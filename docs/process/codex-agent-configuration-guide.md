@@ -191,20 +191,26 @@ Current project decision for Codex development agents:
    - `middle` -> reasoning `medium` -> rate `4`
    - `senior` -> reasoning `high` -> rate `16`
    - `architect` -> VIDA reasoning band `xhigh` mapped onto Codex `high` reasoning effort -> rate `32`
-3. do not use the highest tier as the normal default,
-4. choose the cheapest tier that satisfies:
+3. keep write-capable carrier tiers on the frontier general model and prefer `GPT-5.3-Codex-Spark` only for read-only Codex tiers used for fast host-side analysis, exploration, verification, and architecture preparation,
+4. map that preference in the active project overlay as:
+   - `junior` -> `gpt-5.4`
+   - `middle` -> `gpt-5.4`
+   - `senior` -> `gpt-5.3-codex-spark`
+   - `architect` -> `gpt-5.3-codex-spark`
+5. do not use the highest tier as the normal default,
+6. choose the cheapest tier that satisfies:
    - the required task-class minimum,
    - the local score guard from `.vida/state/worker-strategy.json`,
    - the lane/packet role boundary,
-5. use local scorecards and strategy state to refresh effective tier score dynamically:
+7. use local scorecards and strategy state to refresh effective tier score dynamically:
    - `.vida/state/worker-scorecards.json`
    - `.vida/state/worker-strategy.json`
-6. record post-task feedback through:
+8. record post-task feedback through:
    - `vida agent-feedback --agent-id <tier> --score <0-100> --task-class <task_class> [--outcome <success|failure|neutral>] [--notes "..."]`
-7. use the local host-agent observability ledger for automatic feedback history and budget rollup:
+9. use the local host-agent observability ledger for automatic feedback history and budget rollup:
    - `.vida/state/host-agent-observability.json`
-8. use `vida status --json` as the bounded operator surface for current tier state, recent host-agent events, and total estimated budget units recorded so far,
-9. prefer `vida taskflow task close ...` over ad hoc task finalization when the task belongs to the tracked Codex execution path, because close-time telemetry now refreshes the same score/observability loop automatically.
+10. use `vida status --json` as the bounded operator surface for current tier state, recent host-agent events, and total estimated budget units recorded so far,
+11. prefer `vida taskflow task close ...` over ad hoc task finalization when the task belongs to the tracked Codex execution path, because close-time telemetry now refreshes the same score/observability loop automatically.
 
 Policy note:
 

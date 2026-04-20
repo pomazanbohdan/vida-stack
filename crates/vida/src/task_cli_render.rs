@@ -1,10 +1,10 @@
+use crate::operator_contracts::{
+    finalize_release1_operator_truth, shared_operator_output_contract_parity_error,
+};
 use crate::state_store::{
     BlockedTaskRecord, TaskBulkReparentResult, TaskCriticalPath, TaskDependencyRecord,
     TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode,
     TaskGraphIssue, TaskProgressSummary, TaskRecord,
-};
-use crate::operator_contracts::{
-    finalize_release1_operator_truth, shared_operator_output_contract_parity_error,
 };
 use crate::{print_surface_header, print_surface_line, RenderMode};
 
@@ -78,21 +78,30 @@ pub(crate) fn print_task_list(
     as_json: bool,
 ) {
     let payload = if summary_only {
-        serde_json::json!({
-            "surface": "vida task list",
-            "view": "summary",
-            "task_count": tasks.len(),
-            "tasks": tasks.iter().map(|task| serde_json::json!({
-                "id": task.id,
-                "display_id": task.display_id,
-                "status": task.status,
-                "title": task.title,
-                "priority": task.priority,
-                "issue_type": task.issue_type,
-            })).collect::<Vec<_>>(),
-        })
+        build_pass_operator_surface_payload(
+            "vida task list",
+            serde_json::json!({
+                "view": "summary",
+                "task_count": tasks.len(),
+                "tasks": tasks.iter().map(|task| serde_json::json!({
+                    "id": task.id,
+                    "display_id": task.display_id,
+                    "status": task.status,
+                    "title": task.title,
+                    "priority": task.priority,
+                    "issue_type": task.issue_type,
+                })).collect::<Vec<_>>(),
+            }),
+        )
     } else {
-        serde_json::to_value(tasks).expect("task list should serialize")
+        build_pass_operator_surface_payload(
+            "vida task list",
+            serde_json::json!({
+                "view": "full",
+                "task_count": tasks.len(),
+                "tasks": tasks,
+            }),
+        )
     };
     if crate::surface_render::print_surface_json(
         &payload,
@@ -117,11 +126,14 @@ pub(crate) fn print_task_ready(
     tasks: &[TaskRecord],
     as_json: bool,
 ) {
-    let payload = build_pass_operator_surface_payload("vida task ready", serde_json::json!({
-        "scope_task_id": scope_task_id,
-        "ready_count": tasks.len(),
-        "tasks": tasks,
-    }));
+    let payload = build_pass_operator_surface_payload(
+        "vida task ready",
+        serde_json::json!({
+            "scope_task_id": scope_task_id,
+            "ready_count": tasks.len(),
+            "tasks": tasks,
+        }),
+    );
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -146,7 +158,18 @@ pub(crate) fn print_task_ready(
 }
 
 pub(crate) fn print_task_show(render: RenderMode, task: &TaskRecord, as_json: bool) {
-    if crate::surface_render::print_surface_json(task, as_json, "task should render as json") {
+    let payload = build_pass_operator_surface_payload(
+        "vida task show",
+        serde_json::json!({
+            "task_id": task.id,
+            "task": task,
+        }),
+    );
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task show should render as json",
+    ) {
         return;
     }
 
@@ -158,10 +181,13 @@ pub(crate) fn print_task_progress(
     summary: &TaskProgressSummary,
     as_json: bool,
 ) {
-    let payload = build_pass_operator_surface_payload("vida task progress", serde_json::json!({
-        "task_id": summary.root_task.id,
-        "progress": summary,
-    }));
+    let payload = build_pass_operator_surface_payload(
+        "vida task progress",
+        serde_json::json!({
+            "task_id": summary.root_task.id,
+            "progress": summary,
+        }),
+    );
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -226,11 +252,13 @@ pub(crate) fn print_task_export_summary(
     target_path: &str,
     as_json: bool,
 ) {
-    let payload = serde_json::json!({
-        "status": "pass",
-        "exported_count": exported_count,
-        "target_path": target_path,
-    });
+    let payload = build_pass_operator_surface_payload(
+        "vida task export-jsonl",
+        serde_json::json!({
+            "exported_count": exported_count,
+            "target_path": target_path,
+        }),
+    );
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -308,11 +336,14 @@ pub(crate) fn print_task_dependencies(
     dependencies: &[TaskDependencyStatus],
     as_json: bool,
 ) {
-    let payload = build_pass_operator_surface_payload(title, serde_json::json!({
-        "task_id": task_id,
-        "dependency_count": dependencies.len(),
-        "dependencies": dependencies,
-    }));
+    let payload = build_pass_operator_surface_payload(
+        title,
+        serde_json::json!({
+            "task_id": task_id,
+            "dependency_count": dependencies.len(),
+            "dependencies": dependencies,
+        }),
+    );
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -351,28 +382,34 @@ pub(crate) fn print_blocked_tasks(
     as_json: bool,
 ) {
     let payload = if summary_only {
-        build_pass_operator_surface_payload("vida task blocked", serde_json::json!({
-            "view": "summary",
-            "blocked_count": tasks.len(),
-            "tasks": tasks.iter().map(|blocked| serde_json::json!({
-                "id": blocked.task.id,
-                "display_id": blocked.task.display_id,
-                "status": blocked.task.status,
-                "title": blocked.task.title,
-                "blocker_count": blocked.blockers.len(),
-                "blockers": blocked.blockers.iter().map(|blocker| serde_json::json!({
-                    "depends_on_id": blocker.depends_on_id,
-                    "edge_type": blocker.edge_type,
-                    "dependency_status": blocker.dependency_status,
-                    "dependency_issue_type": blocker.dependency_issue_type,
+        build_pass_operator_surface_payload(
+            "vida task blocked",
+            serde_json::json!({
+                "view": "summary",
+                "blocked_count": tasks.len(),
+                "tasks": tasks.iter().map(|blocked| serde_json::json!({
+                    "id": blocked.task.id,
+                    "display_id": blocked.task.display_id,
+                    "status": blocked.task.status,
+                    "title": blocked.task.title,
+                    "blocker_count": blocked.blockers.len(),
+                    "blockers": blocked.blockers.iter().map(|blocker| serde_json::json!({
+                        "depends_on_id": blocker.depends_on_id,
+                        "edge_type": blocker.edge_type,
+                        "dependency_status": blocker.dependency_status,
+                        "dependency_issue_type": blocker.dependency_issue_type,
+                    })).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
-        }))
+            }),
+        )
     } else {
-        build_pass_operator_surface_payload("vida task blocked", serde_json::json!({
-            "blocked_count": tasks.len(),
-            "tasks": tasks,
-        }))
+        build_pass_operator_surface_payload(
+            "vida task blocked",
+            serde_json::json!({
+                "blocked_count": tasks.len(),
+                "tasks": tasks,
+            }),
+        )
     };
     if crate::surface_render::print_surface_json(
         &payload,
@@ -410,12 +447,15 @@ pub(crate) fn print_task_dependency_tree(
     tree: &TaskDependencyTreeNode,
     as_json: bool,
 ) {
-    let payload = build_pass_operator_surface_payload("vida task tree", serde_json::json!({
-        "root_task_id": tree.task.id,
-        "dependency_count": tree.dependencies.len(),
-        "child_count": tree.children.len(),
-        "tree": tree,
-    }));
+    let payload = build_pass_operator_surface_payload(
+        "vida task tree",
+        serde_json::json!({
+            "root_task_id": tree.task.id,
+            "dependency_count": tree.dependencies.len(),
+            "child_count": tree.children.len(),
+            "tree": tree,
+        }),
+    );
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -457,11 +497,14 @@ pub(crate) fn print_task_direct_children(
     tree: &TaskDependencyTreeNode,
     as_json: bool,
 ) {
-    let payload = build_pass_operator_surface_payload("vida task children", serde_json::json!({
-        "root_task_id": tree.task.id,
-        "child_count": tree.children.len(),
-        "children": tree.children,
-    }));
+    let payload = build_pass_operator_surface_payload(
+        "vida task children",
+        serde_json::json!({
+            "root_task_id": tree.task.id,
+            "child_count": tree.children.len(),
+            "children": tree.children,
+        }),
+    );
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -607,8 +650,9 @@ pub(crate) fn print_task_bulk_reparent_result(
     let payload = build_pass_operator_surface_payload(
         "vida task reparent-children",
         serde_json::json!({
-        "result": result,
-    }));
+            "result": result,
+        }),
+    );
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -634,8 +678,17 @@ pub(crate) fn print_task_bulk_reparent_result(
 }
 
 pub(crate) fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPath, as_json: bool) {
+    let payload = build_pass_operator_surface_payload(
+        "vida task critical-path",
+        serde_json::json!({
+            "length": path.length,
+            "root_task_id": path.root_task_id,
+            "terminal_task_id": path.terminal_task_id,
+            "nodes": path.nodes,
+        }),
+    );
     if crate::surface_render::print_surface_json(
-        path,
+        &payload,
         as_json,
         "critical path should render as json",
     ) {
@@ -666,7 +719,7 @@ pub(crate) fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPa
 mod tests {
     use super::build_pass_operator_surface_payload;
     use crate::operator_contracts::shared_operator_output_contract_parity_error;
-    use crate::state_store::{TaskExecutionSemantics, TaskRecord};
+    use crate::state_store::{TaskCriticalPathNode, TaskExecutionSemantics, TaskRecord};
 
     fn sample_task(id: &str) -> TaskRecord {
         TaskRecord {
@@ -732,6 +785,92 @@ mod tests {
         assert_eq!(payload["shared_fields"]["status"], "pass");
         assert_eq!(payload["operator_contracts"]["status"], "pass");
         assert_eq!(payload["artifact_refs"]["surface"], "vida task tree");
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_list_summary_payload_keeps_release1_operator_contract_parity() {
+        let tasks = vec![sample_task("task-1")];
+        let payload = build_pass_operator_surface_payload(
+            "vida task list",
+            serde_json::json!({
+                "view": "summary",
+                "task_count": tasks.len(),
+                "tasks": [{
+                    "id": tasks[0].id,
+                    "display_id": tasks[0].display_id,
+                    "status": tasks[0].status,
+                    "title": tasks[0].title,
+                    "priority": tasks[0].priority,
+                    "issue_type": tasks[0].issue_type,
+                }],
+            }),
+        );
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["shared_fields"]["status"], "pass");
+        assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(payload["artifact_refs"]["surface"], "vida task list");
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_show_payload_keeps_release1_operator_contract_parity() {
+        let task = sample_task("task-1");
+        let payload = build_pass_operator_surface_payload(
+            "vida task show",
+            serde_json::json!({
+                "task_id": task.id,
+                "task": task,
+            }),
+        );
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["shared_fields"]["status"], "pass");
+        assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(payload["artifact_refs"]["surface"], "vida task show");
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_export_payload_keeps_release1_operator_contract_parity() {
+        let payload = build_pass_operator_surface_payload(
+            "vida task export-jsonl",
+            serde_json::json!({
+                "exported_count": 2,
+                "target_path": ".vida/exports/tasks.snapshot.jsonl",
+            }),
+        );
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["shared_fields"]["status"], "pass");
+        assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(payload["artifact_refs"]["surface"], "vida task export-jsonl");
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_critical_path_payload_keeps_release1_operator_contract_parity() {
+        let payload = build_pass_operator_surface_payload(
+            "vida task critical-path",
+            serde_json::json!({
+                "length": 1,
+                "root_task_id": "task-root",
+                "terminal_task_id": "task-root",
+                "nodes": [TaskCriticalPathNode {
+                    id: "task-root".to_string(),
+                    status: "open".to_string(),
+                    priority: 1,
+                    issue_type: "task".to_string(),
+                    title: "Task root".to_string(),
+                }],
+            }),
+        );
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["shared_fields"]["status"], "pass");
+        assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(payload["artifact_refs"]["surface"], "vida task critical-path");
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 }

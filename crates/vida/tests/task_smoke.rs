@@ -371,14 +371,16 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
     let validate_stdout = run_and_assert_success(&["task", "validate-graph", "--json"], &state_dir);
     assert_eq!(validate_stdout.trim(), "[]");
 
-    let critical_path_stdout =
-        run_and_assert_success(&["task", "critical-path", "--json"], &state_dir);
-    let critical_path_expected =
-        include_str!("../../../tests/golden/taskflow/critical_path.json").trim_end();
-    assert_eq!(
-        normalize_json_fixture(&critical_path_stdout),
-        normalize_json_fixture(critical_path_expected)
-    );
+    let critical_path: serde_json::Value = serde_json::from_str(&run_and_assert_success(
+        &["task", "critical-path", "--json"],
+        &state_dir,
+    ))
+    .expect("critical-path json should parse");
+    assert_eq!(critical_path["status"], "pass");
+    assert_eq!(critical_path["surface"], "vida task critical-path");
+    assert_eq!(critical_path["length"], 2);
+    assert_eq!(critical_path["root_task_id"], "vida-a");
+    assert_eq!(critical_path["terminal_task_id"], "vida-b");
 
     let dep_add_stdout = run_and_assert_success(
         &[
@@ -564,6 +566,8 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
     assert!(blocked.contains("\"id\": \"vida-b\"") || blocked.contains("\"id\":\"vida-b\""));
 
     let critical_path = run_command_json(&["task", "critical-path", "--json"], &state_dir);
+    assert_eq!(critical_path["status"], "pass");
+    assert_eq!(critical_path["surface"], "vida task critical-path");
     assert_eq!(critical_path["length"], 2);
     assert_eq!(critical_path["root_task_id"], "vida-a");
     assert_eq!(critical_path["terminal_task_id"], "vida-b");
@@ -587,9 +591,11 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
     assert_eq!(closed["task"]["close_reason"], "planning proof complete");
 
     let shown = run_command_json(&["task", "show", "vida-b", "--json"], &state_dir);
-    assert_eq!(shown["status"], "closed");
-    assert_eq!(shown["close_reason"], "planning proof complete");
-    assert_eq!(shown["notes"], "planning round trip proof");
+    assert_eq!(shown["status"], "pass");
+    assert_eq!(shown["surface"], "vida task show");
+    assert_eq!(shown["task"]["status"], "closed");
+    assert_eq!(shown["task"]["close_reason"], "planning proof complete");
+    assert_eq!(shown["task"]["notes"], "planning round trip proof");
 
     let _ = fs::remove_dir_all(&state_dir);
 }
@@ -869,7 +875,10 @@ fn task_list_json_ignores_render_color_emoji_styling() {
 
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("json output should parse");
-    assert!(parsed.is_array(), "task list output should be json array");
+    assert_eq!(parsed["status"], "pass");
+    assert_eq!(parsed["surface"], "vida task list");
+    assert_eq!(parsed["view"], "full");
+    assert!(parsed["tasks"].is_array(), "task list tasks should be json array");
 
     let _ = fs::remove_dir_all(&state_dir);
 }

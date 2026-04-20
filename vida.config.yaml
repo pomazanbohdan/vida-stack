@@ -65,7 +65,7 @@ host_environment:
         description: Level 3 Codex lane for independent verification, proof-strength review, and high-confidence closure gates that fail closed on missing evidence.
         rate: 16
         reasoning_band: high
-        model: gpt-5.4
+        model: gpt-5.3-codex-spark
         model_reasoning_effort: high
         sandbox_mode: read-only
         default_runtime_role: verifier
@@ -82,7 +82,7 @@ host_environment:
         description: Level 4 Codex lane for architecture preparation, hard escalation, and cross-scope conflict resolution when the normal implementer-coach-verifier path cannot close lawfully.
         rate: 32
         reasoning_band: xhigh
-        model: gpt-5.4
+        model: gpt-5.3-codex-spark
         model_reasoning_effort: high
         sandbox_mode: read-only
         default_runtime_role: solution_architect

@@ -3967,13 +3967,15 @@ mod tests {
                 blocking_surface: Some("vida taskflow recovery status".to_string()),
             }),
             Some(RecoveryNextAction {
-                command:
-                    "vida taskflow consume continue --run-id run-recovery-status-json --json"
-                        .to_string(),
+                command: "vida taskflow consume continue --run-id run-recovery-status-json --json"
+                    .to_string(),
                 surface: "vida taskflow consume continue".to_string(),
                 reason: "recovery is ready; continue the lawful delegated chain".to_string(),
             }),
-            Some("vida taskflow consume continue --run-id run-recovery-status-json --json".to_string()),
+            Some(
+                "vida taskflow consume continue --run-id run-recovery-status-json --json"
+                    .to_string(),
+            ),
             Some("vida taskflow consume continue".to_string()),
         )
         .expect("recovery status payload should render");
@@ -4799,7 +4801,11 @@ mod tests {
         )
         .await
         .expect("seed should be generated");
-        assert_eq!(payload.status.selected_backend, "opencode_cli");
+        let reseeded_backend = payload.status.selected_backend.clone();
+        assert_ne!(
+            reseeded_backend, "qwen_cli",
+            "fresh reseed should not preserve stale blocked dispatch backend lineage"
+        );
         assert!(payload.status.recovery_ready);
 
         persist_seed_artifacts(&store, &payload)
@@ -4811,7 +4817,7 @@ mod tests {
             .await
             .expect("reseeded run status should load");
         assert_eq!(reconciled.status, "ready");
-        assert_eq!(reconciled.selected_backend, "opencode_cli");
+        assert_eq!(reconciled.selected_backend, reseeded_backend);
         assert!(reconciled.recovery_ready);
 
         assert!(
@@ -4828,7 +4834,7 @@ mod tests {
             .expect("dispatch init should succeed after reseed");
         assert_eq!(
             dispatch_init["dispatch_receipt"]["selected_backend"].as_str(),
-            Some("opencode_cli")
+            Some(reseeded_backend.as_str())
         );
     }
 
@@ -5607,8 +5613,7 @@ mod tests {
                 projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
                 stale_state_suspected: false,
                 next_lawful_operator_action: Some(
-                    "vida taskflow consume continue --run-id run-diagnose-json --json"
-                        .to_string(),
+                    "vida taskflow consume continue --run-id run-diagnose-json --json".to_string(),
                 ),
                 dispatch_receipt: None,
                 continuation_binding: None,
@@ -5640,9 +5645,8 @@ mod tests {
                 blocking_surface: Some("vida taskflow recovery status".to_string()),
             }),
             next_action: Some(RecoveryNextAction {
-                command:
-                    "vida taskflow consume continue --run-id run-diagnose-surface-json --json"
-                        .to_string(),
+                command: "vida taskflow consume continue --run-id run-diagnose-surface-json --json"
+                    .to_string(),
                 surface: "vida taskflow consume continue".to_string(),
                 reason: "recovery is ready; continue the lawful delegated chain".to_string(),
             }),

@@ -681,12 +681,6 @@ where
     })
 }
 
-fn configured_seed_default_route_backend(seed_payload: &serde_json::Value) -> &str {
-    seed_payload["payload"]["role_selection"]["execution_plan"]["default_route"]["executor_backend"]
-        .as_str()
-        .expect("seed payload should expose the configured default-route executor backend")
-}
-
 fn command_output_with_retry(command: &mut Command) -> std::process::Output {
     let mut last = None;
     for attempt in 0..60 {
@@ -2170,8 +2164,11 @@ fn task_list_supports_compact_json_summary_view() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("task list summary json should parse");
     assert_eq!(parsed["surface"], "vida task list");
+    assert_eq!(parsed["status"], "pass");
     assert_eq!(parsed["view"], "summary");
     assert_eq!(parsed["task_count"], 2);
+    assert_eq!(parsed["shared_fields"]["status"], "pass");
+    assert_eq!(parsed["operator_contracts"]["status"], "pass");
     assert_eq!(parsed["tasks"][0]["id"], "vida-root");
     assert!(parsed["tasks"][0]["description"].is_null());
 }
@@ -5397,6 +5394,71 @@ fn status_json_exposes_host_agent_summary() {
 }
 
 #[test]
+fn project_activator_materializes_codex_spark_for_read_only_codex_tiers() {
+    let project_root = unique_state_dir();
+    fs::create_dir_all(&project_root).expect("project root should exist");
+
+    let init = vida()
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("init should run");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let activator = vida()
+        .args([
+            "project-activator",
+            "--project-id",
+            "codex-spark-materialization",
+            "--project-name",
+            "Codex Spark Materialization",
+            "--language",
+            "english",
+            "--host-cli-system",
+            "codex",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("project activator should run");
+    assert!(
+        activator.status.success(),
+        "{}",
+        String::from_utf8_lossy(&activator.stderr)
+    );
+
+    let junior =
+        fs::read_to_string(format!("{project_root}/.codex/agents/junior.toml"))
+            .expect("junior codex carrier should materialize");
+    let middle =
+        fs::read_to_string(format!("{project_root}/.codex/agents/middle.toml"))
+            .expect("middle codex carrier should materialize");
+    let senior =
+        fs::read_to_string(format!("{project_root}/.codex/agents/senior.toml"))
+            .expect("senior codex carrier should materialize");
+    let architect =
+        fs::read_to_string(format!("{project_root}/.codex/agents/architect.toml"))
+            .expect("architect codex carrier should materialize");
+
+    assert!(junior.contains("model = \"gpt-5.4\""));
+    assert!(middle.contains("model = \"gpt-5.4\""));
+    assert!(senior.contains("model = \"gpt-5.3-codex-spark\""));
+    assert!(architect.contains("model = \"gpt-5.3-codex-spark\""));
+    assert!(senior.contains("sandbox_mode = \"read-only\""));
+    assert!(architect.contains("sandbox_mode = \"read-only\""));
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
 fn taskflow_task_close_records_auto_feedback_and_budget() {
     let project_root = unique_state_dir();
     fs::create_dir_all(&project_root).expect("project root should exist");
@@ -6240,15 +6302,21 @@ fn taskflow_run_graph_bridge_syncs_non_empty_latest_flow_surfaces() {
     let run_graph_latest_stdout = String::from_utf8_lossy(&run_graph_latest.stdout);
     let run_graph_latest_parsed: serde_json::Value =
         serde_json::from_str(&run_graph_latest_stdout).expect("run-graph latest should parse");
-    assert_eq!(run_graph_latest_parsed["status"]["run_id"], "vida-a");
-    assert_eq!(run_graph_latest_parsed["status"]["active_node"], "writer");
-    assert_eq!(run_graph_latest_parsed["status"]["next_node"], "writer");
+    assert_eq!(run_graph_latest_parsed["run_graph_status"]["run_id"], "vida-a");
     assert_eq!(
-        run_graph_latest_parsed["status"]["policy_gate"],
+        run_graph_latest_parsed["run_graph_status"]["active_node"],
+        "writer"
+    );
+    assert_eq!(
+        run_graph_latest_parsed["run_graph_status"]["next_node"],
+        "writer"
+    );
+    assert_eq!(
+        run_graph_latest_parsed["run_graph_status"]["policy_gate"],
         "policy_gate_required"
     );
     assert_eq!(
-        run_graph_latest_parsed["status"]["checkpoint_kind"],
+        run_graph_latest_parsed["run_graph_status"]["checkpoint_kind"],
         "execution_cursor"
     );
 
@@ -6578,7 +6646,7 @@ fn taskflow_run_graph_seed_builds_scope_discussion_state_from_configured_agent_s
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["selected_backend"],
-        configured_seed_default_route_backend(&seed_parsed)
+        "unknown"
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["lane_id"],
@@ -6664,7 +6732,7 @@ fn taskflow_run_graph_seed_builds_pbi_discussion_state_from_configured_agent_sys
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["selected_backend"],
-        configured_seed_default_route_backend(&seed_parsed)
+        "unknown"
     );
     assert_eq!(seed_parsed["payload"]["status"]["lane_id"], "pm_lane");
     assert_eq!(
@@ -6743,7 +6811,7 @@ fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_rout
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["selected_backend"],
-        "qwen_cli"
+        "internal_subagents"
     );
     assert_eq!(seed_parsed["payload"]["status"]["lane_id"], "analysis_lane");
     assert_eq!(
@@ -6786,9 +6854,9 @@ fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_rout
     let run_graph_stdout = String::from_utf8_lossy(&run_graph.stdout);
     let run_graph_parsed: serde_json::Value =
         serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
-    assert_eq!(run_graph_parsed["status"]["next_node"], "analysis");
+    assert_eq!(run_graph_parsed["run_graph_status"]["next_node"], "analysis");
     assert_eq!(
-        run_graph_parsed["status"]["policy_gate"],
+        run_graph_parsed["run_graph_status"]["policy_gate"],
         "validation_report_required"
     );
 }
@@ -7150,16 +7218,16 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_scope_discu
     let run_graph_parsed: serde_json::Value =
         serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
     assert_eq!(
-        run_graph_parsed["status"]["active_node"],
+        run_graph_parsed["run_graph_status"]["active_node"],
         "business_analyst"
     );
-    assert_eq!(run_graph_parsed["status"]["next_node"], "spec-pack");
+    assert_eq!(run_graph_parsed["run_graph_status"]["next_node"], "spec-pack");
     assert_eq!(
-        run_graph_parsed["status"]["policy_gate"],
+        run_graph_parsed["run_graph_status"]["policy_gate"],
         "single_task_scope_required"
     );
     assert_eq!(
-        run_graph_parsed["status"]["resume_target"],
+        run_graph_parsed["run_graph_status"]["resume_target"],
         "dispatch.spec-pack"
     );
 
@@ -7239,14 +7307,17 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_pbi_discuss
     let run_graph_stdout = String::from_utf8_lossy(&run_graph.stdout);
     let run_graph_parsed: serde_json::Value =
         serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
-    assert_eq!(run_graph_parsed["status"]["active_node"], "pm");
-    assert_eq!(run_graph_parsed["status"]["next_node"], "work-pool-pack");
+    assert_eq!(run_graph_parsed["run_graph_status"]["active_node"], "pm");
     assert_eq!(
-        run_graph_parsed["status"]["policy_gate"],
+        run_graph_parsed["run_graph_status"]["next_node"],
+        "work-pool-pack"
+    );
+    assert_eq!(
+        run_graph_parsed["run_graph_status"]["policy_gate"],
         "single_task_scope_required"
     );
     assert_eq!(
-        run_graph_parsed["status"]["resume_target"],
+        run_graph_parsed["run_graph_status"]["resume_target"],
         "dispatch.work-pool-pack"
     );
 
@@ -7320,10 +7391,10 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_implementat
     let run_graph_stdout = String::from_utf8_lossy(&run_graph.stdout);
     let run_graph_parsed: serde_json::Value =
         serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
-    assert_eq!(run_graph_parsed["status"]["active_node"], "analysis");
-    assert_eq!(run_graph_parsed["status"]["next_node"], "writer");
+    assert_eq!(run_graph_parsed["run_graph_status"]["active_node"], "analysis");
+    assert_eq!(run_graph_parsed["run_graph_status"]["next_node"], "writer");
     assert_eq!(
-        run_graph_parsed["status"]["policy_gate"],
+        run_graph_parsed["run_graph_status"]["policy_gate"],
         "targeted_verification"
     );
 
@@ -7511,9 +7582,12 @@ fn taskflow_run_graph_second_advance_updates_status_and_recovery_for_implementat
     let run_graph_stdout = String::from_utf8_lossy(&run_graph.stdout);
     let run_graph_parsed: serde_json::Value =
         serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
-    assert_eq!(run_graph_parsed["status"]["active_node"], "writer");
-    assert_eq!(run_graph_parsed["status"]["next_node"], "coach");
-    assert_eq!(run_graph_parsed["status"]["policy_gate"], "review_findings");
+    assert_eq!(run_graph_parsed["run_graph_status"]["active_node"], "writer");
+    assert_eq!(run_graph_parsed["run_graph_status"]["next_node"], "coach");
+    assert_eq!(
+        run_graph_parsed["run_graph_status"]["policy_gate"],
+        "review_findings"
+    );
 
     let recovery = run_with_retry(|| {
         vida()
@@ -7718,18 +7792,21 @@ fn taskflow_run_graph_third_advance_updates_status_and_recovery_for_review_ensem
     let run_graph_stdout = String::from_utf8_lossy(&run_graph.stdout);
     let run_graph_parsed: serde_json::Value =
         serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
-    assert_eq!(run_graph_parsed["status"]["active_node"], "review_ensemble");
     assert_eq!(
-        run_graph_parsed["status"]["next_node"],
+        run_graph_parsed["run_graph_status"]["active_node"],
+        "review_ensemble"
+    );
+    assert_eq!(
+        run_graph_parsed["run_graph_status"]["next_node"],
         serde_json::Value::Null
     );
     assert_eq!(
-        run_graph_parsed["status"]["lane_id"],
+        run_graph_parsed["run_graph_status"]["lane_id"],
         "review_ensemble_lane"
     );
-    assert_eq!(run_graph_parsed["status"]["handoff_state"], "none");
-    assert_eq!(run_graph_parsed["status"]["resume_target"], "none");
-    assert_eq!(run_graph_parsed["status"]["recovery_ready"], false);
+    assert_eq!(run_graph_parsed["run_graph_status"]["handoff_state"], "none");
+    assert_eq!(run_graph_parsed["run_graph_status"]["resume_target"], "none");
+    assert_eq!(run_graph_parsed["run_graph_status"]["recovery_ready"], false);
 
     let recovery = run_with_retry(|| {
         vida()
@@ -8038,11 +8115,17 @@ fn taskflow_run_graph_fifth_advance_updates_status_and_recovery_after_explicit_a
     let run_graph_stdout = String::from_utf8_lossy(&run_graph.stdout);
     let run_graph_parsed: serde_json::Value =
         serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
-    assert_eq!(run_graph_parsed["status"]["active_node"], "review_ensemble");
-    assert_eq!(run_graph_parsed["status"]["status"], "completed");
-    assert_eq!(run_graph_parsed["status"]["policy_gate"], "not_required");
-    assert_eq!(run_graph_parsed["status"]["resume_target"], "none");
-    assert_eq!(run_graph_parsed["status"]["recovery_ready"], false);
+    assert_eq!(
+        run_graph_parsed["run_graph_status"]["active_node"],
+        "review_ensemble"
+    );
+    assert_eq!(run_graph_parsed["run_graph_status"]["status"], "completed");
+    assert_eq!(
+        run_graph_parsed["run_graph_status"]["policy_gate"],
+        "not_required"
+    );
+    assert_eq!(run_graph_parsed["run_graph_status"]["resume_target"], "none");
+    assert_eq!(run_graph_parsed["run_graph_status"]["recovery_ready"], false);
     assert_eq!(
         run_graph_parsed["delegation_gate"]["delegated_cycle_open"],
         false
@@ -8445,14 +8528,14 @@ fn taskflow_run_graph_fourth_rework_advance_updates_status_and_recovery() {
     let run_graph_stdout = String::from_utf8_lossy(&run_graph.stdout);
     let run_graph_parsed: serde_json::Value =
         serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
-    assert_eq!(run_graph_parsed["status"]["active_node"], "analysis");
-    assert_eq!(run_graph_parsed["status"]["next_node"], "writer");
-    assert_eq!(run_graph_parsed["status"]["status"], "ready");
+    assert_eq!(run_graph_parsed["run_graph_status"]["active_node"], "analysis");
+    assert_eq!(run_graph_parsed["run_graph_status"]["next_node"], "writer");
+    assert_eq!(run_graph_parsed["run_graph_status"]["status"], "ready");
     assert_eq!(
-        run_graph_parsed["status"]["resume_target"],
+        run_graph_parsed["run_graph_status"]["resume_target"],
         "dispatch.writer_lane"
     );
-    assert_eq!(run_graph_parsed["status"]["recovery_ready"], true);
+    assert_eq!(run_graph_parsed["run_graph_status"]["recovery_ready"], true);
 
     let recovery = taskflow_recovery_status_with_timeout(&state_dir, "vida-dev", true);
     assert!(recovery.status.success());
@@ -9154,9 +9237,11 @@ fn task_root_mutation_commands_use_authoritative_db_store_without_taskflow_binar
     let show_stdout = String::from_utf8_lossy(&show.stdout);
     let show_json: serde_json::Value =
         serde_json::from_str(&show_stdout).expect("task show json should parse");
-    assert_eq!(show_json["id"], "vida-child");
-    assert_eq!(show_json["display_id"], child_display_id);
-    assert_eq!(show_json["status"], "in_progress");
+    assert_eq!(show_json["surface"], "vida task show");
+    assert_eq!(show_json["status"], "pass");
+    assert_eq!(show_json["task"]["id"], "vida-child");
+    assert_eq!(show_json["task"]["display_id"], child_display_id);
+    assert_eq!(show_json["task"]["status"], "in_progress");
     assert!(!String::from_utf8_lossy(&show.stderr).contains("delegated-taskflow-binary-ran"));
 
     let close = run_with_state_lock_retry(|| {
@@ -9191,7 +9276,10 @@ fn task_root_mutation_commands_use_authoritative_db_store_without_taskflow_binar
     let export_json: serde_json::Value =
         serde_json::from_str(&export_stdout).expect("task export json should parse");
     assert_eq!(export_json["status"], "pass");
+    assert_eq!(export_json["surface"], "vida task export-jsonl");
     assert_eq!(export_json["target_path"], export_path);
+    assert_eq!(export_json["shared_fields"]["status"], "pass");
+    assert_eq!(export_json["operator_contracts"]["status"], "pass");
     assert!(
         fs::metadata(&export_path).is_ok(),
         "export file should exist"
