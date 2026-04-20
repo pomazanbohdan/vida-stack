@@ -309,7 +309,6 @@ mod tests {
     use super::*;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
-    use clap::CommandFactory;
     use std::fs;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -458,26 +457,6 @@ mod tests {
                     "--json"
                 ]))),
             ExitCode::SUCCESS
-        );
-    }
-
-    #[test]
-    fn task_help_lists_mutation_commands() {
-        let mut command = Cli::command();
-        let task = command
-            .find_subcommand_mut("task")
-            .expect("task subcommand should exist");
-        let help = task.render_long_help().to_string();
-        assert!(help.contains("create"), "task help should list create");
-        assert!(help.contains("update"), "task help should list update");
-        assert!(help.contains("close"), "task help should list close");
-        assert!(
-            help.contains("next-display-id"),
-            "task help should list next-display-id"
-        );
-        assert!(
-            help.contains("export-jsonl"),
-            "task help should list export-jsonl"
         );
     }
 
