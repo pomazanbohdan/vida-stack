@@ -22,6 +22,57 @@ const MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run 
 const MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
     "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence.";
 
+fn governance_projection_blocker_codes(
+    principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
+    memory_governance: Option<&crate::state_store::RunGraphMemoryGovernanceProjection>,
+) -> Vec<String> {
+    let mut blocker_codes = Vec::new();
+    if let Some(projection) = principal_delegation {
+        blocker_codes.extend(projection.blocker_codes.iter().cloned());
+    }
+    if let Some(projection) = memory_governance {
+        blocker_codes.extend(projection.blocker_codes.iter().cloned());
+    }
+    canonical_blocker_code_list(blocker_codes.iter().map(String::as_str))
+}
+
+fn governance_projection_next_actions(
+    operator_blocker_codes: &[String],
+    principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
+    memory_governance: Option<&crate::state_store::RunGraphMemoryGovernanceProjection>,
+) -> Vec<String> {
+    let mut next_actions = Vec::new();
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::DelegationChainBroken))
+        && principal_delegation.is_some()
+    {
+        next_actions.push(
+            "Refresh the active run-graph delegation projection so doctor can prove explicit delegator/delegatee linkage and audit evidence."
+                .to_string(),
+        );
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::ApprovalRequired))
+        && memory_governance.is_some_and(|projection| projection.governance_required)
+    {
+        next_actions.push(
+            "Record approval linkage for the active memory-governed run before continuing correction/deletion work."
+                .to_string(),
+        );
+    }
+    if memory_governance
+        .is_some_and(|projection| projection.enforcement_state == "blocked")
+    {
+        next_actions.push(
+            "Materialize consent and TTL linkage in the active run-graph handoff before rerunning `vida doctor`."
+                .to_string(),
+        );
+    }
+    next_actions
+}
+
 fn is_unsupported_architecture_reserved_workflow_boundary(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
@@ -201,6 +252,8 @@ fn doctor_operator_blocker_codes(
     latest_run_graph_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     latest_run_graph_gate: Option<&crate::state_store::RunGraphGateSummary>,
     latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
+    memory_governance: Option<&crate::state_store::RunGraphMemoryGovernanceProjection>,
     trace_evidence_blocker_codes: Vec<String>,
 ) -> Vec<String> {
     let mut operator_blocker_codes: Vec<String> = Vec::new();
@@ -296,6 +349,10 @@ fn doctor_operator_blocker_codes(
         operator_blocker_codes
             .push(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER.to_string());
     }
+    operator_blocker_codes.extend(governance_projection_blocker_codes(
+        principal_delegation,
+        memory_governance,
+    ));
     operator_blocker_codes.extend(trace_evidence_blocker_codes);
     canonical_blocker_code_list(operator_blocker_codes.iter().map(String::as_str))
 }
@@ -304,6 +361,8 @@ fn doctor_operator_next_actions(
     operator_blocker_codes: &[String],
     boot_compatibility: &crate::state_store::BootCompatibilitySummary,
     migration_preflight: &crate::state_store::MigrationPreflightSummary,
+    principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
+    memory_governance: Option<&crate::state_store::RunGraphMemoryGovernanceProjection>,
 ) -> Vec<String> {
     let mut operator_next_actions: Vec<String> = Vec::new();
     if operator_blocker_codes
@@ -415,6 +474,11 @@ fn doctor_operator_next_actions(
         operator_next_actions
             .push(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION.to_string());
     }
+    operator_next_actions.extend(governance_projection_next_actions(
+        operator_blocker_codes,
+        principal_delegation,
+        memory_governance,
+    ));
     operator_next_actions
 }
 
@@ -598,6 +662,26 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+            let latest_run_graph_approval_receipt = match latest_run_graph_status.as_ref() {
+                Some(status) => match store.run_graph_approval_delegation_receipt(&status.run_id).await
+                {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("latest run graph approval/delegation receipt: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                },
+                None => None,
+            };
+            let latest_principal_delegation = latest_run_graph_status.as_ref().map(|status| {
+                status.principal_delegation_projection(
+                    latest_run_graph_dispatch_receipt.as_ref(),
+                    latest_run_graph_approval_receipt.as_ref(),
+                )
+            });
+            let latest_memory_governance = latest_run_graph_status.as_ref().map(|status| {
+                status.memory_governance_projection(latest_run_graph_approval_receipt.as_ref())
+            });
             let mut root_session_write_guard =
                 crate::status_surface_write_guard::root_session_write_guard_summary_from_snapshot_path(
                     latest_final_snapshot_path
@@ -670,12 +754,16 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     latest_run_graph_recovery.as_ref(),
                     latest_run_graph_gate.as_ref(),
                     latest_run_graph_dispatch_receipt.as_ref(),
+                    latest_principal_delegation.as_ref(),
+                    latest_memory_governance.as_ref(),
                     trace_evidence_blocker_codes,
                 );
                 let mut operator_next_actions = doctor_operator_next_actions(
                     &operator_blocker_codes,
                     &boot_compatibility,
                     &migration_preflight,
+                    latest_principal_delegation.as_ref(),
+                    latest_memory_governance.as_ref(),
                 );
                 operator_next_actions.extend(trace_evidence_next_actions);
                 let operator_artifact_refs = serde_json::json!({
@@ -688,6 +776,11 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     "latest_task_reconciliation_receipt_id": latest_task_reconciliation
                         .as_ref()
                         .map(|receipt| receipt.receipt_id.clone()),
+                    "latest_run_graph_approval_receipt_id": latest_run_graph_approval_receipt
+                        .as_ref()
+                        .map(|receipt| receipt.receipt_id.clone()),
+                    "latest_principal_delegation": latest_principal_delegation,
+                    "latest_memory_governance": latest_memory_governance,
                     "effective_instruction_bundle_receipt_id": effective_bundle_receipt_id,
                     "root_session_write_guard_status": root_session_write_guard["status"].clone(),
                 });
@@ -730,6 +823,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         "trace_evidence": trace_evidence.clone(),
                         "latest_run_graph_recovery": latest_run_graph_recovery,
                         "latest_run_graph_gate": latest_run_graph_gate,
+                        "latest_run_graph_approval_receipt": latest_run_graph_approval_receipt,
+                        "latest_principal_delegation": latest_principal_delegation,
+                        "latest_memory_governance": latest_memory_governance,
                         "effective_instruction_bundle": {
                             "root_artifact_id": effective_instruction_bundle.root_artifact_id,
                             "receipt_id": effective_bundle_receipt_id,
@@ -813,7 +909,10 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         "latest_run_graph_recovery": latest_run_graph_recovery,
                         "latest_run_graph_checkpoint": latest_run_graph_checkpoint,
                         "latest_run_graph_gate": latest_run_graph_gate,
+                        "latest_run_graph_approval_receipt": latest_run_graph_approval_receipt,
                         "latest_run_graph_dispatch_receipt": latest_run_graph_dispatch_receipt,
+                        "latest_principal_delegation": latest_principal_delegation,
+                        "latest_memory_governance": latest_memory_governance,
                         "effective_instruction_bundle": {
                             "root_artifact_id": effective_instruction_bundle.root_artifact_id,
                             "mandatory_chain_order": effective_instruction_bundle.mandatory_chain_order,
@@ -944,6 +1043,20 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         "latest run graph delegation gate",
                         &status.delegation_gate().as_display(),
                     );
+                    if let Some(principal_delegation) = latest_principal_delegation.as_ref() {
+                        super::print_surface_ok(
+                            render,
+                            "latest run graph principal delegation",
+                            &principal_delegation.as_display(),
+                        );
+                    }
+                    if let Some(memory_governance) = latest_memory_governance.as_ref() {
+                        super::print_surface_ok(
+                            render,
+                            "latest run graph memory governance",
+                            &memory_governance.as_display(),
+                        );
+                    }
                 }
                 None => {
                     super::print_surface_ok(render, "latest run graph status", "none");

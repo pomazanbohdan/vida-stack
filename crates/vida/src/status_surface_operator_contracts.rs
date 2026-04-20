@@ -292,6 +292,18 @@ pub(crate) fn build_status_operator_contracts(
         "runtime_consumption_latest_snapshot_path": inputs.latest_final_snapshot_path
             .or(inputs.runtime_consumption.latest_snapshot_path.as_deref()),
         "latest_run_graph_dispatch_receipt_id": inputs.latest_run_graph_dispatch_receipt_id,
+        "principal_delegation_projection_state": if !inputs.latest_run_graph_gate_present {
+            "absent"
+        } else if inputs.latest_run_graph_dispatch_receipt_id.is_none() {
+            "awaiting_dispatch_receipt"
+        } else {
+            "runtime_ready_for_projection"
+        },
+        "memory_governance_projection_state": if inputs.latest_run_graph_gate_present {
+            "gate_visible"
+        } else {
+            "absent"
+        },
         "protocol_binding_latest_receipt_id": inputs.protocol_binding.latest_receipt_id,
         "latest_task_reconciliation_receipt_id": inputs.latest_task_reconciliation.map(|receipt| receipt.receipt_id.clone()),
         "effective_instruction_bundle_receipt_id": inputs.effective_bundle_receipt.map(|receipt| receipt.receipt_id.clone()),

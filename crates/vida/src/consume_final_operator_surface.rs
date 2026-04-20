@@ -118,6 +118,12 @@ pub(crate) fn emit_taskflow_consume_final_json(
         protocol_binding_latest_receipt_id.as_deref(),
     )
     .unwrap_or_else(|| serde_json::json!({}));
+    operator_contracts["artifact_refs"]["retrieval_trust_signal"] = retrieval_trust_signal.clone();
+    operator_contracts["artifact_refs"]["protocol_binding_latest_receipt_id"] =
+        protocol_binding_latest_receipt_id
+            .clone()
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null);
     if let Some(runtime_bundle) = payload_json
         .get_mut("runtime_bundle")
         .and_then(serde_json::Value::as_object_mut)
@@ -136,12 +142,6 @@ pub(crate) fn emit_taskflow_consume_final_json(
             );
         }
     }
-    operator_contracts["artifact_refs"]["retrieval_trust_signal"] = retrieval_trust_signal.clone();
-    operator_contracts["artifact_refs"]["protocol_binding_latest_receipt_id"] =
-        protocol_binding_latest_receipt_id
-            .clone()
-            .map(serde_json::Value::String)
-            .unwrap_or(serde_json::Value::Null);
     shared_fields["artifact_refs"] = operator_contracts["artifact_refs"].clone();
     snapshot_with_operator_contracts["artifact_refs"] = operator_contracts["artifact_refs"].clone();
     snapshot_with_operator_contracts["shared_fields"] = shared_fields.clone();

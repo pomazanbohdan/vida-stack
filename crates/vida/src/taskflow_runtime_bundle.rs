@@ -263,9 +263,13 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         },
         "retrieval_trust_evidence": {
             "source": retrieval_trust_evidence["source"].clone(),
+            "source_registry_ref": retrieval_trust_evidence["source_registry_ref"].clone(),
             "citation": retrieval_trust_evidence["citation"].clone(),
             "freshness": retrieval_trust_evidence["freshness"].clone(),
+            "freshness_posture": retrieval_trust_evidence["freshness_posture"].clone(),
             "acl": retrieval_trust_evidence["acl"].clone(),
+            "acl_context": retrieval_trust_evidence["acl_context"].clone(),
+            "acl_propagation": retrieval_trust_evidence["acl_propagation"].clone(),
         },
     });
     let orchestrator_init_view = merge_project_activation_into_init_view(
@@ -1080,7 +1084,16 @@ fn retrieval_trust_evidence_blockers(cache_delivery_contract: &serde_json::Value
     };
 
     let mut blockers = Vec::new();
-    for key in ["source", "citation", "freshness", "acl"] {
+    for key in [
+        "source",
+        "source_registry_ref",
+        "citation",
+        "freshness",
+        "freshness_posture",
+        "acl",
+        "acl_context",
+        "acl_propagation",
+    ] {
         if !evidence.get(key).is_some_and(is_canonical_nonempty_string) {
             if let Some(code) =
                 super::release1_contracts::missing_retrieval_trust_evidence_field_blocker_code(key)
@@ -2352,14 +2365,18 @@ mod tests {
         let contract = serde_json::json!({
             "retrieval_trust_evidence": {
                 "source": "taskflow_runtime_bundle",
+                "source_registry_ref": "runtime_consumption_snapshot_registry:latest_final_release_admission",
                 "citation": "/tmp/project/vida.config.yaml",
-                "freshness": "2026-03-17T00:00:00Z"
+                "freshness": "2026-03-17T00:00:00Z",
+                "freshness_posture": "latest_final_release_admission_snapshot",
+                "acl": "protocol-binding-receipt-2",
+                "acl_context": "protocol_binding_receipt:protocol-binding-receipt-2"
             }
         });
         let blockers = retrieval_trust_evidence_blockers(&contract);
         assert!(blockers
             .iter()
-            .any(|row| row == "missing_retrieval_trust_evidence_field:acl"));
+            .any(|row| row == "missing_retrieval_trust_evidence_field:acl_propagation"));
     }
 
     #[test]
@@ -2367,9 +2384,13 @@ mod tests {
         let contract = serde_json::json!({
             "retrieval_trust_evidence": {
                 "source": " taskflow_runtime_bundle ",
+                "source_registry_ref": " \n ",
                 "citation": "   ",
                 "freshness": "2026-03-17T00:00:00Z",
-                "acl": "\t"
+                "freshness_posture": "latest_final_release_admission_snapshot",
+                "acl": "\t",
+                "acl_context": "protocol_binding_receipt:protocol-binding-receipt-2",
+                "acl_propagation": "  "
             }
         });
         let blockers = retrieval_trust_evidence_blockers(&contract);
@@ -2381,7 +2402,32 @@ mod tests {
             .any(|row| row == "missing_retrieval_trust_evidence_field:acl"));
         assert!(blockers
             .iter()
-            .any(|row| row == "missing_retrieval_trust_evidence_field:source"));
+            .any(|row| row == "missing_retrieval_trust_evidence_field:source_registry_ref"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_trust_evidence_field:acl_propagation"));
+    }
+
+    #[test]
+    fn retrieval_trust_evidence_accepts_widened_registry_and_acl_fields_when_populated() {
+        let contract = serde_json::json!({
+            "retrieval_trust_evidence": {
+                "source": "runtime_consumption_snapshot_index",
+                "source_registry_ref": "runtime_consumption_snapshot_registry:latest_final_release_admission",
+                "citation": "/tmp/project/.vida/data/state/runtime-consumption/final-2.json",
+                "freshness": "final",
+                "freshness_posture": "latest_final_release_admission_snapshot",
+                "acl": "protocol-binding-receipt-2",
+                "acl_context": "protocol_binding_receipt:protocol-binding-receipt-2",
+                "acl_propagation": "protocol_binding_receipt_runtime_gate",
+                "audit_trace_ref": "trace://retrieval-proof"
+            }
+        });
+        let blockers = retrieval_trust_evidence_blockers(&contract);
+        assert!(
+            blockers.is_empty(),
+            "widened retrieval-trust evidence should remain admissible when all canonical fields are populated: {blockers:?}"
+        );
     }
 
     #[test]
@@ -2407,13 +2453,29 @@ mod tests {
             serde_json::json!("runtime_consumption_snapshot_index")
         );
         assert_eq!(
+            evidence["source_registry_ref"],
+            serde_json::json!("runtime_consumption_snapshot_registry:latest_final_release_admission")
+        );
+        assert_eq!(
             evidence["citation"],
             serde_json::json!("/tmp/project/.vida/data/state/runtime-consumption/final-2.json")
         );
         assert_eq!(evidence["freshness"], serde_json::json!("final"));
         assert_eq!(
+            evidence["freshness_posture"],
+            serde_json::json!("latest_final_release_admission_snapshot")
+        );
+        assert_eq!(
             evidence["acl"],
             serde_json::json!("protocol-binding-receipt-2")
+        );
+        assert_eq!(
+            evidence["acl_context"],
+            serde_json::json!("protocol_binding_receipt:protocol-binding-receipt-2")
+        );
+        assert_eq!(
+            evidence["acl_propagation"],
+            serde_json::json!("protocol_binding_receipt_runtime_gate")
         );
     }
 

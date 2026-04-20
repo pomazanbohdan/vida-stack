@@ -79,8 +79,9 @@ pub(crate) use state_store_run_graph_state::{
 };
 #[allow(unused_imports)]
 pub use state_store_run_graph_state::{
-    RunGraphContinuationBinding, RunGraphDispatchContext, RunGraphDispatchReceipt, RunGraphStatus,
-    RunGraphSummary,
+    RunGraphContinuationBinding, RunGraphDispatchContext, RunGraphDispatchReceipt,
+    RunGraphMemoryGovernanceProjection, RunGraphPrincipalDelegationProjection,
+    RunGraphStatus, RunGraphSummary,
 };
 pub(crate) use state_store_run_graph_summary::{
     default_run_graph_lane_status, deserialize_run_graph_lane_status,
@@ -1954,6 +1955,40 @@ hierarchy: framework,contracts
         assert!(error
             .to_string()
             .contains("memory governance linkage required"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_status_accepts_memory_governance_when_consent_and_ttl_are_linked() {
+        let nanos = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-governance-linkage-pass-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let mut status = sample_run_graph_status();
+        status.policy_gate = "memory_delete_required".to_string();
+        status.context_state = "sealed".to_string();
+        status.handoff_state = "consent_ttl_linked".to_string();
+
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("consent+ttl linked governance state should persist");
+
+        let persisted = store
+            .run_graph_status(&status.run_id)
+            .await
+            .expect("load persisted run graph status");
+        assert_eq!(persisted.policy_gate, "memory_delete_required");
+        assert_eq!(persisted.context_state, "sealed");
+        assert_eq!(persisted.handoff_state, "consent_ttl_linked");
 
         let _ = fs::remove_dir_all(&root);
     }

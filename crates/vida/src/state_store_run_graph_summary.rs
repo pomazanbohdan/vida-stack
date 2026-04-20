@@ -503,6 +503,21 @@ impl RunGraphDispatchReceiptSummary {
         self
     }
 
+    pub(crate) fn dispatch_run_graph_trace_ref(&self) -> Option<String> {
+        self.downstream_dispatch_trace_path
+            .clone()
+            .or_else(|| {
+                self.dispatch_result_path
+                    .as_ref()
+                    .map(|path| format!("dispatch-result:{path}"))
+            })
+            .or_else(|| {
+                self.dispatch_packet_path
+                    .as_ref()
+                    .map(|path| format!("dispatch-packet:{path}"))
+            })
+    }
+
     pub fn as_display(&self) -> String {
         format!(
             "run={} target={} status={} lane_status={} supersedes_receipt_id={} exception_path_receipt_id={} blocker_code={} kind={} surface={} command={} packet={} result={} next_target={} next_command={} next_note={} next_ready={} next_blockers={} next_packet={} next_status={} next_result={} next_trace={} next_count={} next_last_target={} agent={} runtime_role={} backend={} posture={} route_backend={} evidence={} recorded_at={}",

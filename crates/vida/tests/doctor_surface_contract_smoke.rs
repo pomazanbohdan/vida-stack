@@ -23,11 +23,11 @@ fn is_canonical_operator_status(value: &str) -> bool {
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER: &str =
     "unsupported_architecture_reserved_workflow_boundary";
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str =
-    "Clear unsupported/architecture-reserved workflow boundary state in run-graph policy/context before operator handoff.";
+    "clear unsupported/architecture-reserved workflow boundary state in run-graph policy/context before operator handoff.";
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
     "missing_run_graph_dispatch_receipt_operator_evidence";
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
-    "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
+    "run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
 
 fn sync_protocol_binding(state_dir: &str) {
     let output = vida()
@@ -104,8 +104,11 @@ fn assert_fixture_has_doctor_run_graph_negative_control_step() {
         MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER
     );
     assert_eq!(
-        step["next_action"],
-        MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION
+        step["next_action"]
+            .as_str()
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION)
     );
 }
 
@@ -182,33 +185,33 @@ fn doctor_json_emits_operator_contract_fields() {
         .iter()
         .any(|code| code.as_str() == Some("missing_retrieval_trust_signal_operator_evidence"));
     let has_retrieval_trust_next_action = next_actions.iter().any(|action| {
-        action.as_str()
+            action.as_str()
             == Some(
-                "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence.",
+                "run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence.",
             )
     });
     let has_retrieval_trust_signal_next_action = next_actions.iter().any(|action| {
-        action.as_str()
+            action.as_str()
             == Some(
-                "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal.",
+                "run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/acl signal.",
             )
     });
     let has_retrieval_trust_source_blocker = blocker_codes
         .iter()
         .any(|code| code.as_str() == Some("missing_retrieval_trust_source_operator_evidence"));
     let has_retrieval_trust_source_next_action = next_actions.iter().any(|action| {
-        action.as_str()
+            action.as_str()
             == Some(
-                "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence.",
+                "run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence.",
             )
     });
     let has_recovery_readiness_blocker = blocker_codes
         .iter()
         .any(|code| code.as_str() == Some("recovery_readiness_blocked"));
     let has_recovery_readiness_next_action = next_actions.iter().any(|action| {
-        action.as_str()
+            action.as_str()
             == Some(
-                "Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff.",
+                "inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff.",
             )
     });
     let has_unsupported_architecture_reserved_boundary_blocker = blocker_codes.iter().any(|code| {
@@ -632,7 +635,7 @@ fn doctor_json_blocks_when_final_snapshot_top_level_operator_contract_parity_is_
         next_actions.iter().any(|action| {
             action.as_str()
                 == Some(
-                    "Regenerate consume-final evidence so canonical risk/register, closure/readiness, and release-1 operator-contract fields are complete.",
+                    "regenerate consume-final evidence so canonical risk/register, closure/readiness, and release-1 operator-contract fields are complete.",
                 )
         }),
         "doctor must publish remediation action when final snapshot release-admission evidence is incomplete"

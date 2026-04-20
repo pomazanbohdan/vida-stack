@@ -1251,7 +1251,16 @@ const RETRIEVAL_OPTIONAL_BOUNDARY_KEYS: &[&str] = &[
     "non_promoted_project_docs",
     "broad_repo_manual_scan",
 ];
-const RETRIEVAL_TRUST_EVIDENCE_KEYS: &[&str] = &["source", "citation", "freshness", "acl"];
+const RETRIEVAL_TRUST_EVIDENCE_KEYS: &[&str] = &[
+    "source",
+    "source_registry_ref",
+    "citation",
+    "freshness",
+    "freshness_posture",
+    "acl",
+    "acl_context",
+    "acl_propagation",
+];
 
 fn canonical_parametric_blocker_code_value(value: &str) -> Option<String> {
     let trimmed = value.trim();
@@ -2626,6 +2635,7 @@ mod tests {
             "invalid_invalidation_tuple_key:startup_bundle_revision",
             "cache_key_mismatch:protocol_binding_revision",
             "missing_retrieval_optional_boundary_entry:non_promoted_project_docs",
+            "missing_retrieval_trust_evidence_field:source_registry_ref",
             "missing_retrieval_trust_evidence_field:acl",
             "missing_retrieval_trust_evidence",
         ]);
@@ -2639,6 +2649,7 @@ mod tests {
                 "missing_retrieval_optional_boundary_entry:non_promoted_project_docs".to_string(),
                 "missing_retrieval_trust_evidence".to_string(),
                 "missing_retrieval_trust_evidence_field:acl".to_string(),
+                "missing_retrieval_trust_evidence_field:source_registry_ref".to_string(),
             ]
         );
     }

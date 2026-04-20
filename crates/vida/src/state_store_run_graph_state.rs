@@ -384,6 +384,78 @@ pub struct RunGraphStatus {
     pub recovery_ready: bool,
 }
 
+#[derive(Debug, serde::Serialize, PartialEq, Eq, Clone)]
+pub struct RunGraphPrincipalDelegationProjection {
+    pub principal_id: String,
+    pub principal_kind: String,
+    pub principal_scope: String,
+    pub delegator_ref: Option<String>,
+    pub delegatee_ref: Option<String>,
+    pub approval_receipt_id: Option<String>,
+    pub audit_ref: Option<String>,
+    pub execution_backend: Option<String>,
+    pub delegation_state: String,
+    pub enforcement_state: String,
+    pub blocker_codes: Vec<String>,
+}
+
+impl RunGraphPrincipalDelegationProjection {
+    pub fn as_display(&self) -> String {
+        format!(
+            "principal_id={} kind={} scope={} delegator={} delegatee={} approval_receipt_id={} audit_ref={} backend={} delegation_state={} enforcement_state={} blocker_codes={}",
+            self.principal_id,
+            self.principal_kind,
+            self.principal_scope,
+            self.delegator_ref.as_deref().unwrap_or("none"),
+            self.delegatee_ref.as_deref().unwrap_or("none"),
+            self.approval_receipt_id.as_deref().unwrap_or("none"),
+            self.audit_ref.as_deref().unwrap_or("none"),
+            self.execution_backend.as_deref().unwrap_or("none"),
+            self.delegation_state,
+            self.enforcement_state,
+            if self.blocker_codes.is_empty() {
+                "none".to_string()
+            } else {
+                self.blocker_codes.join(",")
+            }
+        )
+    }
+}
+
+#[derive(Debug, serde::Serialize, PartialEq, Eq, Clone)]
+pub struct RunGraphMemoryGovernanceProjection {
+    pub governance_required: bool,
+    pub memory_class: Option<String>,
+    pub sensitivity_level: Option<String>,
+    pub consent_basis: Option<String>,
+    pub ttl_policy: Option<String>,
+    pub deletion_or_correction_ref: Option<String>,
+    pub approval_receipt_id: Option<String>,
+    pub enforcement_state: String,
+    pub blocker_codes: Vec<String>,
+}
+
+impl RunGraphMemoryGovernanceProjection {
+    pub fn as_display(&self) -> String {
+        format!(
+            "governance_required={} memory_class={} sensitivity={} consent_basis={} ttl_policy={} deletion_or_correction_ref={} approval_receipt_id={} enforcement_state={} blocker_codes={}",
+            self.governance_required,
+            self.memory_class.as_deref().unwrap_or("none"),
+            self.sensitivity_level.as_deref().unwrap_or("none"),
+            self.consent_basis.as_deref().unwrap_or("none"),
+            self.ttl_policy.as_deref().unwrap_or("none"),
+            self.deletion_or_correction_ref.as_deref().unwrap_or("none"),
+            self.approval_receipt_id.as_deref().unwrap_or("none"),
+            self.enforcement_state,
+            if self.blocker_codes.is_empty() {
+                "none".to_string()
+            } else {
+                self.blocker_codes.join(",")
+            }
+        )
+    }
+}
+
 #[allow(dead_code)]
 impl RunGraphStatus {
     pub(crate) fn validate_memory_governance(&self) -> Result<(), StateStoreError> {
@@ -434,4 +506,198 @@ impl RunGraphStatus {
     pub fn delegation_gate(&self) -> RunGraphDelegationGateSummary {
         RunGraphDelegationGateSummary::from_status(self)
     }
+
+    pub fn principal_delegation_projection(
+        &self,
+        dispatch_summary: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+        approval_receipt: Option<&crate::state_store::RunGraphApprovalDelegationReceipt>,
+    ) -> RunGraphPrincipalDelegationProjection {
+        let approval_receipt_id =
+            approval_receipt.map(|receipt| receipt.receipt_id.clone()).and_then(non_empty_string);
+        let dispatch_target = dispatch_summary
+            .map(|summary| summary.dispatch_target.as_str())
+            .filter(|value| !value.trim().is_empty());
+        let delegatee_ref = self
+            .next_node
+            .as_deref()
+            .map(|next_node| format!("node:{next_node}"))
+            .or_else(|| dispatch_target.map(|target| format!("dispatch_target:{target}")))
+            .or_else(|| {
+                non_empty_string(self.lane_id.clone()).map(|lane_id| format!("lane:{lane_id}"))
+            });
+        let audit_ref = dispatch_summary
+            .and_then(|summary| {
+                summary
+                    .dispatch_result_path
+                    .clone()
+                    .or_else(|| summary.dispatch_packet_path.clone())
+                    .or_else(|| summary.dispatch_run_graph_trace_ref())
+            })
+            .or_else(|| Some(format!("run_graph:{}", self.run_id)));
+        let execution_backend = dispatch_summary
+            .and_then(|summary| summary.selected_backend.clone())
+            .or_else(|| non_empty_string(self.selected_backend.clone()));
+        let delegated_cycle_open = self.delegation_gate().delegated_cycle_open;
+        let approval_transition_active = matches!(
+            approval_receipt
+                .as_ref()
+                .map(|receipt| receipt.transition_kind.as_str()),
+            Some("approval_wait" | "approval_complete")
+        ) || matches!(self.status.as_str(), "awaiting_approval");
+        let principal_delegation_required = delegated_cycle_open || approval_transition_active;
+        let mut blocker_codes = Vec::new();
+        if principal_delegation_required
+            && (delegatee_ref.is_none() || audit_ref.as_deref().is_none())
+        {
+            blocker_codes.push(
+                crate::contract_profile_adapter::blocker_code_str(
+                    crate::contract_profile_adapter::BlockerCode::DelegationChainBroken,
+                )
+                .to_string(),
+            );
+        }
+        if approval_transition_active && approval_receipt_id.is_none() {
+            blocker_codes.push(
+                crate::contract_profile_adapter::blocker_code_str(
+                    crate::contract_profile_adapter::BlockerCode::ApprovalRequired,
+                )
+                .to_string(),
+            );
+        }
+        blocker_codes =
+            crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+        let delegation_state = if delegated_cycle_open {
+            self.delegation_gate().delegated_cycle_state
+        } else if approval_transition_active {
+            "approval_gated".to_string()
+        } else {
+            "not_required".to_string()
+        };
+        let enforcement_state = if !principal_delegation_required {
+            "not_required".to_string()
+        } else if blocker_codes.is_empty() {
+            "pass".to_string()
+        } else {
+            "blocked".to_string()
+        };
+
+        RunGraphPrincipalDelegationProjection {
+            principal_id: format!("run_graph:{}:task:{}", self.run_id, self.task_id),
+            principal_kind: "runtime_local_bounded_principal".to_string(),
+            principal_scope: self.route_task_class.clone(),
+            delegator_ref: Some(format!("node:{}", self.active_node)),
+            delegatee_ref,
+            approval_receipt_id,
+            audit_ref,
+            execution_backend,
+            delegation_state,
+            enforcement_state,
+            blocker_codes,
+        }
+    }
+
+    pub fn memory_governance_projection(
+        &self,
+        approval_receipt: Option<&crate::state_store::RunGraphApprovalDelegationReceipt>,
+    ) -> RunGraphMemoryGovernanceProjection {
+        let governance_required = requires_memory_governance_enforcement(&self.policy_gate);
+        let normalized_gate = self.policy_gate.trim().to_ascii_lowercase();
+        let consent_linked = self
+            .handoff_state
+            .trim()
+            .to_ascii_lowercase()
+            .contains("consent");
+        let ttl_linked = self
+            .handoff_state
+            .trim()
+            .to_ascii_lowercase()
+            .contains("ttl");
+        let approval_receipt_id =
+            approval_receipt.map(|receipt| receipt.receipt_id.clone()).and_then(non_empty_string);
+        let memory_class = if !governance_required {
+            None
+        } else if normalized_gate.contains("correction") {
+            Some("memory_correction_request".to_string())
+        } else if normalized_gate.contains("delete") || normalized_gate.contains("deletion") {
+            Some("memory_deletion_request".to_string())
+        } else {
+            Some("governed_runtime_memory".to_string())
+        };
+        let sensitivity_level = governance_required.then(|| "internal_governed".to_string());
+        let consent_basis = if !governance_required {
+            None
+        } else if consent_linked {
+            Some("consent_linked_runtime_handoff".to_string())
+        } else {
+            None
+        };
+        let ttl_policy = if !governance_required {
+            None
+        } else if ttl_linked {
+            Some("ttl_linked_runtime_handoff".to_string())
+        } else {
+            None
+        };
+        let deletion_or_correction_ref = if !governance_required {
+            None
+        } else if normalized_gate.contains("correction") {
+            Some(format!("memory-correction-{}", self.run_id))
+        } else if normalized_gate.contains("delete") || normalized_gate.contains("deletion") {
+            Some(format!("memory-delete-{}", self.run_id))
+        } else {
+            None
+        };
+
+        let mut blocker_codes = Vec::new();
+        if governance_required && self.context_state != "sealed" {
+            blocker_codes.push(
+                crate::contract_profile_adapter::blocker_code_str(
+                    crate::contract_profile_adapter::BlockerCode::PolicyContextMissing,
+                )
+                .to_string(),
+            );
+        }
+        if governance_required && !handoff_state_links_consent_ttl(&self.handoff_state) {
+            blocker_codes.push(
+                crate::contract_profile_adapter::blocker_code_str(
+                    crate::contract_profile_adapter::BlockerCode::PolicyContextMissing,
+                )
+                .to_string(),
+            );
+        }
+        if governance_required && approval_receipt_id.is_none() {
+            blocker_codes.push(
+                crate::contract_profile_adapter::blocker_code_str(
+                    crate::contract_profile_adapter::BlockerCode::ApprovalRequired,
+                )
+                .to_string(),
+            );
+        }
+        blocker_codes =
+            crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+        let enforcement_state = if !governance_required {
+            "not_required".to_string()
+        } else if blocker_codes.is_empty() {
+            "pass".to_string()
+        } else {
+            "blocked".to_string()
+        };
+
+        RunGraphMemoryGovernanceProjection {
+            governance_required,
+            memory_class,
+            sensitivity_level,
+            consent_basis,
+            ttl_policy,
+            deletion_or_correction_ref,
+            approval_receipt_id,
+            enforcement_state,
+            blocker_codes,
+        }
+    }
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }

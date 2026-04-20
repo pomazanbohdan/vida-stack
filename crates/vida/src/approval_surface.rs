@@ -3,7 +3,8 @@ use std::process::ExitCode;
 use serde::Serialize;
 
 use crate::contract_profile_adapter::{
-    canonical_approval_status_str, canonical_gate_level_str, render_operator_contract_envelope,
+    blocker_code_str, canonical_approval_status_str, canonical_gate_level_str,
+    render_operator_contract_envelope, BlockerCode,
 };
 use crate::taskflow_task_bridge::proxy_state_dir;
 use crate::{state_store::StateStore, ProxyArgs};
@@ -32,6 +33,8 @@ struct ApprovalEnvelope {
     decision_reason: String,
     expiry_state: String,
     approval_evidence_refs: serde_json::Value,
+    principal_delegation: crate::state_store::RunGraphPrincipalDelegationProjection,
+    memory_governance: crate::state_store::RunGraphMemoryGovernanceProjection,
 }
 
 #[derive(Serialize)]
@@ -277,7 +280,15 @@ fn build_approval_envelope(
     approval_receipt: Option<crate::state_store::RunGraphApprovalDelegationReceipt>,
 ) -> ApprovalEnvelope {
     let approval_status = derive_approval_status(&status, approval_receipt.as_ref());
-    let next_actions = match approval_status {
+    let principal_delegation =
+        status.principal_delegation_projection(dispatch_summary.as_ref(), approval_receipt.as_ref());
+    let memory_governance = status.memory_governance_projection(approval_receipt.as_ref());
+    let mut blocker_codes = Vec::new();
+    blocker_codes.extend(principal_delegation.blocker_codes.iter().cloned());
+    blocker_codes.extend(memory_governance.blocker_codes.iter().cloned());
+    let surface_blocked = !blocker_codes.is_empty();
+    blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    let mut next_actions = match approval_status {
         "waiting_for_approval" | "approval_required" => vec![
             "Use `vida taskflow run-graph update <task-id> implementation review_ensemble approved implementation` for the active run once the approval decision is ready.".to_string(),
         ],
@@ -286,13 +297,35 @@ fn build_approval_envelope(
         ],
         _ => vec!["Use `vida approval show <run-id> --json` to inspect a specific run.".to_string()],
     };
+    if principal_delegation
+        .blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::DelegationChainBroken))
+    {
+        next_actions.push(
+            "Refresh the bounded delegation projection so the approval surface carries explicit delegator/delegatee and audit linkage for the active run."
+                .to_string(),
+        );
+    }
+    if memory_governance.governance_required
+        && memory_governance.enforcement_state == "blocked"
+    {
+        next_actions.push(
+            "Record consent, TTL, and approval linkage before continuing memory-governed approval or delegation work."
+                .to_string(),
+        );
+    }
     let artifact_refs = build_artifact_refs(
         &status,
         dispatch_summary.as_ref(),
         approval_receipt.as_ref(),
     );
-    let operator_contracts =
-        render_operator_contract_envelope("pass", Vec::new(), next_actions.clone(), artifact_refs);
+    let operator_contracts = render_operator_contract_envelope(
+        if surface_blocked { "blocked" } else { "pass" },
+        blocker_codes.clone(),
+        next_actions.clone(),
+        artifact_refs,
+    );
     let surface_status = if operator_contracts["status"].as_str() == Some("blocked") {
         "blocked"
     } else {
@@ -332,6 +365,8 @@ fn build_approval_envelope(
             dispatch_summary.as_ref(),
             approval_receipt.as_ref(),
         ),
+        principal_delegation,
+        memory_governance,
     }
 }
 
@@ -367,6 +402,16 @@ fn emit_approval_envelope(envelope: &ApprovalEnvelope, as_json: bool) -> ExitCod
         crate::RenderMode::Plain,
         "expiry_state",
         &envelope.expiry_state,
+    );
+    crate::print_surface_line(
+        crate::RenderMode::Plain,
+        "principal_delegation",
+        &envelope.principal_delegation.as_display(),
+    );
+    crate::print_surface_line(
+        crate::RenderMode::Plain,
+        "memory_governance",
+        &envelope.memory_governance.as_display(),
     );
     if let Some(next_action) = envelope.next_actions.first() {
         crate::print_surface_line(crate::RenderMode::Plain, "next_action", next_action);

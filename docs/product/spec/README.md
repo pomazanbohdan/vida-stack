@@ -45,6 +45,7 @@ Active design docs:
 - `docs/product/spec/review-implemented-result-against-spec-acceptanc-design.md`
 - `docs/product/spec/production-observability-and-operator-contract-baselines-design.md`
 - `docs/product/spec/prompt-lifecycle-evaluation-and-safety-baseline-design.md`
+- `docs/product/spec/bounded-release-retrieval-identity-memory-govern-design.md`
 - `docs/product/spec/lane-supersede-and-shared-truth-envelope-design.md`
 - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
 - `docs/product/spec/compact-dispatch-route-truth-downstream-dispatch-design.md`
@@ -68,3 +69,4 @@ source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
 updated_at: 2026-04-20T10:36:00+03:00
 changelog_ref: README.changelog.jsonl
+- `docs/product/spec/bounded-release-retrieval-identity-memory-govern-design.md`

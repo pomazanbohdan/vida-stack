@@ -36,6 +36,14 @@ impl RuntimeConsumptionSummary {
 
 pub(crate) const RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX: &str =
     "runtime_consumption_snapshot_index";
+pub(crate) const RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL: &str =
+    "runtime_consumption_snapshot_registry:latest_final_release_admission";
+pub(crate) const RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT: &str =
+    "latest_final_release_admission_snapshot";
+pub(crate) const RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT: &str =
+    "protocol_binding_receipt";
+pub(crate) const RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE: &str =
+    "protocol_binding_receipt_runtime_gate";
 
 pub(crate) fn latest_admissible_retrieval_trust_signal(
     runtime_consumption: &RuntimeConsumptionSummary,
@@ -59,9 +67,16 @@ pub(crate) fn latest_admissible_retrieval_trust_signal(
 
     Some(serde_json::json!({
         "source": RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
+        "source_registry_ref": RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
         "citation": citation,
         "freshness": latest_kind,
+        "freshness_posture": RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
         "acl": acl,
+        "acl_context": format!(
+            "{}:{acl}",
+            RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT
+        ),
+        "acl_propagation": RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
     }))
 }
 
@@ -378,7 +393,11 @@ mod tests {
     use super::{
         latest_admissible_retrieval_trust_signal,
         runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result,
-        RuntimeConsumptionSummary, RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
+        RuntimeConsumptionSummary, RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
+        RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
+        RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
+        RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
+        RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
     };
     use crate::state_store::RunGraphDispatchReceiptSummary;
 
@@ -419,7 +438,27 @@ mod tests {
             "/tmp/project/runtime-consumption/final-2.json"
         );
         assert_eq!(signal["freshness"], "final");
+        assert_eq!(
+            signal["source_registry_ref"],
+            RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL
+        );
+        assert_eq!(
+            signal["freshness_posture"],
+            RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT
+        );
         assert_eq!(signal["acl"], "protocol-binding-receipt-2");
+        assert_eq!(
+            signal["acl_context"],
+            format!(
+                "{}:{}",
+                RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
+                "protocol-binding-receipt-2"
+            )
+        );
+        assert_eq!(
+            signal["acl_propagation"],
+            RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE
+        );
     }
 
     #[test]
