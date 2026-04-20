@@ -391,7 +391,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
+        apply_runtime_consumption_final_dispatch_receipt_blocker,
         latest_admissible_retrieval_trust_signal,
+        runtime_consumption_final_dispatch_receipt_blocker_code,
         runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result,
         RuntimeConsumptionSummary, RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
         RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
@@ -399,7 +401,7 @@ mod tests {
         RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
         RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
     };
-    use crate::state_store::RunGraphDispatchReceiptSummary;
+    use crate::state_store::{RunGraphDispatchReceiptSummary, RunGraphStatus};
 
     fn sample_runtime_consumption_summary(
         latest_kind: Option<&str>,
@@ -451,8 +453,7 @@ mod tests {
             signal["acl_context"],
             format!(
                 "{}:{}",
-                RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
-                "protocol-binding-receipt-2"
+                RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT, "protocol-binding-receipt-2"
             )
         );
         assert_eq!(
@@ -541,5 +542,101 @@ mod tests {
             blocker.as_deref(),
             Some(crate::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER)
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn taskflow_consume_final_fails_closed_when_latest_dispatch_receipt_summary_is_missing() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-consume-final-summary-missing-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+
+        let latest_status = RunGraphStatus {
+            run_id: "run-final".to_string(),
+            task_id: "task-final".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "planning".to_string(),
+            next_node: Some("worker".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "taskflow_state_store".to_string(),
+            lane_id: "planning_lane".to_string(),
+            lifecycle_stage: "runtime_consumption_ready".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "awaiting_worker".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.worker".to_string(),
+            recovery_ready: true,
+        };
+        store
+            .record_run_graph_status(&latest_status)
+            .await
+            .expect("persist latest status");
+
+        let mut payload = serde_json::json!({
+            "dispatch_receipt": {
+                "run_id": "run-final",
+                "dispatch_status": "executed",
+                "lane_status": "lane_running",
+                "blocker_code": serde_json::Value::Null,
+            },
+            "direct_consumption_ready": true,
+        });
+
+        let blocker_code = runtime_consumption_final_dispatch_receipt_blocker_code(&store, &payload)
+            .expect("blocker evaluation should succeed")
+            .expect("missing receipt summary should fail closed");
+        assert_eq!(
+            blocker_code,
+            crate::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER
+        );
+
+        apply_runtime_consumption_final_dispatch_receipt_blocker(&mut payload, &blocker_code);
+        assert_eq!(payload["direct_consumption_ready"], false);
+        assert_eq!(payload["dispatch_receipt"]["blocker_code"], blocker_code);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn taskflow_consume_final_propagates_checkpoint_leakage_blocker_code() {
+        let payload = serde_json::json!({
+            "dispatch_receipt": {
+                "run_id": "run-final",
+                "dispatch_status": "executed",
+                "lane_status": "lane_open",
+                "blocker_code": serde_json::Value::Null,
+            },
+            "direct_consumption_ready": true,
+        });
+
+        let blocker_code = runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result(
+            "run-final",
+            "run-final",
+            Err(
+                "invalid task record: run-graph dispatch receipt summary is inconsistent for `run-final`: latest checkpoint evidence must share the same run_id (latest_checkpoint_run_id=run-older)"
+                    .to_string(),
+            ),
+        )
+        .expect("blocker evaluation should succeed")
+        .expect("checkpoint leakage should fail closed");
+        assert_eq!(
+            blocker_code,
+            crate::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER
+        );
+
+        let mut payload = payload;
+        apply_runtime_consumption_final_dispatch_receipt_blocker(&mut payload, &blocker_code);
+        assert_eq!(payload["direct_consumption_ready"], false);
+        assert_eq!(payload["dispatch_receipt"]["blocker_code"], blocker_code);
     }
 }

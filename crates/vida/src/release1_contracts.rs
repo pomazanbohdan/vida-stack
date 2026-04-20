@@ -2411,6 +2411,7 @@ mod tests {
             super::canonical_lane_status_str(" lane_running "),
             Some("lane_running")
         );
+        assert_eq!(super::canonical_lane_status_str("lane_block"), None);
     }
 
     #[test]

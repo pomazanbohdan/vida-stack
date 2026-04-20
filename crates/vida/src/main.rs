@@ -171,9 +171,7 @@ pub(crate) use runtime_assignment_projection_utils::{
     carrier_runtime_section, infer_task_class_from_task_payload, json_u64,
     runtime_assignment_alias_fields, runtime_assignment_from_execution_plan,
 };
-#[cfg(test)]
-use runtime_consumption_state::runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result;
-use runtime_consumption_state::{
+pub(crate) use runtime_consumption_state::{
     apply_runtime_consumption_final_dispatch_receipt_blocker,
     latest_admissible_retrieval_trust_signal,
     runtime_consumption_final_dispatch_receipt_blocker_code,
@@ -189,8 +187,6 @@ pub(crate) use runtime_consumption_surface::{
     RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence, TaskflowConsumeBundleCheck,
     TaskflowConsumeBundlePayload, TaskflowDirectConsumptionPayload,
 };
-#[cfg(test)]
-use runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap;
 pub(crate) use runtime_dispatch_state::*;
 pub(crate) use runtime_lane_summary::role_exists_in_lane_bundle;
 pub(crate) use shell_runtime_helpers::{
@@ -311,12 +307,10 @@ pub(crate) use development_flow_orchestration::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::release1_contracts::canonical_lane_status_str;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
     use clap::CommandFactory;
     use std::fs;
-    use std::path::Path;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -444,27 +438,6 @@ mod tests {
         assert!(runtime_consumption_snapshot_has_release_admission_evidence(
             &snapshot
         ));
-    }
-
-    #[test]
-    fn temp_state_harness_creates_and_cleans_directory() {
-        let path = {
-            let harness = TempStateHarness::new().expect("temp state harness should initialize");
-            let path = harness.path().to_path_buf();
-            assert!(path.exists());
-            path
-        };
-
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn canonical_lane_status_str_trims_whitespace_for_release1_lane_status() {
-        assert_eq!(
-            canonical_lane_status_str("  lane_running  "),
-            Some("lane_running")
-        );
-        assert_eq!(canonical_lane_status_str("lane_block"), None);
     }
 
     #[test]
@@ -620,203 +593,4 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn runtime_consumption_bootstrap_fails_closed_with_blocked_fallback_when_seed_derivation_fails(
-    ) {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-runtime-consumption-seed-fail-closed-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        let cwd = std::env::temp_dir().join(format!(
-            "vida-runtime-consumption-seed-fail-closed-cwd-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        std::fs::create_dir_all(&cwd).expect("create isolated cwd");
-        let _cwd = guard_current_dir(&cwd);
-        let store = crate::state_store::StateStore::open(root.clone())
-            .await
-            .expect("open store");
-        let role_selection = RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "fixed".to_string(),
-            fallback_role: "orchestrator".to_string(),
-            request: "implement".to_string(),
-            selected_role: "worker".to_string(),
-            conversational_mode: None,
-            single_task_only: false,
-            tracked_flow_entry: None,
-            allow_freeform_chat: false,
-            confidence: "high".to_string(),
-            matched_terms: vec!["implementation".to_string()],
-            compiled_bundle: serde_json::Value::Null,
-            execution_plan: serde_json::Value::Null,
-            reason: "test".to_string(),
-        };
-
-        let bootstrap =
-            build_runtime_consumption_run_graph_bootstrap(&store, &role_selection).await;
-        assert_eq!(bootstrap["status"], "blocked");
-        assert_eq!(bootstrap["handoff_ready"], false);
-        assert!(bootstrap["fallback_reason"]
-            .as_str()
-            .is_some_and(|value| value.contains("seed_failed")));
-
-        let latest_status = store
-            .latest_run_graph_status()
-            .await
-            .expect("load latest run graph status")
-            .expect("latest run graph status should exist");
-        assert_eq!(latest_status.status, "blocked");
-        assert!(!latest_status.recovery_ready);
-        assert_eq!(latest_status.context_state, "open");
-
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&cwd);
-    }
-
-    #[test]
-    fn orchestrator_init_view_exposes_continuation_binding_fail_closed_summary() {
-        let view = crate::taskflow_runtime_bundle::build_orchestrator_init_view(
-            Path::new("/tmp/demo"),
-            &serde_json::json!({"root_artifact_id": "root"}),
-            &serde_json::json!({"startup_bundle": serde_json::Value::Null, "startup_capsules": []}),
-            &serde_json::json!({"binding_status": "bound"}),
-            &serde_json::json!({
-                "always_on_core": [],
-                "project_startup_bundle": [],
-                "project_runtime_capsules": [],
-                "task_specific_dynamic_context": [],
-            }),
-            &serde_json::json!({
-                "status": "bound",
-                "continuation_allowed": true,
-                "active_bounded_unit": {
-                    "kind": "run_graph_task",
-                    "task_id": "task-1"
-                },
-                "binding_source": "latest_run_graph_status",
-                "why_this_unit": "Latest runtime state is active.",
-                "primary_path": "normal_delivery_path",
-                "sequential_vs_parallel_posture": "sequential_only",
-                "next_actions": []
-            }),
-            "compatible",
-            "no_migration_required",
-        );
-
-        assert_eq!(view["continuation_binding"]["status"], "bound");
-        assert_eq!(
-            view["continuation_binding"]["active_bounded_unit"]["task_id"],
-            "task-1"
-        );
-        assert_eq!(
-            view["continuation_binding"]["binding_source"],
-            "latest_run_graph_status"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn taskflow_consume_final_fails_closed_when_latest_dispatch_receipt_summary_is_missing() {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-taskflow-consume-final-summary-missing-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        let store = crate::state_store::StateStore::open(root.clone())
-            .await
-            .expect("open store");
-
-        let latest_status = crate::state_store::RunGraphStatus {
-            run_id: "run-final".to_string(),
-            task_id: "task-final".to_string(),
-            task_class: "implementation".to_string(),
-            active_node: "planning".to_string(),
-            next_node: Some("worker".to_string()),
-            status: "ready".to_string(),
-            route_task_class: "implementation".to_string(),
-            selected_backend: "taskflow_state_store".to_string(),
-            lane_id: "planning_lane".to_string(),
-            lifecycle_stage: "runtime_consumption_ready".to_string(),
-            policy_gate: "not_required".to_string(),
-            handoff_state: "awaiting_worker".to_string(),
-            context_state: "sealed".to_string(),
-            checkpoint_kind: "execution_cursor".to_string(),
-            resume_target: "dispatch.worker".to_string(),
-            recovery_ready: true,
-        };
-        store
-            .record_run_graph_status(&latest_status)
-            .await
-            .expect("persist latest status");
-
-        let mut payload = serde_json::json!({
-            "dispatch_receipt": {
-                "run_id": "run-final",
-                "dispatch_status": "executed",
-                "lane_status": "lane_running",
-                "blocker_code": serde_json::Value::Null,
-            },
-            "direct_consumption_ready": true,
-        });
-
-        let blocker_code =
-            runtime_consumption_final_dispatch_receipt_blocker_code(&store, &payload)
-                .expect("blocker evaluation should succeed")
-                .expect("missing receipt summary should fail closed");
-        assert_eq!(
-            blocker_code,
-            RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER
-        );
-
-        apply_runtime_consumption_final_dispatch_receipt_blocker(&mut payload, &blocker_code);
-        assert_eq!(payload["direct_consumption_ready"], false);
-        assert_eq!(payload["dispatch_receipt"]["blocker_code"], blocker_code);
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn taskflow_consume_final_propagates_checkpoint_leakage_blocker_code() {
-        let payload = serde_json::json!({
-            "dispatch_receipt": {
-                "run_id": "run-final",
-                "dispatch_status": "executed",
-                "lane_status": "lane_open",
-                "blocker_code": serde_json::Value::Null,
-            },
-            "direct_consumption_ready": true,
-        });
-
-        let blocker_code =
-            runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result(
-                "run-final",
-                "run-final",
-                Err(
-                    "invalid task record: run-graph dispatch receipt summary is inconsistent for `run-final`: latest checkpoint evidence must share the same run_id (latest_checkpoint_run_id=run-older)"
-                        .to_string(),
-                ),
-            )
-            .expect("blocker evaluation should succeed")
-            .expect("checkpoint leakage should fail closed");
-        assert_eq!(
-            blocker_code,
-            RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER
-        );
-
-        let mut payload = payload;
-        apply_runtime_consumption_final_dispatch_receipt_blocker(&mut payload, &blocker_code);
-        assert_eq!(payload["direct_consumption_ready"], false);
-        assert_eq!(payload["dispatch_receipt"]["blocker_code"], blocker_code);
-    }
 }

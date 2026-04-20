@@ -30,6 +30,23 @@ impl Drop for TempStateHarness {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::TempStateHarness;
+
+    #[test]
+    fn temp_state_harness_creates_and_cleans_directory() {
+        let path = {
+            let harness = TempStateHarness::new().expect("temp state harness should initialize");
+            let path = harness.path().to_path_buf();
+            assert!(path.exists());
+            path
+        };
+
+        assert!(!path.exists());
+    }
+}
+
 fn reserve_temp_root() -> io::Result<PathBuf> {
     let base = env::temp_dir();
 

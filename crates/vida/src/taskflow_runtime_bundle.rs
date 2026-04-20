@@ -1952,6 +1952,47 @@ mod tests {
     }
 
     #[test]
+    fn orchestrator_init_view_exposes_continuation_binding_fail_closed_summary() {
+        let view = super::build_orchestrator_init_view(
+            Path::new("/tmp/demo"),
+            &serde_json::json!({"root_artifact_id": "root"}),
+            &serde_json::json!({"startup_bundle": serde_json::Value::Null, "startup_capsules": []}),
+            &serde_json::json!({"binding_status": "bound"}),
+            &serde_json::json!({
+                "always_on_core": [],
+                "project_startup_bundle": [],
+                "project_runtime_capsules": [],
+                "task_specific_dynamic_context": [],
+            }),
+            &serde_json::json!({
+                "status": "bound",
+                "continuation_allowed": true,
+                "active_bounded_unit": {
+                    "kind": "run_graph_task",
+                    "task_id": "task-1"
+                },
+                "binding_source": "latest_run_graph_status",
+                "why_this_unit": "Latest runtime state is active.",
+                "primary_path": "normal_delivery_path",
+                "sequential_vs_parallel_posture": "sequential_only",
+                "next_actions": []
+            }),
+            "compatible",
+            "no_migration_required",
+        );
+
+        assert_eq!(view["continuation_binding"]["status"], "bound");
+        assert_eq!(
+            view["continuation_binding"]["active_bounded_unit"]["task_id"],
+            "task-1"
+        );
+        assert_eq!(
+            view["continuation_binding"]["binding_source"],
+            "latest_run_graph_status"
+        );
+    }
+
+    #[test]
     fn agent_init_view_exposes_operator_command_map_with_lane_scope_markers() {
         let view = super::build_agent_init_view(
             Path::new("/tmp/demo"),
@@ -2454,7 +2495,9 @@ mod tests {
         );
         assert_eq!(
             evidence["source_registry_ref"],
-            serde_json::json!("runtime_consumption_snapshot_registry:latest_final_release_admission")
+            serde_json::json!(
+                "runtime_consumption_snapshot_registry:latest_final_release_admission"
+            )
         );
         assert_eq!(
             evidence["citation"],
