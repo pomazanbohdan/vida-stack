@@ -325,6 +325,22 @@ mod tests {
     }
 
     #[test]
+    fn runtime_assignment_source_ignores_legacy_route_alias() {
+        let route = serde_json::json!({
+            "codex_runtime_assignment": {
+                "selected_tier": "architect",
+                "activation_agent_type": "architect",
+            }
+        });
+
+        assert_eq!(super::runtime_assignment_source_from_route(&route), "missing");
+        assert_eq!(
+            super::runtime_assignment_from_route(&route),
+            &serde_json::Value::Null
+        );
+    }
+
+    #[test]
     fn explicit_executor_backend_wins_over_carrier_tier_and_legacy_hints() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {

@@ -777,25 +777,6 @@ mod tests {
     }
 
     #[test]
-    fn runtime_assignment_source_ignores_legacy_route_alias() {
-        let route = serde_json::json!({
-            "codex_runtime_assignment": {
-                "selected_tier": "architect",
-                "activation_agent_type": "architect",
-            }
-        });
-
-        assert_eq!(
-            crate::taskflow_routing::runtime_assignment_source_from_route(&route),
-            "missing"
-        );
-        assert_eq!(
-            crate::taskflow_routing::runtime_assignment_from_route(&route),
-            &serde_json::Value::Null
-        );
-    }
-
-    #[test]
     fn selected_backend_prefers_carrier_backend_hint_over_legacy_subagents() {
         let execution_plan = serde_json::json!({
             "development_flow": {
