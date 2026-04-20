@@ -82,3 +82,48 @@ pub(crate) fn blocking_runtime_consumption_run_graph_status(
     status.recovery_ready = false;
     status
 }
+
+#[cfg(test)]
+mod tests {
+    use super::fallback_runtime_consumption_run_graph_status;
+    use crate::RuntimeConsumptionLaneSelection;
+
+    #[test]
+    fn fallback_run_graph_status_uses_carrier_tier_for_conversation_routes() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "research and specification".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec!["research".to_string(), "specification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "status": "design_first",
+                "runtime_assignment": {
+                    "selected_tier": "middle",
+                    "activation_agent_type": "middle"
+                },
+                "default_route": {
+                    "subagents": "internal_subagents"
+                },
+                "development_flow": {
+                    "implementation": {
+                        "preferred_agent_tier": "junior",
+                        "subagents": "internal_subagents"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+
+        let status = fallback_runtime_consumption_run_graph_status(&role_selection, "run-test");
+        assert_eq!(status.selected_backend, "middle");
+    }
+}
