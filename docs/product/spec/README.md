@@ -60,3 +60,4 @@ source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
 updated_at: 2026-04-17T11:08:56.887219102Z
 changelog_ref: README.changelog.jsonl
+- `docs/product/spec/compact-dispatch-route-truth-downstream-dispatch-design.md`

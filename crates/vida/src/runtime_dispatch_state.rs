@@ -90,6 +90,27 @@ fn dispatch_handoff_timeout_seconds(
         .saturating_add(INTERNAL_DISPATCH_HANDOFF_TIMEOUT_GRACE_SECONDS)
 }
 
+fn dispatch_handoff_requires_outer_timeout(
+    project_root: &Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    if receipt.dispatch_kind != "agent_lane" {
+        return true;
+    }
+    if dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
+        return false;
+    }
+    let canonical_backend = canonical_selected_backend_for_receipt(role_selection, receipt)
+        .or_else(|| receipt.selected_backend.clone());
+    canonical_backend
+        .as_deref()
+        .and_then(|backend_id| {
+            configured_external_backend_handoff_timeout_seconds(project_root, backend_id)
+        })
+        .is_none()
+}
+
 fn dispatch_handoff_uses_internal_host(
     project_root: &Path,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -2471,6 +2492,76 @@ async fn tracked_implementer_task_close_evidence_path(
     .map(Some)
 }
 
+async fn verification_closure_admission_ready(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    admitted_override: Option<bool>,
+) -> Result<bool, String> {
+    if let Some(admitted) = admitted_override {
+        return Ok(admitted);
+    }
+    let runtime_bundle = crate::build_taskflow_consume_bundle_payload(store)
+        .await
+        .map_err(|error| {
+            format!("Failed to build runtime bundle while checking verification closure admission: {error}")
+        })?;
+    let bundle_check = crate::taskflow_consume_bundle_check(&runtime_bundle);
+    let (registry, check, readiness, proof, _overview) = crate::build_docflow_runtime_evidence();
+    let docflow_verdict =
+        crate::build_docflow_runtime_verdict(&registry, &check, &readiness, &proof);
+    let closure_admission =
+        build_runtime_closure_admission(&bundle_check, &docflow_verdict, role_selection);
+    if closure_admission.admitted {
+        return Ok(true);
+    }
+    let has_readiness_surface = docflow_verdict
+        .proof_surfaces
+        .iter()
+        .any(|surface| surface.contains("readiness-check"));
+    let has_proof_surface = docflow_verdict
+        .proof_surfaces
+        .iter()
+        .any(|surface| surface.contains("proofcheck"));
+    Ok(bundle_check.ok && docflow_verdict.ready && has_readiness_surface && has_proof_surface)
+}
+
+async fn tracked_verification_closure_evidence_path_with_admission(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    admitted_override: Option<bool>,
+) -> Result<Option<String>, String> {
+    let verification_context = receipt.dispatch_target == "verification"
+        || receipt.downstream_dispatch_last_target.as_deref() == Some("verification");
+    if !verification_context {
+        return Ok(None);
+    }
+    if !verification_closure_admission_ready(store, role_selection, admitted_override).await? {
+        return Ok(None);
+    }
+    let Some(packet_path) = receipt.dispatch_packet_path.as_deref() else {
+        return Ok(None);
+    };
+    let completion_receipt_id = format!("closure-admission-{}", receipt.run_id);
+    write_runtime_lane_completion_result(
+        store.root(),
+        &receipt.run_id,
+        "verification",
+        &completion_receipt_id,
+        packet_path,
+    )
+    .map(Some)
+}
+
+async fn tracked_verification_closure_evidence_path(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<Option<String>, String> {
+    tracked_verification_closure_evidence_path_with_admission(store, role_selection, receipt, None)
+        .await
+}
+
 async fn receipt_backed_execution_evidence_path(
     store: &StateStore,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -2508,10 +2599,18 @@ async fn receipt_backed_execution_evidence_path(
             .map(Some);
         }
     }
-    Ok(readable_result_path(
+    if let Some(path) = readable_result_path(
         store.root(),
         receipt.downstream_dispatch_result_path.as_deref(),
-    ))
+    ) {
+        return Ok(Some(path));
+    }
+    if let Some(path) =
+        tracked_verification_closure_evidence_path(store, role_selection, receipt).await?
+    {
+        return Ok(Some(path));
+    }
+    Ok(None)
 }
 
 fn decode_receipt_packet_context(
@@ -2550,13 +2649,32 @@ fn decode_receipt_packet_context(
     Ok((role_selection, run_graph_bootstrap))
 }
 
-async fn maybe_bridge_closed_implementer_task_into_receipt_with_context(
+pub(crate) async fn maybe_bridge_closed_implementer_task_into_receipt_with_context(
     store: &StateStore,
     role_selection: &RuntimeConsumptionLaneSelection,
     run_graph_bootstrap: &serde_json::Value,
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     closed_task_id: Option<&str>,
 ) -> Result<bool, String> {
+    if receipt.dispatch_target == "implementer"
+        && receipt.dispatch_kind == "agent_lane"
+        && receipt.dispatch_status == "blocked"
+        && receipt.blocker_code.as_deref() == Some("internal_activation_view_only")
+    {
+        let Some(result_path) =
+            tracked_implementer_task_close_evidence_path(store, role_selection, receipt).await?
+        else {
+            return Ok(false);
+        };
+        receipt.dispatch_status = "executed".to_string();
+        receipt.lane_status = "lane_completed".to_string();
+        receipt.dispatch_result_path = Some(result_path);
+        receipt.blocker_code = None;
+        receipt.exception_path_receipt_id = None;
+        refresh_downstream_dispatch_preview(store, role_selection, run_graph_bootstrap, receipt)
+            .await?;
+        return Ok(true);
+    }
     if receipt.downstream_dispatch_last_target.as_deref() != Some("implementer") {
         return Ok(false);
     }
@@ -2585,6 +2703,62 @@ async fn maybe_bridge_closed_implementer_task_into_receipt_with_context(
         role_selection,
         run_graph_bootstrap,
         receipt,
+    )
+    .await
+}
+
+pub(crate) async fn maybe_reconcile_blocked_verification_timeout_with_receipt_evidence_with_admission(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    run_graph_bootstrap: &serde_json::Value,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+    admitted_override: Option<bool>,
+) -> Result<bool, String> {
+    if receipt.dispatch_target != "verification"
+        || receipt.dispatch_kind != "agent_lane"
+        || receipt.dispatch_status != "blocked"
+        || receipt.blocker_code.as_deref() != Some("internal_activation_view_only")
+    {
+        return Ok(false);
+    }
+    let result_path = if let Some(path) =
+        receipt_backed_execution_evidence_path(store, role_selection, receipt).await?
+    {
+        Some(path)
+    } else {
+        tracked_verification_closure_evidence_path_with_admission(
+            store,
+            role_selection,
+            receipt,
+            admitted_override,
+        )
+        .await?
+    };
+    let Some(result_path) = result_path else {
+        return Ok(false);
+    };
+    receipt.dispatch_status = "executed".to_string();
+    receipt.lane_status = "lane_completed".to_string();
+    receipt.dispatch_result_path = Some(result_path);
+    receipt.blocker_code = None;
+    receipt.exception_path_receipt_id = None;
+    refresh_downstream_dispatch_preview(store, role_selection, run_graph_bootstrap, receipt)
+        .await?;
+    Ok(true)
+}
+
+pub(crate) async fn maybe_reconcile_blocked_verification_timeout_with_receipt_evidence(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    run_graph_bootstrap: &serde_json::Value,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) -> Result<bool, String> {
+    maybe_reconcile_blocked_verification_timeout_with_receipt_evidence_with_admission(
+        store,
+        role_selection,
+        run_graph_bootstrap,
+        receipt,
+        None,
     )
     .await
 }
@@ -9320,6 +9494,173 @@ mod tests {
         });
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn maybe_bridge_closed_implementer_task_into_receipt_promotes_blocked_implementer_timeout(
+    ) {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let store = crate::StateStore::open(state_root.clone())
+            .await
+            .expect("state store should open");
+        create_and_close_task(&store, "feature-x-dev").await;
+
+        let role_selection = bridge_test_role_selection("feature-x-dev");
+        let run_graph_bootstrap = json!({ "run_id": "run-bridge-blocked-implementer" });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-bridge-blocked-implementer".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("exc-timeout".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/implementer-dispatch.json".to_string()),
+            dispatch_result_path: Some("/tmp/activation-view-only.json".to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("implementer".to_string()),
+            downstream_dispatch_last_target: Some("implementer".to_string()),
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-19T00:00:00Z".to_string(),
+        };
+
+        let bridged = maybe_bridge_closed_implementer_task_into_receipt_with_context(
+            &store,
+            &role_selection,
+            &run_graph_bootstrap,
+            &mut receipt,
+            Some("feature-x-dev"),
+        )
+        .await
+        .expect("bridge should succeed");
+
+        assert!(bridged);
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_completed");
+        assert!(receipt.blocker_code.is_none());
+        assert!(receipt.exception_path_receipt_id.is_none());
+        assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("coach"));
+        assert!(receipt.downstream_dispatch_ready);
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("packet_ready")
+        );
+        let evidence_path = receipt
+            .dispatch_result_path
+            .as_deref()
+            .expect("bridged dispatch evidence path should exist");
+        let evidence = read_json(harness.path(), evidence_path);
+        assert_eq!(evidence["artifact_kind"], "runtime_lane_completion_result");
+        assert_eq!(evidence["completed_target"], "implementer");
+        assert_eq!(
+            evidence["completion_receipt_id"],
+            "task-close-feature-x-dev"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn maybe_bridge_closure_ready_verification_into_receipt_promotes_blocked_verification_timeout(
+    ) {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let store = crate::StateStore::open(state_root.clone())
+            .await
+            .expect("state store should open");
+        let verification_result_path = harness.path().join("verification-proof.json");
+        fs::write(
+            &verification_result_path,
+            json!({
+                "artifact_kind": "verification_evidence",
+                "status": "clean"
+            })
+            .to_string(),
+        )
+        .expect("verification evidence should persist");
+
+        let role_selection = bridge_test_role_selection("feature-x-dev");
+        let run_graph_bootstrap = json!({ "run_id": "run-bridge-blocked-verification" });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-bridge-blocked-verification".to_string(),
+            dispatch_target: "verification".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("exc-timeout".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/verification-dispatch.json".to_string()),
+            dispatch_result_path: Some("/tmp/activation-view-only.json".to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: Some(verification_result_path.display().to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("verification".to_string()),
+            downstream_dispatch_last_target: Some("verification".to_string()),
+            activation_agent_type: Some("senior".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-19T00:00:00Z".to_string(),
+        };
+
+        let bridged =
+            maybe_reconcile_blocked_verification_timeout_with_receipt_evidence_with_admission(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+                Some(true),
+            )
+            .await
+            .expect("bridge should succeed");
+
+        assert!(bridged);
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_completed");
+        assert!(receipt.blocker_code.is_none());
+        assert!(receipt.exception_path_receipt_id.is_none());
+        assert_eq!(
+            receipt.downstream_dispatch_target.as_deref(),
+            Some("closure")
+        );
+        assert!(receipt.downstream_dispatch_ready);
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("packet_ready")
+        );
+        let evidence_path = receipt
+            .dispatch_result_path
+            .as_deref()
+            .expect("bridged dispatch evidence path should exist");
+        let evidence = read_json(harness.path(), evidence_path);
+        assert_eq!(evidence["artifact_kind"], "verification_evidence");
+        assert_eq!(evidence["status"], "clean");
+    }
+
     #[test]
     fn refresh_downstream_dispatch_preview_unblocks_work_pool_handoff_after_spec_task_closure() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -10436,6 +10777,93 @@ host_environment:
     }
 
     #[test]
+    fn dispatch_handoff_requires_outer_timeout_stays_enabled_for_unwrapped_external_agent_lane() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-handoff-outer-timeout-external-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        std::fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+agent_system:
+  subagents:
+    hermes_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+"#,
+        )
+        .expect("config");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Review the bounded packet and return proof.".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "hermes_cli"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-external-handoff-outer-timeout".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:hermes_cli".to_string()),
+            dispatch_command: Some("hermes chat".to_string()),
+            dispatch_packet_path: Some("/tmp/coach-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-19T00:00:00Z".to_string(),
+        };
+
+        assert!(dispatch_handoff_requires_outer_timeout(
+            &root,
+            &role_selection,
+            &receipt,
+        ));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn dispatch_handoff_timeout_seconds_respects_external_backend_runtime_window() {
         let root = std::env::temp_dir().join(format!(
             "vida-handoff-timeout-external-{}",
@@ -11438,17 +11866,25 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
             format!("Failed to persist in-flight dispatch receipt before execution: {error}")
         })?;
     drop(store);
-    let execution_result = tokio::time::timeout(
-        std::time::Duration::from_secs(handoff_timeout_seconds),
-        execute_runtime_dispatch_handoff(state_root, role_selection, receipt),
-    )
-    .await
-    .map_err(|_| {
-        format!(
-            "Timed out executing runtime dispatch handoff after {}s",
-            handoff_timeout_seconds
+    let execution_result = if dispatch_handoff_requires_outer_timeout(
+        project_root.as_ref(),
+        role_selection,
+        receipt,
+    ) {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(handoff_timeout_seconds),
+            execute_runtime_dispatch_handoff(state_root, role_selection, receipt),
         )
-    });
+        .await
+        .map_err(|_| {
+            format!(
+                "Timed out executing runtime dispatch handoff after {}s",
+                handoff_timeout_seconds
+            )
+        })
+    } else {
+        Ok(execute_runtime_dispatch_handoff(state_root, role_selection, receipt).await)
+    };
     let execution_result = match execution_result {
         Ok(result) => result?,
         Err(timeout_error) => {

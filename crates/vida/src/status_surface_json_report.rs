@@ -40,6 +40,28 @@ pub(crate) struct StatusJsonReportInputs<'a> {
 pub(crate) fn build_status_json_report(
     inputs: StatusJsonReportInputs<'_>,
 ) -> Result<serde_json::Value, String> {
+    let latest_run_graph_dispatch_compact_summary =
+        crate::taskflow_run_graph::build_run_graph_dispatch_compact_summary(
+            inputs.latest_run_graph_status,
+            inputs.latest_run_graph_recovery,
+            inputs.latest_run_graph_dispatch_receipt,
+            Some(inputs.continuation_binding),
+            inputs.latest_run_graph_activation_vs_execution_evidence,
+        );
+    let latest_run_graph_dispatch_route_truth = latest_run_graph_dispatch_compact_summary
+        .as_ref()
+        .map(|summary| serde_json::to_value(&summary.route_truth))
+        .transpose()
+        .map_err(|error| format!("serialize latest_run_graph_dispatch_route_truth: {error}"))?
+        .unwrap_or(serde_json::Value::Null);
+    let latest_run_graph_downstream_dispatch_preview = latest_run_graph_dispatch_compact_summary
+        .as_ref()
+        .map(|summary| serde_json::to_value(&summary.downstream_dispatch_preview))
+        .transpose()
+        .map_err(|error| {
+            format!("serialize latest_run_graph_downstream_dispatch_preview: {error}")
+        })?
+        .unwrap_or(serde_json::Value::Null);
     let latest_run_graph_status = enrich_run_graph_status(
         inputs.latest_run_graph_status,
         inputs.latest_run_graph_mixed_posture,
@@ -104,6 +126,9 @@ pub(crate) fn build_status_json_report(
             "latest_run_graph_status": latest_run_graph_status.clone(),
             "latest_run_graph_recovery": inputs.latest_run_graph_recovery,
             "latest_run_graph_gate": inputs.latest_run_graph_gate,
+            "latest_run_graph_dispatch_route_truth": latest_run_graph_dispatch_route_truth.clone(),
+            "latest_run_graph_downstream_dispatch_preview": latest_run_graph_downstream_dispatch_preview.clone(),
+            "latest_run_graph_dispatch_compact_summary": latest_run_graph_dispatch_compact_summary.clone(),
             "host_agents": host_agents_json_value(inputs.host_agents),
         })
     } else {
@@ -180,6 +205,9 @@ pub(crate) fn build_status_json_report(
             "latest_run_graph_checkpoint": inputs.latest_run_graph_checkpoint,
             "latest_run_graph_gate": inputs.latest_run_graph_gate,
             "latest_run_graph_dispatch_receipt": latest_run_graph_dispatch_receipt.clone(),
+            "latest_run_graph_dispatch_route_truth": latest_run_graph_dispatch_route_truth.clone(),
+            "latest_run_graph_downstream_dispatch_preview": latest_run_graph_downstream_dispatch_preview.clone(),
+            "latest_run_graph_dispatch_compact_summary": latest_run_graph_dispatch_compact_summary.clone(),
         })
     };
 
@@ -635,6 +663,220 @@ mod tests {
             full_json["latest_run_graph_dispatch_receipt"]["activation_semantics"]
                 ["activation_kind"],
             "execution_evidence"
+        );
+        assert_eq!(
+            full_json["latest_run_graph_dispatch_compact_summary"]["route_truth"]
+                ["projection_source"],
+            "reconciled_run_graph_status"
+        );
+        assert_eq!(
+            full_json["latest_run_graph_dispatch_route_truth"]["dispatch_receipt_present"],
+            true
+        );
+        assert_eq!(
+            full_json["latest_run_graph_dispatch_route_truth"]["continuation_binding_present"],
+            false
+        );
+        assert_eq!(
+            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]
+                ["dispatch_target"],
+            "implementer"
+        );
+        assert_eq!(
+            summary_json["latest_run_graph_dispatch_compact_summary"]["route_truth"]
+                ["projection_vs_receipt_parity"],
+            "reconciled_from_receipt"
+        );
+    }
+
+    #[test]
+    fn build_status_json_report_includes_status_only_dispatch_compact_summary() {
+        let operator_contracts = serde_json::json!({
+            "status": "ok",
+            "trace_id": "trace-2",
+            "workflow_class": "specification",
+            "risk_tier": "low",
+            "blocker_codes": [],
+            "next_actions": [],
+            "artifact_refs": [],
+        });
+        let storage_metadata = crate::state_store::StorageMetadataSummary {
+            engine: "surrealkv".to_string(),
+            backend: "kv".to_string(),
+            namespace: "vida".to_string(),
+            database: "primary".to_string(),
+            state_schema_version: 1,
+            instruction_schema_version: 1,
+        };
+        let state_spine = crate::state_store::StateSpineSummary {
+            authoritative_mutation_root: "state-root".to_string(),
+            entity_surface_count: 2,
+            state_schema_version: 1,
+        };
+        let migration_receipts = crate::state_store::MigrationReceiptSummary {
+            compatibility_receipts: 0,
+            application_receipts: 0,
+            verification_receipts: 0,
+            cutover_readiness_receipts: 0,
+            rollback_notes: 0,
+        };
+        let task_reconciliation_rollup = crate::state_store::TaskReconciliationRollup {
+            total_receipts: 0,
+            latest_recorded_at: None,
+            latest_source_path: None,
+            total_task_rows: 0,
+            total_dependency_rows: 0,
+            total_stale_removed: 0,
+            by_operation: std::collections::BTreeMap::new(),
+            by_source_kind: std::collections::BTreeMap::new(),
+            rows: Vec::new(),
+        };
+        let snapshot_bridge = crate::state_store::TaskflowSnapshotBridgeSummary {
+            total_receipts: 0,
+            export_receipts: 0,
+            import_receipts: 0,
+            replace_receipts: 0,
+            object_export_receipts: 0,
+            memory_export_receipts: 0,
+            memory_import_receipts: 0,
+            memory_replace_receipts: 0,
+            file_export_receipts: 0,
+            file_import_receipts: 0,
+            file_replace_receipts: 0,
+            total_task_rows: 0,
+            total_dependency_rows: 0,
+            total_stale_removed: 0,
+            latest_operation: None,
+            latest_source_kind: None,
+            latest_source_path: None,
+            latest_recorded_at: None,
+        };
+        let runtime_consumption = crate::runtime_consumption_state::RuntimeConsumptionSummary {
+            total_snapshots: 0,
+            bundle_snapshots: 0,
+            bundle_check_snapshots: 0,
+            final_snapshots: 0,
+            latest_kind: None,
+            latest_snapshot_path: None,
+        };
+        let protocol_binding = crate::state_store::ProtocolBindingSummary {
+            total_receipts: 0,
+            total_bindings: 0,
+            active_bindings: 0,
+            script_bound_count: 0,
+            rust_bound_count: 0,
+            fully_runtime_bound_count: 0,
+            unbound_count: 0,
+            blocking_issue_count: 0,
+            latest_receipt_id: None,
+            latest_scenario: None,
+            latest_recorded_at: None,
+            primary_state_authority: None,
+        };
+        let run_status = crate::state_store::RunGraphStatus {
+            run_id: "run-2".to_string(),
+            task_id: "task-2".to_string(),
+            task_class: "specification".to_string(),
+            active_node: "business_analyst".to_string(),
+            next_node: Some("implementer".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "specification".to_string(),
+            selected_backend: "opencode_cli".to_string(),
+            lane_id: "lane-2".to_string(),
+            lifecycle_stage: "analysis_active".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "analysis_cursor".to_string(),
+            resume_target: "dispatch.implementer".to_string(),
+            recovery_ready: true,
+        };
+        let root_session_write_guard = serde_json::json!({"mode": "locked"});
+        let continuation_binding = serde_json::json!({
+            "status": "bound",
+            "primary_path": "dispatch.implementer"
+        });
+        let activation_vs_execution_evidence = serde_json::json!({
+            "evidence_state": "activation_view_only",
+            "activation_kind": "activation_view",
+            "receipt_backed": false
+        });
+        let launcher_runtime_paths =
+            crate::doctor_launcher_summary_for_root(std::path::Path::new("/tmp/project"))
+                .expect("launcher summary should build");
+
+        let full_json = super::build_status_json_report(super::StatusJsonReportInputs {
+            summary_only: false,
+            operator_contracts,
+            backend_summary: "backend summary",
+            state_dir: std::path::Path::new("/tmp/state"),
+            launcher_runtime_paths: &launcher_runtime_paths,
+            storage_metadata: &storage_metadata,
+            state_spine: &state_spine,
+            effective_bundle_receipt: None,
+            boot_compatibility: None,
+            migration_state: None,
+            migration_receipts: &migration_receipts,
+            latest_task_reconciliation: None,
+            task_reconciliation_rollup: &task_reconciliation_rollup,
+            snapshot_bridge: &snapshot_bridge,
+            runtime_consumption: &runtime_consumption,
+            protocol_binding: &protocol_binding,
+            activation_truth: None,
+            project_activation_status: Some("pending"),
+            project_activation_pending: true,
+            host_agents: None,
+            root_session_write_guard: &root_session_write_guard,
+            continuation_binding: &continuation_binding,
+            latest_run_graph_status: Some(&run_status),
+            latest_run_graph_recovery: None,
+            latest_run_graph_checkpoint: None,
+            latest_run_graph_gate: None,
+            latest_run_graph_dispatch_receipt: None,
+            latest_run_graph_mixed_posture: None,
+            latest_run_graph_activation_vs_execution_evidence: Some(
+                &activation_vs_execution_evidence,
+            ),
+        })
+        .expect("full report should build");
+
+        assert_eq!(
+            full_json["latest_run_graph_dispatch_compact_summary"]["route_truth"]
+                ["projection_source"],
+            "persisted_run_graph_status"
+        );
+        assert_eq!(
+            full_json["latest_run_graph_dispatch_compact_summary"]["route_truth"]
+                ["projection_vs_receipt_parity"],
+            "no_receipt"
+        );
+        assert_eq!(
+            full_json["latest_run_graph_dispatch_route_truth"]["dispatch_receipt_present"],
+            false
+        );
+        assert_eq!(
+            full_json["latest_run_graph_dispatch_route_truth"]["continuation_binding_present"],
+            true
+        );
+        assert_eq!(
+            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]
+                ["dispatch_target"],
+            "business_analyst"
+        );
+        assert_eq!(
+            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]
+                ["downstream_dispatch_target"],
+            "implementer"
+        );
+        assert_eq!(
+            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]
+                ["downstream_dispatch_status"],
+            "resume_ready"
+        );
+        assert_eq!(
+            full_json["latest_run_graph_dispatch_compact_summary"]["downstream_dispatch_preview"]
+                ["downstream_dispatch_ready"],
+            true
         );
     }
 }

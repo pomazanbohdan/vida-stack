@@ -69,111 +69,78 @@ fn format_run_graph_activation_vs_execution_evidence(evidence: &serde_json::Valu
     )
 }
 
-fn format_dispatch_blockers(
-    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
-) -> String {
-    let mut blockers = Vec::new();
-    if let Some(blocker_code) = summary
-        .blocker_code
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        blockers.push(blocker_code.to_string());
-    }
-    blockers.extend(
-        summary
-            .downstream_dispatch_blockers
-            .iter()
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-    );
-    if blockers.is_empty() {
+fn format_dispatch_blockers(blocker_codes: &[String]) -> String {
+    if blocker_codes.is_empty() {
         "none".to_string()
     } else {
-        blockers.join(", ")
+        blocker_codes.join(", ")
     }
+}
+
+fn format_run_graph_dispatch_compact_summary(
+    summary: &crate::taskflow_run_graph::RunGraphDispatchCompactSummary,
+) -> (String, String, Option<String>) {
+    let route_truth = format!(
+        "source={} parity={} receipt_present={} binding_present={} evidence={} activation_kind={} receipt_backed={} stale={}",
+        summary.route_truth.projection_source,
+        summary.route_truth.projection_vs_receipt_parity,
+        summary.route_truth.dispatch_receipt_present,
+        summary.route_truth.continuation_binding_present,
+        summary.route_truth.evidence_state,
+        summary.route_truth.activation_kind,
+        summary.route_truth.receipt_backed_execution_evidence,
+        summary.stale_state_suspected,
+    );
+    let downstream_preview = format!(
+        "target={} status={} lane_status={} backend={} agent={} runtime_role={} next_target={} next_status={} next_ready={} next_count={} next_active={} next_last={} blockers={}",
+        summary.downstream_dispatch_preview.dispatch_target,
+        summary.downstream_dispatch_preview.dispatch_status,
+        summary.downstream_dispatch_preview.lane_status,
+        summary.downstream_dispatch_preview.selected_backend,
+        summary.downstream_dispatch_preview.activation_agent_type,
+        summary.downstream_dispatch_preview.activation_runtime_role,
+        summary.downstream_dispatch_preview.downstream_dispatch_target,
+        summary.downstream_dispatch_preview.downstream_dispatch_status,
+        summary.downstream_dispatch_preview.downstream_dispatch_ready,
+        summary.downstream_dispatch_preview.downstream_dispatch_executed_count,
+        summary.downstream_dispatch_preview.downstream_dispatch_active_target,
+        summary.downstream_dispatch_preview.downstream_dispatch_last_target,
+        format_dispatch_blockers(&summary.blocker_codes),
+    );
+    let next_action = summary.recommended_command.as_ref().map(|command| {
+        format!(
+            "{} ({})",
+            command,
+            summary.recommended_surface.as_deref().unwrap_or("unknown")
+        )
+    });
+    (route_truth, downstream_preview, next_action)
 }
 
 fn emit_dispatch_diagnosis_lines(
     render: crate::RenderMode,
-    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    summary: &crate::taskflow_run_graph::RunGraphDispatchCompactSummary,
 ) {
+    let (route_truth, downstream_preview, next_action) =
+        format_run_graph_dispatch_compact_summary(summary);
+    crate::surface_render::print_surface_line(render, "latest dispatch route truth", &route_truth);
     crate::surface_render::print_surface_line(
         render,
-        "latest dispatch",
-        &format!(
-            "target={} status={} lane_status={} backend={} agent={} runtime_role={}",
-            summary.dispatch_target,
-            summary.dispatch_status,
-            summary.lane_status,
-            summary.selected_backend.as_deref().unwrap_or("none"),
-            summary.activation_agent_type.as_deref().unwrap_or("none"),
-            summary.activation_runtime_role.as_deref().unwrap_or("none"),
-        ),
+        "latest downstream dispatch preview",
+        &downstream_preview,
     );
     crate::surface_render::print_surface_line(
         render,
-        "latest dispatch blockers",
-        &format_dispatch_blockers(summary),
+        "latest dispatch projection reason",
+        &summary.route_truth.projection_reason,
     );
-    crate::surface_render::print_surface_line(
-        render,
-        "latest downstream dispatch",
-        &format!(
-            "target={} active_target={} ready={} status={} executed_count={} last_target={}",
-            summary
-                .downstream_dispatch_target
-                .as_deref()
-                .unwrap_or("none"),
-            summary
-                .downstream_dispatch_active_target
-                .as_deref()
-                .unwrap_or("none"),
-            summary.downstream_dispatch_ready,
-            summary
-                .downstream_dispatch_status
-                .as_deref()
-                .unwrap_or("none"),
-            summary.downstream_dispatch_executed_count,
-            summary
-                .downstream_dispatch_last_target
-                .as_deref()
-                .unwrap_or("none"),
-        ),
-    );
-    crate::surface_render::print_surface_line(
-        render,
-        "latest dispatch evidence",
-        &format!(
-            "packet={} result={} downstream_packet={} downstream_result={} downstream_trace={}",
-            summary.dispatch_packet_path.as_deref().unwrap_or("none"),
-            summary.dispatch_result_path.as_deref().unwrap_or("none"),
-            summary
-                .downstream_dispatch_packet_path
-                .as_deref()
-                .unwrap_or("none"),
-            summary
-                .downstream_dispatch_result_path
-                .as_deref()
-                .unwrap_or("none"),
-            summary
-                .downstream_dispatch_trace_path
-                .as_deref()
-                .unwrap_or("none"),
-        ),
-    );
-    crate::surface_render::print_surface_line(
-        render,
-        "latest dispatch inspect",
-        "vida taskflow packet latest --json",
-    );
-    crate::surface_render::print_surface_line(
-        render,
-        "latest dispatch diagnosis",
-        "vida taskflow help dispatch",
-    );
+    if let Some(next_action) = next_action {
+        crate::surface_render::print_surface_line(
+            render,
+            "latest dispatch next action",
+            &next_action,
+        );
+    }
 }
 
 pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> ExitCode {
@@ -401,14 +368,30 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
             );
         }
     }
+    let compact_summary = crate::taskflow_run_graph::build_run_graph_dispatch_compact_summary(
+        inputs.latest_run_graph_status,
+        inputs.latest_run_graph_recovery,
+        inputs.latest_run_graph_dispatch_receipt,
+        Some(inputs.continuation_binding),
+        inputs.latest_run_graph_activation_vs_execution_evidence,
+    );
     match inputs.latest_run_graph_dispatch_receipt {
         Some(summary) => {
             crate::surface_render::print_surface_line(
                 inputs.render,
                 "latest run graph dispatch receipt",
-                &summary.as_display(),
+                &format!(
+                    "run={} target={} status={} lane_status={} backend={} evidence={}",
+                    summary.run_id,
+                    summary.dispatch_target,
+                    summary.dispatch_status,
+                    summary.lane_status,
+                    summary.selected_backend.as_deref().unwrap_or("none"),
+                    summary.activation_evidence["activation_kind"]
+                        .as_str()
+                        .unwrap_or("unknown"),
+                ),
             );
-            emit_dispatch_diagnosis_lines(inputs.render, summary);
         }
         None => {
             crate::surface_render::print_surface_line(
@@ -417,6 +400,9 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
                 "none",
             );
         }
+    }
+    if let Some(compact_summary) = compact_summary.as_ref() {
+        emit_dispatch_diagnosis_lines(inputs.render, compact_summary);
     }
     crate::surface_render::print_surface_line(
         inputs.render,
@@ -560,7 +546,8 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
 #[cfg(test)]
 mod tests {
     use super::{
-        format_run_graph_activation_vs_execution_evidence, format_run_graph_mixed_posture,
+        format_run_graph_activation_vs_execution_evidence,
+        format_run_graph_dispatch_compact_summary, format_run_graph_mixed_posture,
     };
 
     #[test]
@@ -588,6 +575,118 @@ mod tests {
         assert_eq!(
             format_run_graph_activation_vs_execution_evidence(&evidence),
             "consistent activation_kind=dispatch"
+        );
+    }
+
+    #[test]
+    fn compact_dispatch_summary_display_includes_route_truth_and_preview() {
+        let summary = crate::taskflow_run_graph::RunGraphDispatchCompactSummary {
+            route_truth: crate::taskflow_run_graph::RunGraphDispatchRouteTruthSummary {
+                projection_source: "reconciled_run_graph_status".to_string(),
+                projection_reason: "status reconciled from receipt".to_string(),
+                projection_vs_receipt_parity: "aligned".to_string(),
+                dispatch_receipt_present: true,
+                continuation_binding_present: true,
+                evidence_state: "activation_view_only".to_string(),
+                activation_kind: "activation_view".to_string(),
+                receipt_backed_execution_evidence: false,
+            },
+            downstream_dispatch_preview:
+                crate::taskflow_run_graph::RunGraphDownstreamDispatchPreviewSummary {
+                    dispatch_target: "implementer".to_string(),
+                    dispatch_status: "executed".to_string(),
+                    lane_status: "lane_completed".to_string(),
+                    selected_backend: "opencode_cli".to_string(),
+                    activation_agent_type: "junior".to_string(),
+                    activation_runtime_role: "worker".to_string(),
+                    downstream_dispatch_target: "verifier".to_string(),
+                    downstream_dispatch_status: "blocked".to_string(),
+                    downstream_dispatch_ready: true,
+                    downstream_dispatch_executed_count: 1,
+                    downstream_dispatch_active_target: "verifier".to_string(),
+                    downstream_dispatch_last_target: "verifier".to_string(),
+                },
+            blocker_codes: vec!["open_delegated_cycle".to_string()],
+            stale_state_suspected: false,
+            recommended_command: Some(
+                "vida taskflow consume continue --run-id run-1 --json".to_string(),
+            ),
+            recommended_surface: Some("vida taskflow consume continue".to_string()),
+        };
+
+        let (route_truth, downstream_preview, next_action) =
+            format_run_graph_dispatch_compact_summary(&summary);
+
+        assert!(route_truth.contains("source=reconciled_run_graph_status"));
+        assert!(route_truth.contains("receipt_present=true"));
+        assert!(route_truth.contains("binding_present=true"));
+        assert!(route_truth.contains("evidence=activation_view_only"));
+        assert!(route_truth.contains("stale=false"));
+        assert!(downstream_preview.contains("next_target=verifier"));
+        assert!(downstream_preview.contains("blockers=open_delegated_cycle"));
+        assert_eq!(
+            next_action.as_deref(),
+            Some(
+                "vida taskflow consume continue --run-id run-1 --json (vida taskflow consume continue)"
+            )
+        );
+    }
+
+    #[test]
+    fn compact_dispatch_summary_display_handles_status_only_preview() {
+        let summary = crate::taskflow_run_graph::RunGraphDispatchCompactSummary {
+            route_truth: crate::taskflow_run_graph::RunGraphDispatchRouteTruthSummary {
+                projection_source: "persisted_run_graph_status".to_string(),
+                projection_reason: "run-graph status reflects authoritative persisted state"
+                    .to_string(),
+                projection_vs_receipt_parity: "no_receipt".to_string(),
+                dispatch_receipt_present: false,
+                continuation_binding_present: true,
+                evidence_state: "activation_view_only".to_string(),
+                activation_kind: "activation_view".to_string(),
+                receipt_backed_execution_evidence: false,
+            },
+            downstream_dispatch_preview:
+                crate::taskflow_run_graph::RunGraphDownstreamDispatchPreviewSummary {
+                    dispatch_target: "business_analyst".to_string(),
+                    dispatch_status: "ready".to_string(),
+                    lane_status: "analysis_active".to_string(),
+                    selected_backend: "opencode_cli".to_string(),
+                    activation_agent_type: "none".to_string(),
+                    activation_runtime_role: "none".to_string(),
+                    downstream_dispatch_target: "implementer".to_string(),
+                    downstream_dispatch_status: "resume_ready".to_string(),
+                    downstream_dispatch_ready: true,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: "business_analyst".to_string(),
+                    downstream_dispatch_last_target: "implementer".to_string(),
+                },
+            blocker_codes: Vec::new(),
+            stale_state_suspected: false,
+            recommended_command: Some(
+                "vida taskflow consume continue --run-id run-2 --json".to_string(),
+            ),
+            recommended_surface: Some("vida taskflow consume continue".to_string()),
+        };
+
+        let (route_truth, downstream_preview, next_action) =
+            format_run_graph_dispatch_compact_summary(&summary);
+
+        assert!(route_truth.contains("source=persisted_run_graph_status"));
+        assert!(route_truth.contains("parity=no_receipt"));
+        assert!(route_truth.contains("receipt_present=false"));
+        assert!(route_truth.contains("binding_present=true"));
+        assert!(route_truth.contains("stale=false"));
+        assert!(downstream_preview.contains("target=business_analyst"));
+        assert!(downstream_preview.contains("next_target=implementer"));
+        assert!(downstream_preview.contains("next_status=resume_ready"));
+        assert!(downstream_preview.contains("next_ready=true"));
+        assert!(downstream_preview.contains("blockers=none"));
+        assert_eq!(
+            next_action.as_deref(),
+            Some(
+                "vida taskflow consume continue --run-id run-2 --json (vida taskflow consume continue)"
+            )
         );
     }
 }

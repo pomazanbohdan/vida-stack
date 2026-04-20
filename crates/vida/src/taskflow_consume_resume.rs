@@ -632,9 +632,20 @@ async fn emit_runtime_consumption_resume_json(
     )?;
     let status = finalized.status;
     let operator_contracts = finalized.operator_contracts.clone();
-    let shared_fields = finalized.shared_fields.clone();
+    let shared_fields = serde_json::json!({
+        "trace_id": operator_contracts["trace_id"].clone(),
+        "workflow_class": operator_contracts["workflow_class"].clone(),
+        "risk_tier": operator_contracts["risk_tier"].clone(),
+        "status": finalized.shared_fields["status"].clone(),
+        "blocker_codes": finalized.shared_fields["blocker_codes"].clone(),
+        "next_actions": finalized.shared_fields["next_actions"].clone(),
+        "artifact_refs": finalized.shared_fields["artifact_refs"].clone(),
+    });
     let snapshot_with_operator_contracts = serde_json::json!({
         "surface": surface_name,
+        "trace_id": operator_contracts["trace_id"].clone(),
+        "workflow_class": operator_contracts["workflow_class"].clone(),
+        "risk_tier": operator_contracts["risk_tier"].clone(),
         "status": status,
         "blocker_codes": finalized.blocker_codes.clone(),
         "next_actions": finalized.next_actions.clone(),
@@ -651,28 +662,50 @@ async fn emit_runtime_consumption_resume_json(
             .map_err(|error| format!("Failed to encode runtime-consumption snapshot: {error}"))?,
     )
     .map_err(|error| format!("Failed to write runtime-consumption snapshot: {error}"))?;
+    if let Some(error) =
+        crate::operator_contracts::shared_operator_output_contract_parity_error(
+            &snapshot_with_operator_contracts,
+        )
+    {
+        return Err(format!(
+            "Failed to preserve runtime-consumption resume operator-contract parity: {error}"
+        ));
+    }
     if !emit_output {
         return Ok(());
     }
     if as_json {
+        let output_payload = serde_json::json!({
+            "surface": surface_name,
+            "trace_id": operator_contracts["trace_id"].clone(),
+            "workflow_class": operator_contracts["workflow_class"].clone(),
+            "risk_tier": operator_contracts["risk_tier"].clone(),
+            "status": status,
+            "blocker_codes": snapshot_with_operator_contracts["blocker_codes"].clone(),
+            "next_actions": snapshot_with_operator_contracts["next_actions"].clone(),
+            "artifact_refs": finalized.artifact_refs.clone(),
+            "shared_fields": shared_fields,
+            "operator_contracts": operator_contracts,
+            "source_run_id": dispatch_receipt.run_id,
+            "source_dispatch_packet_path": dispatch_packet_path,
+            "dispatch_receipt": payload_json["dispatch_receipt"].clone(),
+            "projection_truth": projection_truth,
+            "snapshot_path": snapshot_path,
+            "failure_control_evidence": snapshot_with_operator_contracts["failure_control_evidence"].clone(),
+        });
+        if let Some(error) =
+            crate::operator_contracts::shared_operator_output_contract_parity_error(
+                &output_payload,
+            )
+        {
+            return Err(format!(
+                "Failed to preserve runtime-consumption resume output parity: {error}"
+            ));
+        }
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "surface": surface_name,
-                "status": status,
-                "blocker_codes": snapshot_with_operator_contracts["blocker_codes"].clone(),
-                "next_actions": snapshot_with_operator_contracts["next_actions"].clone(),
-                "artifact_refs": finalized.artifact_refs.clone(),
-                "shared_fields": shared_fields,
-                "operator_contracts": operator_contracts,
-                "source_run_id": dispatch_receipt.run_id,
-                "source_dispatch_packet_path": dispatch_packet_path,
-                "dispatch_receipt": payload_json["dispatch_receipt"].clone(),
-                "projection_truth": projection_truth,
-                "snapshot_path": snapshot_path,
-                "failure_control_evidence": snapshot_with_operator_contracts["failure_control_evidence"].clone(),
-            }))
-            .expect("resume command should render as json")
+            serde_json::to_string_pretty(&output_payload)
+                .expect("resume command should render as json")
         );
     } else {
         super::print_surface_header(super::RenderMode::Plain, surface_name);
@@ -1951,6 +1984,37 @@ async fn sync_run_graph_after_resumed_execution(
     Ok(())
 }
 
+async fn reconcile_blocked_implementer_timeout_with_tracked_close_evidence(
+    store: &super::StateStore,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    run_graph_bootstrap: &serde_json::Value,
+    dispatch_receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) -> Result<bool, String> {
+    super::maybe_bridge_closed_implementer_task_into_receipt_with_context(
+        store,
+        role_selection,
+        run_graph_bootstrap,
+        dispatch_receipt,
+        None,
+    )
+    .await
+}
+
+async fn reconcile_blocked_verification_timeout_with_receipt_evidence(
+    store: &super::StateStore,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    run_graph_bootstrap: &serde_json::Value,
+    dispatch_receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) -> Result<bool, String> {
+    super::maybe_reconcile_blocked_verification_timeout_with_receipt_evidence(
+        store,
+        role_selection,
+        run_graph_bootstrap,
+        dispatch_receipt,
+    )
+    .await
+}
+
 /// Keep retry-artifact preparation strictly fail-closed: it may tune admissible
 /// retry backend hints, but it must still restore a lawful run-graph dispatch-ready
 /// posture for the same bounded node when an explicit retry packet already exists.
@@ -2615,6 +2679,32 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 );
                 return ExitCode::from(1);
             }
+            if let Err(error) = reconcile_blocked_implementer_timeout_with_tracked_close_evidence(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut dispatch_receipt,
+            )
+            .await
+            {
+                eprintln!(
+                    "Failed to reconcile blocked implementer timeout with tracked close evidence: {error}"
+                );
+                return ExitCode::from(1);
+            }
+            if let Err(error) = reconcile_blocked_verification_timeout_with_receipt_evidence(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut dispatch_receipt,
+            )
+            .await
+            {
+                eprintln!(
+                    "Failed to reconcile blocked verification timeout with receipt evidence: {error}"
+                );
+                return ExitCode::from(1);
+            }
             let project_root =
                 super::taskflow_task_bridge::infer_project_root_from_state_root(store.root());
             let prepared_retry_artifact = prepare_explicit_resume_retry_artifact(
@@ -3076,11 +3166,14 @@ mod tests {
         normalize_stale_in_flight_dispatch_receipt, persisted_dispatch_packet_lineage_task_id,
         prefer_ready_downstream_packet_over_active_result, prepare_explicit_resume_retry_artifact,
         primary_backend_for_dispatch_receipt, read_dispatch_packet,
+        reconcile_blocked_implementer_timeout_with_tracked_close_evidence,
+        reconcile_blocked_verification_timeout_with_receipt_evidence,
         recover_missing_first_dispatch_receipt, resolve_runtime_consumption_resume_inputs,
         resolve_runtime_consumption_resume_inputs_for_run_id, resume_from_persisted_final_snapshot,
         resume_packet_ready_blocker_parity_error, retry_backend_for_dispatch_receipt,
         runtime_consumption_resume_blocker_code, runtime_consumption_resume_receipt_blocker_codes,
         runtime_consumption_resume_receipt_next_actions,
+        emit_runtime_consumption_resume_json,
         runtime_consumption_snapshot_has_failure_control_evidence,
         should_refresh_resumed_downstream_preview, sync_run_graph_after_retry_artifact,
         validate_run_graph_resume_state, validate_run_graph_resume_state_for_downstream_packet,
@@ -3088,7 +3181,7 @@ mod tests {
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
     use crate::state_store::{CreateTaskRequest, TaskExecutionSemantics};
-    use crate::StateStore;
+    use crate::{RuntimeConsumptionLaneSelection, StateStore};
     use std::fs;
     use std::process::ExitCode;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -5145,6 +5238,116 @@ agent_system:
                     .iter()
                     .any(|value| value == "pending_specification_evidence"),
                 "specification evidence blocker should be cleared after canonical design/spec completion bridge"
+            );
+
+            let _ = fs::remove_dir_all(&root);
+        });
+    }
+
+    #[test]
+    fn resume_continue_snapshot_has_release1_shared_envelope_fields() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-shared-envelope-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+        runtime.block_on(async {
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            let role_selection = RuntimeConsumptionLaneSelection {
+                ok: true,
+                activation_source: "test".to_string(),
+                selection_mode: "fixed".to_string(),
+                fallback_role: "worker".to_string(),
+                request: "Normalize consume-continue shared operator envelope.".to_string(),
+                selected_role: "worker".to_string(),
+                conversational_mode: None,
+                single_task_only: false,
+                tracked_flow_entry: None,
+                allow_freeform_chat: false,
+                confidence: "high".to_string(),
+                matched_terms: Vec::new(),
+                compiled_bundle: serde_json::Value::Null,
+                execution_plan: serde_json::json!({
+                    "runtime_assignment": {
+                        "selected_backend": "internal_subagents"
+                    }
+                }),
+                reason: "test".to_string(),
+            };
+            let dispatch_receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "resume-envelope-run".to_string(),
+                dispatch_target: "verification".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("internal_cli:codex".to_string()),
+                dispatch_command: Some("codex exec".to_string()),
+                dispatch_packet_path: Some("/tmp/resume-envelope-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/resume-envelope-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("verification".to_string()),
+                downstream_dispatch_last_target: Some("verification".to_string()),
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("verifier".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-20T00:00:00Z".to_string(),
+            };
+
+            emit_runtime_consumption_resume_json(
+                &store,
+                "vida taskflow consume continue",
+                "/tmp/resume-envelope-packet.json",
+                &dispatch_receipt,
+                &role_selection,
+                None,
+                false,
+                true,
+            )
+            .await
+            .expect("resume json snapshot should be emitted");
+
+            let snapshot_path = crate::latest_final_runtime_consumption_snapshot_path(store.root())
+                .expect("load latest final snapshot path")
+                .expect("final snapshot should exist");
+            let snapshot_json: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(&snapshot_path).expect("read final snapshot"),
+            )
+            .expect("parse final snapshot");
+
+            assert_eq!(
+                snapshot_json["trace_id"],
+                snapshot_json["operator_contracts"]["trace_id"]
+            );
+            assert_eq!(
+                snapshot_json["workflow_class"],
+                snapshot_json["operator_contracts"]["workflow_class"]
+            );
+            assert_eq!(
+                snapshot_json["risk_tier"],
+                snapshot_json["operator_contracts"]["risk_tier"]
+            );
+            assert_eq!(
+                crate::operator_contracts::shared_operator_output_contract_parity_error(
+                    &snapshot_json
+                ),
+                None
             );
 
             let _ = fs::remove_dir_all(&root);
@@ -9527,6 +9730,287 @@ agent_system:
         assert_eq!(updated.handoff_state, "awaiting_implementer");
         assert_eq!(updated.resume_target, "dispatch.implementer_lane");
         assert!(updated.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reconcile_blocked_implementer_timeout_with_tracked_close_evidence_promotes_execution()
+    {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-resume-implementer-close-evidence-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "feature-resume-dev",
+                title: "Resume dev task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 2,
+                parent_id: None,
+                labels: &[String::from("dev-pack")],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("task should be created");
+
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "tracked_flow_bootstrap": {
+                    "dev_task": {
+                        "task_id": "feature-resume-dev",
+                        "ensure_command": "vida task ensure feature-resume-dev \"Resume dev task\" --type task --status open --json"
+                    }
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["implementer", "coach"],
+                        "lane_catalog": {
+                            "implementer": {
+                                "dispatch_target": "implementer",
+                                "completion_blocker": "pending_implementation_evidence",
+                                "activation": {
+                                    "activation_agent_type": "junior",
+                                    "activation_runtime_role": "worker"
+                                }
+                            },
+                            "coach": {
+                                "dispatch_target": "coach",
+                                "completion_blocker": "pending_review_clean_evidence",
+                                "activation": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "coach"
+                                }
+                            }
+                        }
+                    }
+                },
+                "orchestration_contract": {},
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-resume-implementer-close-evidence",
+        });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-resume-implementer-close-evidence".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("exc-timeout".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/resume-implementer-dispatch.json".to_string()),
+            dispatch_result_path: Some("/tmp/resume-implementer-timeout.json".to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("implementer".to_string()),
+            downstream_dispatch_last_target: Some("implementer".to_string()),
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-19T00:00:00Z".to_string(),
+        };
+
+        let reconciled = reconcile_blocked_implementer_timeout_with_tracked_close_evidence(
+            &store,
+            &role_selection,
+            &run_graph_bootstrap,
+            &mut receipt,
+        )
+        .await
+        .expect("reconciliation should succeed");
+
+        assert!(reconciled);
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_completed");
+        assert!(receipt.blocker_code.is_none());
+        assert!(receipt.exception_path_receipt_id.is_none());
+        assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("coach"));
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("packet_ready")
+        );
+        assert!(receipt.downstream_dispatch_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reconcile_blocked_verification_timeout_with_receipt_evidence_promotes_closure() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-resume-verification-evidence-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let verification_result_path = root.join("verification-proof.json");
+        fs::write(
+            &verification_result_path,
+            serde_json::json!({
+                "artifact_kind": "verification_evidence",
+                "status": "clean"
+            })
+            .to_string(),
+        )
+        .expect("verification evidence should persist");
+
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue verification".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec!["verification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "tracked_flow_bootstrap": {
+                    "dev_task": {
+                        "task_id": "feature-resume-dev",
+                        "ensure_command": "vida task ensure feature-resume-dev \"Resume dev task\" --type task --status open --json"
+                    }
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["implementer", "coach", "verification"],
+                        "lane_catalog": {
+                            "implementer": {
+                                "dispatch_target": "implementer",
+                                "completion_blocker": "pending_implementation_evidence",
+                                "activation": {
+                                    "activation_agent_type": "junior",
+                                    "activation_runtime_role": "worker"
+                                }
+                            },
+                            "coach": {
+                                "dispatch_target": "coach",
+                                "completion_blocker": "pending_review_clean_evidence",
+                                "activation": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "coach"
+                                }
+                            },
+                            "verification": {
+                                "dispatch_target": "verification",
+                                "completion_blocker": "pending_verification_evidence",
+                                "activation": {
+                                    "activation_agent_type": "senior",
+                                    "activation_runtime_role": "verifier"
+                                }
+                            }
+                        }
+                    }
+                },
+                "orchestration_contract": {},
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-resume-verification-evidence",
+        });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-resume-verification-evidence".to_string(),
+            dispatch_target: "verification".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("exc-timeout".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/resume-verification-dispatch.json".to_string()),
+            dispatch_result_path: Some("/tmp/resume-verification-timeout.json".to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: Some("wait for verifier evidence".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_verification_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: Some(verification_result_path.display().to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("verification".to_string()),
+            downstream_dispatch_last_target: Some("verification".to_string()),
+            activation_agent_type: Some("senior".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-19T00:00:00Z".to_string(),
+        };
+
+        let reconciled = reconcile_blocked_verification_timeout_with_receipt_evidence(
+            &store,
+            &role_selection,
+            &run_graph_bootstrap,
+            &mut receipt,
+        )
+        .await
+        .expect("verification reconciliation should succeed");
+
+        assert!(reconciled);
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_completed");
+        assert!(receipt
+            .dispatch_result_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty()));
+        assert!(receipt.blocker_code.is_none());
+        assert!(receipt.exception_path_receipt_id.is_none());
+        assert_eq!(
+            receipt.downstream_dispatch_target.as_deref(),
+            Some("closure")
+        );
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("packet_ready")
+        );
+        assert!(receipt.downstream_dispatch_ready);
 
         let _ = fs::remove_dir_all(&root);
     }

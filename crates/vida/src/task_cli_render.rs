@@ -3,7 +3,47 @@ use crate::state_store::{
     TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode,
     TaskGraphIssue, TaskProgressSummary, TaskRecord,
 };
+use crate::operator_contracts::{
+    finalize_release1_operator_truth, shared_operator_output_contract_parity_error,
+};
 use crate::{print_surface_header, print_surface_line, RenderMode};
+
+fn build_pass_operator_surface_payload(
+    surface: &str,
+    extra_fields: serde_json::Value,
+) -> serde_json::Value {
+    let finalized = finalize_release1_operator_truth(
+        Vec::new(),
+        Vec::new(),
+        serde_json::json!({
+            "surface": surface,
+        }),
+    )
+    .expect("task operator surface should finalize");
+    let mut payload = serde_json::json!({
+        "surface": surface,
+        "status": finalized.status,
+        "blocker_codes": finalized.blocker_codes,
+        "next_actions": finalized.next_actions,
+        "artifact_refs": finalized.artifact_refs,
+        "shared_fields": finalized.shared_fields,
+        "operator_contracts": finalized.operator_contracts,
+    });
+    let extra_object = extra_fields
+        .as_object()
+        .expect("task operator surface extras must be an object")
+        .clone();
+    payload
+        .as_object_mut()
+        .expect("task operator surface payload should serialize to an object")
+        .extend(extra_object);
+    assert_eq!(
+        shared_operator_output_contract_parity_error(&payload),
+        None,
+        "task operator surface payload should keep release-1 parity"
+    );
+    payload
+}
 
 fn print_task_record(render: RenderMode, title: &str, task: &TaskRecord) {
     print_surface_header(render, title);
@@ -77,13 +117,11 @@ pub(crate) fn print_task_ready(
     tasks: &[TaskRecord],
     as_json: bool,
 ) {
-    let payload = serde_json::json!({
-        "surface": "vida task ready",
-        "status": "pass",
+    let payload = build_pass_operator_surface_payload("vida task ready", serde_json::json!({
         "scope_task_id": scope_task_id,
         "ready_count": tasks.len(),
         "tasks": tasks,
-    });
+    }));
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -120,12 +158,10 @@ pub(crate) fn print_task_progress(
     summary: &TaskProgressSummary,
     as_json: bool,
 ) {
-    let payload = serde_json::json!({
-        "surface": "vida task progress",
-        "status": "pass",
+    let payload = build_pass_operator_surface_payload("vida task progress", serde_json::json!({
         "task_id": summary.root_task.id,
         "progress": summary,
-    });
+    }));
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -272,12 +308,11 @@ pub(crate) fn print_task_dependencies(
     dependencies: &[TaskDependencyStatus],
     as_json: bool,
 ) {
-    let payload = serde_json::json!({
-        "surface": title,
+    let payload = build_pass_operator_surface_payload(title, serde_json::json!({
         "task_id": task_id,
         "dependency_count": dependencies.len(),
         "dependencies": dependencies,
-    });
+    }));
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -316,10 +351,8 @@ pub(crate) fn print_blocked_tasks(
     as_json: bool,
 ) {
     let payload = if summary_only {
-        serde_json::json!({
-            "surface": "vida task blocked",
+        build_pass_operator_surface_payload("vida task blocked", serde_json::json!({
             "view": "summary",
-            "status": "pass",
             "blocked_count": tasks.len(),
             "tasks": tasks.iter().map(|blocked| serde_json::json!({
                 "id": blocked.task.id,
@@ -334,14 +367,12 @@ pub(crate) fn print_blocked_tasks(
                     "dependency_issue_type": blocker.dependency_issue_type,
                 })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
-        })
+        }))
     } else {
-        serde_json::json!({
-            "surface": "vida task blocked",
-            "status": "pass",
+        build_pass_operator_surface_payload("vida task blocked", serde_json::json!({
             "blocked_count": tasks.len(),
             "tasks": tasks,
-        })
+        }))
     };
     if crate::surface_render::print_surface_json(
         &payload,
@@ -379,14 +410,12 @@ pub(crate) fn print_task_dependency_tree(
     tree: &TaskDependencyTreeNode,
     as_json: bool,
 ) {
-    let payload = serde_json::json!({
-        "surface": "vida task tree",
-        "status": "pass",
+    let payload = build_pass_operator_surface_payload("vida task tree", serde_json::json!({
         "root_task_id": tree.task.id,
         "dependency_count": tree.dependencies.len(),
         "child_count": tree.children.len(),
         "tree": tree,
-    });
+    }));
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -428,13 +457,11 @@ pub(crate) fn print_task_direct_children(
     tree: &TaskDependencyTreeNode,
     as_json: bool,
 ) {
-    let payload = serde_json::json!({
-        "surface": "vida task children",
-        "status": "pass",
+    let payload = build_pass_operator_surface_payload("vida task children", serde_json::json!({
         "root_task_id": tree.task.id,
         "child_count": tree.children.len(),
         "children": tree.children,
-    });
+    }));
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -577,11 +604,11 @@ pub(crate) fn print_task_bulk_reparent_result(
     result: &TaskBulkReparentResult,
     as_json: bool,
 ) {
-    let payload = serde_json::json!({
-        "surface": "vida task reparent-children",
-        "status": "pass",
+    let payload = build_pass_operator_surface_payload(
+        "vida task reparent-children",
+        serde_json::json!({
         "result": result,
-    });
+    }));
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -632,5 +659,79 @@ pub(crate) fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPa
             "{}\t{}\t{}\t{}",
             node.id, node.status, node.issue_type, node.title
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_pass_operator_surface_payload;
+    use crate::operator_contracts::shared_operator_output_contract_parity_error;
+    use crate::state_store::{TaskExecutionSemantics, TaskRecord};
+
+    fn sample_task(id: &str) -> TaskRecord {
+        TaskRecord {
+            id: id.to_string(),
+            display_id: Some(format!("vida-{id}")),
+            title: format!("Task {id}"),
+            description: "sample".to_string(),
+            status: "open".to_string(),
+            priority: 2,
+            issue_type: "task".to_string(),
+            created_at: "2026-04-20T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "2026-04-20T00:00:00Z".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: "/tmp".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: vec!["operator-dx".to_string()],
+            execution_semantics: TaskExecutionSemantics::default(),
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn task_ready_payload_keeps_release1_operator_contract_parity() {
+        let tasks = vec![sample_task("task-1")];
+        let payload = build_pass_operator_surface_payload(
+            "vida task ready",
+            serde_json::json!({
+                "scope_task_id": "epic-1",
+                "ready_count": tasks.len(),
+                "tasks": tasks,
+            }),
+        );
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["shared_fields"]["status"], "pass");
+        assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(payload["artifact_refs"]["surface"], "vida task ready");
+        assert_eq!(payload["ready_count"], 1);
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_tree_payload_keeps_release1_operator_contract_parity() {
+        let payload = build_pass_operator_surface_payload(
+            "vida task tree",
+            serde_json::json!({
+                "root_task_id": "task-root",
+                "dependency_count": 0,
+                "child_count": 0,
+                "tree": {
+                    "task": sample_task("task-root"),
+                    "dependencies": [],
+                    "children": [],
+                },
+            }),
+        );
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["shared_fields"]["status"], "pass");
+        assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(payload["artifact_refs"]["surface"], "vida task tree");
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 }
