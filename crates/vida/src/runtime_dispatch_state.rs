@@ -4194,6 +4194,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn runtime_host_execution_contract_reflects_external_qwen_selection() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        let contract = runtime_host_execution_contract_for_root(harness.path());
+        assert_eq!(contract["selected_cli_system"], "qwen");
+        assert_eq!(contract["selected_cli_execution_class"], "external");
+        assert_eq!(contract["runtime_template_root"], ".qwen");
+        assert_eq!(contract["template_materialized"], true);
+    }
+
     fn install_external_cli_test_subagents(config_path: &Path) {
         let config = fs::read_to_string(config_path).expect("config should exist");
         let updated = config.replace(
