@@ -700,51 +700,6 @@ mod tests {
     }
 
     #[test]
-    fn runtime_assignment_from_dispatch_alias_is_fail_closed_when_runtime_role_is_missing() {
-        let compiled_bundle = serde_json::json!({
-            "carrier_runtime": {
-                "roles": [
-                    {
-                        "role_id": "junior",
-                        "tier": "junior",
-                        "rate": 1,
-                        "default_runtime_role": "worker",
-                        "runtime_roles": ["worker"],
-                        "task_classes": ["implementation"]
-                    }
-                ],
-                "worker_strategy": {
-                    "selection_policy": {
-                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
-                    },
-                    "agents": {
-                        "junior": {
-                            "effective_score": 90,
-                            "lifecycle_state": "active"
-                        }
-                    },
-                    "store_path": ".vida/state/worker-strategy.json",
-                    "scorecards_path": ".vida/state/worker-scorecards.json"
-                },
-                "dispatch_aliases": [
-                    {
-                        "role_id": "development_implementer",
-                        "task_classes": ["implementation"]
-                    }
-                ]
-            }
-        });
-
-        let assignment = build_runtime_assignment_from_dispatch_alias(
-            &compiled_bundle,
-            "development_implementer",
-            "implementation",
-        );
-        assert_eq!(assignment["enabled"], false);
-        assert_eq!(assignment["reason"], "dispatch_alias_runtime_role_missing");
-    }
-
-    #[test]
     fn fallback_run_graph_status_uses_carrier_tier_for_conversation_routes() {
         let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,

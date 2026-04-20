@@ -4224,6 +4224,51 @@ mod tests {
         assert_eq!(contract["template_materialized"], true);
     }
 
+    #[test]
+    fn runtime_assignment_from_dispatch_alias_is_fail_closed_when_runtime_role_is_missing() {
+        let compiled_bundle = serde_json::json!({
+            "carrier_runtime": {
+                "roles": [
+                    {
+                        "role_id": "junior",
+                        "tier": "junior",
+                        "rate": 1,
+                        "default_runtime_role": "worker",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"]
+                    }
+                ],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
+                    },
+                    "agents": {
+                        "junior": {
+                            "effective_score": 90,
+                            "lifecycle_state": "active"
+                        }
+                    },
+                    "store_path": ".vida/state/worker-strategy.json",
+                    "scorecards_path": ".vida/state/worker-scorecards.json"
+                },
+                "dispatch_aliases": [
+                    {
+                        "role_id": "development_implementer",
+                        "task_classes": ["implementation"]
+                    }
+                ]
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_dispatch_alias(
+            &compiled_bundle,
+            "development_implementer",
+            "implementation",
+        );
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(assignment["reason"], "dispatch_alias_runtime_role_missing");
+    }
+
     fn install_external_cli_test_subagents(config_path: &Path) {
         let config = fs::read_to_string(config_path).expect("config should exist");
         let updated = config.replace(
