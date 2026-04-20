@@ -3759,22 +3759,16 @@ fn runtime_dispatch_command_for_packet_path(
         "taskflow_pack" => {
             runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target)
         }
-        "agent_lane" => receipt
-            .dispatch_command
-            .clone()
-            .or_else(|| {
-                runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target)
-            })
-            .or_else(|| {
-                Some(
-                    runtime_agent_lane_dispatch_for_root(
-                        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-                        packet_path,
-                        None,
-                    )
-                    .activation_command,
-                )
-            }),
+        "agent_lane" => Some(
+            runtime_agent_lane_dispatch_for_root(
+                &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                packet_path,
+                None,
+            )
+            .activation_command,
+        )
+        .or_else(|| receipt.dispatch_command.clone())
+        .or_else(|| runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target)),
         _ => runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target),
     }
 }
@@ -11732,7 +11726,10 @@ agent_system:
             .expect("dispatch packet json should load");
 
         assert_eq!(packet["dispatch_surface"], "vida agent-init");
-        assert_eq!(packet["dispatch_command"], "vida agent-init");
+        assert!(packet["dispatch_command"]
+            .as_str()
+            .expect("dispatch command should be present")
+            .starts_with("vida agent-init --dispatch-packet "));
         assert_eq!(packet["selected_backend"], "internal_subagents");
         assert_eq!(
             packet["route_policy"]["effective_selected_backend"],
@@ -11863,6 +11860,105 @@ agent_system:
             "preview helper must not write a dispatch packet to disk"
         );
     }
+
+    #[test]
+    fn write_runtime_dispatch_packet_persists_blocked_implementer_packet_without_owned_scope() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "probe closure".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["closure".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "implementation": {
+                        "executor_backend": "internal_subagents",
+                        "activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-blocked-no-scope".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: Some("missing_owned_write_scope".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["missing_owned_write_scope".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-20T00:00:00Z".to_string(),
+        };
+        let handoff_plan = serde_json::json!({});
+        let run_graph_bootstrap = serde_json::json!({});
+        let ctx = RuntimeDispatchPacketContext::new(
+            &state_root,
+            &role_selection,
+            &receipt,
+            &handoff_plan,
+            &run_graph_bootstrap,
+        );
+
+        let preview = runtime_dispatch_packet_preview(&ctx).expect("preview should render");
+        assert_eq!(preview["status"], "blocked");
+        assert_eq!(
+            preview["packet_contract_missing_fields"],
+            serde_json::json!(["owned_paths"])
+        );
+
+        let packet_path =
+            write_runtime_dispatch_packet(&ctx).expect("blocked dispatch packet should persist");
+        let packet = crate::read_json_file_if_present(Path::new(&packet_path))
+            .expect("dispatch packet json should load");
+
+        assert_eq!(packet["packet_template_kind"], "delivery_task_packet");
+        assert!(packet["dispatch_command"]
+            .as_str()
+            .expect("dispatch command should be present")
+            .starts_with("vida agent-init --dispatch-packet "));
+        assert_eq!(
+            packet["delivery_task_packet"]["handoff_task_class"],
+            "implementation"
+        );
+        assert_eq!(packet["delivery_task_packet"]["owned_paths"], serde_json::json!([]));
+    }
 }
 
 pub(crate) fn write_runtime_dispatch_packet(
@@ -11886,7 +11982,13 @@ pub(crate) fn write_runtime_dispatch_packet(
         &packet_path_display,
     );
     let body = build_runtime_dispatch_packet_body(ctx, activation_command)?;
-    validate_runtime_dispatch_packet_contract(&body, "Runtime dispatch packet")?;
+    let validation_error =
+        validate_runtime_dispatch_packet_contract(&body, "Runtime dispatch packet").err();
+    if ctx.receipt.dispatch_status != "blocked" {
+        if let Some(error) = validation_error {
+            return Err(error);
+        }
+    }
     let encoded = serde_json::to_string_pretty(&body)
         .map_err(|error| format!("Failed to encode dispatch packet: {error}"))?;
     std::fs::write(&packet_path, encoded)

@@ -391,6 +391,22 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     return ExitCode::from(1);
                                 }
                             };
+                        let pending_design_packet =
+                            super::blocker_code_str(super::BlockerCode::PendingDesignPacket);
+                        let pending_execution_preparation_evidence = super::blocker_code_str(
+                            super::BlockerCode::PendingExecutionPreparationEvidence,
+                        );
+                        let direct_consumption_ready = bundle_check.ok
+                            && docflow_verdict.ready
+                            && !closure_admission.blockers.iter().any(|row| {
+                                row == pending_design_packet
+                                    || row == pending_execution_preparation_evidence
+                            })
+                            && dispatch_packet_preview
+                                .as_ref()
+                                .and_then(|preview| preview.get("status"))
+                                .and_then(serde_json::Value::as_str)
+                                != Some("blocked");
                         if !consume_final_mode.is_read_only() {
                             let dispatch_packet_path =
                                 match super::write_runtime_dispatch_packet(&ctx) {
@@ -403,6 +419,32 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     }
                                 };
                             dispatch_receipt.dispatch_packet_path = Some(dispatch_packet_path);
+                            if !direct_consumption_ready {
+                                let blocker_code = dispatch_packet_preview
+                                    .as_ref()
+                                    .and_then(|preview| preview.get("status"))
+                                    .and_then(serde_json::Value::as_str)
+                                    .filter(|status| *status == "blocked")
+                                    .map(|_| {
+                                        super::blocker_code_str(
+                                            super::BlockerCode::MissingExecutionPreparationContract,
+                                        )
+                                        .to_string()
+                                    })
+                                    .or_else(|| closure_admission.blockers.first().cloned())
+                                    .or_else(|| docflow_verdict.blockers.first().cloned())
+                                    .or_else(|| bundle_check.blockers.first().cloned())
+                                    .unwrap_or_else(|| {
+                                        super::blocker_code_str(
+                                            super::BlockerCode::PendingExecutionPreparationEvidence,
+                                        )
+                                        .to_string()
+                                    });
+                                dispatch_receipt.dispatch_status = "blocked".to_string();
+                                dispatch_receipt.lane_status =
+                                    super::LaneStatus::LaneBlocked.as_str().to_string();
+                                dispatch_receipt.blocker_code = Some(blocker_code);
+                            }
                         }
                         if let Some(project_root) =
                             super::taskflow_task_bridge::infer_project_root_from_state_root(
@@ -426,11 +468,12 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             )
                             .is_some();
                         let state_root = store.root().to_path_buf();
+                        drop(store);
                         if !consume_final_mode.is_read_only()
+                            && direct_consumption_ready
                             && dispatch_receipt.dispatch_status == "routed"
                             && allow_taskflow_pack_execution
                         {
-                            drop(store);
                             if let Err(error) = super::execute_and_record_dispatch_receipt(
                                 &state_root,
                                 &role_selection,
@@ -455,7 +498,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         };
                         let state_root = store.root().to_path_buf();
                         drop(store);
-                        if !consume_final_mode.is_read_only() {
+                        if !consume_final_mode.is_read_only() && direct_consumption_ready {
                             if let Err(error) = super::execute_downstream_dispatch_chain(
                                 &state_root,
                                 &role_selection,
@@ -482,7 +525,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         // Downstream execution inside execute_downstream_dispatch_chain updates run-graph status
                         // via execute_and_record_dispatch_receipt, but the root-level continuation binding must
                         // be refreshed to reflect the final downstream target.
-                        if !consume_final_mode.is_read_only() {
+                        if !consume_final_mode.is_read_only() && direct_consumption_ready {
                             if let Some(run_id) = run_graph_bootstrap
                                 .get("run_id")
                                 .and_then(serde_json::Value::as_str)
@@ -513,22 +556,6 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         }
-                        let pending_design_packet =
-                            super::blocker_code_str(super::BlockerCode::PendingDesignPacket);
-                        let pending_execution_preparation_evidence = super::blocker_code_str(
-                            super::BlockerCode::PendingExecutionPreparationEvidence,
-                        );
-                        let direct_consumption_ready = bundle_check.ok
-                            && docflow_verdict.ready
-                            && !closure_admission.blockers.iter().any(|row| {
-                                row == pending_design_packet
-                                    || row == pending_execution_preparation_evidence
-                            })
-                            && dispatch_packet_preview
-                                .as_ref()
-                                .and_then(|preview| preview.get("status"))
-                                .and_then(serde_json::Value::as_str)
-                                != Some("blocked");
                         let generated_at = time::OffsetDateTime::now_utc()
                             .format(&super::Rfc3339)
                             .expect("rfc3339 timestamp should render");

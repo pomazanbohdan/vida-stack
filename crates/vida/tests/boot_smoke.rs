@@ -3208,7 +3208,7 @@ fn taskflow_consume_final_executes_ready_downstream_closure_step() {
     );
     assert_eq!(
         status_json["latest_run_graph_status"]["active_node"],
-        "planning"
+        "orchestrator"
     );
     assert_eq!(status_json["latest_run_graph_status"]["status"], "blocked");
 
