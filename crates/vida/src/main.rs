@@ -308,24 +308,8 @@ pub(crate) use development_flow_orchestration::{
 mod tests {
     use super::*;
     use crate::temp_state::TempStateHarness;
-    use crate::test_cli_support::{cli, guard_current_dir};
+    use crate::test_cli_support::guard_current_dir;
     use std::fs;
-    use std::thread;
-    use std::time::{Duration, Instant};
-
-    fn wait_for_state_unlock(state_dir: &std::path::Path) {
-        let direct_lock_path = state_dir.join("LOCK");
-        let nested_lock_path = state_dir
-            .join(".vida")
-            .join("data")
-            .join("state")
-            .join("LOCK");
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while (direct_lock_path.exists() || nested_lock_path.exists()) && Instant::now() < deadline
-        {
-            thread::sleep(Duration::from_millis(25));
-        }
-    }
 
     #[test]
     fn init_command_succeeds() {
@@ -401,63 +385,6 @@ mod tests {
         assert!(harness.path().join(".vida/runtime").is_dir());
         assert!(harness.path().join(".vida/scratchpad").is_dir());
         assert!(!harness.path().join("vida").exists());
-    }
-
-    #[test]
-    #[ignore = "covered by binary integration smoke; in-process sequential SurrealKv opens keep the lock longer than this unit test assumes"]
-    fn task_command_round_trip_succeeds() {
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let jsonl_path = harness.path().join("issues.jsonl");
-        fs::write(
-            &jsonl_path,
-            concat!(
-                "{\"id\":\"vida-a\",\"title\":\"Task A\",\"description\":\"first\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
-                "{\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"in_progress\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
-            ),
-        )
-        .expect("write sample task jsonl");
-
-        assert_eq!(
-            tokio::runtime::Runtime::new()
-                .expect("tokio runtime should initialize")
-                .block_on(run(cli(&[
-                    "task",
-                    "import-jsonl",
-                    jsonl_path.to_str().expect("jsonl path should render"),
-                    "--state-dir",
-                    harness.path().to_str().expect("state path should render"),
-                    "--json"
-                ]))),
-            ExitCode::SUCCESS
-        );
-        wait_for_state_unlock(harness.path());
-
-        assert_eq!(
-            tokio::runtime::Runtime::new()
-                .expect("tokio runtime should initialize")
-                .block_on(run(cli(&[
-                    "task",
-                    "list",
-                    "--state-dir",
-                    harness.path().to_str().expect("state path should render"),
-                    "--json"
-                ]))),
-            ExitCode::SUCCESS
-        );
-        wait_for_state_unlock(harness.path());
-
-        assert_eq!(
-            tokio::runtime::Runtime::new()
-                .expect("tokio runtime should initialize")
-                .block_on(run(cli(&[
-                    "task",
-                    "ready",
-                    "--state-dir",
-                    harness.path().to_str().expect("state path should render"),
-                    "--json"
-                ]))),
-            ExitCode::SUCCESS
-        );
     }
 
 }

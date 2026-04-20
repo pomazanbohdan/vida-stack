@@ -1066,6 +1066,10 @@ mod tests {
         canonical_json_string_array_entries, normalize_task_json_contract_arrays,
         parse_label_values, parse_optional_label_value, task_json_success_status,
     };
+    use crate::test_cli_support::cli;
+    use crate::test_cli_support::guard_current_dir;
+    use crate::temp_state::TempStateHarness;
+    use std::fs;
 
     #[test]
     fn task_json_success_status_defaults_to_release_contract_vocabulary() {
@@ -1107,6 +1111,62 @@ mod tests {
         assert_eq!(
             parse_optional_label_value(Some("alpha, beta")),
             Some(vec!["alpha".to_string(), "beta".to_string()])
+        );
+    }
+
+    #[test]
+    #[ignore = "covered by binary integration smoke; in-process sequential SurrealKv opens keep the lock longer than this unit test assumes"]
+    fn task_command_round_trip_succeeds() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let jsonl_path = harness.path().join("issues.jsonl");
+        fs::write(
+            &jsonl_path,
+            concat!(
+                "{\"id\":\"vida-a\",\"title\":\"Task A\",\"description\":\"first\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"in_progress\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
+            ),
+        )
+        .expect("write sample task jsonl");
+
+        assert_eq!(
+            tokio::runtime::Runtime::new()
+                .expect("tokio runtime should initialize")
+                .block_on(crate::run(cli(&[
+                    "task",
+                    "import-jsonl",
+                    jsonl_path.to_str().expect("jsonl path should render"),
+                    "--state-dir",
+                    harness.path().to_str().expect("state path should render"),
+                    "--json"
+                ]))),
+            std::process::ExitCode::SUCCESS
+        );
+
+        assert_eq!(
+            tokio::runtime::Runtime::new()
+                .expect("tokio runtime should initialize")
+                .block_on(crate::run(cli(&[
+                    "task",
+                    "list",
+                    "--state-dir",
+                    harness.path().to_str().expect("state path should render"),
+                    "--json"
+                ]))),
+            std::process::ExitCode::SUCCESS
+        );
+
+        assert_eq!(
+            tokio::runtime::Runtime::new()
+                .expect("tokio runtime should initialize")
+                .block_on(crate::run(cli(&[
+                    "task",
+                    "ready",
+                    "--state-dir",
+                    harness.path().to_str().expect("state path should render"),
+                    "--json"
+                ]))),
+            std::process::ExitCode::SUCCESS
         );
     }
 }
