@@ -373,6 +373,27 @@ mod tests {
     }
 
     #[test]
+    fn selected_backend_prefers_carrier_backend_hint_over_legacy_subagents() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "implementation": {
+                    "carrier_backend_hint": "neutral_hint",
+                    "subagents": "internal_subagents"
+                }
+            },
+            "default_route": {
+                "subagents": "internal_subagents"
+            },
+            "status": "execution_ready",
+        });
+        let route = &execution_plan["development_flow"]["implementation"];
+        assert_eq!(
+            selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
+            Some("neutral_hint")
+        );
+    }
+
+    #[test]
     fn explicit_executor_backend_wins_over_carrier_tier_and_legacy_hints() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
