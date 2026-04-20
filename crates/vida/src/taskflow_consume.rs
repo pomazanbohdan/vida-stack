@@ -851,6 +851,94 @@ impl RetrievalPolicyDecisionGate {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DeveloperHandoffPacketArtifact {
+    path: Option<String>,
+    ready: bool,
+    status: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ExecutionPreparationEvidenceArtifact {
+    ready: bool,
+    status: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ExecutionPreparationArtifacts {
+    handoff_ready: bool,
+    developer_handoff_packet: DeveloperHandoffPacketArtifact,
+    execution_preparation_evidence: ExecutionPreparationEvidenceArtifact,
+}
+
+fn nonempty_json_string(value: Option<&serde_json::Value>) -> Option<String> {
+    value.and_then(serde_json::Value::as_str).map(str::trim).and_then(|value| {
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    })
+}
+
+fn decode_execution_preparation_artifacts(
+    taskflow_handoff_plan: &serde_json::Value,
+    run_graph_bootstrap: &serde_json::Value,
+) -> ExecutionPreparationArtifacts {
+    let artifact_json = run_graph_bootstrap
+        .get("execution_preparation_artifacts")
+        .filter(|value| value.is_object());
+    let packet_json = artifact_json.and_then(|value| value.get("developer_handoff_packet"));
+    let evidence_json = artifact_json.and_then(|value| value.get("execution_preparation_evidence"));
+
+    let handoff_ready = super::json_bool(taskflow_handoff_plan.get("handoff_ready"), false)
+        && (artifact_json
+            .map(|value| super::json_bool(value.get("handoff_ready"), false))
+            .unwrap_or_else(|| super::json_bool(run_graph_bootstrap.get("handoff_ready"), false)));
+    let developer_handoff_packet = DeveloperHandoffPacketArtifact {
+        path: nonempty_json_string(packet_json.and_then(|value| value.get("path"))).or_else(|| {
+            nonempty_json_string(run_graph_bootstrap.get("execution_preparation_packet_path"))
+        }),
+        ready: packet_json
+            .map(|value| super::json_bool(value.get("ready"), false))
+            .unwrap_or_else(|| {
+                super::json_bool(
+                    run_graph_bootstrap.get("execution_preparation_handoff_packet_ready"),
+                    false,
+                ) || run_graph_bootstrap
+                    .get("execution_preparation_packet_path")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false)
+            }),
+        status: nonempty_json_string(packet_json.and_then(|value| value.get("status"))),
+    };
+    let execution_preparation_evidence = ExecutionPreparationEvidenceArtifact {
+        ready: evidence_json
+            .map(|value| super::json_bool(value.get("ready"), false))
+            .unwrap_or_else(|| {
+                super::json_bool(
+                    run_graph_bootstrap.get("execution_preparation_evidence_ready"),
+                    false,
+                ) || run_graph_bootstrap["evidence"]["execution_preparation"]["status"]
+                    .as_str()
+                    == Some("ready")
+                    || run_graph_bootstrap["evidence"]["execution_preparation"]["ready"]
+                        .as_bool()
+                        .unwrap_or(false)
+            }),
+        status: nonempty_json_string(evidence_json.and_then(|value| value.get("status"))).or_else(
+            || nonempty_json_string(run_graph_bootstrap["evidence"]["execution_preparation"].get("status")),
+        ),
+    };
+
+    ExecutionPreparationArtifacts {
+        handoff_ready,
+        developer_handoff_packet,
+        execution_preparation_evidence,
+    }
+}
+
 fn build_execution_preparation_evidence_gate(
     role_selection: &super::RuntimeConsumptionLaneSelection,
     taskflow_handoff_plan: &serde_json::Value,
@@ -876,29 +964,20 @@ fn build_execution_preparation_evidence_gate(
         };
     }
 
-    let handoff_ready = super::json_bool(taskflow_handoff_plan.get("handoff_ready"), false)
-        && super::json_bool(run_graph_bootstrap.get("handoff_ready"), false);
-    let packet_ready = run_graph_bootstrap
-        .get("execution_preparation_packet_path")
-        .and_then(serde_json::Value::as_str)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-        || super::json_bool(
-            run_graph_bootstrap.get("execution_preparation_handoff_packet_ready"),
-            false,
-        );
-    let evidence_ready = super::json_bool(
-        run_graph_bootstrap.get("execution_preparation_evidence_ready"),
-        false,
-    ) || run_graph_bootstrap["evidence"]["execution_preparation"]["status"]
-        .as_str()
-        == Some("ready")
-        || run_graph_bootstrap["evidence"]["execution_preparation"]["ready"]
-            .as_bool()
-            .unwrap_or(false);
+    let artifacts =
+        decode_execution_preparation_artifacts(taskflow_handoff_plan, run_graph_bootstrap);
+    let packet_ready = artifacts.developer_handoff_packet.ready
+        && artifacts
+            .developer_handoff_packet
+            .path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+    let evidence_ready = artifacts.execution_preparation_evidence.ready;
 
     ExecutionPreparationEvidenceGate {
-        missing_evidence_or_handoff_packet: !(handoff_ready && packet_ready && evidence_ready),
+        missing_evidence_or_handoff_packet: !(artifacts.handoff_ready
+            && packet_ready
+            && evidence_ready),
     }
 }
 
@@ -1632,7 +1711,79 @@ mod tests {
         });
         let run_graph_bootstrap = serde_json::json!({
             "handoff_ready": true,
+            "execution_preparation_artifacts": {
+                "handoff_ready": true,
+                "developer_handoff_packet": {
+                    "ready": true,
+                    "status": "ready",
+                    "path": "/tmp/packet.json"
+                },
+                "execution_preparation_evidence": {
+                    "ready": true,
+                    "status": "ready"
+                }
+            },
+            "evidence": {
+                "execution_preparation": {
+                    "status": "ready",
+                    "ready": true
+                }
+            }
+        });
+
+        let gate = build_execution_preparation_evidence_gate(
+            &role_selection,
+            &taskflow_handoff_plan,
+            &run_graph_bootstrap,
+        );
+
+        assert_eq!(
+            gate,
+            ExecutionPreparationEvidenceGate {
+                missing_evidence_or_handoff_packet: false
+            }
+        );
+    }
+
+    #[test]
+    fn execution_preparation_gate_supports_legacy_bootstrap_fields_for_backward_compatibility() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "architecture refactor implementation".to_string(),
+            selected_role: "orchestrator".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_preparation_required": true,
+                        "lane_sequence": ["execution_preparation", "implementer"],
+                        "lane_catalog": {
+                            "execution_preparation": {
+                                "completion_blocker": "pending_execution_preparation_evidence"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+
+        let taskflow_handoff_plan = serde_json::json!({
+            "handoff_ready": true,
+        });
+        let run_graph_bootstrap = serde_json::json!({
+            "handoff_ready": true,
             "execution_preparation_packet_path": "/tmp/packet.json",
+            "execution_preparation_handoff_packet_ready": true,
             "execution_preparation_evidence_ready": true,
             "evidence": {
                 "execution_preparation": {

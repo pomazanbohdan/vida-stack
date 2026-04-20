@@ -293,6 +293,18 @@ pub(crate) fn build_taskflow_handoff_plan(
             "post_design_activation_chain": activation_chain,
             "post_design_lane_contract": lane_catalog,
             "handoff_ready": true,
+            "execution_preparation_artifacts": {
+                "handoff_ready": false,
+                "developer_handoff_packet": {
+                    "ready": false,
+                    "status": "blocked_pending_developer_handoff_packet",
+                    "path": serde_json::Value::Null,
+                },
+                "execution_preparation_evidence": {
+                    "ready": false,
+                    "status": "blocked_pending_execution_preparation_evidence",
+                }
+            },
         });
     }
 
@@ -305,6 +317,18 @@ pub(crate) fn build_taskflow_handoff_plan(
         "runtime_assignment_source": runtime_assignment_source_from_execution_plan(execution_plan),
         "lane_sequence": development_flow["lane_sequence"],
         "handoff_ready": true,
+        "execution_preparation_artifacts": {
+            "handoff_ready": true,
+            "developer_handoff_packet": {
+                "ready": false,
+                "status": execution_plan["pre_execution_design_gate"]["developer_handoff_packet_status"].clone(),
+                "path": serde_json::Value::Null,
+            },
+            "execution_preparation_evidence": {
+                "ready": false,
+                "status": "pending_execution_preparation_evidence",
+            }
+        },
     })
 }
 
@@ -4038,6 +4062,67 @@ mod tests {
             }),
             reason: "test".to_string(),
         }
+    }
+
+    #[test]
+    fn build_taskflow_handoff_plan_emits_canonical_execution_preparation_artifacts() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: json!({
+                "status": "execution_ready",
+                "pre_execution_design_gate": {
+                    "developer_handoff_packet_status": "blocked_pending_developer_handoff_packet"
+                },
+                "development_flow": {
+                    "lane_sequence": ["execution_preparation", "implementer"],
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "execution_preparation": {
+                                "completion_blocker": "pending_execution_preparation_evidence"
+                            }
+                        }
+                    }
+                },
+                "orchestration_contract": {},
+                "runtime_assignment": {
+                    "selected_tier": "junior"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+
+        let plan = build_taskflow_handoff_plan(&role_selection);
+
+        assert_eq!(plan["status"], "execution_handoff_ready");
+        assert_eq!(plan["handoff_ready"], true);
+        assert_eq!(
+            plan["execution_preparation_artifacts"]["handoff_ready"],
+            true
+        );
+        assert_eq!(
+            plan["execution_preparation_artifacts"]["developer_handoff_packet"]["ready"],
+            false
+        );
+        assert_eq!(
+            plan["execution_preparation_artifacts"]["developer_handoff_packet"]["status"],
+            "blocked_pending_developer_handoff_packet"
+        );
+        assert_eq!(
+            plan["execution_preparation_artifacts"]["execution_preparation_evidence"]["status"],
+            "pending_execution_preparation_evidence"
+        );
     }
 
     fn agent_lane_test_execution_plan(executor_backend: &str) -> serde_json::Value {

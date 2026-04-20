@@ -41,8 +41,14 @@ Active design docs:
 - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
 - `docs/product/spec/specification-lane-scope-hardening-design.md`
 - `docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`
+- `docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`
+- `docs/product/spec/review-implemented-result-against-spec-acceptanc-design.md`
 - `docs/product/spec/lane-supersede-and-shared-truth-envelope-design.md`
 - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
+- `docs/product/spec/compact-dispatch-route-truth-downstream-dispatch-design.md`
+- `docs/product/spec/fix-bug-consume-continue-completed-closure-design.md`
+- `docs/product/spec/fix-bug-implementer-delivery-packet-can-design.md`
+- `docs/product/spec/fix-bug-specification-lane-can-mutate-design.md`
 
 Current promoted runtime-control specs:
 
@@ -58,6 +64,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-17T11:08:56.887219102Z
+updated_at: 2026-04-20T10:36:00+03:00
 changelog_ref: README.changelog.jsonl
-- `docs/product/spec/compact-dispatch-route-truth-downstream-dispatch-design.md`
