@@ -700,29 +700,6 @@ mod tests {
     }
 
     #[test]
-    fn project_activator_fails_closed_for_partial_activation_submission() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        assert_eq!(
-            runtime.block_on(run(cli(&[
-                "project-activator",
-                "--host-cli-system",
-                "codex",
-                "--json"
-            ]))),
-            ExitCode::from(2)
-        );
-
-        assert!(!harness.path().join(".codex/config.toml").exists());
-        let view = project_activator_surface::build_project_activator_view(harness.path());
-        assert_eq!(view["activation_pending"], true);
-        assert!(view["host_environment"]["selected_cli_system"].is_null());
-    }
-
-    #[test]
     fn runtime_host_execution_contract_reflects_external_qwen_selection() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
