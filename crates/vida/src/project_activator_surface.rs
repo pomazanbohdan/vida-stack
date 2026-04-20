@@ -2371,6 +2371,127 @@ mod tests {
     }
 
     #[test]
+    fn project_activator_renders_codex_agent_files_from_overlay_and_keeps_template_contracts() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::unset("VIDA_ROOT");
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        let view = super::build_project_activator_view(harness.path());
+        assert_eq!(
+            view["normal_work_defaults"]["execution_carrier_model"]["agent_identity"],
+            "execution_carrier"
+        );
+        assert_eq!(
+            view["normal_work_defaults"]["execution_carrier_model"]["runtime_role_identity"],
+            "activation_state"
+        );
+        assert_eq!(
+            view["normal_work_defaults"]["execution_carrier_model"]["selection_rule"],
+            "capability_first_then_score_guard_then_cheapest_tier"
+        );
+        assert!(
+            view["normal_work_defaults"]["execution_carrier_model"]["inspect_commands"]["snapshot"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("vida taskflow consume agent-system --json")
+        );
+        assert!(
+            view["normal_work_defaults"]["execution_carrier_model"]["inspect_commands"]
+                ["carrier_catalog"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(".snapshot.carriers")
+        );
+        assert!(
+            view["normal_work_defaults"]["execution_carrier_model"]["inspect_commands"]
+                ["runtime_roles"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("roles")
+        );
+        assert!(
+            view["normal_work_defaults"]["execution_carrier_model"]["inspect_commands"]["scores"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(".snapshot.worker_strategy.agents")
+        );
+        assert!(
+            view["normal_work_defaults"]["execution_carrier_model"]["inspect_commands"]
+                ["selection_preview"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(".payload.taskflow_handoff_plan.runtime_assignment")
+        );
+
+        let config = fs::read_to_string(harness.path().join(".codex/config.toml"))
+            .expect("rendered codex config should exist");
+        let configured_agents =
+            super::build_project_activator_view(harness.path())["normal_work_defaults"]
+                ["default_agent_topology"]
+                .as_array()
+                .expect("default agent topology should render")
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+        assert!(!configured_agents.is_empty());
+        for agent in &configured_agents {
+            assert!(config.contains(&format!("[agents.{agent}]")));
+        }
+        assert!(!config.contains("[agents.development_implementer]"));
+        assert!(!config.contains("[agents.development_coach]"));
+        assert!(!config.contains("[agents.development_verifier]"));
+        assert!(!config.contains("[agents.development_escalation]"));
+
+        for agent in &configured_agents {
+            let rendered =
+                fs::read_to_string(harness.path().join(format!(".codex/agents/{agent}.toml")))
+                    .unwrap_or_else(|_| panic!("{agent} agent should exist"));
+            assert!(!rendered.contains("vida_tier"));
+            assert!(!rendered.contains("vida_rate"));
+            assert!(!rendered.contains("vida_reasoning_band"));
+            assert!(!rendered.contains("vida_default_runtime_role"));
+            assert!(!rendered.contains("vida_runtime_roles"));
+            assert!(!rendered.contains("vida_task_classes"));
+        }
+
+        assert!(!harness
+            .path()
+            .join(".codex/agents/development_implementer.toml")
+            .exists());
+        assert!(!harness
+            .path()
+            .join(".codex/agents/development_coach.toml")
+            .exists());
+        assert!(!harness
+            .path()
+            .join(".codex/agents/development_verifier.toml")
+            .exists());
+        assert!(!harness
+            .path()
+            .join(".codex/agents/development_escalation.toml")
+            .exists());
+    }
+
+    #[test]
     fn project_activator_reports_ready_when_bootstrap_and_docs_exist() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let root = harness.path();

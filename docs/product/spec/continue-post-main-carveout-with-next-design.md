@@ -3,7 +3,7 @@
 Status: `approved`
 
 ## Summary
-- Feature / change: move the bounded owner-domain test `project_activator_command_accepts_json_output` out of `crates/vida/src/main.rs` into `crates/vida/src/project_activator_surface.rs`
+- Feature / change: continue moving the next bounded `project_activator` owner-domain tests out of `crates/vida/src/main.rs` into `crates/vida/src/project_activator_surface.rs`
 - Owner layer: `runtime-family`
 - Runtime surface: `project activation`
 - Status: `approved for bounded implementation`
@@ -11,12 +11,12 @@ Status: `approved`
 ## Current Context
 - `tf-post-r1-main-carveout` is the active deconcentration stream that removes owner logic and owner tests from the launcher root.
 - The previous slices already moved dispatch, lane-summary, tracked-flow, and compiled-bundle tests into their owning modules.
-- `project_activator_command_accepts_json_output` still lives in `crates/vida/src/main.rs` even though it exercises the `vida project-activator` surface owned by `crates/vida/src/project_activator_surface.rs`.
-- Keeping this test in `main.rs` preserves unnecessary root knowledge and slows the goal of making `main.rs` a thin shell/composition surface.
+- The current carveout slice covers the smallest remaining `project_activator` command and activation tests that still live in `crates/vida/src/main.rs`.
+- Keeping these tests in `main.rs` preserves unnecessary root knowledge and slows the goal of making `main.rs` a thin shell/composition surface.
 
 ## Goal
 - Continue the `main.rs` carve-out with the smallest lawful next slice.
-- Place the JSON-output acceptance test beside the `project_activator` owner surface it validates.
+- Place the next smallest `project_activator` command and activation tests beside the owner surface they validate.
 - Preserve behavior, harness semantics, and proof scope.
 - Out of scope:
   - broader `project_activator` decomposition
@@ -26,8 +26,8 @@ Status: `approved`
 ## Requirements
 
 ### Functional Requirements
-- The test `project_activator_command_accepts_json_output` must move from `crates/vida/src/main.rs` to `crates/vida/src/project_activator_surface.rs`.
-- The moved test must still prove that `run(cli(&["project-activator", "--json"]))` returns `ExitCode::SUCCESS` from a bootstrap project root established by `vida init`.
+- The bounded `project_activator` tests selected for the current slice must move from `crates/vida/src/main.rs` to `crates/vida/src/project_activator_surface.rs`.
+- The moved command-surface tests must still prove the same `vida project-activator` outcomes from a bootstrap project root established by `vida init`.
 - Any required test-only imports or helpers must be brought in minimally without widening the slice.
 - `crates/vida/src/main.rs` must retain adjacent non-owner tests unchanged.
 
@@ -50,9 +50,9 @@ Status: `approved`
 
 ## Design Decisions
 
-### 1. Keep The Slice Single-Test And Owner-Domain Local
+### 1. Keep The Slice Single-Test Or Tight Test-Pair And Owner-Domain Local
 Will implement / choose:
-- Move exactly one test, because the runtime currently requires explicit bounded continuation and this is the next smallest lawful unit in the same carve-out stream.
+- Move only the next smallest `project_activator` owner-domain test or tightly coupled test pair, because the runtime currently requires explicit bounded continuation and this is the next smallest lawful unit in the same carve-out stream.
 - Why:
   - keeps the continuation unit unambiguous
   - reduces merge and proof risk
@@ -66,7 +66,7 @@ Will implement / choose:
 
 ### 2. Treat `project_activator_surface.rs` As The Test Owner
 Will implement / choose:
-- Place the test in `crates/vida/src/project_activator_surface.rs` under that module's test surface.
+- Place the selected bounded test in `crates/vida/src/project_activator_surface.rs` under that module's test surface.
 - Why:
   - the command contract is owned by the project activator surface
   - ownership-aligned tests make future refactors cheaper and safer
@@ -80,9 +80,9 @@ Will implement / choose:
 
 ### Core Components
 - `crates/vida/src/main.rs`
-  - source location of the legacy root-owned test
+  - source location of the remaining legacy root-owned `project_activator` tests in this carveout stream
 - `crates/vida/src/project_activator_surface.rs`
-  - destination owner module for the command-surface test
+  - destination owner module for the selected command-surface tests
 - `crates/vida/src/test_cli_support.rs`
   - shared test-only CLI and cwd-guard helpers used by both the root test module and the moved owner-domain test
 
@@ -118,10 +118,10 @@ Will implement / choose:
   - `vida docflow check --root . docs/product/spec/continue-post-main-carveout-with-next-design.md`
 
 ### Phase 2
-- Move the test into `project_activator_surface.rs`.
+- Move the selected bounded `project_activator` test into `project_activator_surface.rs`.
 - Remove the original copy from `main.rs`.
 - Proof target:
-  - `cargo test -p vida project_activator_surface::tests::project_activator_command_accepts_json_output -- --exact --nocapture`
+  - `cargo test -p vida project_activator_surface::tests::<selected_test_name> -- --exact --nocapture`
 
 ### Phase 3
 - Review the diff for owner alignment.
@@ -133,7 +133,7 @@ Will implement / choose:
 
 ## Validation / Proof
 - Unit tests:
-  - `cargo test -p vida project_activator_surface::tests::project_activator_command_accepts_json_output -- --exact --nocapture`
+  - `cargo test -p vida project_activator_surface::tests::<selected_test_name> -- --exact --nocapture`
 - Integration tests:
   - not required for this bounded slice
 - Runtime checks:
