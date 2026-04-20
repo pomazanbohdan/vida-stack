@@ -2422,6 +2422,26 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
 mod agent_init_surface_tests {
     use super::*;
     use crate::RuntimeConsumptionLaneSelection;
+    use crate::run;
+    use crate::temp_state::TempStateHarness;
+    use crate::test_cli_support::{cli, guard_current_dir};
+    use std::path::Path;
+    use std::process::ExitCode;
+    use std::time::{Duration, Instant};
+
+    fn wait_for_state_unlock(state_dir: &Path) {
+        let direct_lock_path = state_dir.join("LOCK");
+        let nested_lock_path = state_dir
+            .join(".vida")
+            .join("data")
+            .join("state")
+            .join("LOCK");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while (direct_lock_path.exists() || nested_lock_path.exists()) && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
 
     fn test_role_selection() -> RuntimeConsumptionLaneSelection {
         RuntimeConsumptionLaneSelection {
@@ -2560,5 +2580,32 @@ mod agent_init_surface_tests {
 
         assert!(payload["execution_truth"].is_null());
         assert!(payload["backend_truth"].is_null());
+    }
+
+    #[test]
+    fn orchestrator_init_succeeds_after_init_scaffold() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&["orchestrator-init", "--json"]))),
+            ExitCode::SUCCESS
+        );
+    }
+
+    #[test]
+    fn agent_init_succeeds_after_init_scaffold() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&["agent-init", "--role", "worker", "--json"]))),
+            ExitCode::SUCCESS
+        );
     }
 }

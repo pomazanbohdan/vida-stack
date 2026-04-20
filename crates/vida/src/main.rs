@@ -800,33 +800,6 @@ mod tests {
     }
 
     #[test]
-    fn orchestrator_init_succeeds_after_init_scaffold() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        assert_eq!(
-            runtime.block_on(run(cli(&["orchestrator-init", "--json"]))),
-            ExitCode::SUCCESS
-        );
-    }
-
-    #[test]
-    fn agent_init_succeeds_after_init_scaffold() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        wait_for_state_unlock(harness.path());
-        assert_eq!(
-            runtime.block_on(run(cli(&["agent-init", "--role", "worker", "--json"]))),
-            ExitCode::SUCCESS
-        );
-    }
-
-    #[test]
     fn orchestrator_init_view_exposes_continuation_binding_fail_closed_summary() {
         let view = crate::taskflow_runtime_bundle::build_orchestrator_init_view(
             Path::new("/tmp/demo"),
