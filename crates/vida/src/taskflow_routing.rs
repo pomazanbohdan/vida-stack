@@ -277,6 +277,35 @@ mod tests {
     }
 
     #[test]
+    fn selected_backend_prefers_explicit_executor_backend_over_runtime_assignment() {
+        let execution_plan = serde_json::json!({
+            "runtime_assignment": {
+                "selected_tier": "middle",
+                "activation_agent_type": "middle",
+            },
+            "development_flow": {
+                "implementation": {
+                    "executor_backend": "internal_subagents",
+                    "subagents": "qwen_cli",
+                    "runtime_assignment": {
+                        "selected_tier": "junior",
+                        "activation_agent_type": "junior",
+                    }
+                }
+            },
+            "default_route": {
+                "subagents": "qwen_cli"
+            },
+            "status": "execution_ready",
+        });
+        let route = &execution_plan["development_flow"]["implementation"];
+        assert_eq!(
+            selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
+            Some("internal_subagents")
+        );
+    }
+
+    #[test]
     fn explicit_executor_backend_wins_over_carrier_tier_and_legacy_hints() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
