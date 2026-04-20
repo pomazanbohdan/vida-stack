@@ -332,6 +332,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida taskflow consume bundle check [--json]");
             println!("  vida taskflow consume agent-system [--json]");
             println!("  vida taskflow consume final \"<request>\" --json");
+            println!("  vida taskflow consume final \"<request>\" --preview [--json]");
+            println!("  vida taskflow consume final \"<request>\" --validate-only [--json]");
             println!(
                 "  vida taskflow consume continue [--run-id <run-id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]"
             );
@@ -350,6 +352,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
                 "  `final` fails closed when the runtime bundle is not ready or the bounded DocFlow evidence branch returns blocking results."
             );
             println!(
+                "  `final --preview` and `final --validate-only` stay read-only: they render packet/dispatch validation evidence without writing or executing dispatch packets."
+            );
+            println!(
                 "  `continue` and `advance` fail closed when no lawful persisted dispatch receipt or packet can be resolved for the requested run."
             );
             println!();
@@ -362,6 +367,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!(
                 "  Materialize one routed intake packet: vida taskflow consume final \"<request>\" --json"
+            );
+            println!(
+                "  Preview packet template, owned scope, and missing contract fields before dispatch: vida taskflow consume final \"<request>\" --preview --json"
             );
             println!(
                 "  Resume one persisted chain from the latest or selected packet: vida taskflow consume continue [--run-id <run-id>] --json"

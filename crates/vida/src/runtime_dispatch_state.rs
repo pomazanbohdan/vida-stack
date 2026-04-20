@@ -3805,6 +3805,234 @@ impl<'a> RuntimeDispatchPacketContext<'a> {
     }
 }
 
+fn build_runtime_dispatch_packet_body(
+    ctx: &RuntimeDispatchPacketContext<'_>,
+    dispatch_command: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let project_root = taskflow_task_bridge::infer_project_root_from_state_root(ctx.state_root)
+        .unwrap_or(std::env::current_dir().map_err(|error| {
+            format!("Failed to resolve project root for dispatch packet rendering: {error}")
+        })?);
+    let host_runtime = runtime_host_execution_contract_for_root(&project_root);
+    let canonical_selected_backend =
+        canonical_selected_backend_for_receipt(ctx.role_selection, ctx.receipt);
+    let effective_execution_posture = effective_execution_posture_summary(
+        &ctx.role_selection.execution_plan,
+        &ctx.receipt.dispatch_target,
+        canonical_selected_backend.as_deref(),
+        ctx.receipt.activation_agent_type.as_deref(),
+        Some(&host_runtime),
+        false,
+    );
+    let packet_template_kind = runtime_dispatch_packet_kind(
+        &ctx.role_selection.execution_plan,
+        &ctx.receipt.dispatch_target,
+        &ctx.receipt.dispatch_kind,
+    );
+    let handoff_runtime_role = ctx
+        .receipt
+        .activation_runtime_role
+        .as_deref()
+        .unwrap_or(ctx.role_selection.selected_role.as_str());
+    let handoff_task_class =
+        runtime_packet_handoff_task_class(&ctx.receipt.dispatch_target, handoff_runtime_role);
+    let closure_class = dispatch_contract_lane(
+        &ctx.role_selection.execution_plan,
+        &ctx.receipt.dispatch_target,
+    )
+    .and_then(|lane| lane["closure_class"].as_str())
+    .unwrap_or("implementation");
+    let execution_truth = dispatch_execution_route_summary(
+        ctx.role_selection,
+        &ctx.receipt.dispatch_target,
+        canonical_selected_backend.as_deref(),
+    );
+    let activation_evidence = dispatch_activation_evidence_summary(ctx.receipt);
+    let delivery_task_packet = runtime_delivery_task_packet_with_scope_context(
+        &ctx.receipt.run_id,
+        &ctx.receipt.dispatch_target,
+        handoff_runtime_role,
+        handoff_task_class,
+        closure_class,
+        &ctx.role_selection.request,
+        tracked_design_doc_path(ctx.role_selection),
+    );
+    let execution_block_packet = runtime_execution_block_packet(
+        &ctx.receipt.run_id,
+        &ctx.receipt.dispatch_target,
+        handoff_runtime_role,
+        handoff_task_class,
+        closure_class,
+    );
+    Ok(serde_json::json!({
+        "packet_kind": "runtime_dispatch_packet",
+        "packet_template_kind": packet_template_kind,
+        "delivery_task_packet": if packet_template_kind == "delivery_task_packet" {
+            delivery_task_packet.clone()
+        } else {
+            serde_json::Value::Null
+        },
+        "execution_block_packet": if packet_template_kind == "execution_block_packet" {
+            execution_block_packet
+        } else {
+            serde_json::Value::Null
+        },
+        "coach_review_packet": if packet_template_kind == "coach_review_packet" {
+            runtime_coach_review_packet(
+                &ctx.receipt.run_id,
+                &ctx.receipt.dispatch_target,
+                "bounded implementation result versus approved spec and definition of done",
+            )
+        } else {
+            serde_json::Value::Null
+        },
+        "verifier_proof_packet": if packet_template_kind == "verifier_proof_packet" {
+            runtime_verifier_proof_packet(
+                &ctx.receipt.run_id,
+                &ctx.receipt.dispatch_target,
+                "independent bounded proof and closure readiness",
+            )
+        } else {
+            serde_json::Value::Null
+        },
+        "escalation_packet": if packet_template_kind == "escalation_packet" {
+            runtime_escalation_packet(&ctx.receipt.run_id, &ctx.receipt.dispatch_target)
+        } else {
+            serde_json::Value::Null
+        },
+        "tracked_flow_packet": if packet_template_kind == "tracked_flow_packet" {
+            runtime_tracked_flow_packet(
+                ctx.role_selection,
+                &ctx.receipt.run_id,
+                &ctx.receipt.dispatch_target,
+            )
+        } else {
+            serde_json::Value::Null
+        },
+        "prompt": runtime_packet_prompt(
+            &ctx.receipt.run_id,
+            &ctx.receipt.dispatch_target,
+            handoff_runtime_role,
+            &ctx.role_selection.request,
+            &ctx.role_selection.execution_plan["orchestration_contract"],
+        ),
+        "recorded_at": ctx.receipt.recorded_at,
+        "run_id": ctx.receipt.run_id,
+        "dispatch_target": ctx.receipt.dispatch_target,
+        "dispatch_status": ctx.receipt.dispatch_status,
+        "lane_status": ctx.receipt.lane_status,
+        "blocker_code": ctx.receipt.blocker_code,
+        "supersedes_receipt_id": ctx.receipt.supersedes_receipt_id,
+        "exception_path_receipt_id": ctx.receipt.exception_path_receipt_id,
+        "dispatch_kind": ctx.receipt.dispatch_kind,
+        "dispatch_surface": ctx.receipt.dispatch_surface,
+        "dispatch_command": dispatch_command,
+        "activation_agent_type": ctx.receipt.activation_agent_type,
+        "activation_runtime_role": ctx.receipt.activation_runtime_role,
+        "selected_backend": canonical_selected_backend,
+        "mixed_posture": effective_execution_posture.clone(),
+        "route_policy": execution_truth.clone(),
+        "activation_vs_execution_evidence": activation_evidence.clone(),
+        "activation_semantics": activation_evidence["activation_semantics"].clone(),
+        "execution_evidence": activation_evidence["execution_evidence"].clone(),
+        "effective_execution_posture": effective_execution_posture,
+        "execution_truth": execution_truth,
+        "activation_evidence": activation_evidence,
+        "host_runtime": host_runtime,
+        "request_text": ctx.role_selection.request,
+        "role_selection": {
+            "selected_role": ctx.role_selection.selected_role,
+            "conversational_mode": ctx.role_selection.conversational_mode,
+            "tracked_flow_entry": ctx.role_selection.tracked_flow_entry,
+            "confidence": ctx.role_selection.confidence,
+        },
+        "role_selection_full": ctx.role_selection,
+        "taskflow_handoff_plan": ctx.taskflow_handoff_plan,
+        "run_graph_bootstrap": ctx.run_graph_bootstrap,
+        "orchestration_contract": ctx.role_selection.execution_plan["orchestration_contract"],
+    }))
+}
+
+pub(crate) fn runtime_dispatch_packet_preview(
+    ctx: &RuntimeDispatchPacketContext<'_>,
+) -> Result<serde_json::Value, String> {
+    let dispatch_command =
+        runtime_dispatch_command_for_target(ctx.role_selection, &ctx.receipt.dispatch_target);
+    let packet = build_runtime_dispatch_packet_body(ctx, dispatch_command)?;
+    let packet_template_kind = packet
+        .get("packet_template_kind")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let active_packet = packet
+        .get(packet_template_kind.as_str())
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let validation_error =
+        validate_runtime_dispatch_packet_contract(&packet, "Runtime dispatch packet preview").err();
+    let packet_contract_missing_fields = validation_error
+        .as_deref()
+        .and_then(|error| error.split("is missing required packet fields: ").nth(1))
+        .map(|fields| {
+            fields
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(serde_json::json!({
+        "status": if validation_error.is_some() { "blocked" } else { "pass" },
+        "packet_template_kind": packet_template_kind,
+        "packet_contract_missing_fields": packet_contract_missing_fields,
+        "contract_validation_error": validation_error,
+        "owned_paths": active_packet
+            .get("owned_paths")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+        "read_only_paths": active_packet
+            .get("read_only_paths")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+        "packet": packet,
+    }))
+}
+
+pub(crate) async fn preview_downstream_dispatch_receipt(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) -> Result<(), String> {
+    let (
+        downstream_dispatch_target,
+        downstream_dispatch_command,
+        downstream_dispatch_note,
+        downstream_dispatch_ready,
+        downstream_dispatch_blockers,
+    ) = derive_downstream_dispatch_preview(store, role_selection, receipt).await;
+    if let Some(error) = downstream_dispatch_ready_blocker_parity_error(
+        downstream_dispatch_ready,
+        &downstream_dispatch_blockers,
+    ) {
+        return Err(error);
+    }
+    apply_downstream_dispatch_preview_to_receipt(
+        receipt,
+        downstream_dispatch_target,
+        downstream_dispatch_command,
+        downstream_dispatch_note,
+        downstream_dispatch_ready,
+        downstream_dispatch_blockers,
+        None,
+    );
+    receipt.downstream_dispatch_trace_path = None;
+    receipt.downstream_dispatch_last_target = None;
+    receipt.downstream_dispatch_executed_count = 0;
+    receipt.downstream_dispatch_packet_path = None;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -11213,6 +11441,125 @@ agent_system:
         );
         assert_eq!(packet["route_policy"]["route_primary_backend"], "qwen_cli");
     }
+
+    #[test]
+    fn runtime_dispatch_packet_preview_exposes_template_and_scope_without_writing_packet() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue implementation in crates/vida/src/runtime_dispatch_state.rs"
+                .to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "implementation": {
+                        "executor_backend": "qwen_cli",
+                        "fallback_executor_backend": "internal_subagents",
+                        "activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        }
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "qwen_cli",
+                        "backend_class": "external_cli",
+                        "write_scope": "none",
+                        "lane_admissibility": {
+                            "implementation": false
+                        }
+                    },
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "write_scope": "repo",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ],
+                "runtime_assignment": {
+                    "selected_tier": "junior",
+                    "activation_agent_type": "junior",
+                    "activation_runtime_role": "worker"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-preview-command".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("qwen_cli".to_string()),
+            recorded_at: "2026-04-20T00:00:00Z".to_string(),
+        };
+        let handoff_plan = serde_json::json!({});
+        let run_graph_bootstrap = serde_json::json!({});
+        let ctx = RuntimeDispatchPacketContext::new(
+            &state_root,
+            &role_selection,
+            &receipt,
+            &handoff_plan,
+            &run_graph_bootstrap,
+        );
+
+        let preview = runtime_dispatch_packet_preview(&ctx).expect("preview should render");
+
+        assert_eq!(preview["status"], "pass");
+        assert_eq!(preview["packet_template_kind"], "delivery_task_packet");
+        assert_eq!(
+            preview["owned_paths"],
+            serde_json::json!(["crates/vida/src/runtime_dispatch_state.rs"])
+        );
+        assert!(
+            state_root
+                .join("runtime-consumption")
+                .join("dispatch-packets")
+                .read_dir()
+                .map(|mut rows| rows.next().is_none())
+                .unwrap_or(true),
+            "preview helper must not write a dispatch packet to disk"
+        );
+    }
 }
 
 pub(crate) fn write_runtime_dispatch_packet(
@@ -11230,153 +11577,12 @@ pub(crate) fn write_runtime_dispatch_packet(
         .replace(':', "-");
     let packet_path = packet_dir.join(format!("{}-{ts}.json", ctx.receipt.run_id));
     let packet_path_display = packet_path.display().to_string();
-    let project_root = taskflow_task_bridge::infer_project_root_from_state_root(ctx.state_root)
-        .unwrap_or(std::env::current_dir().map_err(|error| {
-            format!("Failed to resolve project root for dispatch packet rendering: {error}")
-        })?);
-    let host_runtime = runtime_host_execution_contract_for_root(&project_root);
-    let canonical_selected_backend =
-        canonical_selected_backend_for_receipt(ctx.role_selection, ctx.receipt);
-    let effective_execution_posture = effective_execution_posture_summary(
-        &ctx.role_selection.execution_plan,
-        &ctx.receipt.dispatch_target,
-        canonical_selected_backend.as_deref(),
-        ctx.receipt.activation_agent_type.as_deref(),
-        Some(&host_runtime),
-        false,
-    );
-    let packet_template_kind = runtime_dispatch_packet_kind(
-        &ctx.role_selection.execution_plan,
-        &ctx.receipt.dispatch_target,
-        &ctx.receipt.dispatch_kind,
-    );
-    let handoff_runtime_role = ctx
-        .receipt
-        .activation_runtime_role
-        .as_deref()
-        .unwrap_or(ctx.role_selection.selected_role.as_str());
-    let handoff_task_class =
-        runtime_packet_handoff_task_class(&ctx.receipt.dispatch_target, handoff_runtime_role);
-    let closure_class = dispatch_contract_lane(
-        &ctx.role_selection.execution_plan,
-        &ctx.receipt.dispatch_target,
-    )
-    .and_then(|lane| lane["closure_class"].as_str())
-    .unwrap_or("implementation");
     let activation_command = runtime_dispatch_command_for_packet_path(
         ctx.role_selection,
         ctx.receipt,
         &packet_path_display,
     );
-    let execution_truth = dispatch_execution_route_summary(
-        ctx.role_selection,
-        &ctx.receipt.dispatch_target,
-        canonical_selected_backend.as_deref(),
-    );
-    let activation_evidence = dispatch_activation_evidence_summary(ctx.receipt);
-    let delivery_task_packet = runtime_delivery_task_packet_with_scope_context(
-        &ctx.receipt.run_id,
-        &ctx.receipt.dispatch_target,
-        handoff_runtime_role,
-        handoff_task_class,
-        closure_class,
-        &ctx.role_selection.request,
-        tracked_design_doc_path(ctx.role_selection),
-    );
-    let execution_block_packet = runtime_execution_block_packet(
-        &ctx.receipt.run_id,
-        &ctx.receipt.dispatch_target,
-        handoff_runtime_role,
-        handoff_task_class,
-        closure_class,
-    );
-    let body = serde_json::json!({
-        "packet_kind": "runtime_dispatch_packet",
-        "packet_template_kind": packet_template_kind,
-        "delivery_task_packet": if packet_template_kind == "delivery_task_packet" {
-            delivery_task_packet.clone()
-        } else {
-            serde_json::Value::Null
-        },
-        "execution_block_packet": if packet_template_kind == "execution_block_packet" {
-            execution_block_packet
-        } else {
-            serde_json::Value::Null
-        },
-        "coach_review_packet": if packet_template_kind == "coach_review_packet" {
-            runtime_coach_review_packet(
-                &ctx.receipt.run_id,
-                &ctx.receipt.dispatch_target,
-                "bounded implementation result versus approved spec and definition of done",
-            )
-        } else {
-            serde_json::Value::Null
-        },
-        "verifier_proof_packet": if packet_template_kind == "verifier_proof_packet" {
-            runtime_verifier_proof_packet(
-                &ctx.receipt.run_id,
-                &ctx.receipt.dispatch_target,
-                "independent bounded proof and closure readiness",
-            )
-        } else {
-            serde_json::Value::Null
-        },
-        "escalation_packet": if packet_template_kind == "escalation_packet" {
-            runtime_escalation_packet(&ctx.receipt.run_id, &ctx.receipt.dispatch_target)
-        } else {
-            serde_json::Value::Null
-        },
-        "tracked_flow_packet": if packet_template_kind == "tracked_flow_packet" {
-            runtime_tracked_flow_packet(
-                ctx.role_selection,
-                &ctx.receipt.run_id,
-                &ctx.receipt.dispatch_target,
-            )
-        } else {
-            serde_json::Value::Null
-        },
-        "prompt": runtime_packet_prompt(
-            &ctx.receipt.run_id,
-            &ctx.receipt.dispatch_target,
-            handoff_runtime_role,
-            &ctx.role_selection.request,
-            &ctx.role_selection.execution_plan["orchestration_contract"],
-        ),
-        "recorded_at": ctx.receipt.recorded_at,
-        "run_id": ctx.receipt.run_id,
-        "dispatch_target": ctx.receipt.dispatch_target,
-        "dispatch_status": ctx.receipt.dispatch_status,
-        "lane_status": ctx.receipt.lane_status,
-        "blocker_code": ctx.receipt.blocker_code,
-        "supersedes_receipt_id": ctx.receipt.supersedes_receipt_id,
-        "exception_path_receipt_id": ctx.receipt.exception_path_receipt_id,
-        "dispatch_kind": ctx.receipt.dispatch_kind,
-        "dispatch_surface": ctx.receipt.dispatch_surface,
-        "dispatch_command": activation_command,
-        "activation_agent_type": ctx.receipt.activation_agent_type,
-        "activation_runtime_role": ctx.receipt.activation_runtime_role,
-        "selected_backend": canonical_selected_backend,
-        "mixed_posture": effective_execution_posture.clone(),
-        "route_policy": execution_truth.clone(),
-        "activation_vs_execution_evidence": activation_evidence.clone(),
-        "activation_semantics": activation_evidence["activation_semantics"].clone(),
-        "execution_evidence": activation_evidence["execution_evidence"].clone(),
-        "effective_execution_posture": effective_execution_posture,
-        "execution_truth": execution_truth,
-        "activation_evidence": activation_evidence,
-        "host_runtime": host_runtime,
-        "request_text": ctx.role_selection.request,
-        "role_selection": {
-            "selected_role": ctx.role_selection.selected_role,
-            "conversational_mode": ctx.role_selection.conversational_mode,
-            "tracked_flow_entry": ctx.role_selection.tracked_flow_entry,
-            "confidence": ctx.role_selection.confidence,
-        },
-        "role_selection_full": ctx.role_selection,
-        "taskflow_handoff_plan": ctx.taskflow_handoff_plan,
-        "run_graph_bootstrap": ctx.run_graph_bootstrap,
-        "orchestration_contract": ctx.role_selection.execution_plan["orchestration_contract"],
-    });
+    let body = build_runtime_dispatch_packet_body(ctx, activation_command)?;
     validate_runtime_dispatch_packet_contract(&body, "Runtime dispatch packet")?;
     let encoded = serde_json::to_string_pretty(&body)
         .map_err(|error| format!("Failed to encode dispatch packet: {error}"))?;

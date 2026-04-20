@@ -202,6 +202,9 @@ fn consume_final_operator_blocker_codes(payload: &serde_json::Value) -> Vec<Stri
             blocker_codes.push(code);
         }
     }
+    if payload["dispatch_packet_preview"]["status"].as_str() == Some("blocked") {
+        blocker_codes.push("dispatch_packet_contract_invalid".to_string());
+    }
     blocker_codes
 }
 
@@ -221,6 +224,25 @@ fn consume_final_operator_next_actions(payload: &serde_json::Value) -> Vec<Strin
             "Run `vida taskflow consume bundle check --json` and resolve closure blockers."
                 .to_string(),
         );
+    }
+    if payload["dispatch_packet_preview"]["status"].as_str() == Some("blocked") {
+        let missing_fields = payload["dispatch_packet_preview"]["packet_contract_missing_fields"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>();
+        if missing_fields.is_empty() {
+            next_actions.push(
+                "Review the dispatch packet preview and resolve contract validation blockers before dispatch."
+                    .to_string(),
+            );
+        } else {
+            next_actions.push(format!(
+                "Resolve dispatch packet preview contract gaps before dispatch: {}.",
+                missing_fields.join(", ")
+            ));
+        }
     }
     next_actions
 }
@@ -247,5 +269,37 @@ mod tests {
             build_operator_contracts_envelope("ok", Vec::new(), Vec::new(), serde_json::json!({}));
 
         assert_eq!(envelope["status"], "pass");
+    }
+
+    #[test]
+    fn consume_final_operator_surface_adds_preview_contract_blocker_and_action() {
+        let payload = serde_json::json!({
+            "bundle_check": {
+                "activation_status": "ready_enough_for_normal_work"
+            },
+            "docflow_verdict": {
+                "status": "pass"
+            },
+            "closure_admission": {
+                "status": "pass"
+            },
+            "dispatch_packet_preview": {
+                "status": "blocked",
+                "packet_contract_missing_fields": ["owned_paths", "proof_target"]
+            }
+        });
+
+        let blocker_codes = consume_final_operator_blocker_codes(&payload);
+        let next_actions = consume_final_operator_next_actions(&payload);
+
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code == "dispatch_packet_contract_invalid"));
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("owned_paths")));
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("proof_target")));
     }
 }

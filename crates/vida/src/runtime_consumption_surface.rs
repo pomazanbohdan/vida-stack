@@ -192,6 +192,7 @@ pub(crate) struct TaskflowDirectConsumptionPayload {
     pub(crate) artifact_type: String,
     pub(crate) generated_at: String,
     pub(crate) closure_authority: String,
+    pub(crate) consume_final_mode: String,
     pub(crate) request_text: String,
     pub(crate) role_selection: crate::RuntimeConsumptionLaneSelection,
     pub(crate) runtime_bundle: TaskflowConsumeBundlePayload,
@@ -202,6 +203,8 @@ pub(crate) struct TaskflowDirectConsumptionPayload {
     pub(crate) taskflow_handoff_plan: serde_json::Value,
     pub(crate) run_graph_bootstrap: serde_json::Value,
     pub(crate) dispatch_receipt: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) dispatch_packet_preview: Option<serde_json::Value>,
     pub(crate) direct_consumption_ready: bool,
 }
 
