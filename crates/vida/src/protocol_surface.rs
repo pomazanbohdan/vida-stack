@@ -373,4 +373,78 @@ mod tests {
             ExitCode::SUCCESS
         );
     }
+
+    #[test]
+    fn resolve_protocol_view_target_supports_bootstrap_aliases() {
+        let (target, path) =
+            resolve_protocol_view_target("AGENTS").expect("AGENTS alias should resolve");
+        assert_eq!(target.canonical_id, "bootstrap/router");
+        assert!(
+            path.ends_with("vida/config/instructions/system-maps/bootstrap.router-guide.md"),
+            "bootstrap router guide path should resolve"
+        );
+    }
+
+    #[test]
+    fn resolve_protocol_view_target_supports_worker_entry_name() {
+        let (target, path) = resolve_protocol_view_target("agent-definitions/entry.worker-entry")
+            .expect("worker entry should resolve");
+        assert_eq!(target.canonical_id, "agent-definitions/entry.worker-entry");
+        assert!(
+            path.ends_with("vida/config/instructions/agent-definitions/entry.worker-entry.md"),
+            "worker entry path should resolve"
+        );
+    }
+
+    #[test]
+    fn resolve_protocol_view_target_supports_generic_canonical_ids_without_md() {
+        let (target, path) =
+            resolve_protocol_view_target("instruction-contracts/core.orchestration-protocol")
+                .expect("generic canonical id should resolve");
+        assert_eq!(
+            target.canonical_id,
+            "instruction-contracts/core.orchestration-protocol"
+        );
+        assert_eq!(target.kind, "instruction_contract");
+        assert!(
+            path.ends_with(
+                "vida/config/instructions/instruction-contracts/core.orchestration-protocol.md"
+            ),
+            "generic protocol path should resolve"
+        );
+    }
+
+    #[test]
+    fn resolve_protocol_view_target_ignores_fragment_for_path_resolution() {
+        let (target, path) = resolve_protocol_view_target(
+            "instruction-contracts/overlay.step-thinking-protocol#section-web-search",
+        )
+        .expect("fragment target should resolve");
+        assert_eq!(
+            target.canonical_id,
+            "instruction-contracts/overlay.step-thinking-protocol"
+        );
+        assert!(
+            path.ends_with(
+                "vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md"
+            ),
+            "fragment target path should resolve"
+        );
+    }
+
+    #[test]
+    fn extract_protocol_view_fragment_supports_section_markers() {
+        let content =
+            "intro\n## Section: web-search\n# Web Validation Integration\nbody\n## Section: other\nnext";
+        let section = extract_protocol_view_fragment(content, "section-web-search")
+            .expect("section marker should resolve");
+        assert!(
+            section.contains("Web Validation Integration"),
+            "section content should include heading"
+        );
+        assert!(
+            !section.contains("## Section: other"),
+            "section content should stop at next marker"
+        );
+    }
 }
