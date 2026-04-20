@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde::Serialize;
@@ -24,6 +25,8 @@ struct LaneEnvelope {
     dispatch_status: String,
     supersedes_receipt_id: Option<String>,
     exception_path_receipt_id: Option<String>,
+    exception_path_metadata_path: Option<String>,
+    exception_path_metadata: Option<ExceptionTakeoverMetadata>,
 }
 
 #[derive(Serialize)]
@@ -55,6 +58,7 @@ enum LaneCommand<'a> {
     ExceptionTakeover {
         run_id: &'a str,
         receipt_id: &'a str,
+        metadata: ExceptionTakeoverMetadata,
         as_json: bool,
     },
     Supersede {
@@ -64,8 +68,73 @@ enum LaneCommand<'a> {
     },
 }
 
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
+struct ExceptionTakeoverMetadata {
+    reason_class: String,
+    active_bounded_unit: String,
+    owned_write_scope: Vec<String>,
+    why_delegated_or_rerouted_path_is_not_currently_lawful: String,
+    why_local_write_is_the_smallest_safe_bounded_workaround: String,
+    return_to_normal_posture_condition: String,
+    verification_plan: Vec<String>,
+    recorded_at: String,
+}
+
+impl ExceptionTakeoverMetadata {
+    fn validate(&self) -> Result<(), String> {
+        for (field, value) in [
+            ("reason_class", self.reason_class.trim()),
+            ("active_bounded_unit", self.active_bounded_unit.trim()),
+            (
+                "why_delegated_or_rerouted_path_is_not_currently_lawful",
+                self.why_delegated_or_rerouted_path_is_not_currently_lawful
+                    .trim(),
+            ),
+            (
+                "why_local_write_is_the_smallest_safe_bounded_workaround",
+                self.why_local_write_is_the_smallest_safe_bounded_workaround
+                    .trim(),
+            ),
+            (
+                "return_to_normal_posture_condition",
+                self.return_to_normal_posture_condition.trim(),
+            ),
+            ("recorded_at", self.recorded_at.trim()),
+        ] {
+            if value.is_empty() {
+                return Err(format!(
+                    "exception takeover metadata field `{field}` must be non-empty"
+                ));
+            }
+        }
+        if self.owned_write_scope.is_empty()
+            || self
+                .owned_write_scope
+                .iter()
+                .any(|value| value.trim().is_empty())
+        {
+            return Err(
+                "exception takeover metadata requires at least one non-empty `owned_write_scope` entry"
+                    .to_string(),
+            );
+        }
+        if self.verification_plan.is_empty()
+            || self
+                .verification_plan
+                .iter()
+                .any(|value| value.trim().is_empty())
+        {
+            return Err(
+                "exception takeover metadata requires at least one non-empty `verification_plan` entry"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
 fn lane_usage() -> &'static str {
-    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane complete <run-id> --receipt-id <id> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]"
+    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane complete <run-id> --receipt-id <id> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]"
 }
 
 fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
@@ -133,6 +202,13 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
         [head, run_id, rest @ ..] if head == "exception-takeover" => {
             let mut as_json = false;
             let mut receipt_id = None;
+            let mut reason_class = None;
+            let mut active_bounded_unit = None;
+            let mut owned_write_scope = Vec::new();
+            let mut why_delegated_path_not_lawful = None;
+            let mut why_local_write_safe = None;
+            let mut return_to_normal_when = None;
+            let mut verification_plan = Vec::new();
             let mut index = 0;
             while index < rest.len() {
                 match rest[index].as_str() {
@@ -147,15 +223,85 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                         receipt_id = Some(value.as_str());
                         index += 2;
                     }
+                    "--reason-class" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        reason_class = Some(value.as_str());
+                        index += 2;
+                    }
+                    "--active-bounded-unit" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        active_bounded_unit = Some(value.as_str());
+                        index += 2;
+                    }
+                    "--owned-write-scope" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        owned_write_scope.push(value.to_string());
+                        index += 2;
+                    }
+                    "--why-delegated-path-not-lawful" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        why_delegated_path_not_lawful = Some(value.as_str());
+                        index += 2;
+                    }
+                    "--why-local-write-safe" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        why_local_write_safe = Some(value.as_str());
+                        index += 2;
+                    }
+                    "--return-to-normal-when" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        return_to_normal_when = Some(value.as_str());
+                        index += 2;
+                    }
+                    "--verification-step" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        verification_plan.push(value.to_string());
+                        index += 2;
+                    }
                     _ => return Err(lane_usage().to_string()),
                 }
             }
             let Some(receipt_id) = receipt_id else {
                 return Err(lane_usage().to_string());
             };
+            let metadata = ExceptionTakeoverMetadata {
+                reason_class: reason_class.unwrap_or_default().to_string(),
+                active_bounded_unit: active_bounded_unit.unwrap_or_default().to_string(),
+                owned_write_scope,
+                why_delegated_or_rerouted_path_is_not_currently_lawful:
+                    why_delegated_path_not_lawful
+                        .unwrap_or_default()
+                        .to_string(),
+                why_local_write_is_the_smallest_safe_bounded_workaround: why_local_write_safe
+                    .unwrap_or_default()
+                    .to_string(),
+                return_to_normal_posture_condition: return_to_normal_when
+                    .unwrap_or_default()
+                    .to_string(),
+                verification_plan,
+                recorded_at: time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .expect("rfc3339 timestamp should render"),
+            };
+            metadata.validate()?;
             Ok(LaneCommand::ExceptionTakeover {
                 run_id,
                 receipt_id,
+                metadata,
                 as_json,
             })
         }
@@ -213,6 +359,8 @@ fn exception_takeover_allowed(
 fn build_lane_envelope(
     summary: crate::state_store::RunGraphDispatchReceiptSummary,
     status: Option<crate::state_store::RunGraphStatus>,
+    exception_path_metadata_path: Option<String>,
+    exception_path_metadata: Option<ExceptionTakeoverMetadata>,
     blocked: bool,
     blocker_codes: Vec<String>,
     next_actions: Vec<String>,
@@ -233,6 +381,7 @@ fn build_lane_envelope(
     let artifact_refs = serde_json::json!({
         "latest_run_graph_dispatch_receipt_id": run_id.clone(),
         "exception_path_receipt_id": exception_path_receipt_id.clone(),
+        "exception_path_metadata_path": exception_path_metadata_path.clone(),
         "dispatch_packet_path": dispatch_packet_path.clone(),
         "dispatch_result_path": dispatch_result_path.clone(),
         "downstream_dispatch_packet_path": downstream_dispatch_packet_path.clone(),
@@ -275,6 +424,8 @@ fn build_lane_envelope(
         dispatch_status,
         supersedes_receipt_id,
         exception_path_receipt_id,
+        exception_path_metadata_path,
+        exception_path_metadata,
     }
 }
 
@@ -434,6 +585,15 @@ fn emit_lane_envelope(envelope: &LaneEnvelope, as_json: bool) -> ExitCode {
     crate::print_surface_header(crate::RenderMode::Plain, envelope.surface);
     crate::print_surface_line(crate::RenderMode::Plain, "status", envelope.status);
     crate::print_surface_line(crate::RenderMode::Plain, "run_id", &envelope.run_id);
+    if let Some(trace_id) = envelope.trace_id.as_deref() {
+        crate::print_surface_line(crate::RenderMode::Plain, "trace_id", trace_id);
+    }
+    if let Some(workflow_class) = envelope.workflow_class.as_deref() {
+        crate::print_surface_line(crate::RenderMode::Plain, "workflow_class", workflow_class);
+    }
+    if let Some(risk_tier) = envelope.risk_tier.as_deref() {
+        crate::print_surface_line(crate::RenderMode::Plain, "risk_tier", risk_tier);
+    }
     crate::print_surface_line(
         crate::RenderMode::Plain,
         "lane_status",
@@ -444,6 +604,26 @@ fn emit_lane_envelope(envelope: &LaneEnvelope, as_json: bool) -> ExitCode {
         "dispatch_status",
         &envelope.dispatch_status,
     );
+    if !envelope.blocker_codes.is_empty() {
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "blocker_codes",
+            &envelope.blocker_codes.join(", "),
+        );
+    }
+    if let Some(lane_id) = envelope.lane_id.as_deref() {
+        crate::print_surface_line(crate::RenderMode::Plain, "lane_id", lane_id);
+    }
+    if let Some(runtime_role) = envelope.runtime_role.as_deref() {
+        crate::print_surface_line(crate::RenderMode::Plain, "runtime_role", runtime_role);
+    }
+    if let Some(selected_backend) = envelope.selected_backend.as_deref() {
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "selected_backend",
+            selected_backend,
+        );
+    }
     if let Some(receipt_id) = envelope.exception_path_receipt_id.as_deref() {
         crate::print_surface_line(
             crate::RenderMode::Plain,
@@ -451,6 +631,32 @@ fn emit_lane_envelope(envelope: &LaneEnvelope, as_json: bool) -> ExitCode {
             receipt_id,
         );
     }
+    if let Some(receipt_id) = envelope.supersedes_receipt_id.as_deref() {
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "supersedes_receipt_id",
+            receipt_id,
+        );
+    }
+    if let Some(path) = envelope.exception_path_metadata_path.as_deref() {
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "exception_path_metadata_path",
+            path,
+        );
+    }
+    if let Some(metadata) = envelope.exception_path_metadata.as_ref() {
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "exception_reason_class",
+            &metadata.reason_class,
+        );
+    }
+    crate::print_surface_line(
+        crate::RenderMode::Plain,
+        "artifact_refs",
+        &envelope.artifact_refs.to_string(),
+    );
     if let Some(next_action) = envelope.next_actions.first() {
         crate::print_surface_line(crate::RenderMode::Plain, "next_action", next_action);
     }
@@ -463,7 +669,7 @@ fn emit_lane_envelope(envelope: &LaneEnvelope, as_json: bool) -> ExitCode {
 
 fn emit_blocked_lane_envelope(as_json: bool) -> ExitCode {
     let next_actions = vec![
-        "Use `vida lane show --latest --json` or `vida lane show <run-id> --json` once a lane receipt exists."
+        "Use `vida lane show --latest --json` or `vida lane show <run-id> --json` to inspect the current lane envelope, then record exception-path evidence with `vida lane exception-takeover` or explicit supersession with `vida lane supersede` as needed."
             .to_string(),
     ];
     let operator_contracts = render_operator_contract_envelope(
@@ -521,6 +727,102 @@ fn emit_blocked_lane_envelope(as_json: bool) -> ExitCode {
     ExitCode::from(2)
 }
 
+fn exception_takeover_metadata_dir(state_root: &Path) -> PathBuf {
+    state_root.join("lane-exception-path-metadata")
+}
+
+fn exception_takeover_metadata_path(state_root: &Path, run_id: &str) -> PathBuf {
+    exception_takeover_metadata_dir(state_root).join(format!("{run_id}.json"))
+}
+
+fn read_exception_takeover_metadata(
+    state_root: &Path,
+    run_id: &str,
+) -> Result<Option<ExceptionTakeoverMetadata>, String> {
+    let path = exception_takeover_metadata_path(state_root, run_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "Failed to read persisted exception takeover metadata `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let metadata: ExceptionTakeoverMetadata = serde_json::from_str(&raw).map_err(|error| {
+        format!(
+            "Failed to decode persisted exception takeover metadata `{}`: {error}",
+            path.display()
+        )
+    })?;
+    metadata.validate()?;
+    Ok(Some(metadata))
+}
+
+fn write_exception_takeover_metadata(
+    state_root: &Path,
+    run_id: &str,
+    metadata: &ExceptionTakeoverMetadata,
+) -> Result<String, String> {
+    metadata.validate()?;
+    let dir = exception_takeover_metadata_dir(state_root);
+    std::fs::create_dir_all(&dir).map_err(|error| {
+        format!(
+            "Failed to create exception takeover metadata directory `{}`: {error}",
+            dir.display()
+        )
+    })?;
+    let path = exception_takeover_metadata_path(state_root, run_id);
+    let encoded = serde_json::to_string_pretty(metadata).map_err(|error| {
+        format!(
+            "Failed to encode exception takeover metadata `{}`: {error}",
+            path.display()
+        )
+    })?;
+    std::fs::write(&path, encoded).map_err(|error| {
+        format!(
+            "Failed to persist exception takeover metadata `{}`: {error}",
+            path.display()
+        )
+    })?;
+    Ok(path.display().to_string())
+}
+
+fn lane_mutation_status_guard(
+    run_id: &str,
+    status: Option<&crate::state_store::RunGraphStatus>,
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<(), String> {
+    let Some(status) = status else {
+        return Err(format!(
+            "Lane `{run_id}` has no authoritative run-graph status, so the lane surface cannot prove this run is still active for mutation."
+        ));
+    };
+    if receipt.lane_status == crate::LaneStatus::LaneSuperseded.as_str() {
+        return Err(format!(
+            "Lane `{run_id}` is already superseded; record a new active lane instead of mutating superseded evidence."
+        ));
+    }
+    let terminal_completed_without_next_unit = status.lifecycle_stage == "closure_complete"
+        && status
+            .next_node
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none();
+    let recovery_terminal = recovery.is_some_and(|recovery| {
+        recovery.resume_status == "completed" && recovery.lifecycle_stage == "closure_complete"
+    });
+    if status.status == "completed" || terminal_completed_without_next_unit || recovery_terminal {
+        return Err(format!(
+            "Lane `{run_id}` is no longer active for mutation because run-graph status is terminal (`{}` / `{}`).",
+            status.status, status.lifecycle_stage
+        ));
+    }
+    Ok(())
+}
+
 fn read_lane_packet(path: &str) -> Result<serde_json::Value, String> {
     let raw = std::fs::read_to_string(path)
         .map_err(|error| format!("Failed to read persisted lane packet `{path}`: {error}"))?;
@@ -573,10 +875,24 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 Err(_) => None,
             };
             let recovery = store.run_graph_recovery_summary(&summary.run_id).await.ok();
+            let exception_path_metadata_path =
+                exception_takeover_metadata_path(store.root(), &summary.run_id);
+            let exception_path_metadata =
+                match read_exception_takeover_metadata(store.root(), &summary.run_id) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
             let truth = derive_lane_show_truth(&summary, recovery.as_ref());
             let envelope = build_lane_envelope(
                 summary,
                 status,
+                exception_path_metadata_path
+                    .exists()
+                    .then(|| exception_path_metadata_path.display().to_string()),
+                exception_path_metadata,
                 truth.blocked,
                 truth.blocker_codes,
                 truth.next_actions,
@@ -600,10 +916,24 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 Err(_) => None,
             };
             let recovery = store.run_graph_recovery_summary(run_id).await.ok();
+            let exception_path_metadata_path =
+                exception_takeover_metadata_path(store.root(), run_id);
+            let exception_path_metadata =
+                match read_exception_takeover_metadata(store.root(), run_id) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
             let truth = derive_lane_show_truth(&summary, recovery.as_ref());
             let envelope = build_lane_envelope(
                 summary,
                 status,
+                exception_path_metadata_path
+                    .exists()
+                    .then(|| exception_path_metadata_path.display().to_string()),
+                exception_path_metadata,
                 truth.blocked,
                 truth.blocker_codes,
                 truth.next_actions,
@@ -687,9 +1017,23 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
             let status = store.run_graph_status(run_id).await.ok();
             let truth = derive_lane_show_truth(&updated_summary, None);
+            let exception_path_metadata_path =
+                exception_takeover_metadata_path(store.root(), run_id);
+            let exception_path_metadata =
+                match read_exception_takeover_metadata(store.root(), run_id) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
             let envelope = build_lane_envelope(
                 updated_summary,
                 status,
+                exception_path_metadata_path
+                    .exists()
+                    .then(|| exception_path_metadata_path.display().to_string()),
+                exception_path_metadata,
                 truth.blocked,
                 truth.blocker_codes,
                 truth.next_actions,
@@ -699,6 +1043,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
         LaneCommand::ExceptionTakeover {
             run_id,
             receipt_id,
+            metadata,
             as_json,
         } => {
             let Some(mut receipt) = (match store.run_graph_dispatch_receipt(run_id).await {
@@ -712,19 +1057,35 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 return ExitCode::from(2);
             };
             let recovery = store.run_graph_recovery_summary(run_id).await.ok();
+            let status = store.run_graph_status(run_id).await.ok();
+            if let Err(error) =
+                lane_mutation_status_guard(run_id, status.as_ref(), recovery.as_ref(), &receipt)
+            {
+                eprintln!("{error}");
+                return ExitCode::from(2);
+            }
             receipt.exception_path_receipt_id = Some(receipt_id.to_string());
             receipt.lane_status = explicit_lane_status_for_receipt(&receipt, recovery.as_ref());
             if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
                 eprintln!("Failed to persist exception takeover receipt: {error}");
                 return ExitCode::from(1);
             }
+            let metadata_path =
+                match write_exception_takeover_metadata(store.root(), run_id, &metadata) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
             let updated_summary =
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
-            let status = store.run_graph_status(run_id).await.ok();
             let truth = derive_lane_show_truth(&updated_summary, recovery.as_ref());
             let envelope = build_lane_envelope(
                 updated_summary,
                 status,
+                Some(metadata_path),
+                Some(metadata),
                 truth.blocked,
                 truth.blocker_codes,
                 truth.next_actions,
@@ -747,6 +1108,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 return ExitCode::from(2);
             };
             let recovery = store.run_graph_recovery_summary(run_id).await.ok();
+            let status = store.run_graph_status(run_id).await.ok();
+            if let Err(error) =
+                lane_mutation_status_guard(run_id, status.as_ref(), recovery.as_ref(), &receipt)
+            {
+                eprintln!("{error}");
+                return ExitCode::from(2);
+            }
             receipt.supersedes_receipt_id = Some(receipt_id.to_string());
             receipt.lane_status = explicit_lane_status_for_receipt(&receipt, recovery.as_ref());
             if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
@@ -755,11 +1123,24 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             }
             let updated_summary =
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
-            let status = store.run_graph_status(run_id).await.ok();
+            let exception_path_metadata_path =
+                exception_takeover_metadata_path(store.root(), run_id);
+            let exception_path_metadata =
+                match read_exception_takeover_metadata(store.root(), run_id) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
             let truth = derive_lane_show_truth(&updated_summary, recovery.as_ref());
             let envelope = build_lane_envelope(
                 updated_summary,
                 status,
+                exception_path_metadata_path
+                    .exists()
+                    .then(|| exception_path_metadata_path.display().to_string()),
+                exception_path_metadata,
                 truth.blocked,
                 truth.blocker_codes,
                 truth.next_actions,
@@ -836,6 +1217,32 @@ mod tests {
         }
     }
 
+    fn sample_exception_takeover_args(run_id: &str, receipt_id: &str) -> Vec<String> {
+        vec![
+            "exception-takeover".to_string(),
+            run_id.to_string(),
+            "--receipt-id".to_string(),
+            receipt_id.to_string(),
+            "--reason-class".to_string(),
+            "failed_lawful_reuse".to_string(),
+            "--active-bounded-unit".to_string(),
+            "feature-spec-compliant-exception-path-takeover-surface-dev".to_string(),
+            "--owned-write-scope".to_string(),
+            "crates/vida/src/lane_surface.rs".to_string(),
+            "--why-delegated-path-not-lawful".to_string(),
+            "delegated lane is blocked and cannot lawfully persist the required receipt"
+                .to_string(),
+            "--why-local-write-safe".to_string(),
+            "mutation is bounded to the lane takeover surface and its targeted tests".to_string(),
+            "--return-to-normal-when".to_string(),
+            "return once canonical delegated execution is restored for the bounded unit"
+                .to_string(),
+            "--verification-step".to_string(),
+            "cargo test -p vida lane_surface -- --nocapture".to_string(),
+            "--json".to_string(),
+        ]
+    }
+
     #[test]
     fn parse_lane_show_latest_supports_json() {
         let args = vec![
@@ -883,6 +1290,21 @@ mod tests {
                 run_id: "run-1",
                 receipt_id: "receipt-1",
                 as_json: true
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_lane_exception_takeover_requires_structured_metadata() {
+        let args = sample_exception_takeover_args("run-1", "receipt-1");
+        let command = parse_lane_args(&args).expect("lane exception takeover should parse");
+        assert!(matches!(
+            command,
+            LaneCommand::ExceptionTakeover {
+                run_id: "run-1",
+                receipt_id: "receipt-1",
+                as_json: true,
+                ..
             }
         ));
     }
@@ -1063,13 +1485,7 @@ mod tests {
         wait_for_state_unlock(&root);
 
         let args = ProxyArgs {
-            args: vec![
-                "exception-takeover".to_string(),
-                run_id.to_string(),
-                "--receipt-id".to_string(),
-                "receipt-1".to_string(),
-                "--json".to_string(),
-            ],
+            args: sample_exception_takeover_args(run_id, "receipt-1"),
         };
         assert_eq!(run_lane(args).await, ExitCode::from(2));
 
@@ -1086,6 +1502,18 @@ mod tests {
             Some("receipt-1")
         );
         assert_eq!(after.lane_status, "lane_exception_recorded");
+        let metadata_path = exception_takeover_metadata_path(&root, run_id);
+        let metadata = read_exception_takeover_metadata(&root, run_id)
+            .expect("read persisted exception takeover metadata")
+            .expect("exception takeover metadata should exist");
+        assert!(metadata_path.exists());
+        assert_eq!(metadata.reason_class, "failed_lawful_reuse");
+        assert_eq!(
+            metadata.active_bounded_unit,
+            "feature-spec-compliant-exception-path-takeover-surface-dev"
+        );
+        assert_eq!(metadata.owned_write_scope.len(), 1);
+        assert_eq!(metadata.verification_plan.len(), 1);
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1135,13 +1563,7 @@ mod tests {
         wait_for_state_unlock(&root);
 
         let args = ProxyArgs {
-            args: vec![
-                "exception-takeover".to_string(),
-                run_id.to_string(),
-                "--receipt-id".to_string(),
-                "receipt-clear-1".to_string(),
-                "--json".to_string(),
-            ],
+            args: sample_exception_takeover_args(run_id, "receipt-clear-1"),
         };
         assert_eq!(run_lane(args).await, ExitCode::from(2));
 
@@ -1158,6 +1580,70 @@ mod tests {
             Some("receipt-clear-1")
         );
         assert_eq!(after.lane_status, "lane_exception_recorded");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_exception_takeover_rejects_superseded_lane_mutation() {
+        let _guard = lane_surface_test_lock()
+            .lock()
+            .expect("lane surface test lock should acquire");
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-superseded-mutation-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-lane-superseded";
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "specification",
+            "scope_discussion",
+        );
+        status.active_node = "closure".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "closure_pending".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let mut receipt = sample_receipt("executed");
+        receipt.run_id = run_id.to_string();
+        receipt.lane_status = crate::LaneStatus::LaneSuperseded.as_str().to_string();
+        receipt.supersedes_receipt_id = Some("supersede-1".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: sample_exception_takeover_args(run_id, "receipt-superseded-1"),
+        };
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after rejected mutation");
+        let after = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read receipt after")
+            .expect("receipt should exist");
+        assert_eq!(after.exception_path_receipt_id, None);
+        assert!(
+            !exception_takeover_metadata_path(&root, run_id).exists(),
+            "superseded mutation must not persist exception takeover metadata"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

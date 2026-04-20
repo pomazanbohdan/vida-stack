@@ -509,7 +509,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida taskflow recovery gate <run-id> [--json]");
             println!("  vida taskflow recovery gate-latest [--json]");
             println!("  vida lane show <run-id> [--json]");
-            println!("  vida lane exception-takeover <run-id> --receipt-id <id> [--json]");
+            println!(
+                "  vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--json]"
+            );
             println!("  vida lane supersede <run-id> --receipt-id <id> [--json]");
             println!();
             println!("Returned semantics:");
@@ -519,7 +521,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Recovery-critical lane mutations:");
             println!(
-                "  Record exception-path evidence with `vida lane exception-takeover` before any local takeover path."
+                "  Record exception-path evidence with `vida lane exception-takeover` before any local takeover path; structured reason, bounded unit, owned write scope, and verification steps are required."
             );
             println!(
                 "  Record explicit supersession with `vida lane supersede` before treating admissible takeover as active authority."
