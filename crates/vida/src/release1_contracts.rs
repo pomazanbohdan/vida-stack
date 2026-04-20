@@ -488,6 +488,28 @@ pub(crate) struct CanonicalToolContract {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalLaneExecutionReceipt {
+    #[serde(flatten)]
+    pub header: CanonicalArtifactHeader,
+    pub run_id: String,
+    pub packet_id: String,
+    pub lane_id: String,
+    pub lane_role: String,
+    pub carrier_id: String,
+    pub lane_status: String,
+    pub evidence_status: String,
+    pub started_at: String,
+    pub finished_at: String,
+    #[serde(default)]
+    pub result_artifact_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes_receipt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exception_path_receipt_id: Option<String>,
+}
+
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, SurrealValue)]
 pub(crate) struct CanonicalEvaluationRun {
     #[serde(flatten)]
@@ -559,6 +581,25 @@ pub(crate) struct CanonicalMemoryRecord {
     pub approval_record_ids: Vec<String>,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalClosureAdmissionRecord {
+    #[serde(flatten)]
+    pub header: CanonicalArtifactHeader,
+    pub release_scope: String,
+    #[serde(default)]
+    pub supported_workflow_classes: Vec<String>,
+    pub closure_decision: String,
+    pub decision_at: String,
+    pub decision_owner: String,
+    #[serde(default)]
+    pub evidence_bundle_refs: Vec<String>,
+    #[serde(default)]
+    pub open_risk_acceptance_ids: Vec<String>,
+    #[serde(default)]
+    pub blocked_by: Vec<String>,
+}
+
 // Keep the older artifact-oriented names as explicit wrappers while the rest of
 // the runtime migrates to the schema's canonical event/record/run/bundle nouns.
 // `flatten` preserves the existing wire shape so operator and runtime surfaces
@@ -592,6 +633,13 @@ pub(crate) struct CanonicalToolContractArtifact {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalLaneExecutionReceiptArtifact {
+    #[serde(flatten)]
+    pub lane_execution_receipt: CanonicalLaneExecutionReceipt,
+}
+
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, SurrealValue)]
 pub(crate) struct CanonicalEvaluationArtifact {
     #[serde(flatten)]
@@ -617,6 +665,13 @@ pub(crate) struct CanonicalIncidentEvidenceArtifact {
 pub(crate) struct CanonicalMemoryArtifact {
     #[serde(flatten)]
     pub memory_record: CanonicalMemoryRecord,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalClosureAdmissionArtifact {
+    #[serde(flatten)]
+    pub closure_admission_record: CanonicalClosureAdmissionRecord,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1705,8 +1760,10 @@ mod tests {
         exception_takeover_state, missing_downstream_lane_evidence_blocker,
         release1_contract_status_str, ApprovalStatus, BlockerCode, CanonicalApprovalArtifact,
         CanonicalApprovalRecord, CanonicalArtifactHeader, CanonicalArtifactType,
+        CanonicalClosureAdmissionArtifact, CanonicalClosureAdmissionRecord,
         CanonicalEvaluationArtifact, CanonicalEvaluationRun, CanonicalFeedbackArtifact,
         CanonicalFeedbackEvent, CanonicalIncidentEvidenceArtifact, CanonicalIncidentEvidenceBundle,
+        CanonicalLaneExecutionReceipt, CanonicalLaneExecutionReceiptArtifact,
         CanonicalMemoryArtifact, CanonicalMemoryRecord, CanonicalPolicyDecision,
         CanonicalPolicyDecisionArtifact, CanonicalToolContract, CanonicalToolContractArtifact,
         CanonicalTraceArtifact, CanonicalTraceEvent, CompatibilityBoundary, CompatibilityClass,
@@ -1949,6 +2006,38 @@ mod tests {
             tool_contract: tool.clone(),
         };
 
+        let lane_execution_receipt = CanonicalLaneExecutionReceipt {
+            header: CanonicalArtifactHeader::new(
+                "lane-receipt-1",
+                CanonicalArtifactType::LaneExecutionReceipt,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:12:00Z",
+                "executed",
+                "lane_surface",
+                Some("trace-1".to_string()),
+                Some(
+                    WorkflowClass::DelegatedDevelopmentPacket
+                        .as_str()
+                        .to_string(),
+                ),
+            ),
+            run_id: "run-1".to_string(),
+            packet_id: "packet-1".to_string(),
+            lane_id: "lane-impl-1".to_string(),
+            lane_role: "implementer".to_string(),
+            carrier_id: "internal.codex.middle".to_string(),
+            lane_status: "lane_completed".to_string(),
+            evidence_status: "recorded".to_string(),
+            started_at: "2026-04-18T10:00:00Z".to_string(),
+            finished_at: "2026-04-18T10:12:00Z".to_string(),
+            result_artifact_ids: vec!["trace-evt-1".to_string(), "evaluation-1".to_string()],
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+        };
+        let lane_execution_receipt_artifact = CanonicalLaneExecutionReceiptArtifact {
+            lane_execution_receipt: lane_execution_receipt.clone(),
+        };
+
         let evaluation = CanonicalEvaluationRun {
             header: CanonicalArtifactHeader::new(
                 "evaluation-1",
@@ -2061,6 +2150,37 @@ mod tests {
             memory_record: memory.clone(),
         };
 
+        let closure_admission_record = CanonicalClosureAdmissionRecord {
+            header: CanonicalArtifactHeader::new(
+                "closure-admission-1",
+                CanonicalArtifactType::ClosureAdmissionRecord,
+                "2026-04-18T10:20:00Z",
+                "2026-04-18T10:20:00Z",
+                "admitted",
+                "runtime_consumption_surface",
+                Some("trace-1".to_string()),
+                Some(
+                    WorkflowClass::DelegatedDevelopmentPacket
+                        .as_str()
+                        .to_string(),
+                ),
+            ),
+            release_scope: "release-1-artifact-schema-slice".to_string(),
+            supported_workflow_classes: vec![
+                WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string(),
+                WorkflowClass::IdentityOrPolicyChange.as_str().to_string(),
+            ],
+            closure_decision: "admit".to_string(),
+            decision_at: "2026-04-18T10:20:00Z".to_string(),
+            decision_owner: "closure_surface".to_string(),
+            evidence_bundle_refs: vec!["bundle-check-1".to_string(), "proof-1".to_string()],
+            open_risk_acceptance_ids: vec!["risk-acceptance-1".to_string()],
+            blocked_by: Vec::new(),
+        };
+        let closure_admission_artifact = CanonicalClosureAdmissionArtifact {
+            closure_admission_record: closure_admission_record.clone(),
+        };
+
         assert_eq!(
             serde_json::to_value(&trace).unwrap(),
             serde_json::to_value(&trace_artifact).unwrap()
@@ -2078,6 +2198,10 @@ mod tests {
             serde_json::to_value(&tool_artifact).unwrap()
         );
         assert_eq!(
+            serde_json::to_value(&lane_execution_receipt).unwrap(),
+            serde_json::to_value(&lane_execution_receipt_artifact).unwrap()
+        );
+        assert_eq!(
             serde_json::to_value(&evaluation).unwrap(),
             serde_json::to_value(&evaluation_artifact).unwrap()
         );
@@ -2092,6 +2216,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&memory).unwrap(),
             serde_json::to_value(&memory_artifact).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&closure_admission_record).unwrap(),
+            serde_json::to_value(&closure_admission_artifact).unwrap()
         );
     }
 
@@ -2194,6 +2322,34 @@ mod tests {
             run_at: "2026-04-18T10:10:00Z".to_string(),
             trace_sample_refs: vec!["trace-evt-1".to_string()],
         };
+        let lane_execution_receipt = CanonicalLaneExecutionReceipt {
+            header: CanonicalArtifactHeader::new(
+                "lane-receipt-1",
+                CanonicalArtifactType::LaneExecutionReceipt,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:12:00Z",
+                "executed",
+                "lane_surface",
+                Some("trace-1".to_string()),
+                Some(
+                    WorkflowClass::DelegatedDevelopmentPacket
+                        .as_str()
+                        .to_string(),
+                ),
+            ),
+            run_id: "run-1".to_string(),
+            packet_id: "packet-1".to_string(),
+            lane_id: "lane-impl-1".to_string(),
+            lane_role: "implementer".to_string(),
+            carrier_id: "internal.codex.middle".to_string(),
+            lane_status: "lane_completed".to_string(),
+            evidence_status: "recorded".to_string(),
+            started_at: "2026-04-18T10:00:00Z".to_string(),
+            finished_at: "2026-04-18T10:12:00Z".to_string(),
+            result_artifact_ids: vec!["trace-evt-1".to_string(), "evaluation-1".to_string()],
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+        };
         let incident = CanonicalIncidentEvidenceBundle {
             header: CanonicalArtifactHeader::new(
                 "incident-1",
@@ -2242,6 +2398,33 @@ mod tests {
             deletion_or_correction_ref: Some("memory-correction-1".to_string()),
             approval_record_ids: vec!["approval-1".to_string()],
         };
+        let closure_admission = CanonicalClosureAdmissionRecord {
+            header: CanonicalArtifactHeader::new(
+                "closure-admission-1",
+                CanonicalArtifactType::ClosureAdmissionRecord,
+                "2026-04-18T10:20:00Z",
+                "2026-04-18T10:20:00Z",
+                "admitted",
+                "runtime_consumption_surface",
+                Some("trace-1".to_string()),
+                Some(
+                    WorkflowClass::DelegatedDevelopmentPacket
+                        .as_str()
+                        .to_string(),
+                ),
+            ),
+            release_scope: "release-1-artifact-schema-slice".to_string(),
+            supported_workflow_classes: vec![
+                WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string(),
+                WorkflowClass::IdentityOrPolicyChange.as_str().to_string(),
+            ],
+            closure_decision: "admit".to_string(),
+            decision_at: "2026-04-18T10:20:00Z".to_string(),
+            decision_owner: "closure_surface".to_string(),
+            evidence_bundle_refs: vec!["bundle-check-1".to_string(), "proof-1".to_string()],
+            open_risk_acceptance_ids: vec!["risk-acceptance-1".to_string()],
+            blocked_by: Vec::new(),
+        };
         let feedback = CanonicalFeedbackEvent {
             header: CanonicalArtifactHeader::new(
                 "feedback-1",
@@ -2269,11 +2452,15 @@ mod tests {
         let approval_value = serde_json::to_value(&approval).expect("approval should serialize");
         let tool_value =
             serde_json::to_value(&tool_contract).expect("tool contract should serialize");
+        let lane_value =
+            serde_json::to_value(&lane_execution_receipt).expect("lane receipt should serialize");
         let evaluation_value =
             serde_json::to_value(&evaluation).expect("evaluation should serialize");
         let feedback_value = serde_json::to_value(&feedback).expect("feedback should serialize");
         let incident_value = serde_json::to_value(&incident).expect("incident should serialize");
         let memory_value = serde_json::to_value(&memory).expect("memory should serialize");
+        let closure_value =
+            serde_json::to_value(&closure_admission).expect("closure admission should serialize");
 
         assert_eq!(policy_value["artifact_type"], "policy_decision");
         assert_eq!(policy_value["reason_codes"][0], "policy_satisfied");
@@ -2281,6 +2468,14 @@ mod tests {
         assert_eq!(approval_value["requested_by"], "worker-7");
         assert_eq!(tool_value["artifact_type"], "tool_contract");
         assert_eq!(tool_value["approval_required"], false);
+        assert_eq!(lane_value["artifact_type"], "lane_execution_receipt");
+        assert_eq!(lane_value["run_id"], "run-1");
+        assert_eq!(lane_value["packet_id"], "packet-1");
+        assert_eq!(lane_value["lane_id"], "lane-impl-1");
+        assert_eq!(lane_value["carrier_id"], "internal.codex.middle");
+        assert_eq!(lane_value["lane_status"], "lane_completed");
+        assert_eq!(lane_value["evidence_status"], "recorded");
+        assert_eq!(lane_value["result_artifact_ids"][0], "trace-evt-1");
         assert_eq!(evaluation_value["artifact_type"], "evaluation_run");
         assert_eq!(evaluation_value["metric_results"]["artifacts_added"], 7.0);
         assert_eq!(feedback_value["artifact_type"], "feedback_event");
@@ -2290,6 +2485,18 @@ mod tests {
         assert_eq!(incident_value["trace_ids"][0], "trace-1");
         assert_eq!(memory_value["artifact_type"], "memory_record");
         assert_eq!(memory_value["approval_record_ids"][0], "approval-1");
+        assert_eq!(closure_value["artifact_type"], "closure_admission_record");
+        assert_eq!(
+            closure_value["release_scope"],
+            "release-1-artifact-schema-slice"
+        );
+        assert_eq!(closure_value["closure_decision"], "admit");
+        assert_eq!(closure_value["decision_owner"], "closure_surface");
+        assert_eq!(closure_value["evidence_bundle_refs"][0], "bundle-check-1");
+        assert_eq!(
+            closure_value["supported_workflow_classes"][0],
+            WorkflowClass::DelegatedDevelopmentPacket.as_str()
+        );
     }
 
     #[test]
