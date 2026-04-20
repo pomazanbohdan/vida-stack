@@ -5531,6 +5531,67 @@ fn taskflow_task_close_records_auto_feedback_and_budget() {
         observability_json["events"][0]["source"],
         "vida taskflow task close"
     );
+    assert_eq!(
+        observability_json["events"][0]["feedback_event"]["artifact_type"],
+        "feedback_event"
+    );
+    assert_eq!(
+        observability_json["events"][0]["evaluation_baseline"]["artifact_type"],
+        "evaluation_run"
+    );
+    assert_eq!(
+        observability_json["events"][0]["prompt_lifecycle_baseline"]["lifecycle_state"],
+        "draft"
+    );
+    assert_eq!(
+        observability_json["events"][0]["safety_baseline"]["safety_gate"],
+        "observe"
+    );
+    let prompt_lifecycle =
+        fs::read_to_string(format!("{project_root}/.vida/state/prompt-lifecycle.json"))
+            .expect("prompt lifecycle store should exist");
+    let prompt_lifecycle_json: serde_json::Value =
+        serde_json::from_str(&prompt_lifecycle).expect("prompt lifecycle json should parse");
+    let workflows = prompt_lifecycle_json["workflows"]
+        .as_object()
+        .expect("prompt lifecycle workflows should render");
+    assert_eq!(workflows.len(), 1);
+    assert_eq!(
+        workflows
+            .values()
+            .next()
+            .expect("one workflow baseline should exist")["lifecycle_state"],
+        "draft"
+    );
+
+    let status = status_with_timeout(&project_root, &state_dir, &["status", "--json"]);
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_json: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status json should parse");
+    assert_eq!(
+        status_json["host_agents"]["latest_feedback_event"]["artifact_type"],
+        "feedback_event"
+    );
+    assert_eq!(
+        status_json["host_agents"]["latest_evaluation_baseline"]["artifact_type"],
+        "evaluation_run"
+    );
+    assert_eq!(
+        status_json["host_agents"]["latest_prompt_lifecycle_baseline"]["lifecycle_state"],
+        "draft"
+    );
+    assert_eq!(
+        status_json["host_agents"]["latest_safety_baseline"]["safety_gate"],
+        "observe"
+    );
+    assert_eq!(
+        status_json["host_agents"]["stores"]["prompt_lifecycle"],
+        ".vida/state/prompt-lifecycle.json"
+    );
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }

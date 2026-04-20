@@ -403,7 +403,12 @@ fn append_host_agent_feedback(
         "scorecards_store": super::WORKER_SCORECARDS_STATE,
         "strategy_store": super::WORKER_STRATEGY_STATE,
         "observability_store": super::HOST_AGENT_OBSERVABILITY_STATE,
+        "prompt_lifecycle_store": super::PROMPT_LIFECYCLE_STATE,
         "strategy_row": strategy["agents"][input.agent_id],
-        "observability_event": observability_event
+        "observability_event": observability_event,
+        "feedback_event": observability_event["feedback_event"].clone(),
+        "evaluation_baseline": observability_event["evaluation_baseline"].clone(),
+        "prompt_lifecycle_baseline": observability_event["prompt_lifecycle_baseline"].clone(),
+        "safety_baseline": observability_event["safety_baseline"].clone()
     }))
 }

@@ -508,6 +508,20 @@ pub(crate) struct CanonicalEvaluationRun {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalFeedbackEvent {
+    #[serde(flatten)]
+    pub header: CanonicalArtifactHeader,
+    pub feedback_id: String,
+    pub source_kind: String,
+    pub severity: String,
+    pub feedback_type: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_defect_or_remediation_id: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
 pub(crate) struct CanonicalIncidentEvidenceBundle {
     #[serde(flatten)]
     pub header: CanonicalArtifactHeader,
@@ -582,6 +596,13 @@ pub(crate) struct CanonicalToolContractArtifact {
 pub(crate) struct CanonicalEvaluationArtifact {
     #[serde(flatten)]
     pub evaluation_run: CanonicalEvaluationRun,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalFeedbackArtifact {
+    #[serde(flatten)]
+    pub feedback_event: CanonicalFeedbackEvent,
 }
 
 #[allow(dead_code)]
@@ -1675,13 +1696,13 @@ mod tests {
         exception_takeover_state, missing_downstream_lane_evidence_blocker,
         release1_contract_status_str, ApprovalStatus, BlockerCode, CanonicalApprovalArtifact,
         CanonicalApprovalRecord, CanonicalArtifactHeader, CanonicalArtifactType,
-        CanonicalEvaluationArtifact, CanonicalEvaluationRun, CanonicalIncidentEvidenceArtifact,
-        CanonicalIncidentEvidenceBundle, CanonicalMemoryArtifact, CanonicalMemoryRecord,
-        CanonicalPolicyDecision, CanonicalPolicyDecisionArtifact, CanonicalToolContract,
-        CanonicalToolContractArtifact, CanonicalTraceArtifact, CanonicalTraceEvent,
-        CompatibilityBoundary, CompatibilityClass, ExceptionTakeoverState, GateLevel, LaneStatus,
-        Release1ContractStatus, Release1ContractType, Release1SchemaVersion, RiskTier,
-        WorkflowClass,
+        CanonicalEvaluationArtifact, CanonicalEvaluationRun, CanonicalFeedbackArtifact,
+        CanonicalFeedbackEvent, CanonicalIncidentEvidenceArtifact, CanonicalIncidentEvidenceBundle,
+        CanonicalMemoryArtifact, CanonicalMemoryRecord, CanonicalPolicyDecision,
+        CanonicalPolicyDecisionArtifact, CanonicalToolContract, CanonicalToolContractArtifact,
+        CanonicalTraceArtifact, CanonicalTraceEvent, CompatibilityBoundary, CompatibilityClass,
+        ExceptionTakeoverState, GateLevel, LaneStatus, Release1ContractStatus,
+        Release1ContractType, Release1SchemaVersion, RiskTier, WorkflowClass,
     };
 
     #[test]
@@ -1949,6 +1970,32 @@ mod tests {
             evaluation_run: evaluation.clone(),
         };
 
+        let feedback = CanonicalFeedbackEvent {
+            header: CanonicalArtifactHeader::new(
+                "feedback-1",
+                CanonicalArtifactType::FeedbackEvent,
+                "2026-04-18T10:11:00Z",
+                "2026-04-18T10:11:00Z",
+                "recorded",
+                "agent_feedback_surface",
+                Some("trace-1".to_string()),
+                Some(
+                    WorkflowClass::DelegatedDevelopmentPacket
+                        .as_str()
+                        .to_string(),
+                ),
+            ),
+            feedback_id: "feedback-1".to_string(),
+            source_kind: "manual_feedback".to_string(),
+            severity: "low".to_string(),
+            feedback_type: "agent_runtime_feedback".to_string(),
+            summary: "bounded success feedback".to_string(),
+            linked_defect_or_remediation_id: Some("task-1".to_string()),
+        };
+        let feedback_artifact = CanonicalFeedbackArtifact {
+            feedback_event: feedback.clone(),
+        };
+
         let incident = CanonicalIncidentEvidenceBundle {
             header: CanonicalArtifactHeader::new(
                 "incident-1",
@@ -2024,6 +2071,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&evaluation).unwrap(),
             serde_json::to_value(&evaluation_artifact).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&feedback).unwrap(),
+            serde_json::to_value(&feedback_artifact).unwrap()
         );
         assert_eq!(
             serde_json::to_value(&incident).unwrap(),
@@ -2182,6 +2233,28 @@ mod tests {
             deletion_or_correction_ref: Some("memory-correction-1".to_string()),
             approval_record_ids: vec!["approval-1".to_string()],
         };
+        let feedback = CanonicalFeedbackEvent {
+            header: CanonicalArtifactHeader::new(
+                "feedback-1",
+                CanonicalArtifactType::FeedbackEvent,
+                "2026-04-18T10:11:00Z",
+                "2026-04-18T10:11:00Z",
+                "recorded",
+                "agent_feedback_surface",
+                Some("trace-1".to_string()),
+                Some(
+                    WorkflowClass::DelegatedDevelopmentPacket
+                        .as_str()
+                        .to_string(),
+                ),
+            ),
+            feedback_id: "feedback-1".to_string(),
+            source_kind: "manual_feedback".to_string(),
+            severity: "low".to_string(),
+            feedback_type: "agent_runtime_feedback".to_string(),
+            summary: "bounded success feedback".to_string(),
+            linked_defect_or_remediation_id: Some("task-1".to_string()),
+        };
 
         let policy_value = serde_json::to_value(&policy).expect("policy should serialize");
         let approval_value = serde_json::to_value(&approval).expect("approval should serialize");
@@ -2189,6 +2262,7 @@ mod tests {
             serde_json::to_value(&tool_contract).expect("tool contract should serialize");
         let evaluation_value =
             serde_json::to_value(&evaluation).expect("evaluation should serialize");
+        let feedback_value = serde_json::to_value(&feedback).expect("feedback should serialize");
         let incident_value = serde_json::to_value(&incident).expect("incident should serialize");
         let memory_value = serde_json::to_value(&memory).expect("memory should serialize");
 
@@ -2200,6 +2274,9 @@ mod tests {
         assert_eq!(tool_value["approval_required"], false);
         assert_eq!(evaluation_value["artifact_type"], "evaluation_run");
         assert_eq!(evaluation_value["metric_results"]["artifacts_added"], 7.0);
+        assert_eq!(feedback_value["artifact_type"], "feedback_event");
+        assert_eq!(feedback_value["source_kind"], "manual_feedback");
+        assert_eq!(feedback_value["severity"], "low");
         assert_eq!(incident_value["artifact_type"], "incident_evidence_bundle");
         assert_eq!(incident_value["trace_ids"][0], "trace-1");
         assert_eq!(memory_value["artifact_type"], "memory_record");

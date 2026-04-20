@@ -27,6 +27,10 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
         .as_array()
         .map(|events| events.iter().rev().take(5).cloned().collect::<Vec<_>>())
         .unwrap_or_default();
+    let latest_event = latest_events
+        .first()
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let recent_events_value = serde_json::Value::Array(latest_events);
     let budget_value = observability["budget"].clone();
     let runtime_root = runtime_root_for_selected_system(
@@ -97,6 +101,22 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
     );
     payload.insert("budget".to_string(), budget_value);
     payload.insert("recent_events".to_string(), recent_events_value);
+    payload.insert(
+        "latest_feedback_event".to_string(),
+        latest_event["feedback_event"].clone(),
+    );
+    payload.insert(
+        "latest_evaluation_baseline".to_string(),
+        latest_event["evaluation_baseline"].clone(),
+    );
+    payload.insert(
+        "latest_prompt_lifecycle_baseline".to_string(),
+        latest_event["prompt_lifecycle_baseline"].clone(),
+    );
+    payload.insert(
+        "latest_safety_baseline".to_string(),
+        latest_event["safety_baseline"].clone(),
+    );
     payload.insert("selection_policy".to_string(), serde_json::Value::Null);
     payload.insert("agents".to_string(), serde_json::json!({}));
     payload.insert(
@@ -191,6 +211,7 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
             "scorecards": if strategy.is_null() { serde_json::Value::Null } else { serde_json::Value::String(crate::WORKER_SCORECARDS_STATE.to_string()) },
             "strategy": if strategy.is_null() { serde_json::Value::Null } else { serde_json::Value::String(crate::WORKER_STRATEGY_STATE.to_string()) },
             "observability": crate::HOST_AGENT_OBSERVABILITY_STATE,
+            "prompt_lifecycle": crate::PROMPT_LIFECYCLE_STATE,
         }),
     );
     Some(serde_json::Value::Object(payload))

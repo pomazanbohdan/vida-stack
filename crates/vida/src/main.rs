@@ -286,6 +286,7 @@ const SPEC_BOOTSTRAP_RECEIPT_LATEST: &str = ".vida/receipts/spec-bootstrap.lates
 const WORKER_SCORECARDS_STATE: &str = ".vida/state/worker-scorecards.json";
 const WORKER_STRATEGY_STATE: &str = ".vida/state/worker-strategy.json";
 const HOST_AGENT_OBSERVABILITY_STATE: &str = ".vida/state/host-agent-observability.json";
+const PROMPT_LIFECYCLE_STATE: &str = ".vida/state/prompt-lifecycle.json";
 const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER: &str =
     "run_graph_latest_dispatch_receipt_summary_inconsistent";
 const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_NEXT_ACTION: &str =

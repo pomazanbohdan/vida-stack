@@ -25,6 +25,10 @@ pub(crate) fn host_agent_observability_state_path(project_root: &Path) -> PathBu
     project_root.join(HOST_AGENT_OBSERVABILITY_STATE)
 }
 
+pub(crate) fn prompt_lifecycle_state_path(project_root: &Path) -> PathBuf {
+    project_root.join(crate::PROMPT_LIFECYCLE_STATE)
+}
+
 pub(crate) fn read_json_file_if_present(path: &Path) -> Option<serde_json::Value> {
     let raw = fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
@@ -52,6 +56,19 @@ pub(crate) fn load_or_initialize_host_agent_observability_state(
             })
         },
     )
+}
+
+pub(crate) fn load_or_initialize_prompt_lifecycle_state(project_root: &Path) -> serde_json::Value {
+    read_json_file_if_present(&prompt_lifecycle_state_path(project_root)).unwrap_or_else(|| {
+        serde_json::json!({
+            "schema_version": 1,
+            "updated_at": time::OffsetDateTime::now_utc()
+                .format(&Rfc3339)
+                .expect("rfc3339 timestamp should render"),
+            "store_path": crate::PROMPT_LIFECYCLE_STATE,
+            "workflows": {}
+        })
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +105,253 @@ fn increment_object_counter(
     );
 }
 
+fn host_feedback_artifact_suffix(recorded_at: &str) -> String {
+    recorded_at
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect()
+}
+
+fn host_feedback_workflow_class(task_class: &str) -> &'static str {
+    match task_class.trim() {
+        "implementation" => {
+            crate::release1_contracts::WorkflowClass::DelegatedDevelopmentPacket.as_str()
+        }
+        "verification" | "review" | "quality_gate" | "release_readiness" => {
+            crate::release1_contracts::WorkflowClass::ToolAssistedRead.as_str()
+        }
+        "architecture" | "specification" => {
+            crate::release1_contracts::WorkflowClass::DocumentationMutation.as_str()
+        }
+        "memory" => crate::release1_contracts::WorkflowClass::MemoryWrite.as_str(),
+        _ => crate::release1_contracts::WorkflowClass::InformationalAnswer.as_str(),
+    }
+}
+
+fn host_feedback_source_kind(source: &str) -> &'static str {
+    if source.trim() == "vida task close" {
+        "automatic_task_close_feedback"
+    } else {
+        "manual_feedback"
+    }
+}
+
+fn host_feedback_severity(outcome: &str) -> &'static str {
+    match outcome.trim() {
+        "failure" => "high",
+        "neutral" => "medium",
+        _ => "low",
+    }
+}
+
+fn host_feedback_defect_cluster(input: &HostAgentFeedbackInput<'_>) -> &'static str {
+    let joined = format!(
+        "{} {} {}",
+        input.notes.unwrap_or(""),
+        input.reason.unwrap_or(""),
+        input.task_class
+    )
+    .to_ascii_lowercase();
+    if joined.contains("prompt") || joined.contains("regression") {
+        "prompt_regression"
+    } else if joined.contains("safety") || joined.contains("adversarial") {
+        "safety_review"
+    } else if joined.contains("approval") {
+        "approval_gate"
+    } else if joined.contains("retrieval")
+        || joined.contains("citation")
+        || joined.contains("freshness")
+    {
+        "retrieval_trust"
+    } else if joined.contains("tool") || joined.contains("contract") {
+        "tool_contract"
+    } else if joined.contains("timeout") || joined.contains("latency") {
+        "runtime_timeout"
+    } else {
+        "general_runtime_feedback"
+    }
+}
+
+fn host_feedback_summary_text(input: &HostAgentFeedbackInput<'_>) -> String {
+    input
+        .notes
+        .or(input.reason)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(input.outcome)
+        .to_string()
+}
+
+fn host_feedback_feedback_event(
+    input: &HostAgentFeedbackInput<'_>,
+    recorded_at: &str,
+) -> serde_json::Value {
+    let workflow_class = host_feedback_workflow_class(input.task_class);
+    let suffix = host_feedback_artifact_suffix(recorded_at);
+    let trace_id = format!("host-agent-feedback.trace.{}.{}", input.agent_id, suffix);
+    serde_json::to_value(crate::release1_contracts::CanonicalFeedbackArtifact {
+        feedback_event: crate::release1_contracts::CanonicalFeedbackEvent {
+            header: crate::release1_contracts::CanonicalArtifactHeader::new(
+                format!("host-agent-feedback.event.{}.{}", input.agent_id, suffix),
+                crate::release1_contracts::CanonicalArtifactType::FeedbackEvent,
+                recorded_at.to_string(),
+                recorded_at.to_string(),
+                "recorded",
+                "host_agent_observability",
+                Some(trace_id),
+                Some(workflow_class.to_string()),
+            ),
+            feedback_id: format!("host-agent-feedback.{}.{}", input.agent_id, suffix),
+            source_kind: host_feedback_source_kind(input.source).to_string(),
+            severity: host_feedback_severity(input.outcome).to_string(),
+            feedback_type: "agent_runtime_feedback".to_string(),
+            summary: host_feedback_summary_text(input),
+            linked_defect_or_remediation_id: input.task_id.map(str::to_string),
+        },
+    })
+    .expect("feedback artifact should serialize")
+}
+
+fn host_feedback_evaluation_baseline(
+    input: &HostAgentFeedbackInput<'_>,
+    recorded_at: &str,
+) -> serde_json::Value {
+    let workflow_class = host_feedback_workflow_class(input.task_class);
+    let suffix = host_feedback_artifact_suffix(recorded_at);
+    let trace_id = format!("host-agent-feedback.trace.{}.{}", input.agent_id, suffix);
+    let safety_defect_rate = if input.outcome == "failure" {
+        100.0
+    } else {
+        0.0
+    };
+    serde_json::to_value(crate::release1_contracts::CanonicalEvaluationArtifact {
+        evaluation_run: crate::release1_contracts::CanonicalEvaluationRun {
+            header: crate::release1_contracts::CanonicalArtifactHeader::new(
+                format!(
+                    "host-agent-feedback.evaluation.{}.{}",
+                    input.agent_id, suffix
+                ),
+                crate::release1_contracts::CanonicalArtifactType::EvaluationRun,
+                recorded_at.to_string(),
+                recorded_at.to_string(),
+                "recorded",
+                "host_agent_observability",
+                Some(trace_id.clone()),
+                Some(workflow_class.to_string()),
+            ),
+            evaluation_id: format!("host-agent-evaluation.{}.{}", input.agent_id, suffix),
+            evaluation_profile: "host_agent_feedback_baseline".to_string(),
+            target_surface: input.source.to_string(),
+            dataset_or_sample_window: input
+                .task_id
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("single_feedback_event")
+                .to_string(),
+            metric_results: std::collections::BTreeMap::from([
+                ("feedback_score".to_string(), input.score as f64),
+                ("safety_defect_rate".to_string(), safety_defect_rate),
+            ]),
+            regression_summary: format!(
+                "defect_cluster={} outcome={}",
+                host_feedback_defect_cluster(input),
+                input.outcome
+            ),
+            decision: match input.outcome {
+                "failure" => "hold",
+                "neutral" => "review",
+                _ => "observe",
+            }
+            .to_string(),
+            decision_reason: input.reason.unwrap_or(input.outcome).to_string(),
+            run_at: recorded_at.to_string(),
+            trace_sample_refs: vec![trace_id],
+        },
+    })
+    .expect("evaluation artifact should serialize")
+}
+
+fn host_feedback_prompt_lifecycle_baseline(
+    input: &HostAgentFeedbackInput<'_>,
+    recorded_at: &str,
+) -> serde_json::Value {
+    let workflow_class = host_feedback_workflow_class(input.task_class);
+    let suffix = host_feedback_artifact_suffix(recorded_at);
+    serde_json::json!({
+        "artifact_id": format!("host-agent-feedback.prompt-lifecycle.{}.{}", input.agent_id, suffix),
+        "status": "baseline_only",
+        "workflow_class": workflow_class,
+        "lifecycle_state": "draft",
+        "promotion_gate": "benchmark_required",
+        "canary_status": "not_started",
+        "rollback_posture": "manual_rollback_ready",
+        "source_feedback_id": format!("host-agent-feedback.{}.{}", input.agent_id, suffix),
+        "recorded_at": recorded_at,
+    })
+}
+
+fn host_feedback_safety_baseline(
+    input: &HostAgentFeedbackInput<'_>,
+    recorded_at: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "artifact_id": format!(
+            "host-agent-feedback.safety.{}.{}",
+            input.agent_id,
+            host_feedback_artifact_suffix(recorded_at)
+        ),
+        "status": if input.outcome == "failure" { "review_required" } else { "baseline_recorded" },
+        "workflow_class": host_feedback_workflow_class(input.task_class),
+        "safety_gate": match input.outcome {
+            "failure" => "hold",
+            "neutral" => "review",
+            _ => "observe",
+        },
+        "defect_cluster": host_feedback_defect_cluster(input),
+        "defect_rate_signal": if input.outcome == "failure" { 100.0 } else { 0.0 },
+        "recorded_at": recorded_at,
+    })
+}
+
+fn persist_prompt_lifecycle_baseline(
+    project_root: &Path,
+    prompt_lifecycle_baseline: &serde_json::Value,
+    evaluation_baseline: &serde_json::Value,
+    safety_baseline: &serde_json::Value,
+    feedback_event: &serde_json::Value,
+    recorded_at: &str,
+) -> Result<(), String> {
+    let mut registry = load_or_initialize_prompt_lifecycle_state(project_root);
+    if !registry["workflows"].is_object() {
+        registry["workflows"] = serde_json::json!({});
+    }
+    let workflow_class = prompt_lifecycle_baseline["workflow_class"]
+        .as_str()
+        .unwrap_or("informational_answer")
+        .to_string();
+    registry["workflows"][&workflow_class] = serde_json::json!({
+        "artifact_id": format!("prompt-lifecycle-registry.{workflow_class}"),
+        "workflow_class": workflow_class,
+        "lifecycle_state": prompt_lifecycle_baseline["lifecycle_state"].clone(),
+        "promotion_gate": prompt_lifecycle_baseline["promotion_gate"].clone(),
+        "canary_status": prompt_lifecycle_baseline["canary_status"].clone(),
+        "rollback_posture": prompt_lifecycle_baseline["rollback_posture"].clone(),
+        "latest_feedback_event_id": feedback_event["feedback_id"].clone(),
+        "latest_evaluation_artifact_id": evaluation_baseline["artifact_id"].clone(),
+        "latest_safety_gate": safety_baseline["safety_gate"].clone(),
+        "last_updated_at": recorded_at,
+    });
+    registry["updated_at"] = serde_json::Value::String(recorded_at.to_string());
+
+    let path = prompt_lifecycle_state_path(project_root);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&registry).expect("prompt lifecycle json should render"),
+    )
+    .map_err(|error| format!("Failed to write {}: {error}", path.display()))
+}
+
 pub(crate) fn append_host_agent_observability_event(
     project_root: &Path,
     input: &HostAgentFeedbackInput<'_>,
@@ -110,6 +374,18 @@ pub(crate) fn append_host_agent_observability_event(
         .format(&Rfc3339)
         .expect("rfc3339 timestamp should render");
     let estimated_units = input.estimated_task_price_units.unwrap_or_default();
+    let feedback_event = host_feedback_feedback_event(input, &recorded_at);
+    let evaluation_baseline = host_feedback_evaluation_baseline(input, &recorded_at);
+    let prompt_lifecycle_baseline = host_feedback_prompt_lifecycle_baseline(input, &recorded_at);
+    let safety_baseline = host_feedback_safety_baseline(input, &recorded_at);
+    persist_prompt_lifecycle_baseline(
+        project_root,
+        &prompt_lifecycle_baseline,
+        &evaluation_baseline,
+        &safety_baseline,
+        &feedback_event,
+        &recorded_at,
+    )?;
     let event = serde_json::json!({
         "recorded_at": recorded_at,
         "event_kind": "feedback",
@@ -128,6 +404,10 @@ pub(crate) fn append_host_agent_observability_event(
         "estimated_task_price_units": estimated_units,
         "effective_score": input.effective_score,
         "lifecycle_state": input.lifecycle_state.unwrap_or(""),
+        "feedback_event": feedback_event,
+        "evaluation_baseline": evaluation_baseline,
+        "prompt_lifecycle_baseline": prompt_lifecycle_baseline,
+        "safety_baseline": safety_baseline,
     });
     let event_count = {
         let events = ledger["events"]
@@ -436,4 +716,100 @@ pub(crate) fn build_carrier_pricing_policy(
         "local_scorecards_store": worker_strategy["scorecards_path"],
         "tiers": tiers
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        append_host_agent_observability_event, load_or_initialize_host_agent_observability_state,
+        load_or_initialize_prompt_lifecycle_state, HostAgentFeedbackInput,
+    };
+    use crate::temp_state::TempStateHarness;
+
+    #[test]
+    fn append_host_agent_observability_event_records_control_baseline_artifacts() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let input = HostAgentFeedbackInput {
+            agent_id: "junior",
+            score: 92,
+            outcome: "success",
+            task_class: "implementation",
+            notes: Some("clean bounded closure"),
+            source: "vida agent-feedback",
+            task_id: Some("task-1"),
+            task_display_id: None,
+            task_title: Some("Example Task"),
+            runtime_role: Some("implementer"),
+            selected_tier: Some("junior"),
+            estimated_task_price_units: Some(4),
+            lifecycle_state: Some("promoted"),
+            effective_score: Some(81),
+            reason: None,
+        };
+
+        let event = append_host_agent_observability_event(harness.path(), &input)
+            .expect("event should record");
+        assert_eq!(event["feedback_event"]["artifact_type"], "feedback_event");
+        assert_eq!(
+            event["feedback_event"]["workflow_class"],
+            "delegated_development_packet"
+        );
+        assert_eq!(
+            event["evaluation_baseline"]["artifact_type"],
+            "evaluation_run"
+        );
+        assert_eq!(
+            event["prompt_lifecycle_baseline"]["lifecycle_state"],
+            "draft"
+        );
+        assert_eq!(event["safety_baseline"]["safety_gate"], "observe");
+
+        let ledger = load_or_initialize_host_agent_observability_state(harness.path());
+        assert_eq!(
+            ledger["events"][0]["feedback_event"]["artifact_type"],
+            "feedback_event"
+        );
+        let prompt_lifecycle = load_or_initialize_prompt_lifecycle_state(harness.path());
+        assert_eq!(
+            prompt_lifecycle["workflows"]["delegated_development_packet"]["lifecycle_state"],
+            "draft"
+        );
+    }
+
+    #[test]
+    fn append_host_agent_observability_event_marks_failure_as_hold_with_prompt_regression_cluster()
+    {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let input = HostAgentFeedbackInput {
+            agent_id: "senior",
+            score: 34,
+            outcome: "failure",
+            task_class: "verification",
+            notes: Some("prompt regression triggered safety review"),
+            source: "vida task close",
+            task_id: Some("task-2"),
+            task_display_id: None,
+            task_title: Some("Regression Task"),
+            runtime_role: Some("verifier"),
+            selected_tier: Some("senior"),
+            estimated_task_price_units: Some(8),
+            lifecycle_state: Some("promoted"),
+            effective_score: Some(79),
+            reason: Some("critical prompt regression"),
+        };
+
+        let event = append_host_agent_observability_event(harness.path(), &input)
+            .expect("event should record");
+        assert_eq!(
+            event["feedback_event"]["source_kind"],
+            "automatic_task_close_feedback"
+        );
+        assert_eq!(event["feedback_event"]["severity"], "high");
+        assert_eq!(event["evaluation_baseline"]["decision"], "hold");
+        assert_eq!(event["safety_baseline"]["status"], "review_required");
+        assert_eq!(
+            event["safety_baseline"]["defect_cluster"],
+            "prompt_regression"
+        );
+    }
 }
