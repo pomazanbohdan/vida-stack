@@ -178,12 +178,55 @@ pub(crate) struct RuntimeConsumptionDocflowVerdict {
     pub(crate) proof_surfaces: Vec<String>,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct RuntimeConsumptionClosureAdmission {
     pub(crate) status: String,
     pub(crate) admitted: bool,
     pub(crate) blockers: Vec<String>,
     pub(crate) proof_surfaces: Vec<String>,
+}
+
+pub(crate) fn canonical_closure_admission_artifact_json(
+    generated_at: &str,
+    closure_authority: &str,
+    request_text: &str,
+    closure_admission: &RuntimeConsumptionClosureAdmission,
+) -> serde_json::Value {
+    serde_json::to_value(crate::release1_contracts::CanonicalClosureAdmissionArtifact {
+        closure_admission_record: crate::release1_contracts::CanonicalClosureAdmissionRecord {
+            header: crate::release1_contracts::CanonicalArtifactHeader::new(
+                format!("closure-admission.{generated_at}"),
+                crate::release1_contracts::CanonicalArtifactType::ClosureAdmissionRecord,
+                generated_at.to_string(),
+                generated_at.to_string(),
+                closure_admission.status.clone(),
+                "taskflow_consume_final",
+                None,
+                Some(
+                    crate::release1_contracts::WorkflowClass::DelegatedDevelopmentPacket
+                        .as_str()
+                        .to_string(),
+                ),
+            ),
+            release_scope: request_text.to_string(),
+            supported_workflow_classes: vec![
+                crate::release1_contracts::WorkflowClass::DelegatedDevelopmentPacket
+                    .as_str()
+                    .to_string(),
+            ],
+            closure_decision: if closure_admission.admitted {
+                "admit".to_string()
+            } else {
+                "block".to_string()
+            },
+            decision_at: generated_at.to_string(),
+            decision_owner: closure_authority.to_string(),
+            evidence_bundle_refs: closure_admission.proof_surfaces.clone(),
+            open_risk_acceptance_ids: Vec::new(),
+            blocked_by: closure_admission.blockers.clone(),
+        },
+    })
+    .expect("closure admission artifact should serialize")
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -200,6 +243,7 @@ pub(crate) struct TaskflowDirectConsumptionPayload {
     pub(crate) docflow_activation: RuntimeConsumptionDocflowActivation,
     pub(crate) docflow_verdict: RuntimeConsumptionDocflowVerdict,
     pub(crate) closure_admission: RuntimeConsumptionClosureAdmission,
+    pub(crate) closure_admission_artifact: serde_json::Value,
     pub(crate) taskflow_handoff_plan: serde_json::Value,
     pub(crate) run_graph_bootstrap: serde_json::Value,
     pub(crate) dispatch_receipt: serde_json::Value,
@@ -458,7 +502,8 @@ pub(crate) fn blocking_lane_selection(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_docflow_receipt_evidence, doctor_launcher_summary_for_root,
+        build_docflow_receipt_evidence, canonical_closure_admission_artifact_json,
+        doctor_launcher_summary_for_root, RuntimeConsumptionClosureAdmission,
         RuntimeConsumptionEvidence, CANONICAL_LAUNCHER_COMMAND,
     };
 
@@ -529,5 +574,44 @@ mod tests {
             .installed_binaries
             .iter()
             .any(|binary| binary.active && binary.path == summary.active_executable_path));
+    }
+
+    #[test]
+    fn closure_admission_artifact_json_uses_canonical_release1_shape() {
+        let closure_admission = RuntimeConsumptionClosureAdmission {
+            status: "pass".to_string(),
+            admitted: true,
+            blockers: Vec::new(),
+            proof_surfaces: vec![
+                "vida docflow readiness-check --profile active-canon".to_string(),
+                "vida docflow proofcheck --profile active-canon".to_string(),
+            ],
+        };
+
+        let artifact = canonical_closure_admission_artifact_json(
+            "2026-04-20T20:00:00Z",
+            "taskflow",
+            "schema hardening slice",
+            &closure_admission,
+        );
+
+        assert_eq!(
+            artifact["artifact_type"],
+            "closure_admission_record"
+        );
+        assert_eq!(artifact["owner_surface"], "taskflow_consume_final");
+        assert_eq!(artifact["workflow_class"], "delegated_development_packet");
+        assert_eq!(artifact["release_scope"], "schema hardening slice");
+        assert_eq!(artifact["closure_decision"], "admit");
+        assert_eq!(artifact["decision_owner"], "taskflow");
+        assert_eq!(
+            artifact["evidence_bundle_refs"][0],
+            "vida docflow readiness-check --profile active-canon"
+        );
+        assert_eq!(
+            artifact["evidence_bundle_refs"][1],
+            "vida docflow proofcheck --profile active-canon"
+        );
+        assert_eq!(artifact["blocked_by"], serde_json::json!([]));
     }
 }

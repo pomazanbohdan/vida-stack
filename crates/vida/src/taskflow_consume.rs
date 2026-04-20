@@ -167,13 +167,14 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                         &mut docflow_verdict,
                                         &mut closure_admission,
                                     );
+                                    let generated_at = time::OffsetDateTime::now_utc()
+                                        .format(&super::Rfc3339)
+                                        .expect("rfc3339 timestamp should render");
                                     let payload = super::TaskflowDirectConsumptionPayload {
                                         artifact_name: "taskflow_direct_runtime_consumption"
                                             .to_string(),
                                         artifact_type: "runtime_consumption".to_string(),
-                                        generated_at: time::OffsetDateTime::now_utc()
-                                            .format(&super::Rfc3339)
-                                            .expect("rfc3339 timestamp should render"),
+                                        generated_at: generated_at.clone(),
                                         closure_authority: "taskflow".to_string(),
                                         consume_final_mode: consume_final_mode.as_str().to_string(),
                                         role_selection: super::blocking_lane_selection(
@@ -199,7 +200,14 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                                 }),
                                             },
                                         docflow_verdict,
-                                        closure_admission,
+                                        closure_admission: closure_admission.clone(),
+                                        closure_admission_artifact:
+                                            crate::runtime_consumption_surface::canonical_closure_admission_artifact_json(
+                                                &generated_at,
+                                                "taskflow",
+                                                &request_text,
+                                                &closure_admission,
+                                            ),
                                         taskflow_handoff_plan: serde_json::json!({
                                             "status": "blocked",
                                             "handoff_ready": false,
@@ -521,16 +529,17 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 .and_then(|preview| preview.get("status"))
                                 .and_then(serde_json::Value::as_str)
                                 != Some("blocked");
+                        let generated_at = time::OffsetDateTime::now_utc()
+                            .format(&super::Rfc3339)
+                            .expect("rfc3339 timestamp should render");
                         let payload = super::TaskflowDirectConsumptionPayload {
                             artifact_name: "taskflow_direct_runtime_consumption".to_string(),
                             artifact_type: "runtime_consumption".to_string(),
-                            generated_at: time::OffsetDateTime::now_utc()
-                                .format(&super::Rfc3339)
-                                .expect("rfc3339 timestamp should render"),
+                            generated_at: generated_at.clone(),
                             closure_authority: "taskflow".to_string(),
                             consume_final_mode: consume_final_mode.as_str().to_string(),
                             role_selection,
-                            request_text,
+                            request_text: request_text.clone(),
                             direct_consumption_ready,
                             runtime_bundle,
                             bundle_check,
@@ -548,7 +557,14 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 }),
                             },
                             docflow_verdict,
-                            closure_admission,
+                            closure_admission: closure_admission.clone(),
+                            closure_admission_artifact:
+                                crate::runtime_consumption_surface::canonical_closure_admission_artifact_json(
+                                    &generated_at,
+                                    "taskflow",
+                                    &request_text,
+                                    &closure_admission,
+                                ),
                             taskflow_handoff_plan,
                             run_graph_bootstrap,
                             dispatch_receipt: dispatch_receipt_json,
@@ -842,21 +858,29 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     docflow_receipt_evidence,
                                 );
                             }
+                            let generated_at = time::OffsetDateTime::now_utc()
+                                .format(&super::Rfc3339)
+                                .expect("rfc3339 timestamp should render");
                             let payload = super::TaskflowDirectConsumptionPayload {
                                 artifact_name: "taskflow_direct_runtime_consumption".to_string(),
                                 artifact_type: "runtime_consumption".to_string(),
-                                generated_at: time::OffsetDateTime::now_utc()
-                                    .format(&super::Rfc3339)
-                                    .expect("rfc3339 timestamp should render"),
+                                generated_at: generated_at.clone(),
                                 closure_authority: "taskflow".to_string(),
                                 consume_final_mode: consume_final_mode.as_str().to_string(),
-                                request_text,
+                                request_text: request_text.clone(),
                                 role_selection,
                                 runtime_bundle,
                                 bundle_check,
                                 docflow_activation,
                                 docflow_verdict,
-                                closure_admission,
+                                closure_admission: closure_admission.clone(),
+                                closure_admission_artifact:
+                                    crate::runtime_consumption_surface::canonical_closure_admission_artifact_json(
+                                        &generated_at,
+                                        "taskflow",
+                                        &request_text,
+                                        &closure_admission,
+                                    ),
                                 taskflow_handoff_plan: serde_json::json!({
                                     "status": "blocked",
                                     "handoff_ready": false,
