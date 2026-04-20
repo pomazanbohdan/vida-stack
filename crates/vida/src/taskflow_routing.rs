@@ -306,6 +306,25 @@ mod tests {
     }
 
     #[test]
+    fn runtime_assignment_source_ignores_legacy_execution_plan_alias() {
+        let execution_plan = serde_json::json!({
+            "codex_runtime_assignment": {
+                "selected_tier": "senior",
+                "activation_agent_type": "senior",
+            }
+        });
+
+        assert_eq!(
+            super::runtime_assignment_source_from_execution_plan(&execution_plan),
+            "missing"
+        );
+        assert_eq!(
+            super::runtime_assignment_from_execution_plan(&execution_plan),
+            &serde_json::Value::Null
+        );
+    }
+
+    #[test]
     fn explicit_executor_backend_wins_over_carrier_tier_and_legacy_hints() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
