@@ -1813,7 +1813,7 @@ mod tests {
     use crate::run;
     use crate::state_store::LauncherActivationSnapshot;
     use crate::temp_state::TempStateHarness;
-    use crate::test_cli_support::{cli, guard_current_dir};
+    use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
     use crate::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC;
     use crate::WORKER_SCORECARDS_STATE;
     use crate::WORKER_STRATEGY_STATE;
@@ -2269,7 +2269,9 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::unset("VIDA_ROOT");
 
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
             runtime.block_on(run(cli(&["project-activator", "--json"]))),
             ExitCode::SUCCESS
@@ -2281,6 +2283,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::unset("VIDA_ROOT");
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -2297,6 +2300,74 @@ mod tests {
         let view = super::build_project_activator_view(harness.path());
         assert_eq!(view["activation_pending"], true);
         assert!(view["host_environment"]["selected_cli_system"].is_null());
+    }
+
+    #[test]
+    fn project_activator_can_complete_bounded_activation_in_one_command() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::unset("VIDA_ROOT");
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "ukrainian",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        let config = fs::read_to_string(harness.path().join("vida.config.yaml"))
+            .expect("config should exist");
+        assert!(config.contains("id: vida-test"));
+        assert!(config.contains("user_communication: ukrainian"));
+        assert!(config.contains("documentation: ukrainian"));
+        assert!(config.contains("cli_system: codex"));
+        assert!(harness.path().join("docs/project-root-map.md").is_file());
+        assert!(harness.path().join("docs/product/spec/README.md").is_file());
+        assert!(harness
+            .path()
+            .join("docs/product/spec/templates/feature-design-document.template.md")
+            .is_file());
+        assert!(harness
+            .path()
+            .join("docs/process/documentation-tooling-map.md")
+            .is_file());
+        assert!(harness
+            .path()
+            .join("docs/process/codex-agent-configuration-guide.md")
+            .is_file());
+        assert!(harness.path().join(".codex/config.toml").is_file());
+        assert!(harness.path().join(WORKER_SCORECARDS_STATE).is_file());
+        assert!(harness.path().join(WORKER_STRATEGY_STATE).is_file());
+        assert!(
+            harness
+                .path()
+                .join(".vida/receipts/project-activation.latest.json")
+                .is_file(),
+            "activation receipt should be written"
+        );
+
+        let view = super::build_project_activator_view(harness.path());
+        assert_eq!(view["activation_pending"], false);
+        assert_eq!(view["status"], "ready_enough_for_normal_work");
+        assert_eq!(
+            view["normal_work_defaults"]["documentation_first_for_feature_requests"],
+            true
+        );
+        assert_eq!(
+            view["normal_work_defaults"]["local_feature_design_template"],
+            crate::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE
+        );
     }
 
     #[test]

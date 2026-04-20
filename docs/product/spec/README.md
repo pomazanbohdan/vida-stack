@@ -52,6 +52,7 @@ Active design docs:
 - `docs/product/spec/fix-bug-consume-continue-completed-closure-design.md`
 - `docs/product/spec/fix-bug-implementer-delivery-packet-can-design.md`
 - `docs/product/spec/fix-bug-specification-lane-can-mutate-design.md`
+- `docs/product/spec/continue-post-main-carveout-with-next-design.md`
 
 Current promoted runtime-control specs:
 

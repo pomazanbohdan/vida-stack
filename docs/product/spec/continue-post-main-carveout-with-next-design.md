@@ -27,7 +27,7 @@ Status: `approved`
 
 ### Functional Requirements
 - The test `project_activator_command_accepts_json_output` must move from `crates/vida/src/main.rs` to `crates/vida/src/project_activator_surface.rs`.
-- The moved test must still prove that `run(cli(&["project-activator", "--json"]))` returns `ExitCode::SUCCESS`.
+- The moved test must still prove that `run(cli(&["project-activator", "--json"]))` returns `ExitCode::SUCCESS` from a bootstrap project root established by `vida init`.
 - Any required test-only imports or helpers must be brought in minimally without widening the slice.
 - `crates/vida/src/main.rs` must retain adjacent non-owner tests unchanged.
 
@@ -92,8 +92,10 @@ Will implement / choose:
 
 ### Integration Points
 - `run(cli(&["project-activator", "--json"]))`
+- `run(cli(&["init"]))` as the minimal bootstrap precondition for project-root resolution
 - `TempStateHarness`
 - `guard_current_dir`
+- a minimal test-only `VIDA_ROOT` guard so inherited host environment does not mask project-root resolution defects
 - Tokio runtime initialization used by the existing command test harness pattern
 
 ### Bounded File Set

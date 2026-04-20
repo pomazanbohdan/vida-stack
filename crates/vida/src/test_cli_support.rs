@@ -46,6 +46,28 @@ pub(crate) fn guard_current_dir(path: &Path) -> CurrentDirGuard {
     CurrentDirGuard::change_to(path)
 }
 
+pub(crate) struct EnvVarGuard {
+    key: &'static str,
+    original: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    pub(crate) fn unset(key: &'static str) -> Self {
+        let original = env::var_os(key);
+        env::remove_var(key);
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.original {
+            Some(value) => env::set_var(self.key, value),
+            None => env::remove_var(self.key),
+        }
+    }
+}
+
 pub(crate) fn cli(args: &[&str]) -> Cli {
     let mut argv = vec!["vida"];
     argv.extend(args.iter().copied());
