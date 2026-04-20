@@ -43,6 +43,7 @@ Active design docs:
 - `docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`
 - `docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`
 - `docs/product/spec/review-implemented-result-against-spec-acceptanc-design.md`
+- `docs/product/spec/production-observability-and-operator-contract-baselines-design.md`
 - `docs/product/spec/lane-supersede-and-shared-truth-envelope-design.md`
 - `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
 - `docs/product/spec/compact-dispatch-route-truth-downstream-dispatch-design.md`

@@ -541,6 +541,26 @@ pub(crate) fn external_cli_preflight_summary(
         selected_cli_entry,
     );
     let tool_contract_blocked = tool_contract["status"].as_str() == Some("blocked");
+    let tool_contract_blocker = crate::release1_contracts::cli_probe_tool_contract_blocker_code(
+        selected_execution_class.as_str(),
+        selected_cli_entry.is_some(),
+        selected_cli_entry
+            .and_then(|entry| crate::yaml_lookup(entry, &["runtime_root"]))
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty()),
+    );
+    let trace_baseline = crate::release1_contracts::cli_probe_trace_baseline_summary(
+        if tool_contract_blocked {
+            crate::release1_contracts::Release1ContractStatus::Blocked
+        } else {
+            crate::release1_contracts::Release1ContractStatus::Pass
+        },
+        tool_contract_blocker,
+        selected_execution_class.as_str(),
+    );
+    let incident_baseline =
+        crate::release1_contracts::cli_probe_incident_baseline_summary(tool_contract_blocker);
     let carrier_readiness = external_cli_readiness_summaries(overlay);
     let route_primary_backends = route_primary_external_backends(overlay);
     let blocked_primary_backends = carrier_readiness["carriers"]
@@ -577,6 +597,8 @@ pub(crate) fn external_cli_preflight_summary(
             "effective_execution_posture": effective_execution_posture,
             "mixed_posture": effective_execution_posture == "mixed",
             "tool_contract": tool_contract,
+            "trace_baseline": trace_baseline,
+            "incident_baseline": incident_baseline,
             "carrier_readiness": carrier_readiness,
             "route_primary_external_backends": route_primary_backends,
             "blocked_primary_backends": blocked_primary_backends,
@@ -600,6 +622,8 @@ pub(crate) fn external_cli_preflight_summary(
             "effective_execution_posture": effective_execution_posture,
             "mixed_posture": effective_execution_posture == "mixed",
             "tool_contract": tool_contract,
+            "trace_baseline": trace_baseline,
+            "incident_baseline": incident_baseline,
             "carrier_readiness": carrier_readiness,
             "route_primary_external_backends": route_primary_backends,
             "blocked_primary_backends": blocked_primary_backends,
@@ -638,6 +662,8 @@ pub(crate) fn external_cli_preflight_summary(
             "effective_execution_posture": effective_execution_posture,
             "mixed_posture": effective_execution_posture == "mixed",
             "tool_contract": tool_contract,
+            "trace_baseline": trace_baseline,
+            "incident_baseline": incident_baseline,
             "carrier_readiness": carrier_readiness,
             "route_primary_external_backends": route_primary_backends,
             "blocked_primary_backends": blocked_primary_backends,
@@ -660,6 +686,8 @@ pub(crate) fn external_cli_preflight_summary(
         "effective_execution_posture": effective_execution_posture,
         "mixed_posture": effective_execution_posture == "mixed",
         "tool_contract": tool_contract,
+        "trace_baseline": trace_baseline,
+        "incident_baseline": incident_baseline,
         "carrier_readiness": carrier_readiness,
         "route_primary_external_backends": route_primary_backends,
         "blocked_primary_backends": blocked_primary_backends,
@@ -753,6 +781,42 @@ host_environment:
         assert_eq!(summary["selected_execution_class"], "external");
         assert_eq!(summary["effective_execution_posture"], "external");
         assert_eq!(summary["mixed_posture"], false);
+        assert_eq!(summary["trace_baseline"]["artifact_type"], "trace_event");
+        assert_eq!(
+            summary["incident_baseline"]["artifact_type"],
+            "incident_evidence_bundle"
+        );
+    }
+
+    #[test]
+    fn external_cli_preflight_projects_trace_and_incident_baselines_when_tool_contract_blocks() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: opencode
+  systems:
+    opencode:
+      enabled: true
+      execution_class: external
+"#,
+        )
+        .expect("overlay yaml should parse");
+
+        let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "opencode"]);
+        let summary = external_cli_preflight_summary(&overlay, "opencode", entry);
+        assert_eq!(summary["status"], "blocked");
+        assert_eq!(summary["tool_contract"]["status"], "blocked");
+        assert_eq!(summary["trace_baseline"]["status"], "blocked");
+        assert_eq!(summary["trace_baseline"]["artifact_type"], "trace_event");
+        assert_eq!(summary["incident_baseline"]["status"], "open");
+        assert_eq!(
+            summary["incident_baseline"]["artifact_type"],
+            "incident_evidence_bundle"
+        );
+        assert_eq!(
+            summary["incident_baseline"]["trigger_reason"],
+            "external_cli_preflight_gate:tool_contract_incomplete"
+        );
     }
 
     #[test]

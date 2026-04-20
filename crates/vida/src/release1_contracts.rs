@@ -1373,6 +1373,14 @@ const CLI_PROBE_TOOL_CONTRACT_INPUT_SCHEMA_REF: &str =
     "status_surface.external_cli_preflight.input_schema.v1";
 const CLI_PROBE_TOOL_CONTRACT_OUTPUT_SCHEMA_REF: &str =
     "status_surface.external_cli_preflight.output_schema.v1";
+const CLI_PROBE_TRACE_BASELINE_ARTIFACT_ID: &str = "status_surface.external_cli_preflight.trace";
+const CLI_PROBE_TRACE_BASELINE_TRACE_ID: &str = "status_surface.external_cli_preflight.trace";
+const CLI_PROBE_TRACE_BASELINE_SPAN_ID: &str = "status_surface.external_cli_preflight.span";
+const CLI_PROBE_TRACE_BASELINE_WORKFLOW_RUN_ID: &str = "status_surface.external_cli_preflight.run";
+const CLI_PROBE_INCIDENT_BASELINE_ARTIFACT_ID: &str =
+    "status_surface.external_cli_preflight.incident";
+const CLI_PROBE_INCIDENT_BASELINE_INCIDENT_ID: &str =
+    "status_surface.external_cli_preflight.incident";
 const CLI_PROBE_TOOL_CONTRACT_POLICY_HOOK_IDS: &[&str] = &[
     "execution_class_gate",
     "runtime_root_resolution",
@@ -1387,6 +1395,12 @@ fn cli_probe_tool_contract_auth_mode(selected_execution_class: &str) -> &'static
         "internal" => "project_runtime_internal",
         _ => "unknown",
     }
+}
+
+fn cli_probe_now_rfc3339() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("rfc3339 timestamp should render")
 }
 
 pub(crate) fn cli_probe_tool_contract_blocker_code(
@@ -1443,6 +1457,105 @@ pub(crate) fn cli_probe_tool_contract_summary(
         "policy_hook_ids": CLI_PROBE_TOOL_CONTRACT_POLICY_HOOK_IDS,
         "observability_requirements": CLI_PROBE_TOOL_CONTRACT_OBSERVABILITY_REQUIREMENTS,
     })
+}
+
+pub(crate) fn cli_probe_trace_baseline_summary(
+    status: Release1ContractStatus,
+    blocker_code: Option<BlockerCode>,
+    selected_execution_class: &str,
+) -> serde_json::Value {
+    let now = cli_probe_now_rfc3339();
+    serde_json::to_value(CanonicalTraceArtifact {
+        trace_event: CanonicalTraceEvent {
+            header: CanonicalArtifactHeader::new(
+                CLI_PROBE_TRACE_BASELINE_ARTIFACT_ID,
+                CanonicalArtifactType::TraceEvent,
+                now.clone(),
+                now.clone(),
+                status.as_str(),
+                "status_surface_external_cli",
+                Some(CLI_PROBE_TRACE_BASELINE_TRACE_ID.to_string()),
+                Some(WorkflowClass::ToolAssistedRead.as_str().to_string()),
+            ),
+            span_id: CLI_PROBE_TRACE_BASELINE_SPAN_ID.to_string(),
+            parent_span_id: None,
+            workflow_run_id: CLI_PROBE_TRACE_BASELINE_WORKFLOW_RUN_ID.to_string(),
+            actor_kind: "status_surface".to_string(),
+            actor_id: selected_execution_class.trim().to_string(),
+            event_type: "external_cli_preflight_probe".to_string(),
+            started_at: now.clone(),
+            ended_at: now,
+            outcome: if status == Release1ContractStatus::Pass {
+                "succeeded".to_string()
+            } else {
+                "blocked".to_string()
+            },
+            side_effect_class: CLI_PROBE_TOOL_CONTRACT_SIDE_EFFECT_CLASS.to_string(),
+            related_artifact_ids: vec![CLI_PROBE_TOOL_CONTRACT_ARTIFACT_ID.to_string()],
+            policy_decision_ids: CLI_PROBE_TOOL_CONTRACT_POLICY_HOOK_IDS
+                .iter()
+                .map(|entry| (*entry).to_string())
+                .collect(),
+            approval_record_ids: blocker_code
+                .map(blocker_code_str)
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        },
+    })
+    .expect("trace baseline summary should serialize")
+}
+
+pub(crate) fn cli_probe_incident_baseline_summary(
+    blocker_code: Option<BlockerCode>,
+) -> serde_json::Value {
+    let now = cli_probe_now_rfc3339();
+    serde_json::to_value(CanonicalIncidentEvidenceArtifact {
+        incident_evidence_bundle: CanonicalIncidentEvidenceBundle {
+            header: CanonicalArtifactHeader::new(
+                CLI_PROBE_INCIDENT_BASELINE_ARTIFACT_ID,
+                CanonicalArtifactType::IncidentEvidenceBundle,
+                now.clone(),
+                now.clone(),
+                "open",
+                "status_surface_external_cli",
+                Some(CLI_PROBE_TRACE_BASELINE_TRACE_ID.to_string()),
+                Some(
+                    WorkflowClass::IncidentResponseOrRecovery
+                        .as_str()
+                        .to_string(),
+                ),
+            ),
+            incident_id: CLI_PROBE_INCIDENT_BASELINE_INCIDENT_ID.to_string(),
+            trace_ids: vec![CLI_PROBE_TRACE_BASELINE_ARTIFACT_ID.to_string()],
+            trigger_reason: blocker_code
+                .map(blocker_code_str)
+                .map(|code| format!("external_cli_preflight_gate:{code}"))
+                .unwrap_or_else(|| "external_cli_preflight_baseline_ready".to_string()),
+            impact_summary: "Bounded incident evidence bundle path for external CLI preflight."
+                .to_string(),
+            side_effect_summary:
+                "Preflight remains read-only while preserving incident escalation evidence."
+                    .to_string(),
+            rollback_or_restore_actions: vec![
+                "Repair the selected host CLI runtime/tool contract.".to_string(),
+                "Rerun `vida status --json` to refresh the bounded preflight baseline.".to_string(),
+            ],
+            recovery_outcome: if blocker_code.is_some() {
+                "pending_remediation".to_string()
+            } else {
+                "not_required".to_string()
+            },
+            root_cause_status: if blocker_code.is_some() {
+                "suspected".to_string()
+            } else {
+                "not_started".to_string()
+            },
+            opened_at: now,
+            closed_at: None,
+        },
+    })
+    .expect("incident baseline summary should serialize")
 }
 
 pub(crate) fn missing_family_blocker_code(family: &str) -> Option<String> {
@@ -1557,7 +1670,8 @@ mod tests {
         canonical_release1_contract_status_str, canonical_release1_contract_type_str,
         canonical_release1_schema_version_str, canonical_risk_tier_str,
         canonical_workflow_class_str, classify_compatibility_boundary,
-        cli_probe_tool_contract_summary, evaluate_policy_gate_protocol_binding,
+        cli_probe_incident_baseline_summary, cli_probe_tool_contract_summary,
+        cli_probe_trace_baseline_summary, evaluate_policy_gate_protocol_binding,
         exception_takeover_state, missing_downstream_lane_evidence_blocker,
         release1_contract_status_str, ApprovalStatus, BlockerCode, CanonicalApprovalArtifact,
         CanonicalApprovalRecord, CanonicalArtifactHeader, CanonicalArtifactType,
@@ -2387,6 +2501,44 @@ mod tests {
             incomplete["retry_posture"],
             "retry_on_transient_external_cli_probe_failure"
         );
+    }
+
+    #[test]
+    fn cli_probe_trace_baseline_summary_projects_canonical_trace_event_shape() {
+        let trace = cli_probe_trace_baseline_summary(
+            Release1ContractStatus::Blocked,
+            Some(BlockerCode::ToolContractIncomplete),
+            "external",
+        );
+
+        assert_eq!(trace["artifact_type"], "trace_event");
+        assert_eq!(trace["status"], "blocked");
+        assert_eq!(trace["owner_surface"], "status_surface_external_cli");
+        assert_eq!(
+            trace["trace_id"],
+            "status_surface.external_cli_preflight.trace"
+        );
+        assert_eq!(trace["workflow_class"], "tool_assisted_read");
+        assert_eq!(trace["event_type"], "external_cli_preflight_probe");
+        assert_eq!(trace["side_effect_class"], "read_only_status_probe");
+        assert_eq!(trace["approval_record_ids"][0], "tool_contract_incomplete");
+    }
+
+    #[test]
+    fn cli_probe_incident_baseline_summary_projects_canonical_incident_bundle_shape() {
+        let incident =
+            cli_probe_incident_baseline_summary(Some(BlockerCode::ToolContractIncomplete));
+
+        assert_eq!(incident["artifact_type"], "incident_evidence_bundle");
+        assert_eq!(incident["status"], "open");
+        assert_eq!(incident["owner_surface"], "status_surface_external_cli");
+        assert_eq!(incident["workflow_class"], "incident_response_or_recovery");
+        assert_eq!(
+            incident["trigger_reason"],
+            "external_cli_preflight_gate:tool_contract_incomplete"
+        );
+        assert_eq!(incident["recovery_outcome"], "pending_remediation");
+        assert_eq!(incident["root_cause_status"], "suspected");
     }
 
     #[test]
