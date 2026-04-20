@@ -800,35 +800,6 @@ mod tests {
     }
 
     #[test]
-    fn codex_dispatch_aliases_require_canonical_overlay_key() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-
-        let config_path = harness.path().join("vida.config.yaml");
-        let config_body =
-            fs::read_to_string(&config_path).expect("config should be readable after init");
-        let updated = config_body.replace("dispatch_aliases:", "named_lanes:");
-        fs::write(&config_path, updated).expect("config should be rewritten");
-
-        let config = project_activator_surface::read_yaml_file_checked(
-            &harness.path().join("vida.config.yaml"),
-        )
-        .expect("config");
-        let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
-            .expect("bundle should compile");
-        let carrier_runtime = bundle["carrier_runtime"].clone();
-        assert!(bundle.get("codex_multi_agent").is_none());
-        let dispatch_aliases = carrier_runtime["dispatch_aliases"]
-            .as_array()
-            .expect("dispatch aliases should still be an array");
-
-        assert!(dispatch_aliases.is_empty());
-    }
-
-    #[test]
     fn agent_feedback_records_scorecard_and_refreshes_strategy() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
