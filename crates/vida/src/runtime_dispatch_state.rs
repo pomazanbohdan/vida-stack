@@ -10818,6 +10818,42 @@ mod tests {
         assert!(artifact["recorded_at"]
             .as_str()
             .is_some_and(|value| !value.trim().is_empty()));
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["artifact_type"],
+            "lane_execution_receipt"
+        );
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["owner_surface"],
+            "runtime_dispatch_state"
+        );
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["run_id"],
+            "run-completion-evidence"
+        );
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["packet_id"],
+            "implementer-packet"
+        );
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["lane_role"],
+            "worker"
+        );
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["carrier_id"],
+            "junior"
+        );
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["lane_status"],
+            "lane_running"
+        );
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["evidence_status"],
+            "recorded"
+        );
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["result_artifact_ids"][0],
+            path
+        );
     }
 
     #[test]
@@ -10876,6 +10912,26 @@ mod tests {
         assert_eq!(artifact["dispatch_target"], "coach");
         assert_eq!(artifact["blocker_code"], "internal_activation_view_only");
         assert!(artifact.get("completion_receipt_id").is_none());
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["artifact_type"],
+            "lane_execution_receipt"
+        );
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["packet_id"],
+            "coach-packet"
+        );
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["carrier_id"],
+            "middle"
+        );
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["exception_path_receipt_id"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["result_artifact_ids"][0],
+            path
+        );
     }
 
     #[test]
@@ -11992,6 +12048,7 @@ fn write_runtime_dispatch_result(
         .format(&Rfc3339)
         .expect("rfc3339 timestamp should render");
     let mut artifact_body = body.clone();
+    let result_path_display = result_path.display().to_string();
     if let Some(object) = artifact_body.as_object_mut() {
         object.insert("run_id".to_string(), serde_json::json!(receipt.run_id));
         object.insert(
@@ -12009,6 +12066,15 @@ fn write_runtime_dispatch_result(
                 serde_json::json!(packet_path),
             );
         }
+        object.insert(
+            "lane_execution_receipt_artifact".to_string(),
+            canonical_lane_execution_receipt_artifact_json(
+                receipt,
+                body,
+                &recorded_at,
+                &result_path_display,
+            ),
+        );
         let executed_agent_lane = receipt.dispatch_kind == "agent_lane"
             && json_string(body.get("execution_state")).as_deref() == Some("executed")
             && receipt
@@ -12048,6 +12114,69 @@ fn write_runtime_dispatch_result(
     std::fs::write(&result_path, encoded)
         .map_err(|error| format!("Failed to write dispatch result: {error}"))?;
     Ok(result_path.display().to_string())
+}
+
+fn canonical_lane_execution_receipt_artifact_json(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    body: &serde_json::Value,
+    finished_at: &str,
+    result_artifact_path: &str,
+) -> serde_json::Value {
+    let packet_id = receipt
+        .dispatch_packet_path
+        .as_deref()
+        .and_then(|path| std::path::Path::new(path).file_stem())
+        .and_then(|stem| stem.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{}-{}-no-packet", receipt.run_id, receipt.dispatch_target));
+    let lane_role = receipt
+        .activation_runtime_role
+        .clone()
+        .unwrap_or_else(|| receipt.dispatch_target.clone());
+    let carrier_id = receipt
+        .selected_backend
+        .clone()
+        .or_else(|| receipt.activation_agent_type.clone())
+        .or_else(|| receipt.dispatch_surface.clone())
+        .unwrap_or_else(|| "taskflow_state_store".to_string());
+    let status = match json_string(body.get("status")).as_deref() {
+        Some("pass") => "pass".to_string(),
+        Some("blocked") => "blocked".to_string(),
+        _ if receipt.dispatch_status == "blocked" => "blocked".to_string(),
+        _ => "pass".to_string(),
+    };
+    serde_json::to_value(crate::release1_contracts::CanonicalLaneExecutionReceiptArtifact {
+        lane_execution_receipt: crate::release1_contracts::CanonicalLaneExecutionReceipt {
+            header: crate::release1_contracts::CanonicalArtifactHeader::new(
+                format!("lane-execution.{}.{}", receipt.run_id, receipt.dispatch_target),
+                crate::release1_contracts::CanonicalArtifactType::LaneExecutionReceipt,
+                receipt.recorded_at.clone(),
+                finished_at.to_string(),
+                status,
+                "runtime_dispatch_state",
+                None,
+                Some(
+                    crate::release1_contracts::WorkflowClass::DelegatedDevelopmentPacket
+                        .as_str()
+                        .to_string(),
+                ),
+            ),
+            run_id: receipt.run_id.clone(),
+            packet_id,
+            lane_id: format!("{}:{}", receipt.run_id, receipt.dispatch_target),
+            lane_role,
+            carrier_id,
+            lane_status: receipt.lane_status.clone(),
+            evidence_status: "recorded".to_string(),
+            started_at: receipt.recorded_at.clone(),
+            finished_at: finished_at.to_string(),
+            result_artifact_ids: vec![result_artifact_path.to_string()],
+            supersedes_receipt_id: receipt.supersedes_receipt_id.clone(),
+            exception_path_receipt_id: receipt.exception_path_receipt_id.clone(),
+        },
+    })
+    .expect("lane execution receipt artifact should serialize")
 }
 
 fn runtime_dispatch_execution_started_result(
