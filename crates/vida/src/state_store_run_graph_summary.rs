@@ -1031,7 +1031,7 @@ impl StateStore {
 
             let task = match self.show_task(task_id).await {
                 Ok(task) => task,
-                Err(StateStoreError::MissingTask { .. }) => continue,
+                Err(StateStoreError::MissingTask { .. }) => return Ok(Some(binding)),
                 Err(error) => return Err(error),
             };
             if task.status == "closed" {

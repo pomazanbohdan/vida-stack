@@ -1015,6 +1015,13 @@ async fn recover_missing_first_dispatch_receipt(
     let run_graph_bootstrap =
         match super::taskflow_run_graph::run_graph_dispatch_bootstrap_from_status(&status) {
             Ok(bootstrap) => bootstrap,
+            Err(_) if status.status != "completed" => serde_json::json!({
+                "status": "dispatch_init_ready",
+                "handoff_ready": true,
+                "run_id": status.run_id,
+                "latest_status": serde_json::to_value(&status)
+                    .map_err(|error| format!("Failed to encode status: {error}"))?,
+            }),
             Err(_) => return Ok(None),
         };
 
@@ -1038,6 +1045,38 @@ async fn recover_missing_first_dispatch_receipt(
         &role_selection,
         &run_graph_bootstrap,
     );
+    let active_lane_in_progress = status.status == "ready"
+        && status.lifecycle_stage.ends_with("_active")
+        && status
+            .next_node
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some_and(|next_node| next_node != status.active_node);
+    if active_lane_in_progress {
+        let dispatch_target = status.active_node.clone();
+        let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
+            super::downstream_activation_fields(&role_selection, &dispatch_target);
+        dispatch_receipt.dispatch_target = dispatch_target.clone();
+        dispatch_receipt.dispatch_status = "executed".to_string();
+        dispatch_receipt.lane_status = super::LaneStatus::LaneRunning.as_str().to_string();
+        dispatch_receipt.dispatch_kind = dispatch_kind;
+        dispatch_receipt.dispatch_surface = dispatch_surface;
+        dispatch_receipt.dispatch_command =
+            super::runtime_dispatch_command_for_target(&role_selection, &dispatch_target);
+        dispatch_receipt.downstream_dispatch_target = Some(dispatch_target.clone());
+        dispatch_receipt.downstream_dispatch_command =
+            super::runtime_dispatch_command_for_target(&role_selection, &dispatch_target);
+        dispatch_receipt.activation_agent_type = activation_agent_type;
+        dispatch_receipt.activation_runtime_role = activation_runtime_role;
+        dispatch_receipt.selected_backend = super::downstream_selected_backend(
+            &role_selection,
+            &dispatch_target,
+            dispatch_receipt.activation_agent_type.as_deref(),
+            None,
+        )
+        .filter(|value| !value.is_empty());
+    }
     dispatch_receipt.recorded_at = recorded_at;
     dispatch_receipt.dispatch_command = super::runtime_dispatch_command_for_target(
         &role_selection,
@@ -2098,6 +2137,24 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
         .latest_explicit_run_graph_continuation_binding()
         .await
         .map_err(|error| format!("Failed to read explicit continuation binding: {error}"))?;
+    if let Some(binding) = explicit_continuation_binding.as_ref() {
+        let bound_run_id = binding
+            .active_bounded_unit
+            .get("run_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if binding.status == "bound"
+            && binding.binding_source == "explicit_continuation_bind_task"
+            && bound_run_id.is_some_and(|binding_run_id| binding_run_id != status.run_id)
+        {
+            let binding_run_id = bound_run_id.unwrap_or("unknown");
+            return Err(format!(
+                "Latest explicit continuation binding points to run `{binding_run_id}` while the latest run-graph status is `{}`. Default `vida taskflow consume continue --json` must not silently reselect the stale latest run; pass `--run-id {binding_run_id}` or refresh/bind the intended bounded unit explicitly.",
+                status.run_id
+            ));
+        }
+    }
     let latest_run_graph_recovery = store
         .latest_run_graph_recovery_summary()
         .await
@@ -2124,6 +2181,14 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
             latest_run_graph_dispatch_receipt.as_ref(),
             continuation_binding_evidence_ambiguous,
         );
+    let terminal_completed_run = status.status == "completed"
+        && status.lifecycle_stage == "closure_complete";
+    if terminal_completed_run {
+        return Err(format!(
+            "Latest continuation binding for run `{}` is ambiguous. Either bind the next bounded unit explicitly with `vida taskflow continuation bind {} --task-id <task-id> --json` or pass `--run-id {}` to refresh that specific run.",
+            status.run_id, status.run_id, status.run_id
+        ));
+    }
     if continuation_binding["status"] != "bound" {
         return Err(format!(
             "Latest continuation binding for run `{}` is ambiguous. Either bind the next bounded unit explicitly with `vida taskflow continuation bind {} --task-id <task-id> --json` or pass `--run-id {}` to refresh that specific run.",
@@ -2189,9 +2254,13 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
     let explicit_downstream_target =
         completed_run_explicit_downstream_target_for_resume(store, run_id).await?;
     if let Some(bound_target) = explicit_downstream_target.as_deref() {
-        let prefer_ready_packet =
-            allow_downstream_lineage && prefer_ready_downstream_packet_over_active_result(&receipt);
-        if prefer_ready_packet {
+        let active_target_matches_bound = receipt
+            .downstream_dispatch_active_target
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            == Some(bound_target);
+        if allow_downstream_lineage && !active_target_matches_bound {
             if let Some(resume) =
                 maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt)
                     .await?
@@ -2217,22 +2286,6 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
                     "Completed run `{run_id}` is explicitly bound to downstream target `{bound_target}`, but persisted downstream result lineage still points to stale target `{}`. Resume must fail closed until a fresh `{bound_target}` downstream packet is recorded.",
                     resume.dispatch_receipt.dispatch_target
                 ));
-            }
-        }
-        if !prefer_ready_packet {
-            if allow_downstream_lineage {
-                if let Some(resume) =
-                    maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt)
-                        .await?
-                {
-                    if resume.dispatch_receipt.dispatch_target == bound_target {
-                        return Ok(resume);
-                    }
-                    return Err(format!(
-                        "Completed run `{run_id}` is explicitly bound to downstream target `{bound_target}`, but persisted downstream packet lineage still points to stale target `{}`. Resume must fail closed until a fresh `{bound_target}` downstream packet is recorded.",
-                        resume.dispatch_receipt.dispatch_target
-                    ));
-                }
             }
         }
         return Err(missing_explicit_downstream_resume_evidence_error(
@@ -2340,6 +2393,45 @@ pub(crate) async fn resolve_runtime_consumption_resume_inputs(
     } else if let Some(run_id) = requested_run_id {
         return resolve_runtime_consumption_resume_inputs_for_run_id(store, run_id).await;
     } else {
+        let explicit_binding = store
+            .latest_explicit_run_graph_continuation_binding()
+            .await
+            .map_err(|error| format!("Failed to read explicit continuation binding: {error}"))?;
+        let latest_receipt = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .map_err(|error| format!("Failed to read latest run-graph dispatch receipt: {error}"))?;
+        if let Some(status) = store
+            .latest_run_graph_status()
+            .await
+            .map_err(|error| format!("Failed to read latest persisted run-graph state: {error}"))?
+        {
+            let terminal_completed_run =
+                status.status == "completed" && status.lifecycle_stage == "closure_complete";
+            let ambiguous_active_downstream_result = explicit_binding.is_none()
+                && latest_receipt.as_ref().is_some_and(|receipt| {
+                    receipt.run_id == status.run_id
+                        && receipt
+                            .downstream_dispatch_active_target
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .is_some()
+                        && receipt
+                            .downstream_dispatch_result_path
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .is_some()
+                        && matches!(status.status.as_str(), "blocked" | "completed")
+                });
+            if terminal_completed_run || ambiguous_active_downstream_result {
+                return Err(format!(
+                    "Latest continuation binding for run `{}` is ambiguous. Either bind the next bounded unit explicitly with `vida taskflow continuation bind {} --task-id <task-id> --json` or pass `--run-id {}` to refresh that specific run.",
+                    status.run_id, status.run_id, status.run_id
+                ));
+            }
+        }
         let run_id = resolve_default_resume_run_id(store).await?;
         return resolve_runtime_consumption_resume_inputs_for_run_id(store, &run_id).await;
     };
@@ -2423,9 +2515,8 @@ fn prepare_explicit_resume_retry_artifact(
     let Some(project_root) = project_root else {
         return false;
     };
-    if dispatch_receipt_internal_retry_eligible(project_root, role_selection, dispatch_receipt) {
-        return true;
-    }
+    let _internal_retry_eligible =
+        dispatch_receipt_internal_retry_eligible(project_root, role_selection, dispatch_receipt);
     if let Some(primary_backend) =
         primary_backend_for_dispatch_receipt(project_root, role_selection, dispatch_receipt)
     {
