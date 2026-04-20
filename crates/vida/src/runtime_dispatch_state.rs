@@ -4195,6 +4195,178 @@ mod tests {
     }
 
     #[test]
+    fn taskflow_consume_final_closure_admission_reports_admit() {
+        let bundle_check = TaskflowConsumeBundleCheck {
+            ok: true,
+            blockers: vec![],
+            root_artifact_id: "root".to_string(),
+            artifact_count: 4,
+            boot_classification: "compatible".to_string(),
+            migration_state: "ready".to_string(),
+            activation_status: "ready_enough_for_normal_work".to_string(),
+        };
+        let docflow_verdict = RuntimeConsumptionDocflowVerdict {
+            status: "pass".to_string(),
+            ready: true,
+            blockers: vec![],
+            proof_surfaces: vec![
+                "vida docflow check --profile active-canon".to_string(),
+                "vida docflow readiness-check --profile active-canon".to_string(),
+                "vida docflow proofcheck --profile active-canon".to_string(),
+            ],
+        };
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "status".to_string(),
+            selected_role: "orchestrator".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "status": "ready_for_runtime_routing"
+            }),
+            reason: "test".to_string(),
+        };
+
+        let admission =
+            build_runtime_closure_admission(&bundle_check, &docflow_verdict, &role_selection);
+
+        assert_eq!(admission.status, "admit");
+        assert!(admission.admitted);
+        assert!(admission.blockers.is_empty());
+        assert_eq!(
+            admission.proof_surfaces,
+            vec![
+                "vida taskflow consume bundle check",
+                "vida docflow check --profile active-canon",
+                "vida docflow readiness-check --profile active-canon",
+                "vida docflow proofcheck --profile active-canon",
+            ]
+        );
+    }
+
+    #[test]
+    fn taskflow_consume_final_closure_admission_reports_fail_closed_blockers() {
+        let bundle_check = TaskflowConsumeBundleCheck {
+            ok: false,
+            blockers: vec!["boot_incompatible".to_string()],
+            root_artifact_id: "root".to_string(),
+            artifact_count: 0,
+            boot_classification: "blocking".to_string(),
+            migration_state: "blocked".to_string(),
+            activation_status: "pending".to_string(),
+        };
+        let docflow_verdict = RuntimeConsumptionDocflowVerdict {
+            status: "block".to_string(),
+            ready: false,
+            blockers: vec![
+                "missing_docflow_activation".to_string(),
+                "missing_readiness_verdict".to_string(),
+            ],
+            proof_surfaces: vec!["vida docflow check --profile active-canon".to_string()],
+        };
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "status".to_string(),
+            selected_role: "orchestrator".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "blocked".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "status": "blocked"
+            }),
+            reason: "test".to_string(),
+        };
+
+        let admission =
+            build_runtime_closure_admission(&bundle_check, &docflow_verdict, &role_selection);
+
+        assert_eq!(admission.status, "block");
+        assert!(!admission.admitted);
+        assert_eq!(
+            admission.blockers,
+            vec![
+                "boot_incompatible",
+                "missing_closure_proof",
+                "missing_docflow_activation",
+                "missing_readiness_verdict",
+                "restore_reconcile_not_green",
+            ]
+        );
+    }
+
+    #[test]
+    fn taskflow_consume_final_closure_admission_blocks_while_design_packet_is_pending() {
+        let bundle_check = TaskflowConsumeBundleCheck {
+            ok: true,
+            blockers: vec![],
+            root_artifact_id: "root".to_string(),
+            artifact_count: 4,
+            boot_classification: "compatible".to_string(),
+            migration_state: "ready".to_string(),
+            activation_status: "ready_enough_for_normal_work".to_string(),
+        };
+        let docflow_verdict = RuntimeConsumptionDocflowVerdict {
+            status: "pass".to_string(),
+            ready: true,
+            blockers: vec![],
+            proof_surfaces: vec![
+                "vida docflow check --profile active-canon".to_string(),
+                "vida docflow readiness-check --profile active-canon".to_string(),
+                "vida docflow proofcheck --profile active-canon".to_string(),
+            ],
+        };
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "create a feature with research, specification, plan, and implementation"
+                .to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec![
+                "research".to_string(),
+                "specification".to_string(),
+                "implementation".to_string(),
+            ],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "status": "design_first"
+            }),
+            reason: "auto_feature_design_request".to_string(),
+        };
+
+        let admission =
+            build_runtime_closure_admission(&bundle_check, &docflow_verdict, &role_selection);
+
+        assert_eq!(admission.status, "block");
+        assert!(!admission.admitted);
+        assert_eq!(
+            admission.blockers,
+            vec!["pending_design_packet", "pending_developer_handoff_packet"]
+        );
+    }
+
+    #[test]
     fn runtime_host_execution_contract_reflects_external_qwen_selection() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
