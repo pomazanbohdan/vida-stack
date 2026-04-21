@@ -465,6 +465,24 @@ mod tests {
     }
 
     #[test]
+    fn compiled_bundle_exposes_canonical_carrier_runtime_without_legacy_aliases() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+
+        let config =
+            read_yaml_file_checked(&harness.path().join("vida.config.yaml")).expect("config");
+        let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
+            .expect("bundle should compile");
+        let carrier_runtime = bundle["carrier_runtime"].clone();
+        assert!(carrier_runtime.is_object());
+        assert!(bundle.get("codex_multi_agent").is_none());
+        assert!(carrier_runtime["dispatch_aliases"].is_array());
+    }
+
+    #[test]
     fn dispatch_aliases_require_canonical_overlay_key() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -483,7 +501,6 @@ mod tests {
         let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
             .expect("bundle should compile");
         let carrier_runtime = bundle["carrier_runtime"].clone();
-        assert!(bundle.get("codex_multi_agent").is_none());
         let dispatch_aliases = carrier_runtime["dispatch_aliases"]
             .as_array()
             .expect("dispatch aliases should still be an array");
