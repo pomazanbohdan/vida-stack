@@ -544,11 +544,7 @@ async fn route_taskflow_ready(command: TaskReadyArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let store = if state_dir.exists() {
-        crate::state_store::StateStore::open_existing(state_dir).await
-    } else {
-        crate::state_store::StateStore::open(state_dir).await
-    };
+    let store = crate::task_surface::open_read_only_task_store(state_dir).await;
     match store {
         Ok(store) => match store.ready_tasks_scoped(command.scope.as_deref()).await {
             Ok(tasks) => {
@@ -685,7 +681,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         }
     };
 
-    let store = match crate::state_store::StateStore::open_existing(state_dir).await {
+    let store = match crate::task_surface::open_read_only_task_store(state_dir).await {
         Ok(store) => store,
         Err(error) => {
             eprintln!("Failed to open authoritative state store: {error}");

@@ -46,6 +46,12 @@ async fn open_task_store(
     }
 }
 
+pub(crate) async fn open_read_only_task_store(
+    state_dir: std::path::PathBuf,
+) -> Result<StateStore, state_store::StateStoreError> {
+    StateStore::open_existing_read_only(state_dir).await
+}
+
 fn task_rows_as_values(
     tasks: &[state_store::TaskRecord],
 ) -> Result<Vec<serde_json::Value>, String> {
@@ -873,7 +879,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match open_read_only_task_store(state_dir).await {
                 Ok(store) => match store.task_dependency_tree(&command.task_id).await {
                     Ok(tree) => {
                         print_task_direct_children(command.render, &tree, command.json);
@@ -894,7 +900,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match open_read_only_task_store(state_dir).await {
                 Ok(store) => match store.task_dependency_tree(&command.task_id).await {
                     Ok(tree) => {
                         print_task_dependency_tree(command.render, &tree, command.json);
@@ -1066,9 +1072,9 @@ mod tests {
         canonical_json_string_array_entries, normalize_task_json_contract_arrays,
         parse_label_values, parse_optional_label_value, task_json_success_status,
     };
+    use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
     use crate::test_cli_support::guard_current_dir;
-    use crate::temp_state::TempStateHarness;
     use std::fs;
 
     #[test]

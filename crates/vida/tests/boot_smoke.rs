@@ -2786,6 +2786,110 @@ fn status_and_doctor_text_surfaces_fail_closed_with_lock_remediation_hint() {
 }
 
 #[test]
+fn parallel_read_only_task_surfaces_do_not_fail_on_state_lock_contention() {
+    let state_dir = unique_state_dir();
+
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+
+    let root = vida()
+        .args([
+            "task",
+            "ensure",
+            "parallel-root",
+            "Parallel Root",
+            "--description",
+            "root for parallel read-only task surfaces",
+            "--status",
+            "open",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("root task ensure should run");
+    assert!(root.status.success(), "{}", String::from_utf8_lossy(&root.stderr));
+
+    let child = vida()
+        .args([
+            "task",
+            "ensure",
+            "parallel-child",
+            "Parallel Child",
+            "--parent-id",
+            "parallel-root",
+            "--description",
+            "ready child for scoped next",
+            "--status",
+            "open",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("child task ensure should run");
+    assert!(child.status.success(), "{}", String::from_utf8_lossy(&child.stderr));
+
+    let state_dir_for_children = state_dir.clone();
+    let children_handle = std::thread::spawn(move || {
+        vida()
+            .args(["task", "children", "parallel-root", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir_for_children)
+            .output()
+            .expect("task children should run")
+    });
+
+    let state_dir_for_next = state_dir.clone();
+    let next_handle = std::thread::spawn(move || {
+        vida()
+            .args(["task", "next", "--scope", "parallel-root", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir_for_next)
+            .output()
+            .expect("task next should run")
+    });
+
+    let children_output = children_handle.join().expect("children thread should join");
+    let next_output = next_handle.join().expect("next thread should join");
+
+    assert!(
+        children_output.status.success(),
+        "task children should not fail under concurrent read-only load: stdout={} stderr={}",
+        String::from_utf8_lossy(&children_output.stdout),
+        String::from_utf8_lossy(&children_output.stderr)
+    );
+    assert!(
+        next_output.status.success(),
+        "task next should not fail under concurrent read-only load: stdout={} stderr={}",
+        String::from_utf8_lossy(&next_output.stdout),
+        String::from_utf8_lossy(&next_output.stderr)
+    );
+    assert!(
+        !is_state_lock_error(&children_output),
+        "task children should not surface lock contention: {}",
+        String::from_utf8_lossy(&children_output.stderr)
+    );
+    assert!(
+        !is_state_lock_error(&next_output),
+        "task next should not surface lock contention: {}",
+        String::from_utf8_lossy(&next_output.stderr)
+    );
+
+    let children_json: serde_json::Value =
+        serde_json::from_slice(&children_output.stdout).expect("task children json should parse");
+    let next_json: serde_json::Value =
+        serde_json::from_slice(&next_output.stdout).expect("task next json should parse");
+    assert_eq!(children_json["child_count"], 1);
+    assert_eq!(children_json["children"][0]["child_id"], "parallel-child");
+    assert!(
+        next_json["ready_count"]
+            .as_u64()
+            .expect("task next ready_count should be numeric")
+            >= 1,
+        "scoped next should remain machine-readable under concurrent read-only access: {next_json}"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn taskflow_consume_bundle_check_fails_closed_without_protocol_binding_receipt() {
     let project_root = unique_state_dir();
     let state_dir = format!("{project_root}/.vida/data/state");
