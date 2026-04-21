@@ -2698,6 +2698,10 @@ fn taskflow_consume_bundle_check_fails_fast_under_state_lock_contention() {
             || stderr.contains("timed out while waiting for authoritative datastore lock"),
         "expected lock contention to be reported, got stderr={stderr}"
     );
+    assert!(
+        stderr.contains("another VIDA process still holds the authoritative datastore lock"),
+        "expected explicit lock remediation hint, got stderr={stderr}"
+    );
 
     drop(held_state_lock);
     let _ = fs::remove_dir_all(&state_dir);
