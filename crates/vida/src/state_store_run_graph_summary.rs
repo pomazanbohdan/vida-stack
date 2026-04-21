@@ -882,6 +882,7 @@ impl StateStore {
         status.validate_memory_governance()?;
         let updated_at = unix_timestamp_nanos().to_string();
         let receipt_recorded_at = updated_at.clone();
+        let checkpoint_record_updated_at = updated_at.clone();
         let _: Option<RoutedRunStateRow> = self
             .db
             .upsert(("routed_run_state", status.run_id.as_str()))
@@ -929,6 +930,18 @@ impl StateStore {
                 updated_at: unix_timestamp_nanos().to_string(),
             })
             .await?;
+        if !status
+            .checkpoint_kind
+            .trim()
+            .eq_ignore_ascii_case("none")
+        {
+            let checkpoint_record = RunGraphProjectionCheckpointRecord::from_status(
+                status,
+                checkpoint_record_updated_at,
+            );
+            self.record_run_graph_projection_checkpoint_record(&checkpoint_record)
+                .await?;
+        }
         if let Some(transition_kind) = approval_delegation_transition_kind(status) {
             let receipt = RunGraphApprovalDelegationReceipt::from_status(
                 status,
@@ -994,6 +1007,129 @@ impl StateStore {
                 binding.validate()?;
                 Ok(Some(binding))
             }
+            None => Ok(None),
+        }
+    }
+
+    pub async fn record_run_graph_replay_lineage_receipt(
+        &self,
+        receipt: &RunGraphReplayLineageReceipt,
+    ) -> Result<(), StateStoreError> {
+        receipt.validate()?;
+        let _: Option<RunGraphReplayLineageReceipt> = self
+            .db
+            .upsert((
+                "run_graph_replay_lineage_receipt",
+                receipt.receipt_id.as_str(),
+            ))
+            .content(receipt.clone())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn record_run_graph_projection_checkpoint_record(
+        &self,
+        record: &RunGraphProjectionCheckpointRecord,
+    ) -> Result<(), StateStoreError> {
+        record.validate()?;
+        let _: Option<RunGraphProjectionCheckpointRecord> = self
+            .db
+            .upsert((
+                "run_graph_projection_checkpoint_record",
+                record.record_id.as_str(),
+            ))
+            .content(record.clone())
+            .await?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn run_graph_projection_checkpoint_record(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunGraphProjectionCheckpointRecord>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT * FROM run_graph_projection_checkpoint_record \
+                 WHERE run_id = $run_id \
+                 ORDER BY updated_at DESC, record_id DESC \
+                 LIMIT 1;",
+            )
+            .bind(("run_id", run_id.to_string()))
+            .await?;
+        let rows: Vec<RunGraphProjectionCheckpointRecord> = query.take(0)?;
+        match rows.into_iter().next() {
+            Some(record) => {
+                record.validate()?;
+                Ok(Some(record))
+            }
+            None => Ok(None),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn latest_run_graph_projection_checkpoint_record(
+        &self,
+    ) -> Result<Option<RunGraphProjectionCheckpointRecord>, StateStoreError> {
+        let Some(status) = self.latest_run_graph_status().await? else {
+            return Ok(None);
+        };
+        match self
+            .run_graph_projection_checkpoint_record(&status.run_id)
+            .await?
+        {
+            Some(record) if record.run_id == status.run_id => Ok(Some(record)),
+            Some(record) => Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph projection checkpoint record is inconsistent for `{}`: latest projection checkpoint record run_id must share the same run_id (record_run_id={})",
+                    status.run_id, record.run_id
+                ),
+            }),
+            None => Ok(None),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn run_graph_replay_lineage_receipt(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunGraphReplayLineageReceipt>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT * FROM run_graph_replay_lineage_receipt \
+                 WHERE run_id = $run_id \
+                 ORDER BY recorded_at DESC, receipt_id DESC \
+                 LIMIT 1;",
+            )
+            .bind(("run_id", run_id.to_string()))
+            .await?;
+        let rows: Vec<RunGraphReplayLineageReceipt> = query.take(0)?;
+        match rows.into_iter().next() {
+            Some(receipt) => {
+                receipt.validate()?;
+                Ok(Some(receipt))
+            }
+            None => Ok(None),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn latest_run_graph_replay_lineage_receipt(
+        &self,
+    ) -> Result<Option<RunGraphReplayLineageReceipt>, StateStoreError> {
+        let Some(status) = self.latest_run_graph_status().await? else {
+            return Ok(None);
+        };
+        match self.run_graph_replay_lineage_receipt(&status.run_id).await? {
+            Some(receipt) if receipt.run_id == status.run_id => Ok(Some(receipt)),
+            Some(receipt) => Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph replay lineage receipt is inconsistent for `{}`: latest replay lineage receipt run_id must share the same run_id (receipt_run_id={})",
+                    status.run_id, receipt.run_id
+                ),
+            }),
             None => Ok(None),
         }
     }

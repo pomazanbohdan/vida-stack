@@ -1001,6 +1001,103 @@ fn build_resume_inputs(
     }
 }
 
+fn build_run_graph_replay_lineage_receipt(
+    status: &crate::state_store::RunGraphStatus,
+    source_receipt: &crate::state_store::RunGraphDispatchReceipt,
+    resume: &ResumeInputs,
+    lineage_kind: &str,
+) -> Result<crate::state_store::RunGraphReplayLineageReceipt, String> {
+    let checkpoint_kind = status.checkpoint_kind.trim().to_string();
+    let resume_target = status.resume_target.trim().to_string();
+    let recorded_at = time::OffsetDateTime::now_utc()
+        .format(&super::Rfc3339)
+        .expect("rfc3339 timestamp should render");
+    let source_dispatch_packet_path = match lineage_kind {
+        "downstream_packet" | "downstream_result" => source_receipt
+            .downstream_dispatch_packet_path
+            .clone()
+            .or_else(|| source_receipt.dispatch_packet_path.clone()),
+        _ => source_receipt.dispatch_packet_path.clone(),
+    };
+    let source_dispatch_result_path = match lineage_kind {
+        "downstream_result" => source_receipt
+            .downstream_dispatch_result_path
+            .clone()
+            .or_else(|| source_receipt.dispatch_result_path.clone()),
+        _ => source_receipt.dispatch_result_path.clone(),
+    };
+    let resolved_task_id = status.task_id.trim().to_string();
+    let receipt_id = format!(
+        "replay-lineage-{}-{}",
+        resume.dispatch_receipt.run_id,
+        time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+    );
+    if checkpoint_kind.is_empty() {
+        return Err(format!(
+            "Failed to record run-graph replay lineage receipt: run `{}` is missing checkpoint_kind in persisted run-graph status",
+            resume.dispatch_receipt.run_id
+        ));
+    }
+    if resume_target.is_empty() {
+        return Err(format!(
+            "Failed to record run-graph replay lineage receipt: run `{}` is missing resume_target in persisted run-graph status",
+            resume.dispatch_receipt.run_id
+        ));
+    }
+    if resolved_task_id.is_empty() {
+        return Err(format!(
+            "Failed to record run-graph replay lineage receipt: run `{}` is missing task_id in persisted run-graph status",
+            resume.dispatch_receipt.run_id
+        ));
+    }
+    Ok(crate::state_store::RunGraphReplayLineageReceipt {
+        receipt_id,
+        run_id: resume.dispatch_receipt.run_id.clone(),
+        lineage_kind: lineage_kind.to_string(),
+        replay_scope: "resume_resolution".to_string(),
+        origin_checkpoint_ref: format!(
+            "{}:{}:{}",
+            resume.dispatch_receipt.run_id, checkpoint_kind, resume_target
+        ),
+        fork_parent: None,
+        source_dispatch_target: source_receipt.dispatch_target.clone(),
+        source_dispatch_packet_path,
+        source_dispatch_result_path,
+        resolved_dispatch_target: resume.dispatch_receipt.dispatch_target.clone(),
+        resolved_task_id,
+        checkpoint_kind,
+        resume_target,
+        validation_outcome: "lawful_resume".to_string(),
+        recorded_at,
+    })
+}
+
+async fn record_run_graph_replay_lineage_receipt_for_resume(
+    store: &super::StateStore,
+    source_receipt: &crate::state_store::RunGraphDispatchReceipt,
+    resume: &ResumeInputs,
+    lineage_kind: &str,
+) -> Result<(), String> {
+    let status = store
+        .run_graph_status(&resume.dispatch_receipt.run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to load run-graph status for replay lineage receipt: {error}"
+            )
+        })?;
+    let receipt = build_run_graph_replay_lineage_receipt(
+        &status,
+        source_receipt,
+        resume,
+        lineage_kind,
+    )?;
+    store
+        .record_run_graph_replay_lineage_receipt(&receipt)
+        .await
+        .map_err(|error| format!("Failed to record run-graph replay lineage receipt: {error}"))
+}
+
 async fn recover_missing_first_dispatch_receipt(
     store: &super::StateStore,
     run_id: &str,
@@ -2266,6 +2363,13 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
                     .await?
             {
                 if resume.dispatch_receipt.dispatch_target == bound_target {
+                    record_run_graph_replay_lineage_receipt_for_resume(
+                        store,
+                        &receipt,
+                        &resume,
+                        "downstream_packet",
+                    )
+                    .await?;
                     return Ok(resume);
                 }
                 return Err(format!(
@@ -2280,6 +2384,13 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
                     .await?
             {
                 if resume.dispatch_receipt.dispatch_target == bound_target {
+                    record_run_graph_replay_lineage_receipt_for_resume(
+                        store,
+                        &receipt,
+                        &resume,
+                        "downstream_result",
+                    )
+                    .await?;
                     return Ok(resume);
                 }
                 return Err(format!(
@@ -2298,6 +2409,13 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
                 maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt)
                     .await?
             {
+                record_run_graph_replay_lineage_receipt_for_resume(
+                    store,
+                    &receipt,
+                    &resume,
+                    "downstream_packet",
+                )
+                .await?;
                 return Ok(resume);
             }
         }
@@ -2306,6 +2424,13 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
                 maybe_resume_inputs_from_active_downstream_result(store, Some(run_id), &receipt)
                     .await?
             {
+                record_run_graph_replay_lineage_receipt_for_resume(
+                    store,
+                    &receipt,
+                    &resume,
+                    "downstream_result",
+                )
+                .await?;
                 return Ok(resume);
             }
         }
@@ -2314,6 +2439,13 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
                 maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt)
                     .await?
             {
+                record_run_graph_replay_lineage_receipt_for_resume(
+                    store,
+                    &receipt,
+                    &resume,
+                    "downstream_packet",
+                )
+                .await?;
                 return Ok(resume);
             }
         }
@@ -2337,22 +2469,33 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
         )
         .await?
         {
-            return Ok(build_resume_inputs(
+            let resume = build_resume_inputs(
                 bridged_receipt,
                 packet_path,
                 packet,
                 role_selection,
-            ));
+            );
+            record_run_graph_replay_lineage_receipt_for_resume(
+                store,
+                &receipt,
+                &resume,
+                "root_dispatch_packet",
+            )
+            .await?;
+            return Ok(resume);
         }
     }
     validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet")?;
     validate_run_graph_resume_state(store, run_id).await?;
-    Ok(build_resume_inputs(
-        receipt,
-        packet_path,
-        packet,
-        role_selection,
-    ))
+    let resume = build_resume_inputs(receipt.clone(), packet_path, packet, role_selection);
+    record_run_graph_replay_lineage_receipt_for_resume(
+        store,
+        &receipt,
+        &resume,
+        "root_dispatch_packet",
+    )
+    .await?;
+    Ok(resume)
 }
 
 pub(crate) async fn resolve_runtime_consumption_resume_inputs(
@@ -8765,6 +8908,14 @@ agent_system:
             error.contains("still points to task `task-old`"),
             "unexpected error: {error}"
         );
+        assert!(
+            store
+                .run_graph_replay_lineage_receipt(run_id)
+                .await
+                .expect("replay lineage lookup should succeed")
+                .is_none(),
+            "fail-closed lineage mismatch must not persist a replay-lineage receipt"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -9035,6 +9186,27 @@ agent_system:
             resolved.dispatch_packet_path,
             packet_path.display().to_string()
         );
+        let replay_lineage = store
+            .run_graph_replay_lineage_receipt(run_id)
+            .await
+            .expect("replay lineage lookup should succeed")
+            .expect("lawful resume should persist replay-lineage receipt");
+        assert_eq!(replay_lineage.run_id, run_id);
+        assert_eq!(replay_lineage.lineage_kind, "root_dispatch_packet");
+        assert_eq!(replay_lineage.replay_scope, "resume_resolution");
+        assert_eq!(replay_lineage.source_dispatch_target, "implementer");
+        assert_eq!(replay_lineage.resolved_dispatch_target, "implementer");
+        assert_eq!(replay_lineage.resolved_task_id, "task-aligned");
+        assert_eq!(replay_lineage.validation_outcome, "lawful_resume");
+        assert_eq!(replay_lineage.checkpoint_kind, "execution_cursor");
+        assert_eq!(replay_lineage.resume_target, "none");
+        assert_eq!(
+            replay_lineage.source_dispatch_packet_path.as_deref(),
+            Some(packet_path.display().to_string().as_str())
+        );
+        assert!(replay_lineage
+            .origin_checkpoint_ref
+            .starts_with(&format!("{run_id}:execution_cursor:none")));
 
         let _ = fs::remove_dir_all(&root);
     }

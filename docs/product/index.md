@@ -111,6 +111,7 @@ Release-1 working entrypoints:
 22. [taskflow-v1-runtime-modernization-plan.md](spec/taskflow-v1-runtime-modernization-plan.md)
 23. [docflow-v1-runtime-modernization-plan.md](spec/docflow-v1-runtime-modernization-plan.md)
 24. [vida1-development-conditions.md](../process/vida1-development-conditions.md)
+25. [checkpoint-commit-and-replay-model.md](spec/checkpoint-commit-and-replay-model.md)
 
 Repository project split:
 

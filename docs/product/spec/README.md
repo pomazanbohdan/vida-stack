@@ -58,6 +58,7 @@ Current promoted runtime-control specs:
 
 - `docs/product/spec/autonomous-report-continuation-law.md`
 - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
+- `docs/product/spec/checkpoint-commit-and-replay-model.md`
 
 -----
 artifact_path: product/spec/readme

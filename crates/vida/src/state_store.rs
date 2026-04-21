@@ -75,13 +75,14 @@ pub use state_store_protocol_binding::{ProtocolBindingState, ProtocolBindingSumm
 #[allow(unused_imports)]
 pub(crate) use state_store_run_graph_state::{
     ExecutionPlanStateRow, GovernanceStateRow, ResumabilityCapsuleRow, RoutedRunStateRow,
-    RunGraphDispatchReceiptStored, RunGraphLatestRow,
+    RunGraphDispatchReceiptStored, RunGraphLatestRow, RunGraphProjectionCheckpointRecord,
+    RunGraphReplayLineageReceipt,
 };
 #[allow(unused_imports)]
 pub use state_store_run_graph_state::{
     RunGraphContinuationBinding, RunGraphDispatchContext, RunGraphDispatchReceipt,
-    RunGraphMemoryGovernanceProjection, RunGraphPrincipalDelegationProjection,
-    RunGraphStatus, RunGraphSummary,
+    RunGraphMemoryGovernanceProjection, RunGraphPrincipalDelegationProjection, RunGraphStatus,
+    RunGraphSummary,
 };
 pub(crate) use state_store_run_graph_summary::{
     default_run_graph_lane_status, deserialize_run_graph_lane_status,
@@ -162,6 +163,8 @@ DEFINE TABLE launcher_activation_snapshot SCHEMALESS;
 DEFINE TABLE run_graph_approval_delegation_receipt SCHEMALESS;
 DEFINE TABLE run_graph_continuation_binding SCHEMALESS;
 DEFINE TABLE run_graph_dispatch_context SCHEMALESS;
+DEFINE TABLE run_graph_projection_checkpoint_record SCHEMALESS;
+DEFINE TABLE run_graph_replay_lineage_receipt SCHEMALESS;
 "#;
 
 fn state_store_recovery_hint_for_message(message: &str) -> Option<&'static str> {
@@ -2434,6 +2437,30 @@ hierarchy: framework,contracts
         }
     }
 
+    fn sample_replay_lineage_receipt(
+        receipt_id: &str,
+        run_id: &str,
+        recorded_at: &str,
+    ) -> RunGraphReplayLineageReceipt {
+        RunGraphReplayLineageReceipt {
+            receipt_id: receipt_id.to_string(),
+            run_id: run_id.to_string(),
+            lineage_kind: "dispatch_packet_lineage".to_string(),
+            replay_scope: "completed_resume".to_string(),
+            origin_checkpoint_ref: format!("checkpoint:{run_id}"),
+            fork_parent: None,
+            source_dispatch_target: "coach".to_string(),
+            source_dispatch_packet_path: Some(format!("/tmp/{run_id}-coach.json")),
+            source_dispatch_result_path: Some(format!("/tmp/{run_id}-coach-result.json")),
+            resolved_dispatch_target: "closure".to_string(),
+            resolved_task_id: format!("task-{run_id}"),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            validation_outcome: "pass".to_string(),
+            recorded_at: recorded_at.to_string(),
+        }
+    }
+
     #[test]
     fn run_graph_dispatch_receipt_summary_uses_recorded_exception_lane_status_until_takeover_is_explicit(
     ) {
@@ -2529,6 +2556,176 @@ hierarchy: framework,contracts
             .expect("load receipt")
             .expect("receipt exists");
         assert_eq!(receipt.lane_status, "lane_running");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_replay_lineage_receipt_round_trips_latest_record_for_run_id() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-replay-lineage-round-trip-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let older = sample_replay_lineage_receipt(
+            "receipt-replay-lineage-1",
+            "run-replay-lineage",
+            "2026-04-20T10:00:00Z",
+        );
+        let newer = sample_replay_lineage_receipt(
+            "receipt-replay-lineage-2",
+            "run-replay-lineage",
+            "2026-04-20T10:05:00Z",
+        );
+
+        store
+            .record_run_graph_replay_lineage_receipt(&older)
+            .await
+            .expect("persist older replay lineage receipt");
+        store
+            .record_run_graph_replay_lineage_receipt(&newer)
+            .await
+            .expect("persist newer replay lineage receipt");
+
+        let loaded = store
+            .run_graph_replay_lineage_receipt("run-replay-lineage")
+            .await
+            .expect("load latest replay lineage receipt")
+            .expect("replay lineage receipt should exist");
+        assert_eq!(loaded.receipt_id, "receipt-replay-lineage-2");
+        assert_eq!(loaded.run_id, "run-replay-lineage");
+        assert_eq!(loaded.resolved_dispatch_target, "closure");
+        assert_eq!(loaded.validation_outcome, "pass");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_replay_lineage_receipt_uses_latest_status_run_id() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-latest-replay-lineage-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut older_status = sample_run_graph_status();
+        older_status.run_id = "run-replay-lineage-older".to_string();
+        older_status.task_id = "task-replay-lineage-older".to_string();
+        older_status.resume_target = "dispatch.coach_lane".to_string();
+        store
+            .record_run_graph_status(&older_status)
+            .await
+            .expect("persist older run graph status");
+        store
+            .record_run_graph_replay_lineage_receipt(&sample_replay_lineage_receipt(
+                "receipt-replay-lineage-older",
+                "run-replay-lineage-older",
+                "2026-04-20T10:00:00Z",
+            ))
+            .await
+            .expect("persist older replay lineage receipt");
+
+        let mut latest_status = sample_run_graph_status();
+        latest_status.run_id = "run-replay-lineage-latest".to_string();
+        latest_status.task_id = "task-replay-lineage-latest".to_string();
+        latest_status.resume_target = "dispatch.verification_lane".to_string();
+        store
+            .record_run_graph_status(&latest_status)
+            .await
+            .expect("persist latest run graph status");
+        store
+            .record_run_graph_replay_lineage_receipt(&sample_replay_lineage_receipt(
+                "receipt-replay-lineage-latest",
+                "run-replay-lineage-latest",
+                "2026-04-20T10:10:00Z",
+            ))
+            .await
+            .expect("persist latest replay lineage receipt");
+
+        let latest = store
+            .latest_run_graph_replay_lineage_receipt()
+            .await
+            .expect("load latest replay lineage receipt")
+            .expect("latest replay lineage receipt should exist");
+        assert_eq!(latest.run_id, "run-replay-lineage-latest");
+        assert_eq!(latest.receipt_id, "receipt-replay-lineage-latest");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_replay_lineage_receipt_fails_closed_on_persisted_empty_required_field() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-replay-lineage-invalid-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-replay-lineage-invalid".to_string();
+        status.task_id = "task-replay-lineage-invalid".to_string();
+        status.resume_target = "dispatch.coach_lane".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<RunGraphReplayLineageReceipt> = store
+            .db
+            .upsert((
+                "run_graph_replay_lineage_receipt",
+                "receipt-replay-lineage-invalid",
+            ))
+            .content(RunGraphReplayLineageReceipt {
+                resolved_task_id: String::new(),
+                ..sample_replay_lineage_receipt(
+                    "receipt-replay-lineage-invalid",
+                    "run-replay-lineage-invalid",
+                    "2026-04-20T10:15:00Z",
+                )
+            })
+            .await
+            .expect("persist invalid replay lineage receipt");
+
+        let error = store
+            .run_graph_replay_lineage_receipt("run-replay-lineage-invalid")
+            .await
+            .expect_err("invalid persisted replay lineage receipt should fail closed");
+        match error {
+            StateStoreError::InvalidTaskRecord { reason } => {
+                assert!(reason.contains("run-graph replay lineage receipt"));
+                assert!(reason.contains("resolved_task_id"));
+            }
+            other => panic!("expected InvalidTaskRecord, got {other:?}"),
+        }
+
+        let error = store
+            .latest_run_graph_replay_lineage_receipt()
+            .await
+            .expect_err("latest replay lineage receipt should fail closed for invalid latest row");
+        match error {
+            StateStoreError::InvalidTaskRecord { reason } => {
+                assert!(reason.contains("run-graph replay lineage receipt"));
+                assert!(reason.contains("resolved_task_id"));
+            }
+            other => panic!("expected InvalidTaskRecord, got {other:?}"),
+        }
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -2856,6 +3053,288 @@ hierarchy: framework,contracts
         assert!(error
             .to_string()
             .contains("run-graph dispatch receipt summary is inconsistent"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_replay_lineage_receipt_round_trips_for_latest_run() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-replay-lineage-round-trip-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-replay-lineage".to_string();
+        status.task_id = "task-replay-lineage".to_string();
+        status.resume_target = "resume.current_lane".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let receipt = RunGraphReplayLineageReceipt {
+            receipt_id: "replay-lineage-run-replay-lineage".to_string(),
+            run_id: "run-replay-lineage".to_string(),
+            lineage_kind: "root_dispatch_packet".to_string(),
+            replay_scope: "resume_resolution".to_string(),
+            origin_checkpoint_ref: "run-replay-lineage:execution_cursor:resume.current_lane"
+                .to_string(),
+            fork_parent: None,
+            source_dispatch_target: "implementer".to_string(),
+            source_dispatch_packet_path: Some("/tmp/run-replay-lineage-packet.json".to_string()),
+            source_dispatch_result_path: Some("/tmp/run-replay-lineage-result.json".to_string()),
+            resolved_dispatch_target: "implementer".to_string(),
+            resolved_task_id: "task-replay-lineage".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "resume.current_lane".to_string(),
+            validation_outcome: "lawful_resume".to_string(),
+            recorded_at: "2026-04-21T00:00:00Z".to_string(),
+        };
+        store
+            .record_run_graph_replay_lineage_receipt(&receipt)
+            .await
+            .expect("persist replay lineage receipt");
+
+        let by_run = store
+            .run_graph_replay_lineage_receipt("run-replay-lineage")
+            .await
+            .expect("load replay lineage receipt by run")
+            .expect("receipt exists");
+        assert_eq!(by_run.receipt_id, receipt.receipt_id);
+        assert_eq!(by_run.origin_checkpoint_ref, receipt.origin_checkpoint_ref);
+        assert_eq!(by_run.resolved_task_id, "task-replay-lineage");
+
+        let latest = store
+            .latest_run_graph_replay_lineage_receipt()
+            .await
+            .expect("load latest replay lineage receipt")
+            .expect("latest receipt exists");
+        assert_eq!(latest.run_id, "run-replay-lineage");
+        assert_eq!(latest.lineage_kind, "root_dispatch_packet");
+        assert_eq!(latest.resume_target, "resume.current_lane");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_replay_lineage_receipt_ignores_older_run_receipts() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-replay-lineage-latest-scope-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut older_status = sample_run_graph_status();
+        older_status.run_id = "run-replay-old".to_string();
+        older_status.task_id = "task-replay-old".to_string();
+        older_status.resume_target = "resume.old".to_string();
+        store
+            .record_run_graph_status(&older_status)
+            .await
+            .expect("persist older status");
+
+        let mut latest_status = sample_run_graph_status();
+        latest_status.run_id = "run-replay-new".to_string();
+        latest_status.task_id = "task-replay-new".to_string();
+        latest_status.resume_target = "resume.new".to_string();
+        store
+            .record_run_graph_status(&latest_status)
+            .await
+            .expect("persist latest status");
+
+        let older_receipt = RunGraphReplayLineageReceipt {
+            receipt_id: "replay-lineage-run-replay-old".to_string(),
+            run_id: "run-replay-old".to_string(),
+            lineage_kind: "downstream_packet".to_string(),
+            replay_scope: "resume_resolution".to_string(),
+            origin_checkpoint_ref: "run-replay-old:execution_cursor:resume.old".to_string(),
+            fork_parent: None,
+            source_dispatch_target: "implementer".to_string(),
+            source_dispatch_packet_path: Some("/tmp/run-replay-old-packet.json".to_string()),
+            source_dispatch_result_path: None,
+            resolved_dispatch_target: "coach".to_string(),
+            resolved_task_id: "task-replay-old".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "resume.old".to_string(),
+            validation_outcome: "lawful_resume".to_string(),
+            recorded_at: "2026-04-20T00:00:00Z".to_string(),
+        };
+        store
+            .record_run_graph_replay_lineage_receipt(&older_receipt)
+            .await
+            .expect("persist older replay lineage receipt");
+
+        let latest = store
+            .latest_run_graph_replay_lineage_receipt()
+            .await
+            .expect("load latest scoped replay lineage receipt");
+        assert!(
+            latest.is_none(),
+            "latest run should not inherit replay lineage receipt from older run"
+        );
+
+        let older = store
+            .run_graph_replay_lineage_receipt("run-replay-old")
+            .await
+            .expect("load older replay lineage receipt")
+            .expect("older receipt exists");
+        assert_eq!(older.receipt_id, "replay-lineage-run-replay-old");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn record_run_graph_status_appends_projection_checkpoint_records_for_same_run() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-projection-checkpoint-history-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-projection-checkpoint".to_string();
+        status.task_id = "task-projection-checkpoint".to_string();
+        status.resume_target = "dispatch.writer_lane".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist first status");
+
+        status.active_node = "coach".to_string();
+        status.resume_target = "dispatch.coach_lane".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist second status");
+
+        let mut query = store
+            .db
+            .query(
+                "SELECT * FROM run_graph_projection_checkpoint_record \
+                 WHERE run_id = $run_id \
+                 ORDER BY updated_at ASC, record_id ASC;",
+            )
+            .bind(("run_id", "run-projection-checkpoint".to_string()))
+            .await
+            .expect("load projection checkpoint history");
+        let rows: Vec<RunGraphProjectionCheckpointRecord> =
+            query.take(0).expect("decode projection checkpoint rows");
+        assert_eq!(rows.len(), 2, "status writes must append checkpoint records");
+        assert_ne!(rows[0].record_id, rows[1].record_id);
+        assert_eq!(rows[0].projector_id, "taskflow.run_graph.status_projection");
+        assert_eq!(
+            rows[1].checkpoint_group,
+            "run_graph_status:run-projection-checkpoint"
+        );
+        assert_eq!(rows[1].last_gapless_position, rows[1].updated_at);
+        assert_eq!(rows[1].lineage_kind, "live_status_projection");
+
+        let latest = store
+            .run_graph_projection_checkpoint_record("run-projection-checkpoint")
+            .await
+            .expect("load latest projection checkpoint record")
+            .expect("latest projection checkpoint record exists");
+        assert_eq!(latest.last_gapless_position, latest.updated_at);
+        assert_eq!(
+            latest.origin_checkpoint_ref,
+            "run-projection-checkpoint:execution_cursor:dispatch.coach_lane"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_projection_checkpoint_record_scopes_to_latest_status_run() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-projection-checkpoint-latest-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut older_status = sample_run_graph_status();
+        older_status.run_id = "run-projection-old".to_string();
+        older_status.task_id = "task-projection-old".to_string();
+        older_status.resume_target = "dispatch.old".to_string();
+        store
+            .record_run_graph_status(&older_status)
+            .await
+            .expect("persist older status");
+
+        let mut latest_status = sample_run_graph_status();
+        latest_status.run_id = "run-projection-new".to_string();
+        latest_status.task_id = "task-projection-new".to_string();
+        latest_status.resume_target = "dispatch.new".to_string();
+        store
+            .record_run_graph_status(&latest_status)
+            .await
+            .expect("persist latest status");
+
+        let latest = store
+            .latest_run_graph_projection_checkpoint_record()
+            .await
+            .expect("load latest projection checkpoint record")
+            .expect("latest projection checkpoint record exists");
+        assert_eq!(latest.run_id, "run-projection-new");
+        assert_eq!(latest.last_gapless_position, latest.updated_at);
+        assert_eq!(latest.projector_id, "taskflow.run_graph.status_projection");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-projection-checkpoint-skip-none-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-projection-none".to_string();
+        status.task_id = "task-projection-none".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist status without checkpoint lineage");
+
+        let latest = store
+            .run_graph_projection_checkpoint_record("run-projection-none")
+            .await
+            .expect("load projection checkpoint record");
+        assert!(
+            latest.is_none(),
+            "checkpoint placeholder state must not emit a projection checkpoint record"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

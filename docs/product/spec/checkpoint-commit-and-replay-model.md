@@ -113,6 +113,16 @@ Artifact rule:
 1. the checkpoint-commit artifact must be distinct from the resumability capsule,
 2. projection/read-model summaries must be derived from persisted checkpoint records rather than replacing them.
 
+Current bounded TaskFlow mapping for the active `run_graph` family:
+
+1. the first distinct checkpoint artifact is an append-only `projection_checkpoint_record` emitted from grouped `run_graph` status persistence rather than from the resumability capsule,
+2. `projector_id` is the stable family-owned projector id `taskflow.run_graph.status_projection`,
+3. `checkpoint_group` is the per-run grouped projection boundary `run_graph_status:{run_id}`,
+4. `last_gapless_position` is the shared grouped-write commit token for that status projection pass and currently reuses the persisted `updated_at` value rather than the resumability `resume_target`,
+5. `origin_checkpoint_ref` for this bounded slice is `{run_id}:{checkpoint_kind}:{resume_target}`,
+6. `replay_scope` is `live_pass` and `fork_parent` remains empty unless an explicit replay/fork surface is activated,
+7. when `checkpoint_kind = none`, no projection-checkpoint record is emitted because placeholder resumability state is not lawful checkpoint lineage.
+
 ### 4.3 Delayed Write Safety
 
 If handler execution succeeds but checkpoint persistence is delayed or partially fails:
@@ -168,7 +178,8 @@ Mapping rule:
 
 1. `resumability_capsule` is one runtime continuation surface and must not be treated as the checkpoint-commit record itself,
 2. latest `run_graph` recovery/checkpoint summaries are query surfaces and must not be treated as full replay lineage,
-3. proof closure requires distinct checkpoint/replay artifacts when replay lineage is part of the release claim.
+3. proof closure requires distinct checkpoint/replay artifacts when replay lineage is part of the release claim,
+4. the current bounded `run_graph` implementation therefore keeps append-only `projection_checkpoint_record` and replay-lineage receipts as durable artifacts while leaving latest recovery/checkpoint summaries as derived read surfaces only.
 
 ## 6. Invariants
 
@@ -190,10 +201,10 @@ LangGraph alignment note:
 artifact_path: product/spec/checkpoint-commit-and-replay-model
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-04-03'
+artifact_revision: '2026-04-21'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/checkpoint-commit-and-replay-model.md
 created_at: '2026-03-09T12:00:46+02:00'
-updated_at: '2026-04-03T19:00:00+03:00'
+updated_at: '2026-04-21T18:30:00+03:00'
 changelog_ref: checkpoint-commit-and-replay-model.changelog.jsonl

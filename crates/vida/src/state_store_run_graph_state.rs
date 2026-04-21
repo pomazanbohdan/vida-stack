@@ -249,6 +249,112 @@ impl RunGraphDispatchContext {
     }
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub struct RunGraphReplayLineageReceipt {
+    pub receipt_id: String,
+    pub run_id: String,
+    pub lineage_kind: String,
+    pub replay_scope: String,
+    pub origin_checkpoint_ref: String,
+    pub fork_parent: Option<String>,
+    pub source_dispatch_target: String,
+    pub source_dispatch_packet_path: Option<String>,
+    pub source_dispatch_result_path: Option<String>,
+    pub resolved_dispatch_target: String,
+    pub resolved_task_id: String,
+    pub checkpoint_kind: String,
+    pub resume_target: String,
+    pub validation_outcome: String,
+    pub recorded_at: String,
+}
+
+impl RunGraphReplayLineageReceipt {
+    pub(crate) fn validate(&self) -> Result<(), StateStoreError> {
+        for (field, value) in [
+            ("receipt_id", self.receipt_id.as_str()),
+            ("run_id", self.run_id.as_str()),
+            ("lineage_kind", self.lineage_kind.as_str()),
+            ("replay_scope", self.replay_scope.as_str()),
+            ("origin_checkpoint_ref", self.origin_checkpoint_ref.as_str()),
+            ("source_dispatch_target", self.source_dispatch_target.as_str()),
+            ("resolved_dispatch_target", self.resolved_dispatch_target.as_str()),
+            ("resolved_task_id", self.resolved_task_id.as_str()),
+            ("checkpoint_kind", self.checkpoint_kind.as_str()),
+            ("resume_target", self.resume_target.as_str()),
+            ("validation_outcome", self.validation_outcome.as_str()),
+            ("recorded_at", self.recorded_at.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "run-graph replay lineage receipt for `{}` has empty field `{field}`",
+                        self.run_id
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub struct RunGraphProjectionCheckpointRecord {
+    pub record_id: String,
+    pub run_id: String,
+    pub projector_id: String,
+    pub checkpoint_group: String,
+    pub lineage_kind: String,
+    pub origin_checkpoint_ref: String,
+    pub replay_scope: String,
+    pub fork_parent: Option<String>,
+    pub last_gapless_position: String,
+    pub updated_at: String,
+}
+
+impl RunGraphProjectionCheckpointRecord {
+    pub(crate) fn from_status(status: &RunGraphStatus, updated_at: String) -> Self {
+        Self {
+            record_id: format!("projection-checkpoint-{}-{updated_at}", status.run_id),
+            run_id: status.run_id.clone(),
+            projector_id: "taskflow.run_graph.status_projection".to_string(),
+            checkpoint_group: format!("run_graph_status:{}", status.run_id),
+            lineage_kind: "live_status_projection".to_string(),
+            origin_checkpoint_ref: format!(
+                "{}:{}:{}",
+                status.run_id, status.checkpoint_kind, status.resume_target
+            ),
+            replay_scope: "live_pass".to_string(),
+            fork_parent: None,
+            last_gapless_position: updated_at.clone(),
+            updated_at,
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), StateStoreError> {
+        for (field, value) in [
+            ("record_id", self.record_id.as_str()),
+            ("run_id", self.run_id.as_str()),
+            ("projector_id", self.projector_id.as_str()),
+            ("checkpoint_group", self.checkpoint_group.as_str()),
+            ("lineage_kind", self.lineage_kind.as_str()),
+            ("origin_checkpoint_ref", self.origin_checkpoint_ref.as_str()),
+            ("replay_scope", self.replay_scope.as_str()),
+            ("last_gapless_position", self.last_gapless_position.as_str()),
+            ("updated_at", self.updated_at.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "run-graph projection checkpoint record for `{}` has empty field `{field}`",
+                        self.run_id
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
 pub(crate) struct RunGraphDispatchReceiptStored {
@@ -512,8 +618,9 @@ impl RunGraphStatus {
         dispatch_summary: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
         approval_receipt: Option<&crate::state_store::RunGraphApprovalDelegationReceipt>,
     ) -> RunGraphPrincipalDelegationProjection {
-        let approval_receipt_id =
-            approval_receipt.map(|receipt| receipt.receipt_id.clone()).and_then(non_empty_string);
+        let approval_receipt_id = approval_receipt
+            .map(|receipt| receipt.receipt_id.clone())
+            .and_then(non_empty_string);
         let dispatch_target = dispatch_summary
             .map(|summary| summary.dispatch_target.as_str())
             .filter(|value| !value.trim().is_empty());
@@ -564,8 +671,7 @@ impl RunGraphStatus {
                 .to_string(),
             );
         }
-        blocker_codes =
-            crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+        blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
         let delegation_state = if delegated_cycle_open {
             self.delegation_gate().delegated_cycle_state
         } else if approval_transition_active {
@@ -612,8 +718,9 @@ impl RunGraphStatus {
             .trim()
             .to_ascii_lowercase()
             .contains("ttl");
-        let approval_receipt_id =
-            approval_receipt.map(|receipt| receipt.receipt_id.clone()).and_then(non_empty_string);
+        let approval_receipt_id = approval_receipt
+            .map(|receipt| receipt.receipt_id.clone())
+            .and_then(non_empty_string);
         let memory_class = if !governance_required {
             None
         } else if normalized_gate.contains("correction") {
@@ -673,8 +780,7 @@ impl RunGraphStatus {
                 .to_string(),
             );
         }
-        blocker_codes =
-            crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+        blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
         let enforcement_state = if !governance_required {
             "not_required".to_string()
         } else if blocker_codes.is_empty() {
