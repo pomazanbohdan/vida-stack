@@ -118,6 +118,40 @@ fn authoritative_dispatch_blocker_codes(
     crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes)
 }
 
+fn terminal_completed_without_next_unit(
+    status: Option<&crate::state_store::RunGraphStatus>,
+) -> bool {
+    status.is_some_and(|status| {
+        status.status == "completed"
+            && status.lifecycle_stage == "closure_complete"
+            && status
+                .next_node
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+    })
+}
+
+fn explicit_task_binding_matches_status(
+    binding: Option<&crate::state_store::RunGraphContinuationBinding>,
+    status: Option<&crate::state_store::RunGraphStatus>,
+) -> bool {
+    let Some(binding) = binding else {
+        return false;
+    };
+    let Some(status) = status else {
+        return false;
+    };
+    binding.run_id == status.run_id
+        && binding.binding_source == "explicit_continuation_bind_task"
+        && binding
+            .active_bounded_unit
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            == Some("task_graph_task")
+}
+
 fn build_taskflow_next_decision(
     ready_head: Option<&crate::state_store::TaskRecord>,
     recovery_holds_active_bound_run: bool,
@@ -125,20 +159,28 @@ fn build_taskflow_next_decision(
     latest_runtime_consumption_kind: Option<&str>,
     scope_task_id: Option<&str>,
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+    explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
 ) -> TaskflowNextDecision {
     let ready_head = ready_head.map(graph_summary_task_ref);
+    let completed_without_explicit_next_unit =
+        terminal_completed_without_next_unit(latest_run_graph_status)
+            && !explicit_task_binding_matches_status(explicit_binding, latest_run_graph_status);
+    let admissibility_gate = if recovery_holds_active_bound_run {
+        "delegated_cycle_runtime_gate".to_string()
+    } else if completed_without_explicit_next_unit {
+        "completed_without_explicit_next_bounded_unit".to_string()
+    } else if ready_head.is_some() {
+        "ready_now".to_string()
+    } else {
+        "no_ready_task".to_string()
+    };
     let mut blocker_codes = Vec::<String>::new();
     let mut next_actions = Vec::<String>::new();
     let candidate_task_context = TaskflowNextCandidateContext {
         ready_head: ready_head.clone(),
-        admissible_now: !recovery_holds_active_bound_run,
-        admissibility_gate: if recovery_holds_active_bound_run {
-            "delegated_cycle_runtime_gate".to_string()
-        } else if ready_head.is_some() {
-            "ready_now".to_string()
-        } else {
-            "no_ready_task".to_string()
-        },
+        admissible_now: !(recovery_holds_active_bound_run || completed_without_explicit_next_unit),
+        admissibility_gate,
     };
 
     let (recommended_command, recommended_surface, primary_ready_task, why_not_now, next_action) =
@@ -195,6 +237,38 @@ fn build_taskflow_next_decision(
                     Some(next_action),
                 )
             }
+        } else if completed_without_explicit_next_unit {
+            let run_id = latest_run_graph_status
+                .map(|status| status.run_id.as_str())
+                .unwrap_or("<run-id>");
+            let next_action = TaskflowNextAction {
+                command: format!(
+                    "vida taskflow continuation bind {run_id} --task-id <task-id> --json"
+                ),
+                surface: "vida taskflow continuation bind".to_string(),
+                reason: "the latest run is already closure_complete and no explicit continuation binding is admissible yet".to_string(),
+            };
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::NoReadyTasks,
+            ) {
+                blocker_codes.push(code);
+            }
+            next_actions.push(format!(
+                "Do not continue by heuristic after closure; bind the next bounded unit explicitly with `{}`.",
+                next_action.command
+            ));
+            (
+                Some(next_action.command.clone()),
+                Some(next_action.surface.clone()),
+                None,
+                Some(TaskflowNextWhyNotNow {
+                    category: "completed_without_explicit_next_bounded_unit".to_string(),
+                    summary: "The latest run is closure_complete with no explicit admissible continuation binding, so `vida taskflow next` must fail closed.".to_string(),
+                    blocker_codes: blocker_codes.clone(),
+                    blocking_surface: Some("vida taskflow continuation bind".to_string()),
+                }),
+                Some(next_action),
+            )
         } else if let Some(task) = ready_head.clone() {
             let next_action = TaskflowNextAction {
                 command: format!("vida task show {} --json", task.id),
@@ -739,6 +813,16 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         },
         None => None,
     };
+    let explicit_binding = match store.as_ref() {
+        Some(store) => match store.latest_explicit_run_graph_continuation_binding().await {
+            Ok(summary) => summary,
+            Err(error) => {
+                eprintln!("Failed to read latest explicit continuation binding: {error}");
+                return ExitCode::from(1);
+            }
+        },
+        None => None,
+    };
 
     let recovery_holds_active_bound_run = recovery_holds_active_bound_run(recovery.as_ref());
     let decision = build_taskflow_next_decision(
@@ -748,6 +832,8 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         runtime_consumption.latest_kind.as_deref(),
         scope_task_id,
         dispatch.as_ref(),
+        latest_run_graph.as_ref(),
+        explicit_binding.as_ref(),
     );
     let payload = serde_json::json!({
         "surface": "vida taskflow next",
@@ -763,6 +849,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         "primary_ready_task": decision.primary_ready_task,
         "candidate_task_context": decision.candidate_task_context,
         "latest_run_graph": latest_run_graph,
+        "continuation_binding": explicit_binding,
         "recovery": recovery,
         "gate": gate,
         "dispatch": dispatch,
@@ -1343,6 +1430,8 @@ mod tests {
             Some("bundle-check"),
             Some("epic-1"),
             Some(&dispatch),
+            None,
+            None,
         );
 
         assert_eq!(decision.status, "blocked");
@@ -1378,8 +1467,16 @@ mod tests {
 
     #[test]
     fn taskflow_next_decision_reports_no_ready_task_with_explicit_next_action() {
-        let decision =
-            super::build_taskflow_next_decision(None, false, false, None, Some("epic-1"), None);
+        let decision = super::build_taskflow_next_decision(
+            None,
+            false,
+            false,
+            None,
+            Some("epic-1"),
+            None,
+            None,
+            None,
+        );
 
         assert_eq!(decision.status, "blocked");
         assert!(decision.primary_ready_task.is_none());
@@ -1406,6 +1503,49 @@ mod tests {
             .blocker_codes
             .iter()
             .any(|code| code == "no_ready_tasks"));
+    }
+
+    #[test]
+    fn taskflow_next_decision_fails_closed_after_closure_without_explicit_binding() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-closure",
+            "task-closure",
+            "implementation",
+        );
+        status.active_node = "closure".to_string();
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        let decision = super::build_taskflow_next_decision(
+            None,
+            false,
+            true,
+            Some("final"),
+            None,
+            None,
+            Some(&status),
+            None,
+        );
+
+        assert_eq!(decision.status, "blocked");
+        assert!(!decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "completed_without_explicit_next_bounded_unit"
+        );
+        assert_eq!(
+            decision
+                .why_not_now
+                .as_ref()
+                .map(|value| value.category.as_str()),
+            Some("completed_without_explicit_next_bounded_unit")
+        );
+        assert_eq!(
+            decision
+                .next_action
+                .as_ref()
+                .map(|value| value.command.as_str()),
+            Some("vida taskflow continuation bind run-closure --task-id <task-id> --json")
+        );
     }
 }
 
