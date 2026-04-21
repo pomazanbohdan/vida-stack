@@ -156,7 +156,7 @@ host_environment:
     }
 
     #[test]
-    fn selected_runtime_root_uses_first_enabled_system_without_hardcoded_codex_default() {
+    fn selected_runtime_root_uses_first_enabled_system_without_hardcoded_internal_default() {
         let config = serde_yaml::from_str::<serde_yaml::Value>(
             r#"
 host_environment:

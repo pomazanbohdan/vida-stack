@@ -2192,7 +2192,7 @@ mod tests {
     }
 
     #[test]
-    fn project_activator_accepts_host_cli_selection_and_materializes_codex_template() {
+    fn project_activator_accepts_host_cli_selection_and_materializes_selected_template() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -2373,7 +2373,7 @@ mod tests {
     }
 
     #[test]
-    fn project_activator_renders_codex_agent_files_from_overlay_and_keeps_template_contracts() {
+    fn project_activator_renders_host_agent_files_from_overlay_and_keeps_template_contracts() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
