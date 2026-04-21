@@ -62,9 +62,7 @@ fn governance_projection_next_actions(
                 .to_string(),
         );
     }
-    if memory_governance
-        .is_some_and(|projection| projection.enforcement_state == "blocked")
-    {
+    if memory_governance.is_some_and(|projection| projection.enforcement_state == "blocked") {
         next_actions.push(
             "Materialize consent and TTL linkage in the active run-graph handoff before rerunning `vida doctor`."
                 .to_string(),
@@ -663,7 +661,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     }
                 };
             let latest_run_graph_approval_receipt = match latest_run_graph_status.as_ref() {
-                Some(status) => match store.run_graph_approval_delegation_receipt(&status.run_id).await
+                Some(status) => match store
+                    .run_graph_approval_delegation_receipt(&status.run_id)
+                    .await
                 {
                     Ok(summary) => summary,
                     Err(error) => {

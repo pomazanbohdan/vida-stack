@@ -1,6 +1,34 @@
 use super::*;
 use crate::task_cli_render::{print_task_bulk_reparent_result, print_task_direct_children};
 
+#[derive(Debug, Clone)]
+pub(crate) struct TaskReadMetadata {
+    pub mode: &'static str,
+    pub degraded: bool,
+    pub snapshot_path: Option<String>,
+    pub detail: &'static str,
+}
+
+impl TaskReadMetadata {
+    fn authoritative_live() -> Self {
+        Self {
+            mode: "authoritative_live",
+            degraded: false,
+            snapshot_path: None,
+            detail: "served from the authoritative state store",
+        }
+    }
+
+    fn snapshot(path: &std::path::Path, detail: &'static str) -> Self {
+        Self {
+            mode: "snapshot",
+            degraded: true,
+            snapshot_path: Some(path.display().to_string()),
+            detail,
+        }
+    }
+}
+
 fn task_json_success_status() -> &'static str {
     crate::contract_profile_adapter::release_contract_status(true)
 }
@@ -81,14 +109,63 @@ async fn load_task_snapshot_rows_with_retry(
     load_task_snapshot_rows(state_dir)
 }
 
+async fn load_task_snapshot_rows_snapshot_first(
+    state_dir: &std::path::Path,
+) -> Result<(Vec<state_store::TaskRecord>, TaskReadMetadata), state_store::StateStoreError> {
+    let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
+    match StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path) {
+        Ok(rows) => Ok((
+            rows,
+            TaskReadMetadata::snapshot(
+                &snapshot_path,
+                "served from canonical task snapshot evidence",
+            ),
+        )),
+        Err(snapshot_error) => match open_read_only_task_store(state_dir.to_path_buf()).await {
+            Ok(store) => store
+                .list_tasks(None, true)
+                .await
+                .map(|rows| (rows, TaskReadMetadata::authoritative_live())),
+            Err(live_error) if is_authoritative_state_lock_error(&live_error) => Err(live_error),
+            Err(live_error) => Err(live_error),
+        }
+        .map_err(|live_error| match snapshot_error {
+            state_store::StateStoreError::Io(_) => live_error,
+            other => other,
+        }),
+    }
+}
+
+fn resolve_task_from_rows(
+    rows: &[state_store::TaskRecord],
+    task_id_or_display_id: &str,
+) -> Result<state_store::TaskRecord, state_store::StateStoreError> {
+    if let Some(task) = rows.iter().find(|task| task.id == task_id_or_display_id) {
+        return Ok(task.clone());
+    }
+    if let Some(task) = rows
+        .iter()
+        .find(|task| task.display_id.as_deref() == Some(task_id_or_display_id))
+    {
+        return Ok(task.clone());
+    }
+    Err(state_store::StateStoreError::MissingTask {
+        task_id: task_id_or_display_id.to_string(),
+    })
+}
+
 async fn refresh_task_snapshot_after_mutation(
     store: &StateStore,
     surface: &str,
 ) -> Result<(), ExitCode> {
-    store.refresh_task_snapshot().await.map(|_| ()).map_err(|error| {
-        eprintln!("Failed to refresh canonical task snapshot after {surface}: {error}");
-        ExitCode::from(1)
-    })
+    store
+        .refresh_task_snapshot()
+        .await
+        .map(|_| ())
+        .map_err(|error| {
+            eprintln!("Failed to refresh canonical task snapshot after {surface}: {error}");
+            ExitCode::from(1)
+        })
 }
 
 pub(crate) async fn ready_tasks_scoped_read_only(
@@ -96,10 +173,7 @@ pub(crate) async fn ready_tasks_scoped_read_only(
     scope_task_id: Option<&str>,
 ) -> Result<Vec<state_store::TaskRecord>, state_store::StateStoreError> {
     match open_read_only_task_store(state_dir.clone()).await {
-        Ok(store) => {
-            let _ = store.refresh_task_snapshot().await;
-            store.ready_tasks_scoped(scope_task_id).await
-        }
+        Ok(store) => store.ready_tasks_scoped(scope_task_id).await,
         Err(error) if is_authoritative_state_lock_error(&error) => {
             let rows = load_task_snapshot_rows_with_retry(&state_dir).await?;
             StateStore::ready_tasks_scoped_from_rows(&rows, scope_task_id)
@@ -113,16 +187,45 @@ pub(crate) async fn task_dependency_tree_read_only(
     task_id: &str,
 ) -> Result<state_store::TaskDependencyTreeNode, state_store::StateStoreError> {
     match open_read_only_task_store(state_dir.clone()).await {
-        Ok(store) => {
-            let _ = store.refresh_task_snapshot().await;
-            store.task_dependency_tree(task_id).await
-        }
+        Ok(store) => store.task_dependency_tree(task_id).await,
         Err(error) if is_authoritative_state_lock_error(&error) => {
             let rows = load_task_snapshot_rows_with_retry(&state_dir).await?;
             StateStore::task_dependency_tree_from_rows(&rows, task_id)
         }
         Err(error) => Err(error),
     }
+}
+
+async fn task_list_snapshot_first(
+    state_dir: std::path::PathBuf,
+    status: Option<&str>,
+    include_all: bool,
+) -> Result<(Vec<state_store::TaskRecord>, TaskReadMetadata), state_store::StateStoreError> {
+    let (rows, metadata) = load_task_snapshot_rows_snapshot_first(&state_dir).await?;
+    let filtered = rows
+        .into_iter()
+        .filter(|task| include_all || task.status != "closed")
+        .filter(|task| status.map(|wanted| task.status == wanted).unwrap_or(true))
+        .collect();
+    Ok((filtered, metadata))
+}
+
+async fn task_show_snapshot_first(
+    state_dir: std::path::PathBuf,
+    task_id: &str,
+) -> Result<(state_store::TaskRecord, TaskReadMetadata), state_store::StateStoreError> {
+    let (rows, metadata) = load_task_snapshot_rows_snapshot_first(&state_dir).await?;
+    let task = resolve_task_from_rows(&rows, task_id)?;
+    Ok((task, metadata))
+}
+
+async fn task_ready_snapshot_first(
+    state_dir: std::path::PathBuf,
+    scope_task_id: Option<&str>,
+) -> Result<(Vec<state_store::TaskRecord>, TaskReadMetadata), state_store::StateStoreError> {
+    let (rows, metadata) = load_task_snapshot_rows_snapshot_first(&state_dir).await?;
+    let tasks = StateStore::ready_tasks_scoped_from_rows(&rows, scope_task_id)?;
+    Ok((tasks, metadata))
 }
 
 fn task_rows_as_values(
@@ -411,13 +514,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .unwrap_or_else(state_store::default_state_dir);
             match StateStore::open(state_dir).await {
                 Ok(store) => match store.import_tasks_from_jsonl(&command.path).await {
-                Ok(summary) => {
-                    if let Err(code) =
-                        refresh_task_snapshot_after_mutation(&store, "vida task import-jsonl").await
-                    {
-                        return code;
-                    }
-                    if command.json {
+                    Ok(summary) => {
+                        if let Err(code) =
+                            refresh_task_snapshot_after_mutation(&store, "vida task import-jsonl")
+                                .await
+                        {
+                            return code;
+                        }
+                        if command.json {
                             let mut summary_json = serde_json::json!({
                                 "status": task_json_success_status(),
                                 "source_path": summary.source_path,
@@ -463,11 +567,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     .await
                 {
                     Ok(()) => {
-                        if let Err(code) = refresh_task_snapshot_after_mutation(
-                            &store,
-                            "vida task replace-jsonl",
-                        )
-                        .await
+                        if let Err(code) =
+                            refresh_task_snapshot_after_mutation(&store, "vida task replace-jsonl")
+                                .await
                         {
                             return code;
                         }
@@ -528,22 +630,20 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
-                Ok(store) => match store
-                    .list_tasks(command.status.as_deref(), command.all)
-                    .await
-                {
-                    Ok(tasks) => {
-                        print_task_list(command.render, &tasks, command.summary, command.json);
-                        ExitCode::SUCCESS
-                    }
-                    Err(error) => {
-                        eprintln!("Failed to list tasks: {error}");
-                        ExitCode::from(1)
-                    }
-                },
+            match task_list_snapshot_first(state_dir, command.status.as_deref(), command.all).await
+            {
+                Ok((tasks, metadata)) => {
+                    print_task_list(
+                        command.render,
+                        &tasks,
+                        command.summary,
+                        command.json,
+                        Some(&metadata),
+                    );
+                    ExitCode::SUCCESS
+                }
                 Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
+                    eprintln!("Failed to list tasks: {error}");
                     ExitCode::from(1)
                 }
             }
@@ -552,63 +652,13 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
-                Ok(store) => match store.show_task(&command.task_id).await {
-                    Ok(task) => {
-                        print_task_show(command.render, &task, command.json);
-                        ExitCode::SUCCESS
-                    }
-                    Err(error) => {
-                        if !command.task_id.starts_with("vida-") {
-                            eprintln!("Failed to show task: {error}");
-                            return ExitCode::from(1);
-                        }
-                        match store.list_tasks(None, true).await {
-                            Ok(tasks) => match task_rows_as_values(&tasks) {
-                                Ok(rows) => {
-                                    let resolved =
-                                        crate::taskflow_task_bridge::resolve_task_id_by_display_id(
-                                            &rows,
-                                            &command.task_id,
-                                        );
-                                    if !resolved
-                                        .get("found")
-                                        .and_then(serde_json::Value::as_bool)
-                                        .unwrap_or(false)
-                                    {
-                                        eprintln!("Failed to show task: {error}");
-                                        return ExitCode::from(1);
-                                    }
-                                    let resolved_id = resolved
-                                        .get("task_id")
-                                        .and_then(serde_json::Value::as_str)
-                                        .unwrap_or_default()
-                                        .to_string();
-                                    match store.show_task(&resolved_id).await {
-                                        Ok(task) => {
-                                            print_task_show(command.render, &task, command.json);
-                                            ExitCode::SUCCESS
-                                        }
-                                        Err(resolved_error) => {
-                                            eprintln!("Failed to show task: {resolved_error}");
-                                            ExitCode::from(1)
-                                        }
-                                    }
-                                }
-                                Err(render_error) => {
-                                    eprintln!("Failed to show task: {render_error}");
-                                    ExitCode::from(1)
-                                }
-                            },
-                            Err(list_error) => {
-                                eprintln!("Failed to show task: {list_error}");
-                                ExitCode::from(1)
-                            }
-                        }
-                    }
-                },
+            match task_show_snapshot_first(state_dir, &command.task_id).await {
+                Ok((task, metadata)) => {
+                    print_task_show(command.render, &task, command.json, Some(&metadata));
+                    ExitCode::SUCCESS
+                }
                 Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
+                    eprintln!("Failed to show task: {error}");
                     ExitCode::from(1)
                 }
             }
@@ -638,24 +688,19 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
-                Ok(store) => match store.ready_tasks_scoped(command.scope.as_deref()).await {
-                    Ok(tasks) => {
-                        print_task_ready(
-                            command.render,
-                            command.scope.as_deref(),
-                            &tasks,
-                            command.json,
-                        );
-                        ExitCode::SUCCESS
-                    }
-                    Err(error) => {
-                        eprintln!("Failed to compute ready tasks: {error}");
-                        ExitCode::from(1)
-                    }
-                },
+            match task_ready_snapshot_first(state_dir, command.scope.as_deref()).await {
+                Ok((tasks, metadata)) => {
+                    print_task_ready(
+                        command.render,
+                        command.scope.as_deref(),
+                        &tasks,
+                        command.json,
+                        Some(&metadata),
+                    );
+                    ExitCode::SUCCESS
+                }
                 Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
+                    eprintln!("Failed to compute ready tasks: {error}");
                     ExitCode::from(1)
                 }
             }
@@ -835,7 +880,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let feedback_source = command.source.as_deref().unwrap_or("vida task close");
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.close_task(&command.task_id, &command.reason).await {
-                Ok(task) => {
+                    Ok(task) => {
                         if let Err(code) =
                             refresh_task_snapshot_after_mutation(&store, "vida task close").await
                         {
@@ -1085,11 +1130,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         .await
                     {
                         Ok(dependency) => {
-                            if let Err(code) = refresh_task_snapshot_after_mutation(
-                                &store,
-                                "vida task dep add",
-                            )
-                            .await
+                            if let Err(code) =
+                                refresh_task_snapshot_after_mutation(&store, "vida task dep add")
+                                    .await
                             {
                                 return code;
                             }
@@ -1127,11 +1170,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         .await
                     {
                         Ok(dependency) => {
-                            if let Err(code) = refresh_task_snapshot_after_mutation(
-                                &store,
-                                "vida task dep remove",
-                            )
-                            .await
+                            if let Err(code) =
+                                refresh_task_snapshot_after_mutation(&store, "vida task dep remove")
+                                    .await
                             {
                                 return code;
                             }

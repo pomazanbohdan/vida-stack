@@ -1,4 +1,54 @@
 use super::*;
+use std::fs::OpenOptions;
+use std::os::fd::AsRawFd;
+
+const AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT: usize = 80;
+const AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS: u64 = 25;
+
+struct AuthoritativeOpenGuard {
+    file: std::fs::File,
+}
+
+impl AuthoritativeOpenGuard {
+    async fn acquire(root: &Path) -> Result<Self, StateStoreError> {
+        let guard_path = root.join(".vida-authoritative-open.guard");
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&guard_path)?;
+        for attempt in 0..AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT {
+            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if result == 0 {
+                return Ok(Self { file });
+            }
+            let error = std::io::Error::last_os_error();
+            let would_block = matches!(
+                error.raw_os_error(),
+                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+            );
+            if would_block && attempt + 1 < AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT {
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS,
+                ))
+                .await;
+                continue;
+            }
+            return Err(StateStoreError::Io(error));
+        }
+
+        Err(StateStoreError::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timed out while waiting for authoritative datastore access serialization guard",
+        )))
+    }
+}
+
+impl Drop for AuthoritativeOpenGuard {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
 
 pub(super) fn state_schema_document() -> String {
     let storage_schema = SurrealStoreTarget::new(DEFAULT_STATE_DIR).bootstrap_schema_document();
@@ -16,6 +66,7 @@ impl StateStore {
 
     pub async fn open(root: PathBuf) -> Result<Self, StateStoreError> {
         fs::create_dir_all(&root)?;
+        let _guard = AuthoritativeOpenGuard::acquire(&root).await?;
 
         for attempt in 0..80 {
             match Self::open_once(root.clone()).await {
@@ -39,6 +90,7 @@ impl StateStore {
         if !root.exists() {
             return Err(StateStoreError::MissingStateDir(root));
         }
+        let _guard = AuthoritativeOpenGuard::acquire(&root).await?;
 
         for attempt in 0..80 {
             match Self::open_existing_once(root.clone()).await {

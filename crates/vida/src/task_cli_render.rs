@@ -8,6 +8,39 @@ use crate::state_store::{
 };
 use crate::{print_surface_header, print_surface_line, RenderMode};
 
+fn task_read_metadata_value(
+    metadata: Option<&crate::task_surface::TaskReadMetadata>,
+) -> serde_json::Value {
+    metadata.map_or_else(
+        || serde_json::json!(null),
+        |metadata| {
+            serde_json::json!({
+                "mode": metadata.mode,
+                "degraded": metadata.degraded,
+                "snapshot_path": metadata.snapshot_path,
+                "detail": metadata.detail,
+            })
+        },
+    )
+}
+
+fn print_task_read_metadata(
+    render: RenderMode,
+    metadata: Option<&crate::task_surface::TaskReadMetadata>,
+) {
+    let Some(metadata) = metadata else {
+        return;
+    };
+    print_surface_line(render, "state access", metadata.mode);
+    if metadata.degraded {
+        print_surface_line(render, "degraded read", "yes");
+    }
+    print_surface_line(render, "read detail", metadata.detail);
+    if let Some(snapshot_path) = metadata.snapshot_path.as_deref() {
+        print_surface_line(render, "snapshot path", snapshot_path);
+    }
+}
+
 fn build_pass_operator_surface_payload(
     surface: &str,
     extra_fields: serde_json::Value,
@@ -76,11 +109,13 @@ pub(crate) fn print_task_list(
     tasks: &[TaskRecord],
     summary_only: bool,
     as_json: bool,
+    read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
 ) {
     let payload = if summary_only {
         build_pass_operator_surface_payload(
             "vida task list",
             serde_json::json!({
+                "state_access": task_read_metadata_value(read_metadata),
                 "view": "summary",
                 "task_count": tasks.len(),
                 "tasks": tasks.iter().map(|task| serde_json::json!({
@@ -97,6 +132,7 @@ pub(crate) fn print_task_list(
         build_pass_operator_surface_payload(
             "vida task list",
             serde_json::json!({
+                "state_access": task_read_metadata_value(read_metadata),
                 "view": "full",
                 "task_count": tasks.len(),
                 "tasks": tasks,
@@ -112,6 +148,7 @@ pub(crate) fn print_task_list(
     }
 
     print_surface_header(render, "vida task");
+    print_task_read_metadata(render, read_metadata);
     if summary_only {
         print_surface_line(render, "view", "summary");
     }
@@ -125,10 +162,12 @@ pub(crate) fn print_task_ready(
     scope_task_id: Option<&str>,
     tasks: &[TaskRecord],
     as_json: bool,
+    read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
 ) {
     let payload = build_pass_operator_surface_payload(
         "vida task ready",
         serde_json::json!({
+            "state_access": task_read_metadata_value(read_metadata),
             "scope_task_id": scope_task_id,
             "ready_count": tasks.len(),
             "tasks": tasks,
@@ -143,6 +182,7 @@ pub(crate) fn print_task_ready(
     }
 
     print_surface_header(render, "vida task ready");
+    print_task_read_metadata(render, read_metadata);
     if let Some(scope_task_id) = scope_task_id {
         print_surface_line(render, "scope task", scope_task_id);
     }
@@ -157,10 +197,16 @@ pub(crate) fn print_task_ready(
     }
 }
 
-pub(crate) fn print_task_show(render: RenderMode, task: &TaskRecord, as_json: bool) {
+pub(crate) fn print_task_show(
+    render: RenderMode,
+    task: &TaskRecord,
+    as_json: bool,
+    read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
+) {
     let payload = build_pass_operator_surface_payload(
         "vida task show",
         serde_json::json!({
+            "state_access": task_read_metadata_value(read_metadata),
             "task_id": task.id,
             "task": task,
         }),
@@ -174,6 +220,7 @@ pub(crate) fn print_task_show(render: RenderMode, task: &TaskRecord, as_json: bo
     }
 
     print_task_record(render, "vida task show", task);
+    print_task_read_metadata(render, read_metadata);
 }
 
 pub(crate) fn print_task_progress(
@@ -845,7 +892,10 @@ mod tests {
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["shared_fields"]["status"], "pass");
         assert_eq!(payload["operator_contracts"]["status"], "pass");
-        assert_eq!(payload["artifact_refs"]["surface"], "vida task export-jsonl");
+        assert_eq!(
+            payload["artifact_refs"]["surface"],
+            "vida task export-jsonl"
+        );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
@@ -870,7 +920,10 @@ mod tests {
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["shared_fields"]["status"], "pass");
         assert_eq!(payload["operator_contracts"]["status"], "pass");
-        assert_eq!(payload["artifact_refs"]["surface"], "vida task critical-path");
+        assert_eq!(
+            payload["artifact_refs"]["surface"],
+            "vida task critical-path"
+        );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 }

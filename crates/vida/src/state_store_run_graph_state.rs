@@ -276,8 +276,14 @@ impl RunGraphReplayLineageReceipt {
             ("lineage_kind", self.lineage_kind.as_str()),
             ("replay_scope", self.replay_scope.as_str()),
             ("origin_checkpoint_ref", self.origin_checkpoint_ref.as_str()),
-            ("source_dispatch_target", self.source_dispatch_target.as_str()),
-            ("resolved_dispatch_target", self.resolved_dispatch_target.as_str()),
+            (
+                "source_dispatch_target",
+                self.source_dispatch_target.as_str(),
+            ),
+            (
+                "resolved_dispatch_target",
+                self.resolved_dispatch_target.as_str(),
+            ),
             ("resolved_task_id", self.resolved_task_id.as_str()),
             ("checkpoint_kind", self.checkpoint_kind.as_str()),
             ("resume_target", self.resume_target.as_str()),

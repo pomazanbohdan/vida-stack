@@ -2263,10 +2263,7 @@ mod tests {
             view["normal_work_defaults"]["local_agent_guide"],
             DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC
         );
-        assert_eq!(
-            view["project_docs"]["agent_configuration_guide"],
-            true
-        );
+        assert_eq!(view["project_docs"]["agent_configuration_guide"], true);
         assert!(view["normal_work_defaults"]
             .get("local_codex_guide")
             .is_none());

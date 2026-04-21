@@ -99,8 +99,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[tokio::test]
-    async fn launcher_activation_snapshot_write_accepts_empty_source_config_path_as_provenance_only()
-     {
+    async fn launcher_activation_snapshot_write_accepts_empty_source_config_path_as_provenance_only(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())

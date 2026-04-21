@@ -662,11 +662,9 @@ async fn emit_runtime_consumption_resume_json(
             .map_err(|error| format!("Failed to encode runtime-consumption snapshot: {error}"))?,
     )
     .map_err(|error| format!("Failed to write runtime-consumption snapshot: {error}"))?;
-    if let Some(error) =
-        crate::operator_contracts::shared_operator_output_contract_parity_error(
-            &snapshot_with_operator_contracts,
-        )
-    {
+    if let Some(error) = crate::operator_contracts::shared_operator_output_contract_parity_error(
+        &snapshot_with_operator_contracts,
+    ) {
         return Err(format!(
             "Failed to preserve runtime-consumption resume operator-contract parity: {error}"
         ));
@@ -694,9 +692,7 @@ async fn emit_runtime_consumption_resume_json(
             "failure_control_evidence": snapshot_with_operator_contracts["failure_control_evidence"].clone(),
         });
         if let Some(error) =
-            crate::operator_contracts::shared_operator_output_contract_parity_error(
-                &output_payload,
-            )
+            crate::operator_contracts::shared_operator_output_contract_parity_error(&output_payload)
         {
             return Err(format!(
                 "Failed to preserve runtime-consumption resume output parity: {error}"
@@ -1082,16 +1078,10 @@ async fn record_run_graph_replay_lineage_receipt_for_resume(
         .run_graph_status(&resume.dispatch_receipt.run_id)
         .await
         .map_err(|error| {
-            format!(
-                "Failed to load run-graph status for replay lineage receipt: {error}"
-            )
+            format!("Failed to load run-graph status for replay lineage receipt: {error}")
         })?;
-    let receipt = build_run_graph_replay_lineage_receipt(
-        &status,
-        source_receipt,
-        resume,
-        lineage_kind,
-    )?;
+    let receipt =
+        build_run_graph_replay_lineage_receipt(&status, source_receipt, resume, lineage_kind)?;
     store
         .record_run_graph_replay_lineage_receipt(&receipt)
         .await
@@ -1771,6 +1761,17 @@ fn stale_in_flight_dispatch_preserves_internal_activation_view(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     result: &serde_json::Value,
 ) -> bool {
+    let explicit_external_dispatch_evidence = receipt
+        .dispatch_surface
+        .as_deref()
+        .is_some_and(|value| value.starts_with("external_cli:"))
+        || result["surface"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("external_cli:"))
+        || result["backend_dispatch"]["backend_class"].as_str() == Some("external_cli");
+    if explicit_external_dispatch_evidence {
+        return false;
+    }
     receipt.selected_backend.as_deref() == Some("internal_subagents")
         || receipt
             .dispatch_surface
@@ -1784,6 +1785,43 @@ fn stale_in_flight_dispatch_preserves_internal_activation_view(
             receipt.dispatch_packet_path.as_deref(),
             result,
         )
+}
+
+fn blocked_external_dispatch_artifact_mismatched_as_internal_activation(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    result: &serde_json::Value,
+) -> bool {
+    if receipt.dispatch_status != "blocked"
+        || receipt.blocker_code.as_deref() != Some("internal_activation_view_only")
+        || result["execution_state"].as_str() != Some("blocked")
+        || result["blocker_code"].as_str() != Some("internal_activation_view_only")
+    {
+        return false;
+    }
+    let selected_backend = receipt
+        .selected_backend
+        .as_deref()
+        .or_else(|| result["selected_backend"].as_str());
+    let Some(selected_backend) = selected_backend
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    if selected_backend == "internal_subagents" {
+        return false;
+    }
+    receipt
+        .dispatch_surface
+        .as_deref()
+        .is_some_and(|value| value.starts_with("external_cli:"))
+        || result["surface"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("external_cli:"))
+        || result["backend_dispatch"]["backend_class"].as_str() == Some("external_cli")
+        || (selected_backend.ends_with("_cli")
+            && result["lane_execution_receipt_artifact"]["carrier_id"].as_str()
+                == Some(selected_backend))
 }
 
 fn dispatch_packet_indicates_internal_activation_view(
@@ -1846,7 +1884,12 @@ fn normalize_stale_in_flight_dispatch_receipt(
 ) -> Result<bool, String> {
     let timeout_blocked_receipt = receipt.dispatch_status == "blocked"
         && receipt.blocker_code.as_deref() == Some("timeout_without_takeover_authority");
-    if receipt.dispatch_status != "executing" && !timeout_blocked_receipt {
+    let blocked_internal_activation_receipt = receipt.dispatch_status == "blocked"
+        && receipt.blocker_code.as_deref() == Some("internal_activation_view_only");
+    if receipt.dispatch_status != "executing"
+        && !timeout_blocked_receipt
+        && !blocked_internal_activation_receipt
+    {
         return Ok(false);
     }
     let Some(result_path) = receipt
@@ -1860,6 +1903,14 @@ fn normalize_stale_in_flight_dispatch_receipt(
     let Some(result) = crate::read_json_file_if_present(std::path::Path::new(result_path)) else {
         return Ok(false);
     };
+    if blocked_external_dispatch_artifact_mismatched_as_internal_activation(receipt, &result) {
+        super::apply_dispatch_execution_timeout_to_receipt(
+            state_root,
+            receipt,
+            STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS as u64,
+        )?;
+        return Ok(true);
+    }
     if timeout_blocked_receipt
         && stale_in_flight_dispatch_preserves_internal_activation_view(receipt, &result)
         && result["blocker_code"].as_str() == Some("timeout_without_takeover_authority")
@@ -2278,8 +2329,8 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
             latest_run_graph_dispatch_receipt.as_ref(),
             continuation_binding_evidence_ambiguous,
         );
-    let terminal_completed_run = status.status == "completed"
-        && status.lifecycle_stage == "closure_complete";
+    let terminal_completed_run =
+        status.status == "completed" && status.lifecycle_stage == "closure_complete";
     if terminal_completed_run {
         return Err(format!(
             "Latest continuation binding for run `{}` is ambiguous. Either bind the next bounded unit explicitly with `vida taskflow continuation bind {} --task-id <task-id> --json` or pass `--run-id {}` to refresh that specific run.",
@@ -2469,12 +2520,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
         )
         .await?
         {
-            let resume = build_resume_inputs(
-                bridged_receipt,
-                packet_path,
-                packet,
-                role_selection,
-            );
+            let resume = build_resume_inputs(bridged_receipt, packet_path, packet, role_selection);
             record_run_graph_replay_lineage_receipt_for_resume(
                 store,
                 &receipt,
@@ -2543,7 +2589,9 @@ pub(crate) async fn resolve_runtime_consumption_resume_inputs(
         let latest_receipt = store
             .latest_run_graph_dispatch_receipt_summary()
             .await
-            .map_err(|error| format!("Failed to read latest run-graph dispatch receipt: {error}"))?;
+            .map_err(|error| {
+                format!("Failed to read latest run-graph dispatch receipt: {error}")
+            })?;
         if let Some(status) = store
             .latest_run_graph_status()
             .await
@@ -3393,11 +3441,13 @@ pub(crate) async fn run_taskflow_consume_advance_command(
 #[cfg(test)]
 mod tests {
     use super::{
+        blocked_external_dispatch_artifact_mismatched_as_internal_activation,
         build_failure_control_evidence, canonical_resume_dispatch_status,
         canonical_resume_lane_status, canonical_resume_string_array_entries,
         dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
-        dispatch_receipt_retry_eligible, normalize_runtime_dispatch_packet,
-        normalize_stale_in_flight_dispatch_receipt, persisted_dispatch_packet_lineage_task_id,
+        dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
+        normalize_runtime_dispatch_packet, normalize_stale_in_flight_dispatch_receipt,
+        persisted_dispatch_packet_lineage_task_id,
         prefer_ready_downstream_packet_over_active_result, prepare_explicit_resume_retry_artifact,
         primary_backend_for_dispatch_receipt, read_dispatch_packet,
         reconcile_blocked_implementer_timeout_with_tracked_close_evidence,
@@ -3407,7 +3457,6 @@ mod tests {
         resume_packet_ready_blocker_parity_error, retry_backend_for_dispatch_receipt,
         runtime_consumption_resume_blocker_code, runtime_consumption_resume_receipt_blocker_codes,
         runtime_consumption_resume_receipt_next_actions,
-        emit_runtime_consumption_resume_json,
         runtime_consumption_snapshot_has_failure_control_evidence,
         should_refresh_resumed_downstream_preview, sync_run_graph_after_retry_artifact,
         validate_run_graph_resume_state, validate_run_graph_resume_state_for_downstream_packet,
@@ -5058,6 +5107,110 @@ agent_system:
     }
 
     #[test]
+    fn normalize_blocked_external_internal_activation_mismatch_reclassifies_generic_timeout() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-external-internal-activation-mismatch-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&root).expect("create temp root");
+        let packet_path = root.join("dispatch-packet.json");
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "execution_truth": {
+                    "effective_selected_backend": "internal_subagents",
+                    "route_primary_backend": "hermes_cli",
+                    "route_primary_backend_class": "external_cli"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write stale packet");
+        let result_path = root.join("dispatch-result.json");
+        fs::write(
+            &result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "surface": "vida agent-init",
+                "status": "blocked",
+                "execution_state": "blocked",
+                "blocker_code": "internal_activation_view_only",
+                "selected_backend": "hermes_cli",
+                "lane_execution_receipt_artifact": {
+                    "carrier_id": "hermes_cli"
+                },
+                "recorded_at": "2026-04-21T12:39:12Z",
+                "source_dispatch_packet_path": packet_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write blocked mismatched result");
+
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-external-internal-activation-mismatch".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-21T12:14:39Z".to_string(),
+        };
+
+        let result = crate::read_json_file_if_present(&result_path).expect("result should exist");
+        assert!(
+            blocked_external_dispatch_artifact_mismatched_as_internal_activation(&receipt, &result)
+        );
+        assert!(
+            normalize_stale_in_flight_dispatch_receipt(&root, &mut receipt)
+                .expect("external mismatch normalization should succeed")
+        );
+        assert_eq!(
+            receipt.blocker_code.as_deref(),
+            Some("timeout_without_takeover_authority")
+        );
+        let normalized_result = crate::read_json_file_if_present(std::path::Path::new(
+            receipt
+                .dispatch_result_path
+                .as_deref()
+                .expect("normalized result path should exist"),
+        ))
+        .expect("normalized result should exist");
+        assert_eq!(normalized_result["execution_state"], "blocked");
+        assert_eq!(
+            normalized_result["blocker_code"],
+            "timeout_without_takeover_authority"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn normalize_stale_receipt_uses_dispatch_packet_to_preserve_internal_activation_view() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -5151,6 +5304,108 @@ agent_system:
         assert_eq!(
             normalized_result["blocker_code"],
             "internal_activation_view_only"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn normalize_stale_receipt_keeps_generic_timeout_when_external_evidence_overrides_internal_packet_hint(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-stale-external-timeout-dominates-packet-hint-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&root).expect("create temp root");
+        let packet_path = root.join("dispatch-packet.json");
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "host_runtime": {
+                    "selected_cli_execution_class": "internal"
+                },
+                "effective_execution_posture": {
+                    "effective_posture_kind": "internal",
+                    "selected_execution_class": "internal"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write dispatch packet");
+        let result_path = root.join("dispatch-result.json");
+        fs::write(
+            &result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "surface": "external_cli:hermes_cli",
+                "backend_dispatch": {
+                    "backend_class": "external_cli",
+                    "backend_id": "hermes_cli"
+                },
+                "status": "blocked",
+                "execution_state": "blocked",
+                "blocker_code": "timeout_without_takeover_authority",
+                "recorded_at": "2026-04-21T13:28:23Z",
+                "source_dispatch_packet_path": packet_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write blocked timeout result");
+
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-external-timeout-overrides-internal-packet".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:hermes_cli".to_string()),
+            dispatch_command: Some("hermes chat".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-21T12:14:39Z".to_string(),
+        };
+
+        assert!(
+            !normalize_stale_in_flight_dispatch_receipt(&root, &mut receipt)
+                .expect("external timeout normalization should succeed")
+        );
+        assert_eq!(
+            receipt.blocker_code.as_deref(),
+            Some("timeout_without_takeover_authority")
+        );
+        let normalized_result = crate::read_json_file_if_present(std::path::Path::new(
+            receipt
+                .dispatch_result_path
+                .as_deref()
+                .expect("normalized result path should exist"),
+        ))
+        .expect("normalized result should exist");
+        assert_eq!(
+            normalized_result["blocker_code"],
+            "timeout_without_takeover_authority"
         );
 
         let _ = fs::remove_dir_all(&root);

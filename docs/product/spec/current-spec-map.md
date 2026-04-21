@@ -111,9 +111,14 @@ Companion rule:
 22. [repair-fail-closed-resume-closure-truth-design.md](repair-fail-closed-resume-closure-truth-design.md)
     Config families: fail-closed resume-time packet reconciliation, persisted specification packet repair toward tracked design-doc scope, and active A1 recovery-truth closure for stale dispatch lineage
 23. [lane-supersede-and-shared-truth-envelope-design.md](lane-supersede-and-shared-truth-envelope-design.md)
-    Config families: explicit lane supersession mutation, shared lane-envelope truth derivation across `show`/`exception-takeover`/`supersede`, admissible-versus-active takeover posture, and recovery-adjacent lane-command discoverability
+   Config families: explicit lane supersession mutation, shared lane-envelope truth derivation across `show`/`exception-takeover`/`supersede`, admissible-versus-active takeover posture, and recovery-adjacent lane-command discoverability
 24. [implementation-backend-admissibility-and-selection-truth-design.md](implementation-backend-admissibility-and-selection-truth-design.md)
-    Config families: implementation-lane backend admissibility truth, canonical selected-backend resolution, route-primary versus effective-backend diagnostic split, and packet/summary/status projection alignment
+   Config families: implementation-lane backend admissibility truth, canonical selected-backend resolution, route-primary versus effective-backend diagnostic split, and packet/summary/status projection alignment
+25. [coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md](coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md)
+   Config families: coach-lane downstream backend canonicalization, explicit review-route preference over inherited internal fallback, mixed-lane backend lineage, and runtime dispatch receipt/status alignment
+26. [blocked-external-coach-artifact-truth-not-reconciled-design.md](blocked-external-coach-artifact-truth-not-reconciled-design.md)
+   Config families: blocked dispatch semantic-mismatch detection, run-graph projection stale truth beyond executing-only timeout cases, consume-resume continuation repair for obsolete blocked artifacts, and lane/status operator parity for mismatched blocked evidence
+   Registered path: `docs/product/spec/blocked-external-coach-artifact-truth-not-reconciled-design.md`
 
 ### Project And Packaging
 
@@ -221,31 +226,46 @@ Companion rule:
 29. [authoritative-state-lock-recovery-design.md](authoritative-state-lock-recovery-design.md)
    Config families: bounded authoritative state-store lock-lifetime reduction during agent-lane dispatch, lock-specific remediation hints, and fail-closed long-lived-state recovery posture without silent lock cleanup
    Registered path: `docs/product/spec/authoritative-state-lock-recovery-design.md`
-30. [launcher-decomposition-and-code-hygiene-design.md](launcher-decomposition-and-code-hygiene-design.md)
+30. [serialize-authoritative-state-access-lock-mitigation-design.md](serialize-authoritative-state-access-lock-mitigation-design.md)
+   Config families: bounded authoritative state-access serialization, snapshot-first read-surface mitigation for lock contention, and explicit degraded-read truth for operator/task inspection surfaces
+   Registered path: `docs/product/spec/serialize-authoritative-state-access-lock-mitigation-design.md`
+31. [existing-design-implementation-routing-blocked-design.md](existing-design-implementation-routing-blocked-design.md)
+   Config families: bounded design-gate suppression for implementation-ready tasks, tracked-flow routing repair away from stale spec-pack re-entry, and implementation-oriented dispatch truth for already finalized design-backed work
+   Registered path: `docs/product/spec/existing-design-implementation-routing-blocked-design.md`
+32. [launcher-decomposition-and-code-hygiene-design.md](launcher-decomposition-and-code-hygiene-design.md)
    Config families: bounded launcher decomposition seams, large-file concentration reduction, dead-code and duplication validation, and proof-safe extraction planning for `crates/vida/**`
    Registered path: `docs/product/spec/launcher-decomposition-and-code-hygiene-design.md`
-31. [internal-codex-agent-execution-fail-closed-design.md](internal-codex-agent-execution-fail-closed-design.md)
+33. [internal-codex-agent-execution-fail-closed-design.md](internal-codex-agent-execution-fail-closed-design.md)
    Config families: bounded internal-host activation-view fail-closed semantics, truthful agent-lane execution state, root-session anti-bypass guidance, and runtime dispatch bridge hardening for Codex/internal execution
    Registered path: `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
-32. [taskflow-execution-semantics-and-scheduler-design.md](taskflow-execution-semantics-and-scheduler-design.md)
+34. [internal-dispatch-timeout-does-not-return-design.md](internal-dispatch-timeout-does-not-return-design.md)
+   Config families: bounded internal-host delegated handoff timeout return semantics, prompt blocked receipt/result truth for stranded implementer handoffs, and runtime dispatch wrapper hardening beyond in-flight `executing` artifacts
+   Registered path: `docs/product/spec/internal-dispatch-timeout-does-not-return-design.md`
+35. [coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md](coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md)
+   Config families: bounded coach-lane backend canonicalization, explicit review-route preference over inherited internal fallback, mixed-lane backend lineage, and runtime dispatch receipt/status alignment
+   Registered path: `docs/product/spec/coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md`
+36. [external-coach-timeout-truth-does-not-return-cleanly-design.md](external-coach-timeout-truth-does-not-return-cleanly-design.md)
+   Config families: bounded external coach timeout truth, timeout classification by actual backend class, bounded parent return after kill-after grace, and external dispatch artifact/status alignment
+   Registered path: `docs/product/spec/external-coach-timeout-truth-does-not-return-cleanly-design.md`
+37. [taskflow-execution-semantics-and-scheduler-design.md](taskflow-execution-semantics-and-scheduler-design.md)
    Config families: bounded TaskFlow task execution semantics schema, graph-plus-semantics scheduler projection, operator-visible parallel-admission truth, and fail-closed compatibility defaults for legacy tasks
    Registered path: `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
-33. [external-cli-carrier-hardening-design.md](external-cli-carrier-hardening-design.md)
+38. [external-cli-carrier-hardening-design.md](external-cli-carrier-hardening-design.md)
    Config families: bounded external CLI carrier dispatch pinning, carrier readiness/status classification, normalized opencode/kilo/vibe project profiles, and operator-visible smoke-proof routing for sandbox/auth/model activation
    Registered path: `docs/product/spec/external-cli-carrier-hardening-design.md`
-34. [continuation-binding-fail-closed-hardening-design.md](continuation-binding-fail-closed-hardening-design.md)
+36. [continuation-binding-fail-closed-hardening-design.md](continuation-binding-fail-closed-hardening-design.md)
    Config families: bounded continuation-binding fail-closed enforcement, explicit active-bounded-unit init/status surfaces, ambiguity blocker vocabulary, and generated host guidance against self-selecting adjacent work
    Registered path: `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
-35. [continuation-and-seeded-dispatch-bridge-design.md](continuation-and-seeded-dispatch-bridge-design.md)
+37. [continuation-and-seeded-dispatch-bridge-design.md](continuation-and-seeded-dispatch-bridge-design.md)
    Config families: bounded explicit continuation binding records, seeded run dispatch-init bridges, persisted dispatch-context rows, and packet render/inspect operator surfaces for lawful resume inputs
    Registered path: `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
-36. [lawful-closure-continuation-rebinding-design.md](lawful-closure-continuation-rebinding-design.md)
+38. [lawful-closure-continuation-rebinding-design.md](lawful-closure-continuation-rebinding-design.md)
    Config families: bounded explicit post-closure continuation rebinding, backlog-task continuation artifacts, completed-run summary admissibility, and fail-closed rejection of stale in-flight bindings
    Registered path: `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
-37. [export-canonical-operator-command-map-through-design.md](export-canonical-operator-command-map-through-design.md)
+39. [export-canonical-operator-command-map-through-design.md](export-canonical-operator-command-map-through-design.md)
    Config families: bounded operator command-family export through orchestrator-init and agent-init, help/discoverability alignment across root/task/taskflow surfaces, and canonical command-map parity between init views and primary help entrypoints
    Registered path: `docs/product/spec/export-canonical-operator-command-map-through-design.md`
-38. [reconciled-runtime-projection-output-design.md](reconciled-runtime-projection-output-design.md)
+40. [reconciled-runtime-projection-output-design.md](reconciled-runtime-projection-output-design.md)
    Config families: bounded reconciled runtime projection truth output, effective projection source/reason reporting, downstream target/blocker parity, stale-state suspicion, and next-lawful-operator-action surfaces across init/status/recovery/continue
    Registered path: `docs/product/spec/reconciled-runtime-projection-output-design.md`
 
@@ -303,5 +323,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-17T11:08:29.099890665Z
+updated_at: 2026-04-21T12:43:35.155658937Z
 changelog_ref: current-spec-map.changelog.jsonl

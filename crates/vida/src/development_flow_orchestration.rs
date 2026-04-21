@@ -680,8 +680,11 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
         .unwrap_or("verification");
     let feature_design_terms =
         crate::feature_delivery_design_terms(&selection.request.to_lowercase());
-    let requires_design_gate = selection.tracked_flow_entry.as_deref() == Some("spec-pack")
-        || !feature_design_terms.is_empty();
+    let suppress_fresh_design_gate =
+        selection.reason == "auto_existing_design_backed_implementation_request_override";
+    let requires_design_gate = !suppress_fresh_design_gate
+        && (selection.tracked_flow_entry.as_deref() == Some("spec-pack")
+            || !feature_design_terms.is_empty());
     let tracked_flow_bootstrap = if requires_design_gate {
         build_design_first_tracked_flow_bootstrap(&selection.request)
     } else {

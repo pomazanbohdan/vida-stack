@@ -192,40 +192,42 @@ pub(crate) fn canonical_closure_admission_artifact_json(
     request_text: &str,
     closure_admission: &RuntimeConsumptionClosureAdmission,
 ) -> serde_json::Value {
-    serde_json::to_value(crate::release1_contracts::CanonicalClosureAdmissionArtifact {
-        closure_admission_record: crate::release1_contracts::CanonicalClosureAdmissionRecord {
-            header: crate::release1_contracts::CanonicalArtifactHeader::new(
-                format!("closure-admission.{generated_at}"),
-                crate::release1_contracts::CanonicalArtifactType::ClosureAdmissionRecord,
-                generated_at.to_string(),
-                generated_at.to_string(),
-                closure_admission.status.clone(),
-                "taskflow_consume_final",
-                None,
-                Some(
+    serde_json::to_value(
+        crate::release1_contracts::CanonicalClosureAdmissionArtifact {
+            closure_admission_record: crate::release1_contracts::CanonicalClosureAdmissionRecord {
+                header: crate::release1_contracts::CanonicalArtifactHeader::new(
+                    format!("closure-admission.{generated_at}"),
+                    crate::release1_contracts::CanonicalArtifactType::ClosureAdmissionRecord,
+                    generated_at.to_string(),
+                    generated_at.to_string(),
+                    closure_admission.status.clone(),
+                    "taskflow_consume_final",
+                    None,
+                    Some(
+                        crate::release1_contracts::WorkflowClass::DelegatedDevelopmentPacket
+                            .as_str()
+                            .to_string(),
+                    ),
+                ),
+                release_scope: request_text.to_string(),
+                supported_workflow_classes: vec![
                     crate::release1_contracts::WorkflowClass::DelegatedDevelopmentPacket
                         .as_str()
                         .to_string(),
-                ),
-            ),
-            release_scope: request_text.to_string(),
-            supported_workflow_classes: vec![
-                crate::release1_contracts::WorkflowClass::DelegatedDevelopmentPacket
-                    .as_str()
-                    .to_string(),
-            ],
-            closure_decision: if closure_admission.admitted {
-                "admit".to_string()
-            } else {
-                "block".to_string()
+                ],
+                closure_decision: if closure_admission.admitted {
+                    "admit".to_string()
+                } else {
+                    "block".to_string()
+                },
+                decision_at: generated_at.to_string(),
+                decision_owner: closure_authority.to_string(),
+                evidence_bundle_refs: closure_admission.proof_surfaces.clone(),
+                open_risk_acceptance_ids: Vec::new(),
+                blocked_by: closure_admission.blockers.clone(),
             },
-            decision_at: generated_at.to_string(),
-            decision_owner: closure_authority.to_string(),
-            evidence_bundle_refs: closure_admission.proof_surfaces.clone(),
-            open_risk_acceptance_ids: Vec::new(),
-            blocked_by: closure_admission.blockers.clone(),
         },
-    })
+    )
     .expect("closure admission artifact should serialize")
 }
 
@@ -595,10 +597,7 @@ mod tests {
             &closure_admission,
         );
 
-        assert_eq!(
-            artifact["artifact_type"],
-            "closure_admission_record"
-        );
+        assert_eq!(artifact["artifact_type"], "closure_admission_record");
         assert_eq!(artifact["owner_surface"], "taskflow_consume_final");
         assert_eq!(artifact["workflow_class"], "delegated_development_packet");
         assert_eq!(artifact["release_scope"], "schema hardening slice");

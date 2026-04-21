@@ -2167,7 +2167,9 @@ mod tests {
             ),
             release_scope: "release-1-artifact-schema-slice".to_string(),
             supported_workflow_classes: vec![
-                WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string(),
+                WorkflowClass::DelegatedDevelopmentPacket
+                    .as_str()
+                    .to_string(),
                 WorkflowClass::IdentityOrPolicyChange.as_str().to_string(),
             ],
             closure_decision: "admit".to_string(),
@@ -2415,7 +2417,9 @@ mod tests {
             ),
             release_scope: "release-1-artifact-schema-slice".to_string(),
             supported_workflow_classes: vec![
-                WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string(),
+                WorkflowClass::DelegatedDevelopmentPacket
+                    .as_str()
+                    .to_string(),
                 WorkflowClass::IdentityOrPolicyChange.as_str().to_string(),
             ],
             closure_decision: "admit".to_string(),

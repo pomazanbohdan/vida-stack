@@ -334,6 +334,69 @@ fn next_lawful_operator_action_for_status(status: &RunGraphStatus) -> Option<Str
     ))
 }
 
+fn blocked_external_dispatch_artifact_mismatched_as_internal_activation(
+    receipt: &RunGraphDispatchReceipt,
+) -> bool {
+    if receipt.dispatch_status != "blocked"
+        || receipt.blocker_code.as_deref() != Some("internal_activation_view_only")
+    {
+        return false;
+    }
+    let Some(result_path) = receipt
+        .dispatch_result_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let Some(result) = crate::read_json_file_if_present(std::path::Path::new(result_path)) else {
+        return false;
+    };
+    if result["execution_state"].as_str() != Some("blocked")
+        || result["blocker_code"].as_str() != Some("internal_activation_view_only")
+    {
+        return false;
+    }
+    let selected_backend = receipt
+        .selected_backend
+        .as_deref()
+        .or_else(|| result["selected_backend"].as_str());
+    let Some(selected_backend) = selected_backend
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    if selected_backend == "internal_subagents" {
+        return false;
+    }
+    receipt
+        .dispatch_surface
+        .as_deref()
+        .is_some_and(|value| value.starts_with("external_cli:"))
+        || result["surface"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("external_cli:"))
+        || result["backend_dispatch"]["backend_class"].as_str() == Some("external_cli")
+        || (selected_backend.ends_with("_cli")
+            && result["lane_execution_receipt_artifact"]["carrier_id"].as_str()
+                == Some(selected_backend))
+}
+
+fn next_lawful_operator_action_for_projection(
+    status: &RunGraphStatus,
+    receipt: Option<&RunGraphDispatchReceipt>,
+) -> Option<String> {
+    if receipt.is_some_and(blocked_external_dispatch_artifact_mismatched_as_internal_activation) {
+        return Some(format!(
+            "vida taskflow consume continue --run-id {} --json",
+            status.run_id
+        ));
+    }
+    next_lawful_operator_action_for_status(status)
+}
+
 fn recommended_surface_for_command(command: &str) -> String {
     if command.starts_with("vida taskflow consume continue") {
         return "vida taskflow consume continue".to_string();
@@ -792,7 +855,10 @@ fn projection_truth_from_status_surface(
             status_surface_receipt.as_ref(),
         ),
         stale_state_suspected,
-        next_lawful_operator_action: next_lawful_operator_action_for_status(status),
+        next_lawful_operator_action: next_lawful_operator_action_for_projection(
+            status,
+            status_surface_receipt.as_ref(),
+        ),
         dispatch_receipt: None,
         continuation_binding: None,
     };
@@ -864,6 +930,9 @@ fn projection_stale_state_suspected(receipt: Option<&RunGraphDispatchReceipt>) -
     let Some(receipt) = receipt else {
         return false;
     };
+    if blocked_external_dispatch_artifact_mismatched_as_internal_activation(receipt) {
+        return true;
+    }
     if receipt.dispatch_status != "executing" {
         return false;
     }
@@ -920,7 +989,10 @@ pub(crate) async fn run_graph_projection_truth(
             dispatch_receipt.as_ref(),
         ),
         stale_state_suspected,
-        next_lawful_operator_action: next_lawful_operator_action_for_status(status),
+        next_lawful_operator_action: next_lawful_operator_action_for_projection(
+            status,
+            dispatch_receipt.as_ref(),
+        ),
         dispatch_receipt,
         continuation_binding,
     })
@@ -2478,6 +2550,106 @@ fn implementation_verification_outcome(status: &str) -> ImplementationVerificati
         .unwrap_or(ImplementationVerificationOutcome::UnexpectedStatus)
 }
 
+fn inferred_design_doc_path_for_task(task_id: &str) -> Option<String> {
+    let slug = task_id
+        .trim()
+        .strip_prefix("feature-")
+        .unwrap_or(task_id.trim());
+    if slug.is_empty() {
+        return None;
+    }
+    Some(format!("docs/product/spec/{slug}-design.md"))
+}
+
+async fn existing_design_backed_task_design_doc_path(
+    store: &StateStore,
+    task_id: &str,
+) -> Option<String> {
+    let task = store.show_task(task_id).await.ok()?;
+    if task.labels.iter().any(|label| {
+        matches!(
+            label.as_str(),
+            "spec-pack" | "documentation" | "work-pool-pack" | "dev-pack"
+        )
+    }) {
+        return None;
+    }
+    let design_doc_path = inferred_design_doc_path_for_task(task_id)?;
+    let design_doc = std::path::Path::new(&design_doc_path);
+    if !design_doc.is_file() {
+        return None;
+    }
+    let contents = std::fs::read_to_string(design_doc).ok()?;
+    let has_status_marker = contents.contains("Status:");
+    let has_bounded_file_set = contents.contains("## Bounded File Set");
+    (has_status_marker || has_bounded_file_set).then_some(design_doc_path)
+}
+
+fn inject_tracked_design_doc_path(execution_plan: &mut serde_json::Value, design_doc_path: &str) {
+    let Some(plan) = execution_plan.as_object_mut() else {
+        return;
+    };
+    let tracked_flow_bootstrap = plan
+        .entry("tracked_flow_bootstrap".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if tracked_flow_bootstrap.is_null() {
+        *tracked_flow_bootstrap = serde_json::json!({});
+    }
+    let Some(tracked_flow_bootstrap) = tracked_flow_bootstrap.as_object_mut() else {
+        return;
+    };
+    tracked_flow_bootstrap.insert(
+        "design_doc_path".to_string(),
+        serde_json::Value::String(design_doc_path.to_string()),
+    );
+}
+
+async fn try_existing_design_backed_implementation_override(
+    store: &StateStore,
+    task_id: &str,
+    request_text: &str,
+    selection: &mut RuntimeConsumptionLaneSelection,
+) -> Result<(), String> {
+    let Some(design_doc_path) = existing_design_backed_task_design_doc_path(store, task_id).await
+    else {
+        return Ok(());
+    };
+    if selection.conversational_mode.as_deref() != Some("scope_discussion")
+        || selection.tracked_flow_entry.as_deref() != Some("spec-pack")
+    {
+        return Ok(());
+    }
+
+    let normalized_request = request_text.to_lowercase();
+    let implementation_terms =
+        crate::runtime_lane_summary::explicit_implementation_request_terms(&normalized_request);
+    let bounded_repair_terms =
+        crate::runtime_lane_summary::explicit_bounded_code_repair_terms(&normalized_request);
+    let matched_terms = if !implementation_terms.is_empty() {
+        implementation_terms
+    } else if !bounded_repair_terms.is_empty() {
+        bounded_repair_terms
+    } else {
+        return Ok(());
+    };
+
+    selection.selected_role = "worker".to_string();
+    selection.conversational_mode = None;
+    selection.tracked_flow_entry = Some("dev-pack".to_string());
+    selection.allow_freeform_chat = false;
+    selection.matched_terms = matched_terms.clone();
+    selection.confidence = if matched_terms.len() >= 3 {
+        "high".to_string()
+    } else {
+        "medium".to_string()
+    };
+    selection.reason = "auto_existing_design_backed_implementation_request_override".to_string();
+    selection.execution_plan =
+        build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, selection);
+    inject_tracked_design_doc_path(&mut selection.execution_plan, &design_doc_path);
+    Ok(())
+}
+
 pub(crate) fn approval_delegation_transition_kind(status: &RunGraphStatus) -> Option<&'static str> {
     let route_bound_implementation =
         status.task_class == "implementation" && status.route_task_class == "implementation";
@@ -2513,7 +2685,14 @@ pub(crate) async fn derive_seeded_run_graph_status(
     task_id: &str,
     request_text: &str,
 ) -> Result<TaskflowRunGraphSeedPayload, String> {
-    let selection = build_runtime_lane_selection_with_store(store, request_text).await?;
+    let mut selection = build_runtime_lane_selection_with_store(store, request_text).await?;
+    try_existing_design_backed_implementation_override(
+        store,
+        task_id,
+        request_text,
+        &mut selection,
+    )
+    .await?;
     let execution_plan = &selection.execution_plan;
     let compiled_control = compiled_run_graph_control(store).await?;
     let is_conversation = selection.conversational_mode.is_some();
@@ -3771,6 +3950,7 @@ mod tests {
     use crate::runtime_dispatch_state::load_project_overlay_yaml_for_root;
     use crate::state_store::LauncherActivationSnapshot;
     use crate::temp_state::TempStateHarness;
+    use crate::test_cli_support::guard_current_dir;
     use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
     use std::path::Path;
@@ -4541,6 +4721,78 @@ mod tests {
         assert_eq!(payload.status.task_class, "scope_discussion");
         assert!(payload.role_selection.conversational_mode.is_some());
         assert_ne!(payload.status.route_task_class, "implementation");
+    }
+
+    #[tokio::test]
+    async fn derive_seeded_run_graph_prefers_worker_for_existing_design_backed_task() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open state store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "feature-existing-design-route-fix",
+                title: "Existing design route fix",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create implementation-ready task");
+
+        let design_doc_path = harness
+            .path()
+            .join("docs/product/spec/existing-design-route-fix-design.md");
+        std::fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
+            .expect("create design doc directory");
+        std::fs::write(
+            &design_doc_path,
+            "# Existing Design Route Fix\n\nStatus: `proposed`\n\n## Bounded File Set\n- `crates/vida/src/taskflow_run_graph.rs`\n",
+        )
+        .expect("write existing design doc");
+
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            "feature-existing-design-route-fix",
+            "Review the existing design document, keep the specification context, and then implement the bounded current-release code fix without opening a new spec pack.",
+        )
+        .await
+        .expect("seed should be generated");
+
+        assert_eq!(payload.role_selection.selected_role, "worker");
+        assert!(payload.role_selection.conversational_mode.is_none());
+        assert_eq!(
+            payload.role_selection.reason,
+            "auto_existing_design_backed_implementation_request_override"
+        );
+        assert_eq!(
+            payload.role_selection.tracked_flow_entry.as_deref(),
+            Some("dev-pack")
+        );
+        assert_eq!(payload.status.task_class, "implementation");
+        assert_eq!(payload.status.route_task_class, "implementation");
+        assert_eq!(
+            payload.role_selection.execution_plan["status"].as_str(),
+            Some("ready_for_runtime_routing")
+        );
+        assert_eq!(
+            payload.role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
+                .as_str(),
+            Some("docs/product/spec/existing-design-route-fix-design.md")
+        );
     }
 
     #[test]
@@ -5472,6 +5724,89 @@ mod tests {
         };
 
         assert!(!projection_stale_state_suspected(Some(&receipt)));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn projection_stale_state_suspected_for_blocked_external_internal_activation_mismatch() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-projection-blocked-mismatch-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        let result_path = root.join("dispatch-result.json");
+        std::fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "execution_state": "blocked",
+                "blocker_code": "internal_activation_view_only",
+                "selected_backend": "hermes_cli",
+                "lane_execution_receipt_artifact": {
+                    "carrier_id": "hermes_cli"
+                },
+                "recorded_at": "2026-04-21T12:39:12Z"
+            }))
+            .expect("dispatch result should encode"),
+        )
+        .expect("dispatch result should write");
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-projection-blocked-mismatch".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/projection-packet.json".to_string()),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-21T12:14:39Z".to_string(),
+        };
+
+        assert!(projection_stale_state_suspected(Some(&receipt)));
+        assert_eq!(
+            next_lawful_operator_action_for_projection(
+                &RunGraphStatus {
+                    run_id: "run-projection-blocked-mismatch".to_string(),
+                    task_id: "task-projection-blocked-mismatch".to_string(),
+                    task_class: "implementation".to_string(),
+                    active_node: "coach".to_string(),
+                    next_node: None,
+                    status: "blocked".to_string(),
+                    route_task_class: "implementation".to_string(),
+                    selected_backend: "hermes_cli".to_string(),
+                    lane_id: "coach_lane".to_string(),
+                    lifecycle_stage: "coach_blocked".to_string(),
+                    policy_gate: "validation_report_required".to_string(),
+                    handoff_state: "none".to_string(),
+                    context_state: "sealed".to_string(),
+                    checkpoint_kind: "execution_cursor".to_string(),
+                    resume_target: "none".to_string(),
+                    recovery_ready: false,
+                },
+                Some(&receipt),
+            )
+            .as_deref(),
+            Some("vida taskflow consume continue --run-id run-projection-blocked-mismatch --json")
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

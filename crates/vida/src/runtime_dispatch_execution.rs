@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, TryRecvError};
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
@@ -321,13 +321,31 @@ fn execute_wrapped_command(
                 }
             }
             Some(TimeoutProgress::TimedOut) => {
-                timeout_progress = Some(TimeoutProgress::TimedOut);
+                return Ok(ObservedCommandOutput {
+                    status: synthetic_timeout_exit_status(),
+                    stdout: stdout.take().unwrap_or_default(),
+                    stderr: stderr.take().unwrap_or_default(),
+                    timed_out: true,
+                });
             }
             None => {}
         }
 
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[cfg(unix)]
+fn synthetic_timeout_exit_status() -> ExitStatus {
+    ExitStatus::from_raw(libc::SIGKILL)
+}
+
+#[cfg(not(unix))]
+fn synthetic_timeout_exit_status() -> ExitStatus {
+    std::process::Command::new("cmd")
+        .args(["/C", "exit 124"])
+        .status()
+        .expect("synthetic timeout exit status should render on non-unix")
 }
 
 async fn execute_wrapped_command_async(

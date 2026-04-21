@@ -280,8 +280,8 @@ fn build_approval_envelope(
     approval_receipt: Option<crate::state_store::RunGraphApprovalDelegationReceipt>,
 ) -> ApprovalEnvelope {
     let approval_status = derive_approval_status(&status, approval_receipt.as_ref());
-    let principal_delegation =
-        status.principal_delegation_projection(dispatch_summary.as_ref(), approval_receipt.as_ref());
+    let principal_delegation = status
+        .principal_delegation_projection(dispatch_summary.as_ref(), approval_receipt.as_ref());
     let memory_governance = status.memory_governance_projection(approval_receipt.as_ref());
     let mut blocker_codes = Vec::new();
     blocker_codes.extend(principal_delegation.blocker_codes.iter().cloned());
@@ -307,9 +307,7 @@ fn build_approval_envelope(
                 .to_string(),
         );
     }
-    if memory_governance.governance_required
-        && memory_governance.enforcement_state == "blocked"
-    {
+    if memory_governance.governance_required && memory_governance.enforcement_state == "blocked" {
         next_actions.push(
             "Record consent, TTL, and approval linkage before continuing memory-governed approval or delegation work."
                 .to_string(),

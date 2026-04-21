@@ -1383,11 +1383,11 @@ fn contains_keywords(request: &str, keywords: &[String]) -> Vec<String> {
     crate::contains_keywords(request, keywords)
 }
 
-fn feature_delivery_design_terms(request: &str) -> Vec<String> {
+pub(crate) fn feature_delivery_design_terms(request: &str) -> Vec<String> {
     crate::feature_delivery_design_terms(request)
 }
 
-fn explicit_implementation_request_terms(request: &str) -> Vec<String> {
+pub(crate) fn explicit_implementation_request_terms(request: &str) -> Vec<String> {
     crate::contains_keywords(
         request,
         &[
@@ -1407,7 +1407,7 @@ fn explicit_implementation_request_terms(request: &str) -> Vec<String> {
     )
 }
 
-fn explicit_bounded_code_repair_terms(request: &str) -> Vec<String> {
+pub(crate) fn explicit_bounded_code_repair_terms(request: &str) -> Vec<String> {
     let repair_terms = crate::contains_keywords(
         request,
         &[

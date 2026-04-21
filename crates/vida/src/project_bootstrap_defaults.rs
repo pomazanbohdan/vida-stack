@@ -55,8 +55,7 @@ pub(crate) const DEFAULT_PROJECT_DECISIONS_DOC: &str = "docs/process/decisions.m
 pub(crate) const DEFAULT_PROJECT_ENVIRONMENTS_DOC: &str = "docs/process/environments.md";
 pub(crate) const DEFAULT_PROJECT_OPERATIONS_DOC: &str = "docs/process/project-operations.md";
 pub(crate) const DEFAULT_PROJECT_AGENT_SYSTEM_DOC: &str = "docs/process/agent-system.md";
-pub(crate) const DEFAULT_PROJECT_AGENT_GUIDE_DOC: &str =
-    DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC;
+pub(crate) const DEFAULT_PROJECT_AGENT_GUIDE_DOC: &str = DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC;
 pub(crate) const DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC: &str =
     "docs/process/codex-agent-configuration-guide.md";
 pub(crate) const DEFAULT_PROJECT_DOC_TOOLING_DOC: &str =

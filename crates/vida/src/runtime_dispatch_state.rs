@@ -99,16 +99,41 @@ fn dispatch_handoff_requires_outer_timeout(
         return true;
     }
     if dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
-        return false;
+        // Keep a secondary outer timeout around internal host dispatch. The inner
+        // command wrapper remains the primary guard, but live delegated handoffs
+        // have shown that pipe/process edge cases can still strand the orchestrator
+        // after the bounded window unless the outer state-machine timeout also
+        // remains active.
+        return true;
     }
+    false
+}
+
+fn sync_receipt_dispatch_handoff_surface(
+    project_root: &Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) {
+    if receipt.dispatch_kind != "agent_lane" {
+        return;
+    }
+    let Some(dispatch_packet_path) = receipt
+        .dispatch_packet_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
     let canonical_backend = canonical_selected_backend_for_receipt(role_selection, receipt)
         .or_else(|| receipt.selected_backend.clone());
-    canonical_backend
-        .as_deref()
-        .and_then(|backend_id| {
-            configured_external_backend_handoff_timeout_seconds(project_root, backend_id)
-        })
-        .is_none()
+    let lane_dispatch = runtime_agent_lane_dispatch_for_root(
+        project_root,
+        dispatch_packet_path,
+        canonical_backend.as_deref(),
+    );
+    receipt.dispatch_surface = Some(lane_dispatch.surface);
+    receipt.dispatch_command = Some(lane_dispatch.activation_command);
 }
 
 fn dispatch_handoff_uses_internal_host(
@@ -134,20 +159,29 @@ fn dispatch_handoff_uses_internal_host(
         dispatch_packet_path,
         canonical_backend.as_deref(),
     );
-    let internal_host_carrier_backend = canonical_backend
+    let lane_dispatch_backend_class = lane_dispatch.backend_dispatch["backend_class"].as_str();
+    let selected_backend_class = canonical_backend
         .as_deref()
         .or(receipt.selected_backend.as_deref())
-        .is_some_and(|backend_id| {
-            configured_internal_host_carrier_exists(
-                overlay.as_ref(),
-                &selected_cli_system,
-                backend_id,
-            )
+        .and_then(|backend_id| {
+            backend_class_from_execution_plan(&role_selection.execution_plan, backend_id)
         });
+    let internal_host_carrier_backend = lane_dispatch_backend_class != Some("external_cli")
+        && canonical_backend
+            .as_deref()
+            .or(receipt.selected_backend.as_deref())
+            .is_some_and(|backend_id| {
+                configured_internal_host_carrier_exists(
+                    overlay.as_ref(),
+                    &selected_cli_system,
+                    backend_id,
+                )
+            });
     let internal_agent_backend = canonical_backend.as_deref() == Some("internal_subagents")
         || receipt.selected_backend.as_deref() == Some("internal_subagents")
         || internal_host_carrier_backend
-        || lane_dispatch.backend_dispatch["backend_class"].as_str() == Some("internal");
+        || selected_backend_class.as_deref() == Some("internal")
+        || lane_dispatch_backend_class == Some("internal");
     lane_dispatch.surface == "vida agent-init"
         && host_execution_class == "internal"
         && internal_agent_backend
@@ -335,10 +369,10 @@ pub(crate) fn build_taskflow_handoff_plan(
 pub(crate) fn runtime_consumption_run_id(
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> String {
-    if let Some(task_id) =
-        role_selection.execution_plan["tracked_flow_bootstrap"]["spec_task"]["task_id"]
-            .as_str()
-            .filter(|value| !value.is_empty())
+    if let Some(task_id) = role_selection.execution_plan["tracked_flow_bootstrap"]["spec_task"]
+        ["task_id"]
+        .as_str()
+        .filter(|value| !value.is_empty())
     {
         return task_id.to_string();
     }
@@ -507,28 +541,46 @@ fn route_has_backend_hints(execution_plan: &serde_json::Value, route: &serde_jso
 
 fn admissible_backend_candidates_for_dispatch_target(
     execution_plan: &serde_json::Value,
-    _dispatch_target: &str,
+    dispatch_target: &str,
     route: &serde_json::Value,
     inherited_selected_backend: Option<&str>,
     activation_agent_type: Option<&str>,
 ) -> Vec<String> {
     let route_is_backend_agnostic = !route_has_backend_hints(execution_plan, route);
+    let prefer_route_backends_first = !route_is_backend_agnostic
+        && !dispatch_target_requires_strict_backend_admissibility(dispatch_target);
     let mut candidates = Vec::new();
-    if let Some(inherited) = inherited_selected_backend
+    let inherited = inherited_selected_backend
         .filter(|candidate| {
             route_is_backend_agnostic || route_declares_backend(execution_plan, route, candidate)
         })
-        .map(str::to_string)
-    {
-        candidates.push(inherited);
+        .map(str::to_string);
+    let route_primary = route_selected_backend(execution_plan, route);
+    let route_fallback = fallback_executor_backend_from_route(route);
+    let route_fanout = fanout_executor_backends_from_route(route);
+    if prefer_route_backends_first {
+        if let Some(primary) = route_primary {
+            candidates.push(primary);
+        }
+        if let Some(fallback) = route_fallback {
+            candidates.push(fallback);
+        }
+        candidates.extend(route_fanout);
+        if let Some(inherited) = inherited {
+            candidates.push(inherited);
+        }
+    } else {
+        if let Some(inherited) = inherited {
+            candidates.push(inherited);
+        }
+        if let Some(primary) = route_primary {
+            candidates.push(primary);
+        }
+        if let Some(fallback) = route_fallback {
+            candidates.push(fallback);
+        }
+        candidates.extend(route_fanout);
     }
-    if let Some(primary) = route_selected_backend(execution_plan, route) {
-        candidates.push(primary);
-    }
-    if let Some(fallback) = fallback_executor_backend_from_route(route) {
-        candidates.push(fallback);
-    }
-    candidates.extend(fanout_executor_backends_from_route(route));
     if let Some(activation) = activation_agent_type
         .filter(|_| route_is_backend_agnostic)
         .map(str::to_string)
@@ -4033,7 +4085,7 @@ mod tests {
     use crate::state_store::CreateTaskRequest;
     use crate::state_store::RunGraphDispatchReceipt;
     use crate::temp_state::TempStateHarness;
-    use crate::{Cli, run};
+    use crate::{run, Cli};
     use clap::Parser;
     use serde_json::json;
     use std::cell::Cell;
@@ -4960,8 +5012,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_delivery_task_packet_uses_bounded_file_set_from_tracked_design_doc_for_implementation()
-     {
+    fn runtime_delivery_task_packet_uses_bounded_file_set_from_tracked_design_doc_for_implementation(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -5510,11 +5562,9 @@ mod tests {
             ))
             .expect("internal host should execute with writable runtime env");
 
-        assert!(
-            result["surface"]
-                .as_str()
-                .is_some_and(|value| value.starts_with("internal_cli:"))
-        );
+        assert!(result["surface"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("internal_cli:")));
         assert_eq!(result["execution_state"], "executed");
         let captured = fs::read_to_string(&env_capture).expect("env capture should exist");
         let rows: Vec<_> = captured.lines().collect();
@@ -5738,8 +5788,8 @@ mod tests {
     }
 
     #[test]
-    fn execute_runtime_dispatch_handoff_keeps_internal_host_on_codex_when_receipt_backend_is_external()
-     {
+    fn execute_runtime_dispatch_handoff_keeps_internal_host_on_codex_when_receipt_backend_is_external(
+    ) {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -5873,11 +5923,9 @@ mod tests {
             ))
             .expect("internal host should ignore external receipt backend and execute on codex");
 
-        assert!(
-            result["surface"]
-                .as_str()
-                .is_some_and(|value| value.starts_with("internal_cli:"))
-        );
+        assert!(result["surface"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("internal_cli:")));
         assert_eq!(result["execution_state"], "executed");
         assert_eq!(result["status"], "pass");
         assert_eq!(result["execution_evidence"]["backend_id"], "junior");
@@ -6027,24 +6075,18 @@ mod tests {
             .expect("dispatch receipt should record execution evidence");
 
         assert_eq!(receipt.dispatch_status, "executed");
-        assert!(
-            receipt
-                .dispatch_surface
-                .as_deref()
-                .is_some_and(|value| value.starts_with("internal_cli:"))
-        );
-        assert!(
-            receipt
-                .dispatch_command
-                .as_deref()
-                .is_some_and(|value| value.contains("exec"))
-        );
-        assert!(
-            receipt
-                .dispatch_result_path
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty())
-        );
+        assert!(receipt
+            .dispatch_surface
+            .as_deref()
+            .is_some_and(|value| value.starts_with("internal_cli:")));
+        assert!(receipt
+            .dispatch_command
+            .as_deref()
+            .is_some_and(|value| value.contains("exec")));
+        assert!(receipt
+            .dispatch_result_path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()));
         let store = runtime
             .block_on(StateStore::open_existing(state_root.clone()))
             .expect("state store should reopen");
@@ -6054,12 +6096,10 @@ mod tests {
             .expect("persisted dispatch receipt should exist");
         assert_eq!(persisted_receipt.dispatch_status, "executed");
         assert_eq!(persisted_receipt.dispatch_target, "implementer");
-        assert!(
-            persisted_receipt
-                .dispatch_result_path
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty())
-        );
+        assert!(persisted_receipt
+            .dispatch_result_path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()));
     }
 
     #[test]
@@ -6219,12 +6259,10 @@ mod tests {
             receipt.blocker_code.as_deref(),
             Some("internal_activation_view_only")
         );
-        assert!(
-            receipt
-                .dispatch_surface
-                .as_deref()
-                .is_some_and(|value| value.starts_with("internal_cli:"))
-        );
+        assert!(receipt
+            .dispatch_surface
+            .as_deref()
+            .is_some_and(|value| value.starts_with("internal_cli:")));
         let dispatch_result_path = receipt
             .dispatch_result_path
             .as_deref()
@@ -6246,12 +6284,10 @@ mod tests {
             "expected timeout path to record an exit code value or null signal exit, got {:?}",
             parsed["exit_code"]
         );
-        assert!(
-            parsed["provider_error"]
-                .as_str()
-                .expect("provider error should render")
-                .contains("timed out after 1s")
-        );
+        assert!(parsed["provider_error"]
+            .as_str()
+            .expect("provider error should render")
+            .contains("timed out after 1s"));
         assert_eq!(parsed["timeout_wrapper"]["timeout_seconds"], 1);
         assert_eq!(parsed["timeout_wrapper"]["kill_after_grace_seconds"], 1);
         assert_eq!(parsed["timeout_wrapper"]["timed_out"], true);
@@ -6519,17 +6555,15 @@ mod tests {
         assert_eq!(parsed["execution_state"], "blocked");
         assert_eq!(parsed["blocker_code"], "internal_activation_view_only");
         assert_eq!(parsed["timeout_wrapper"]["timed_out"], true);
-        assert!(
-            parsed["provider_error"]
-                .as_str()
-                .expect("provider error should render")
-                .contains("timed out after 1s")
-        );
+        assert!(parsed["provider_error"]
+            .as_str()
+            .expect("provider error should render")
+            .contains("timed out after 1s"));
     }
 
     #[test]
-    fn execute_and_record_dispatch_receipt_times_out_when_internal_detached_descendant_keeps_pipe_open()
-     {
+    fn execute_and_record_dispatch_receipt_times_out_when_internal_detached_descendant_keeps_pipe_open(
+    ) {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -6883,23 +6917,19 @@ mod tests {
         );
         assert_eq!(receipt.dispatch_status, "executed");
         assert_eq!(receipt.lane_status, "lane_running");
-        assert!(
-            receipt
-                .dispatch_surface
-                .as_deref()
-                .is_some_and(|value| value.starts_with("internal_cli:"))
-        );
-        assert!(
-            receipt
-                .dispatch_result_path
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty())
-        );
+        assert!(receipt
+            .dispatch_surface
+            .as_deref()
+            .is_some_and(|value| value.starts_with("internal_cli:")));
+        assert!(receipt
+            .dispatch_result_path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()));
     }
 
     #[test]
-    fn execute_and_record_dispatch_receipt_persists_in_flight_runtime_truth_while_internal_codex_runs()
-     {
+    fn execute_and_record_dispatch_receipt_persists_in_flight_runtime_truth_while_internal_codex_runs(
+    ) {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -7092,12 +7122,10 @@ mod tests {
 
         assert_eq!(in_flight_receipt.dispatch_status, "executing");
         assert_eq!(in_flight_receipt.lane_status, "lane_running");
-        assert!(
-            in_flight_receipt
-                .dispatch_result_path
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty())
-        );
+        assert!(in_flight_receipt
+            .dispatch_result_path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()));
         assert_eq!(in_flight_status.active_node, "implementer");
         assert_eq!(in_flight_status.lifecycle_stage, "implementer_active");
         assert_eq!(in_flight_status.handoff_state, "none");
@@ -7246,12 +7274,10 @@ mod tests {
             "expected external timeout wrapper to return promptly, got {:?}",
             elapsed
         );
-        assert!(
-            result["provider_error"]
-                .as_str()
-                .expect("provider error should render")
-                .contains("timed out after 1s")
-        );
+        assert!(result["provider_error"]
+            .as_str()
+            .expect("provider error should render")
+            .contains("timed out after 1s"));
         assert!(
             result["exit_code"].is_null() || result["exit_code"].as_i64().is_some(),
             "expected timeout path to record an exit code value or null signal exit, got {:?}",
@@ -7263,8 +7289,8 @@ mod tests {
     }
 
     #[test]
-    fn execute_runtime_dispatch_handoff_times_out_configured_external_backend_with_detached_descendant()
-     {
+    fn execute_runtime_dispatch_handoff_times_out_configured_external_backend_with_detached_descendant(
+    ) {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -7867,12 +7893,10 @@ mod tests {
             result["backend_dispatch"]["backend_id"],
             serde_json::Value::Null
         );
-        assert!(
-            result["activation_command"]
-                .as_str()
-                .expect("activation command should render")
-                .contains("vida agent-init")
-        );
+        assert!(result["activation_command"]
+            .as_str()
+            .expect("activation command should render")
+            .contains("vida agent-init"));
         assert_eq!(result["blocker_code"], "internal_activation_view_only");
     }
 
@@ -8004,18 +8028,14 @@ mod tests {
             "external"
         );
         assert_eq!(result["backend_dispatch"]["backend_id"], "qwen_cli");
-        assert!(
-            result["activation_command"]
-                .as_str()
-                .expect("activation command should render")
-                .contains("sh")
-        );
-        assert!(
-            result["provider_output"]
-                .as_str()
-                .expect("provider output should render")
-                .contains("external-dispatch:Read and execute the VIDA dispatch packet")
-        );
+        assert!(result["activation_command"]
+            .as_str()
+            .expect("activation command should render")
+            .contains("sh"));
+        assert!(result["provider_output"]
+            .as_str()
+            .expect("provider output should render")
+            .contains("external-dispatch:Read and execute the VIDA dispatch packet"));
         assert_eq!(result["role_selection"]["selected_role"], "worker");
     }
 
@@ -8512,11 +8532,10 @@ mod tests {
             active_downstream_dispatch_target(&receipt).as_deref(),
             Some("specification")
         );
-        assert!(
-            note.as_deref()
-                .unwrap_or_default()
-                .contains("wait for bounded evidence return")
-        );
+        assert!(note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("wait for bounded evidence return"));
     }
 
     #[test]
@@ -8761,8 +8780,8 @@ mod tests {
     }
 
     #[test]
-    fn effective_execution_posture_infers_internal_backend_class_from_activation_agent_type_on_internal_host()
-     {
+    fn effective_execution_posture_infers_internal_backend_class_from_activation_agent_type_on_internal_host(
+    ) {
         let summary = effective_execution_posture_summary(
             &serde_json::json!({}),
             "analysis",
@@ -8907,8 +8926,8 @@ mod tests {
     }
 
     #[test]
-    fn activation_view_only_dispatch_result_surfaces_transport_blocker_and_does_not_unlock_the_next_lane()
-     {
+    fn activation_view_only_dispatch_result_surfaces_transport_blocker_and_does_not_unlock_the_next_lane(
+    ) {
         let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -9195,12 +9214,10 @@ mod tests {
         );
         assert!(receipt.downstream_dispatch_ready);
         assert!(receipt.downstream_dispatch_blockers.is_empty());
-        assert!(
-            receipt
-                .downstream_dispatch_packet_path
-                .as_deref()
-                .is_some_and(|path| !path.trim().is_empty())
-        );
+        assert!(receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty()));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -9341,12 +9358,10 @@ mod tests {
         assert!(receipt.downstream_dispatch_ready);
         assert!(receipt.downstream_dispatch_blockers.is_empty());
         assert!(receipt.blocker_code.is_none());
-        assert!(
-            receipt
-                .downstream_dispatch_packet_path
-                .as_deref()
-                .is_some_and(|path| !path.trim().is_empty())
-        );
+        assert!(receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty()));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -9925,12 +9940,10 @@ mod tests {
                 evidence["completion_receipt_id"],
                 "task-close-feature-x-dev"
             );
-            assert!(
-                persisted
-                    .downstream_dispatch_packet_path
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
-            );
+            assert!(persisted
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()));
             let packet_path = persisted
                 .downstream_dispatch_packet_path
                 .as_deref()
@@ -10018,12 +10031,10 @@ mod tests {
                 evidence["completion_receipt_id"],
                 "receipt-executed-run-refresh-preview-implementer"
             );
-            assert!(
-                receipt
-                    .downstream_dispatch_packet_path
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
-            );
+            assert!(receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()));
         });
     }
 
@@ -10080,8 +10091,8 @@ mod tests {
     }
 
     #[test]
-    fn refresh_downstream_dispatch_preview_does_not_mark_implementer_packet_ready_without_owned_scope()
-     {
+    fn refresh_downstream_dispatch_preview_does_not_mark_implementer_packet_ready_without_owned_scope(
+    ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let state_root = harness.path().join(crate::state_store::default_state_dir());
         fs::create_dir_all(state_root.join("runtime-consumption"))
@@ -10148,8 +10159,8 @@ mod tests {
     }
 
     #[test]
-    fn refresh_downstream_dispatch_preview_uses_task_close_completion_evidence_for_blocked_implementer()
-     {
+    fn refresh_downstream_dispatch_preview_uses_task_close_completion_evidence_for_blocked_implementer(
+    ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let state_root = harness.path().join(crate::state_store::default_state_dir());
         fs::create_dir_all(state_root.join("runtime-consumption"))
@@ -10224,8 +10235,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn maybe_bridge_closed_implementer_task_into_receipt_promotes_blocked_implementer_timeout()
-     {
+    async fn maybe_bridge_closed_implementer_task_into_receipt_promotes_blocked_implementer_timeout(
+    ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let state_root = harness.path().join(crate::state_store::default_state_dir());
         fs::create_dir_all(state_root.join("runtime-consumption"))
@@ -10303,8 +10314,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn maybe_bridge_closure_ready_verification_into_receipt_promotes_blocked_verification_timeout()
-     {
+    async fn maybe_bridge_closure_ready_verification_into_receipt_promotes_blocked_verification_timeout(
+    ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let state_root = harness.path().join(crate::state_store::default_state_dir());
         fs::create_dir_all(state_root.join("runtime-consumption"))
@@ -10477,13 +10488,11 @@ mod tests {
                 evidence["completion_receipt_id"],
                 "task-close-feature-x-spec"
             );
-            assert!(
-                receipt
-                    .downstream_dispatch_note
-                    .as_deref()
-                    .unwrap_or_default()
-                    .contains("spec-pack is closed")
-            );
+            assert!(receipt
+                .downstream_dispatch_note
+                .as_deref()
+                .unwrap_or_default()
+                .contains("spec-pack is closed"));
         });
     }
 
@@ -10983,16 +10992,12 @@ mod tests {
             "/tmp/implementer-packet.json"
         );
         assert_eq!(artifact["provider_result"], "implemented");
-        assert!(
-            artifact["completion_receipt_id"]
-                .as_str()
-                .is_some_and(|value| value.starts_with("dispatch-completion-"))
-        );
-        assert!(
-            artifact["recorded_at"]
-                .as_str()
-                .is_some_and(|value| !value.trim().is_empty())
-        );
+        assert!(artifact["completion_receipt_id"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("dispatch-completion-")));
+        assert!(artifact["recorded_at"]
+            .as_str()
+            .is_some_and(|value| !value.trim().is_empty()));
         assert_eq!(
             artifact["lane_execution_receipt_artifact"]["artifact_type"],
             "lane_execution_receipt"
@@ -11182,17 +11187,15 @@ mod tests {
             blocker_code_value(BlockerCode::TimeoutWithoutTakeoverAuthority)
                 .expect("timeout blocker should stay registry-backed")
         );
-        assert!(
-            result["provider_error"]
-                .as_str()
-                .expect("provider error should render")
-                .contains("timed out after 10s")
-        );
+        assert!(result["provider_error"]
+            .as_str()
+            .expect("provider error should render")
+            .contains("timed out after 10s"));
     }
 
     #[test]
-    fn apply_dispatch_handoff_timeout_to_receipt_keeps_internal_activation_semantics_for_internal_host()
-     {
+    fn apply_dispatch_handoff_timeout_to_receipt_keeps_internal_activation_semantics_for_internal_host(
+    ) {
         let root = std::env::temp_dir().join(format!(
             "vida-timeout-classification-internal-{}",
             time::OffsetDateTime::now_utc().unix_timestamp_nanos()
@@ -11302,12 +11305,10 @@ host_environment:
         )
         .expect("dispatch result should decode");
         assert_eq!(artifact["blocker_code"], "internal_activation_view_only");
-        assert!(
-            artifact["provider_error"]
-                .as_str()
-                .expect("provider error should render")
-                .contains("timed out after 39s")
-        );
+        assert!(artifact["provider_error"]
+            .as_str()
+            .expect("provider error should render")
+            .contains("timed out after 39s"));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -11420,6 +11421,139 @@ host_environment:
             blocker_code_value(BlockerCode::TimeoutWithoutTakeoverAuthority)
                 .expect("timeout blocker should stay registry-backed")
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn apply_dispatch_handoff_timeout_to_receipt_keeps_generic_timeout_for_external_backend_on_internal_host(
+    ) {
+        let root = std::env::temp_dir().join(format!(
+            "vida-timeout-classification-external-on-internal-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        std::fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+agent_system:
+  subagents:
+    hermes_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      dispatch:
+        no_output_timeout_seconds: 8
+"#,
+        )
+        .expect("config");
+        let state_root = root.join(crate::state_store::default_state_dir());
+        std::fs::create_dir_all(
+            state_root
+                .join("runtime-consumption")
+                .join("dispatch-results"),
+        )
+        .expect("dispatch result dir");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Review the bounded implementation result.".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["review".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "hermes_cli"
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "hermes_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "coach": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: "run-timeout-external-on-internal".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/coach-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-21T00:00:00Z".to_string(),
+        };
+
+        apply_dispatch_handoff_timeout_to_receipt(
+            &state_root,
+            &root,
+            &role_selection,
+            &mut receipt,
+            10,
+        )
+        .expect("timeout classification should persist");
+
+        assert_eq!(
+            receipt.blocker_code.as_deref(),
+            blocker_code_value(BlockerCode::TimeoutWithoutTakeoverAuthority).as_deref()
+        );
+        let artifact: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                receipt
+                    .dispatch_result_path
+                    .as_deref()
+                    .expect("dispatch result path should persist"),
+            )
+            .expect("dispatch result should be readable"),
+        )
+        .expect("dispatch result should decode");
+        assert_eq!(
+            artifact["blocker_code"],
+            blocker_code_value(BlockerCode::TimeoutWithoutTakeoverAuthority)
+                .expect("timeout blocker should stay registry-backed")
+        );
+        assert!(artifact["provider_error"]
+            .as_str()
+            .expect("provider error should render")
+            .contains("runtime dispatch handoff timed out"));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -11604,7 +11738,100 @@ host_environment:
     }
 
     #[test]
-    fn dispatch_handoff_requires_outer_timeout_stays_enabled_for_unwrapped_external_agent_lane() {
+    fn dispatch_handoff_requires_outer_timeout_for_internal_host_agent_lane() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-handoff-outer-timeout-internal-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        std::fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      max_runtime_seconds: 37
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("config");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Implement the bounded fix with regression tests.".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "implementer": {
+                                "backend_id": "internal_subagents",
+                                "backend_class": "internal"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-internal-handoff-outer-timeout".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/implementer-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-21T00:00:00Z".to_string(),
+        };
+
+        assert!(dispatch_handoff_requires_outer_timeout(
+            &root,
+            &role_selection,
+            &receipt,
+        ));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dispatch_handoff_requires_outer_timeout_is_disabled_for_external_agent_lane() {
         let root = std::env::temp_dir().join(format!(
             "vida-handoff-outer-timeout-external-{}",
             time::OffsetDateTime::now_utc().unix_timestamp_nanos()
@@ -11681,13 +11908,191 @@ agent_system:
             recorded_at: "2026-04-19T00:00:00Z".to_string(),
         };
 
-        assert!(dispatch_handoff_requires_outer_timeout(
+        assert!(!dispatch_handoff_requires_outer_timeout(
             &root,
             &role_selection,
             &receipt,
         ));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn execute_and_record_dispatch_receipt_times_out_external_backend_without_reverting_to_agent_init(
+    ) {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+
+        let config_path = harness.path().join("vida.config.yaml");
+        install_external_cli_test_subagents(&config_path);
+        let config = fs::read_to_string(&config_path).expect("config should exist");
+        let updated = config
+            .replace(
+                "command: qwen\n        static_args:\n          - -y\n          - -o\n          - text",
+                "command: sh\n        static_args:\n          - -lc\n          - 'trap \"\" TERM; sleep 30'\n          - vida-dispatch",
+            )
+            .replace(
+                "        prompt_mode: positional\n",
+                "        prompt_mode: positional\n        no_output_timeout_seconds: 1\n      max_runtime_seconds: 1\n",
+            );
+        fs::write(&config_path, updated).expect("config should update");
+
+        let state_root = harness_state_root(&harness);
+        runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should open");
+        let dispatch_packet_path = harness.path().join("external-agent-record-timeout.json");
+        fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": runtime_delivery_task_packet(
+                    "run-external-record-timeout",
+                    "coach",
+                    "coach",
+                    "coach",
+                    "coach",
+                    "Review the bounded packet and return proof."
+                ),
+                "dispatch_target": "coach",
+                "request_text": "Review the bounded packet and return proof.",
+                "activation_runtime_role": "coach",
+                "role_selection": {
+                    "selected_role": "coach"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Review the bounded packet and return proof.".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string(), "coach".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "hermes_cli"
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "hermes_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "coach": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-external-record-timeout"
+        });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-external-record-timeout".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-21T00:00:00Z".to_string(),
+        };
+
+        let started = Instant::now();
+        runtime
+            .block_on(execute_and_record_dispatch_receipt(
+                &state_root,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            ))
+            .expect("external timeout dispatch receipt should persist bounded result");
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(6),
+            "expected external timeout wrapper to return within a bounded window, got {:?}",
+            elapsed
+        );
+        assert_eq!(receipt.dispatch_status, "blocked");
+        assert_eq!(receipt.lane_status, "lane_blocked");
+        assert_eq!(
+            receipt.blocker_code.as_deref(),
+            Some("timeout_without_takeover_authority")
+        );
+        assert_eq!(
+            receipt.dispatch_surface.as_deref(),
+            Some("external_cli:hermes_cli")
+        );
+        assert!(receipt
+            .dispatch_command
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty() && !value.contains("vida agent-init")));
+        let dispatch_result_path = receipt
+            .dispatch_result_path
+            .as_deref()
+            .expect("dispatch result path should record");
+        let rendered =
+            fs::read_to_string(dispatch_result_path).expect("dispatch result artifact should load");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&rendered).expect("dispatch result json should parse");
+        assert_eq!(parsed["surface"], "external_cli:hermes_cli");
+        assert_eq!(parsed["blocker_code"], "timeout_without_takeover_authority");
+        assert_eq!(parsed["timeout_wrapper"]["timed_out"], true);
     }
 
     #[test]
@@ -11800,7 +12205,8 @@ agent_system:
     }
 
     #[test]
-    fn admissible_selected_backend_preserves_inherited_declared_fallback_for_coach_lane() {
+    fn admissible_selected_backend_prefers_route_primary_for_coach_lane_over_inherited_internal_fallback(
+    ) {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -11833,7 +12239,7 @@ agent_system:
             Some("internal_subagents"),
         );
 
-        assert_eq!(selected.as_deref(), Some("internal_subagents"));
+        assert_eq!(selected.as_deref(), Some("hermes_cli"));
     }
 
     #[test]
@@ -11847,12 +12253,22 @@ agent_system:
             Some("coach"),
         );
 
-        let coach_receipt = build_downstream_dispatch_receipt(&role_selection, &implementer_receipt)
-            .expect("coach downstream receipt should build");
+        let coach_receipt =
+            build_downstream_dispatch_receipt(&role_selection, &implementer_receipt)
+                .expect("coach downstream receipt should build");
         assert_eq!(coach_receipt.dispatch_target, "coach");
-        assert_eq!(coach_receipt.selected_backend.as_deref(), Some("hermes_cli"));
-        assert_eq!(coach_receipt.activation_agent_type.as_deref(), Some("middle"));
-        assert_eq!(coach_receipt.activation_runtime_role.as_deref(), Some("coach"));
+        assert_eq!(
+            coach_receipt.selected_backend.as_deref(),
+            Some("hermes_cli")
+        );
+        assert_eq!(
+            coach_receipt.activation_agent_type.as_deref(),
+            Some("middle")
+        );
+        assert_eq!(
+            coach_receipt.activation_runtime_role.as_deref(),
+            Some("coach")
+        );
         assert_eq!(coach_receipt.dispatch_status, "routed");
 
         let mut executed_coach_receipt = coach_receipt.clone();
@@ -11978,6 +12394,70 @@ agent_system:
     }
 
     #[test]
+    fn mixed_backend_coach_receipt_prefers_explicit_review_route_over_inherited_internal_fallback()
+    {
+        let mut execution_plan = mixed_backend_execution_plan();
+        execution_plan["backend_admissibility_matrix"] = json!([
+            {
+                "backend_id": "opencode_cli",
+                "backend_class": "external_cli",
+                "lane_admissibility": {
+                    "implementation": false,
+                    "coach": true,
+                    "verification": true
+                }
+            },
+            {
+                "backend_id": "hermes_cli",
+                "backend_class": "external_cli",
+                "lane_admissibility": {
+                    "implementation": false,
+                    "coach": true,
+                    "verification": true
+                }
+            },
+            {
+                "backend_id": "internal_subagents",
+                "backend_class": "internal",
+                "lane_admissibility": {
+                    "implementation": true,
+                    "coach": true,
+                    "verification": true
+                }
+            }
+        ]);
+        let mut role_selection = mixed_backend_role_selection();
+        role_selection.execution_plan = execution_plan;
+
+        let implementer_receipt = executed_agent_lane_receipt(
+            "implementer",
+            "internal_subagents",
+            "junior",
+            "worker",
+            Some("coach"),
+        );
+
+        let coach_receipt =
+            build_downstream_dispatch_receipt(&role_selection, &implementer_receipt)
+                .expect("coach downstream receipt should build");
+
+        assert_eq!(coach_receipt.dispatch_target, "coach");
+        assert_eq!(
+            coach_receipt.selected_backend.as_deref(),
+            Some("hermes_cli")
+        );
+        assert_eq!(
+            coach_receipt.activation_agent_type.as_deref(),
+            Some("middle")
+        );
+        assert_eq!(
+            coach_receipt.activation_runtime_role.as_deref(),
+            Some("coach")
+        );
+        assert_eq!(coach_receipt.dispatch_status, "routed");
+    }
+
+    #[test]
     fn apply_first_handoff_execution_keeps_selected_backend_across_mixed_lane_chain() {
         let status = crate::taskflow_run_graph::default_run_graph_status(
             "run-mixed-backend-matrix",
@@ -12017,8 +12497,11 @@ agent_system:
     fn review_ensemble_route_summary_preserves_fanout_and_internal_fallback_matrix() {
         let role_selection = mixed_backend_role_selection();
 
-        let summary =
-            dispatch_execution_route_summary(&role_selection, "review_ensemble", Some("opencode_cli"));
+        let summary = dispatch_execution_route_summary(
+            &role_selection,
+            "review_ensemble",
+            Some("opencode_cli"),
+        );
 
         assert_eq!(summary["effective_selected_backend"], "opencode_cli");
         assert_eq!(summary["selected_backend_source"], "dispatch_receipt");
@@ -12032,8 +12515,8 @@ agent_system:
     }
 
     #[test]
-    fn write_runtime_dispatch_packet_keeps_agent_init_command_for_mixed_implementer_route_before_execution()
-     {
+    fn write_runtime_dispatch_packet_keeps_agent_init_command_for_mixed_implementer_route_before_execution(
+    ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
         let state_root = harness.path().join(crate::state_store::default_state_dir());
@@ -12138,12 +12621,10 @@ agent_system:
             .expect("dispatch packet json should load");
 
         assert_eq!(packet["dispatch_surface"], "vida agent-init");
-        assert!(
-            packet["dispatch_command"]
-                .as_str()
-                .expect("dispatch command should be present")
-                .starts_with("vida agent-init --dispatch-packet ")
-        );
+        assert!(packet["dispatch_command"]
+            .as_str()
+            .expect("dispatch command should be present")
+            .starts_with("vida agent-init --dispatch-packet "));
         assert_eq!(packet["selected_backend"], "internal_subagents");
         assert_eq!(
             packet["route_policy"]["effective_selected_backend"],
@@ -12363,12 +12844,10 @@ agent_system:
             .expect("dispatch packet json should load");
 
         assert_eq!(packet["packet_template_kind"], "delivery_task_packet");
-        assert!(
-            packet["dispatch_command"]
-                .as_str()
-                .expect("dispatch command should be present")
-                .starts_with("vida agent-init --dispatch-packet ")
-        );
+        assert!(packet["dispatch_command"]
+            .as_str()
+            .expect("dispatch command should be present")
+            .starts_with("vida agent-init --dispatch-packet "));
         assert_eq!(
             packet["delivery_task_packet"]["handoff_task_class"],
             "implementation"
@@ -12910,6 +13389,17 @@ fn stale_in_flight_dispatch_preserves_internal_activation_view(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     result: &serde_json::Value,
 ) -> bool {
+    let explicit_external_dispatch_evidence = receipt
+        .dispatch_surface
+        .as_deref()
+        .is_some_and(|value| value.starts_with("external_cli:"))
+        || result["surface"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("external_cli:"))
+        || result["backend_dispatch"]["backend_class"].as_str() == Some("external_cli");
+    if explicit_external_dispatch_evidence {
+        return false;
+    }
     receipt.selected_backend.as_deref() == Some("internal_subagents")
         || receipt
             .dispatch_surface
@@ -13095,6 +13585,7 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
         receipt.selected_backend = canonical_selected_backend_for_receipt(role_selection, receipt);
     }
     let project_root = runtime_dispatch_project_root_from_state_root(state_root);
+    sync_receipt_dispatch_handoff_surface(project_root.as_ref(), role_selection, receipt);
     let handoff_timeout_seconds =
         dispatch_handoff_timeout_seconds(project_root.as_ref(), role_selection, receipt);
     let in_flight_dispatch_result_path = write_runtime_dispatch_result(

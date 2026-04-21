@@ -333,7 +333,10 @@ mod tests {
             }
         });
 
-        assert_eq!(super::runtime_assignment_source_from_route(&route), "missing");
+        assert_eq!(
+            super::runtime_assignment_source_from_route(&route),
+            "missing"
+        );
         assert_eq!(
             super::runtime_assignment_from_route(&route),
             &serde_json::Value::Null
