@@ -124,7 +124,7 @@ Repository: `{project_title}`\n\n\
    - `{DEFAULT_PROJECT_DOC_TOOLING_DOC}`\n\
 7. Project agent-system baseline:\n\
    - `{DEFAULT_PROJECT_AGENT_SYSTEM_DOC}`\n\
-8. Project Codex agent guide:\n\
+8. Project host-agent guide:\n\
    - `{DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC}`\n\
 9. Project research index:\n\
    - `{DEFAULT_PROJECT_RESEARCH_README}`\n\n\
@@ -838,6 +838,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
             "product_spec_readme": product_spec_readme.is_file(),
             "feature_design_template": feature_design_template.is_file(),
             "process_readme": process_readme.is_file(),
+            "host_agent_configuration_guide": codex_agent_guide.is_file(),
             "codex_agent_configuration_guide": codex_agent_guide.is_file(),
             "documentation_tooling_map": documentation_tooling_map.is_file(),
             "sidecar_has_placeholders": sidecar_has_placeholders,
@@ -1644,7 +1645,7 @@ fn apply_project_activation_answers(
         ),
         (
             project_root.join(DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC),
-            super::init_surfaces::render_project_codex_guide(),
+            super::init_surfaces::render_project_host_agent_guide(),
             DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC,
         ),
         (
