@@ -9,7 +9,7 @@ pub(crate) fn build_project_activator_normal_work_defaults(
         "local_feature_design_template": crate::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE,
         "local_product_spec_guide": crate::DEFAULT_PROJECT_PRODUCT_SPEC_README,
         "local_documentation_tooling_map": crate::DEFAULT_PROJECT_DOC_TOOLING_DOC,
-        "local_agent_guide": crate::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC,
+        "local_agent_guide": crate::DEFAULT_PROJECT_AGENT_GUIDE_DOC,
         "local_host_agent_guide": crate::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC,
         "default_agent_topology": default_agent_topology,
         "carrier_tier_rates": carrier_tier_rates,
