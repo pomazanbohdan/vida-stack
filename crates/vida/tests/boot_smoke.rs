@@ -5434,19 +5434,37 @@ fn project_activator_materializes_codex_spark_for_read_only_codex_tiers() {
         "{}",
         String::from_utf8_lossy(&activator.stderr)
     );
+    let activator_payload: serde_json::Value =
+        serde_json::from_slice(&activator.stdout).expect("project activator should render json");
+    assert_eq!(activator_payload["surface"], "vida project-activator");
+    assert_eq!(activator_payload["post_init_restart_required"], true);
+    let activator_parsed = &activator_payload["view"];
+    assert_eq!(activator_parsed["status"], "ready_enough_for_normal_work");
+    assert_eq!(
+        activator_parsed["host_environment"]["selected_cli_system"],
+        "codex"
+    );
+    assert_eq!(
+        activator_parsed["host_environment"]["template_materialized"],
+        true
+    );
+    assert_eq!(
+        activator_parsed["host_environment"]["materialization_required"],
+        false
+    );
+    assert_eq!(
+        activator_parsed["host_environment"]["runtime_template_root"],
+        ".codex"
+    );
 
-    let junior =
-        fs::read_to_string(format!("{project_root}/.codex/agents/junior.toml"))
-            .expect("junior codex carrier should materialize");
-    let middle =
-        fs::read_to_string(format!("{project_root}/.codex/agents/middle.toml"))
-            .expect("middle codex carrier should materialize");
-    let senior =
-        fs::read_to_string(format!("{project_root}/.codex/agents/senior.toml"))
-            .expect("senior codex carrier should materialize");
-    let architect =
-        fs::read_to_string(format!("{project_root}/.codex/agents/architect.toml"))
-            .expect("architect codex carrier should materialize");
+    let junior = fs::read_to_string(format!("{project_root}/.codex/agents/junior.toml"))
+        .expect("junior codex carrier should materialize");
+    let middle = fs::read_to_string(format!("{project_root}/.codex/agents/middle.toml"))
+        .expect("middle codex carrier should materialize");
+    let senior = fs::read_to_string(format!("{project_root}/.codex/agents/senior.toml"))
+        .expect("senior codex carrier should materialize");
+    let architect = fs::read_to_string(format!("{project_root}/.codex/agents/architect.toml"))
+        .expect("architect codex carrier should materialize");
 
     assert!(junior.contains("model = \"gpt-5.4\""));
     assert!(middle.contains("model = \"gpt-5.4\""));
