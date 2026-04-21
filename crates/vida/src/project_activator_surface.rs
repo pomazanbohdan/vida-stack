@@ -838,6 +838,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
             "product_spec_readme": product_spec_readme.is_file(),
             "feature_design_template": feature_design_template.is_file(),
             "process_readme": process_readme.is_file(),
+            "agent_configuration_guide": codex_agent_guide.is_file(),
             "host_agent_configuration_guide": codex_agent_guide.is_file(),
             "codex_agent_configuration_guide": codex_agent_guide.is_file(),
             "documentation_tooling_map": documentation_tooling_map.is_file(),
@@ -2261,6 +2262,10 @@ mod tests {
         assert_eq!(
             view["normal_work_defaults"]["local_agent_guide"],
             DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC
+        );
+        assert_eq!(
+            view["project_docs"]["agent_configuration_guide"],
+            true
         );
         assert!(view["normal_work_defaults"]
             .get("local_codex_guide")
