@@ -2,9 +2,9 @@ pub(crate) fn resolved_carrier_roles(
     config: &serde_yaml::Value,
     catalog_root: &std::path::Path,
 ) -> Vec<serde_json::Value> {
-    let overlay_roles = super::project_activator_surface::overlay_codex_agent_catalog(config);
+    let overlay_roles = super::project_activator_surface::overlay_host_cli_agent_catalog(config);
     if overlay_roles.is_empty() {
-        super::project_activator_surface::read_codex_agent_catalog(catalog_root)
+        super::project_activator_surface::read_host_cli_agent_catalog(catalog_root)
     } else {
         overlay_roles
     }
@@ -64,12 +64,12 @@ pub(crate) fn materialized_dispatch_aliases(
     carrier_roles: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
     if dispatch_alias_rows.is_empty() {
-        super::project_activator_surface::overlay_codex_dispatch_alias_catalog(
+        super::project_activator_surface::overlay_host_cli_dispatch_alias_catalog(
             config,
             carrier_roles,
         )
     } else {
-        super::project_activator_surface::materialize_codex_dispatch_alias_catalog(
+        super::project_activator_surface::materialize_host_cli_dispatch_alias_catalog(
             dispatch_alias_rows,
             carrier_roles,
         )

@@ -4,12 +4,13 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use super::activation_status::canonical_activation_status;
-#[path = "project_activator_codex_materialization.rs"]
-mod project_activator_codex_materialization;
+#[path = "project_activator_host_cli_materialization.rs"]
+mod project_activator_host_cli_materialization;
 use super::*;
-pub(crate) use project_activator_codex_materialization::{
-    host_cli_entry_carrier_catalog, materialize_codex_dispatch_alias_catalog,
-    overlay_codex_agent_catalog, overlay_codex_dispatch_alias_catalog, read_codex_agent_catalog,
+pub(crate) use project_activator_host_cli_materialization::{
+    host_cli_entry_carrier_catalog, materialize_host_cli_dispatch_alias_catalog,
+    overlay_host_cli_agent_catalog, overlay_host_cli_dispatch_alias_catalog,
+    read_host_cli_agent_catalog,
 };
 
 #[derive(Debug, Clone)]
@@ -518,7 +519,7 @@ pub(crate) fn materialize_host_cli_template(
     let copy_tree_target = project_root.join(&runtime_root);
     match mode.as_str() {
         "codex_toml_catalog_render" => {
-            project_activator_codex_materialization::materialize_codex_template_with_catalog_render(
+            project_activator_host_cli_materialization::materialize_host_cli_template_with_catalog_render(
                 project_root,
                 cli_system,
                 &entry_ref,
@@ -586,20 +587,19 @@ pub(crate) fn resolved_host_cli_agent_catalog_for_root(
     let registry = host_cli_system_registry_with_fallback(Some(overlay));
     let catalog_entry = registry.get(&selected_host_cli_system);
     let mut host_cli_agent_catalog =
-        project_activator_codex_materialization::host_cli_entry_carrier_catalog(catalog_entry);
+        project_activator_host_cli_materialization::host_cli_entry_carrier_catalog(catalog_entry);
     if host_cli_agent_catalog.is_empty() {
         if catalog_entry
             .map(|entry| host_cli_system_materialization_mode(entry, &selected_host_cli_system))
             .as_deref()
             == Some("codex_toml_catalog_render")
         {
-            host_cli_agent_catalog =
-                project_activator_codex_materialization::resolve_codex_agent_catalog_for_rendered_root(
-                    project_root,
-                    overlay,
-                    catalog_entry,
-                    &selected_host_cli_system,
-                );
+            host_cli_agent_catalog = project_activator_host_cli_materialization::resolve_host_cli_agent_catalog_for_rendered_root(
+                project_root,
+                overlay,
+                catalog_entry,
+                &selected_host_cli_system,
+            );
         }
     }
     if host_cli_agent_catalog.is_empty() {
@@ -1753,7 +1753,7 @@ pub(crate) fn write_project_activation_receipt(
         .and_then(|system| registry.get(system));
     let default_agent_templates = host_cli_entry
         .map(|entry| {
-            project_activator_codex_materialization::host_cli_entry_carrier_catalog(Some(entry))
+            project_activator_host_cli_materialization::host_cli_entry_carrier_catalog(Some(entry))
         })
         .unwrap_or_default()
         .into_iter()
@@ -2443,15 +2443,14 @@ mod tests {
 
         let config = fs::read_to_string(harness.path().join(".codex/config.toml"))
             .expect("rendered codex config should exist");
-        let configured_agents =
-            super::build_project_activator_view(harness.path())["normal_work_defaults"]
-                ["default_agent_topology"]
-                .as_array()
-                .expect("default agent topology should render")
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(ToString::to_string)
-                .collect::<Vec<_>>();
+        let configured_agents = super::build_project_activator_view(harness.path())
+            ["normal_work_defaults"]["default_agent_topology"]
+            .as_array()
+            .expect("default agent topology should render")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
         assert!(!configured_agents.is_empty());
         for agent in &configured_agents {
             assert!(config.contains(&format!("[agents.{agent}]")));

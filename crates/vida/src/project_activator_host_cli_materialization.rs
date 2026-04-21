@@ -2,8 +2,9 @@ use super::*;
 
 const CODEX_RUNTIME_LABEL: &str = "Codex";
 
-pub(crate) fn render_codex_template_from_catalog(
+pub(crate) fn render_host_cli_template_from_catalog(
     project_root: &Path,
+    runtime_root: &Path,
     template_root: &Path,
     agent_catalog: &[serde_json::Value],
     named_lane_catalog: &[serde_json::Value],
@@ -11,18 +12,18 @@ pub(crate) fn render_codex_template_from_catalog(
     crate::host_runtime_materialization::render_host_runtime_template_from_catalog(
         CODEX_RUNTIME_LABEL,
         project_root,
-        &project_root.join(".codex"),
+        runtime_root,
         template_root,
         agent_catalog,
         named_lane_catalog,
     )
 }
 
-pub(crate) fn read_codex_agent_catalog(codex_root: &Path) -> Vec<serde_json::Value> {
-    crate::host_runtime_materialization::read_host_runtime_agent_catalog(codex_root)
+pub(crate) fn read_host_cli_agent_catalog(runtime_root: &Path) -> Vec<serde_json::Value> {
+    crate::host_runtime_materialization::read_host_runtime_agent_catalog(runtime_root)
 }
 
-pub(crate) fn overlay_codex_agent_catalog(config: &serde_yaml::Value) -> Vec<serde_json::Value> {
+pub(crate) fn overlay_host_cli_agent_catalog(config: &serde_yaml::Value) -> Vec<serde_json::Value> {
     crate::host_runtime_materialization::overlay_host_runtime_agent_catalog(config)
 }
 
@@ -32,7 +33,7 @@ pub(crate) fn host_cli_entry_carrier_catalog(
     crate::host_runtime_materialization::host_runtime_entry_carrier_catalog(entry)
 }
 
-pub(crate) fn materialize_codex_dispatch_alias_catalog(
+pub(crate) fn materialize_host_cli_dispatch_alias_catalog(
     configured_aliases: &[serde_json::Value],
     agent_catalog: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
@@ -42,7 +43,7 @@ pub(crate) fn materialize_codex_dispatch_alias_catalog(
     )
 }
 
-pub(crate) fn overlay_codex_dispatch_alias_catalog(
+pub(crate) fn overlay_host_cli_dispatch_alias_catalog(
     config: &serde_yaml::Value,
     agent_catalog: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
@@ -52,7 +53,7 @@ pub(crate) fn overlay_codex_dispatch_alias_catalog(
     )
 }
 
-pub(crate) fn codex_dispatch_alias_catalog_for_root(
+pub(crate) fn host_cli_dispatch_alias_catalog_for_root(
     config: &serde_yaml::Value,
     root: &Path,
     agent_catalog: &[serde_json::Value],
@@ -64,7 +65,7 @@ pub(crate) fn codex_dispatch_alias_catalog_for_root(
     )
 }
 
-pub(crate) fn materialize_codex_template_with_catalog_render(
+pub(crate) fn materialize_host_cli_template_with_catalog_render(
     project_root: &Path,
     cli_system: &str,
     registry_entry: &serde_yaml::Value,
@@ -87,18 +88,22 @@ pub(crate) fn materialize_codex_template_with_catalog_render(
         cli_system,
     ));
     let carrier_roles = {
-        let overlay_roles = overlay_codex_agent_catalog(&overlay);
+        let overlay_roles = overlay_host_cli_agent_catalog(&overlay);
         if overlay_roles.is_empty() {
-            read_codex_agent_catalog(&rendered_catalog_root)
+            read_host_cli_agent_catalog(&rendered_catalog_root)
         } else {
             overlay_roles
         }
     };
     let carrier_dispatch_aliases =
-        codex_dispatch_alias_catalog_for_root(&overlay, project_root, &carrier_roles)?;
+        host_cli_dispatch_alias_catalog_for_root(&overlay, project_root, &carrier_roles)?;
     if !carrier_roles.is_empty() {
-        render_codex_template_from_catalog(
+        render_host_cli_template_from_catalog(
             project_root,
+            &project_root.join(super::host_cli_system_runtime_surface(
+                registry_entry,
+                cli_system,
+            )),
             &source,
             &carrier_roles,
             &carrier_dispatch_aliases,
@@ -108,7 +113,7 @@ pub(crate) fn materialize_codex_template_with_catalog_render(
     Ok(runtime_root)
 }
 
-pub(crate) fn resolve_codex_agent_catalog_for_rendered_root(
+pub(crate) fn resolve_host_cli_agent_catalog_for_rendered_root(
     project_root: &Path,
     overlay: &serde_yaml::Value,
     catalog_entry: Option<&serde_yaml::Value>,
@@ -118,9 +123,9 @@ pub(crate) fn resolve_codex_agent_catalog_for_rendered_root(
         catalog_entry.unwrap_or(&serde_yaml::Value::Null),
         selected_host_cli_system,
     ));
-    let overlay_rows = overlay_codex_agent_catalog(overlay);
+    let overlay_rows = overlay_host_cli_agent_catalog(overlay);
     if overlay_rows.is_empty() {
-        read_codex_agent_catalog(carrier_catalog_root.as_path())
+        read_host_cli_agent_catalog(carrier_catalog_root.as_path())
     } else {
         overlay_rows
     }
