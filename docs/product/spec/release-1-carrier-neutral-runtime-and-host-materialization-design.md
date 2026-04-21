@@ -147,6 +147,23 @@ Will implement / choose:
 - ADR link if needed:
   - none
 
+### 4. Multi-backend proof matrix stays representative and carrier-neutral
+Will implement / choose:
+- add one bounded proof-matrix tranche that proves the same neutral dispatch contract across representative internal and external backend combinations instead of exhaustively enumerating every configured carrier
+- keep the primary full-lane chain anchored on the canonical implementation route from `vida.config.yaml`: seeded implementation dispatch, analysis on `opencode_cli`, coach on `hermes_cli`, review/approval/rework progression on the verification route, and `internal_subagents` as the lawful fallback path when admissibility blocks an external primary backend
+- keep matrix expectations focused on neutral machine-readable fields such as `selected_backend`, `dispatch_kind`, `resume_target`, `handoff_state`, `downstream_dispatch_ready`, and downstream trace/receipt parity
+- Why:
+  - this slice needs current-tree proof that mixed-backend orchestration preserves one neutral runtime contract across seed, handoff, fallback, approval wait, and rework re-entry
+  - representative cells give durable coverage for launcher/runtime law without binding canon to vendor-specific naming or requiring one test per carrier
+- Trade-offs:
+  - the matrix must be intentionally small, so it proves representative cells rather than exhaustive backend permutations
+  - some backend-specific fanout behavior remains covered by focused routing tests instead of a single giant e2e smoke
+- Alternatives considered:
+  - only linear run-graph smoke without backend lineage assertions
+  - one exhaustive backend-by-backend matrix that duplicates routing and smoke fixtures across every carrier
+- ADR link if needed:
+  - none
+
 ## Technical Design
 
 ### Core Components
@@ -196,19 +213,14 @@ Will implement / choose:
   - `r1-05-a` host template/materializer abstraction
   - `r1-05-b` runtime assignment neutralization
   - `r1-08-a` and `r1-08-b` fixture/proof neutralization
+  - current implementation routing in `vida.config.yaml` for the representative mixed-backend lane chain and fallback cells
 
 ### Bounded File Set
 - Expected code changes:
-  - [`crates/vida/src/project_activator_surface.rs`](/home/unnamed/project/vida-stack/crates/vida/src/project_activator_surface.rs)
-  - [`crates/vida/src/status_surface.rs`](/home/unnamed/project/vida-stack/crates/vida/src/status_surface.rs)
-  - [`crates/vida/src/main.rs`](/home/unnamed/project/vida-stack/crates/vida/src/main.rs)
-  - [`crates/vida/src/taskflow_consume_bundle.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_consume_bundle.rs)
-  - [`crates/vida/src/taskflow_routing.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_routing.rs)
-  - [`crates/vida/src/taskflow_run_graph.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_run_graph.rs)
+  - [`crates/vida/src/runtime_dispatch_state.rs`](/home/unnamed/project/vida-stack/crates/vida/src/runtime_dispatch_state.rs)
 - Likely follow-on tests and proof assets:
-  - [`crates/vida/tests/boot_smoke.rs`](/home/unnamed/project/vida-stack/crates/vida/tests/boot_smoke.rs)
-  - [`crates/vida/tests/task_smoke.rs`](/home/unnamed/project/vida-stack/crates/vida/tests/task_smoke.rs)
-  - canonical fixture/golden assets introduced under the Release-1 proof contract
+  - bounded mixed-backend/full-lane-chain assertions in [`crates/vida/src/runtime_dispatch_state.rs`](/home/unnamed/project/vida-stack/crates/vida/src/runtime_dispatch_state.rs)
+  - carrier-neutral proof receipts in this design doc
 
 ## Fail-Closed Constraints
 - Forbidden fallback paths:
@@ -240,14 +252,22 @@ Will implement / choose:
 - Final proof target:
   - `r1-05-b` and the carrier-neutral portion of `r1-08-*` can close without codex-era canonical names.
 
+### Phase 4
+- Add the bounded multi-backend proof matrix for representative internal/external/fallback cells and one full-lane implementation chain.
+- Prove downstream receipt and trace parity for mixed backend selection, approval wait, and rework return without introducing vendor-branded canonical fields.
+- Final proof target:
+  - representative backend combinations stay green under one neutral contract for lane-chain execution and fallback routing.
+
 ## Validation / Proof
 - Unit tests:
   - neutral bundle builder fields
   - host-system registry/materialization selection
   - runtime-assignment selection over neutral DTOs
+  - representative downstream backend selection and fallback cells for implementation, coach, and verification lanes
 - Integration tests:
   - status/consume payloads for codex and qwen compatibility paths using the same neutral contracts
   - fail-closed unknown-system and missing-carrier cases
+  - one representative mixed-backend full-lane chain covering implementation seed, downstream receipt progression, approval wait or rework continuity, and internal fallback parity
 - Runtime checks:
   - `./target/debug/vida status --json`
   - `./target/debug/vida project-activator --json`

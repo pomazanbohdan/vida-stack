@@ -4627,6 +4627,140 @@ mod tests {
         })
     }
 
+    fn mixed_backend_execution_plan() -> serde_json::Value {
+        json!({
+            "backend_admissibility_matrix": [
+            {
+                "backend_id": "opencode_cli",
+                "backend_class": "external_cli",
+                "lane_admissibility": {
+                    "implementation": false,
+                    "coach": false,
+                    "verification": true
+                }
+            },
+                {
+                    "backend_id": "hermes_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "implementation": false,
+                        "coach": true,
+                        "verification": true
+                    }
+                },
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true,
+                        "coach": true,
+                        "verification": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "implementer": {
+                    "executor_backend": "opencode_cli",
+                    "fallback_executor_backend": "internal_subagents"
+                },
+                "coach": {
+                    "executor_backend": "hermes_cli",
+                    "fallback_executor_backend": "internal_subagents"
+                },
+                "verification": {
+                    "executor_backend": "opencode_cli",
+                    "fallback_executor_backend": "internal_subagents"
+                },
+                "review_ensemble": {
+                    "executor_backend": "opencode_cli",
+                    "fallback_executor_backend": "internal_subagents",
+                    "fanout_executor_backends": ["opencode_cli", "hermes_cli", "kilo_cli"]
+                },
+                "dispatch_contract": {
+                    "execution_lane_sequence": ["implementer", "coach", "verification"],
+                    "implementer_activation": {
+                        "activation_agent_type": "junior",
+                        "activation_runtime_role": "worker"
+                    },
+                    "coach_activation": {
+                        "activation_agent_type": "middle",
+                        "activation_runtime_role": "coach"
+                    },
+                    "verifier_activation": {
+                        "activation_agent_type": "senior",
+                        "activation_runtime_role": "verifier"
+                    }
+                }
+            }
+        })
+    }
+
+    fn mixed_backend_role_selection() -> RuntimeConsumptionLaneSelection {
+        RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: mixed_backend_execution_plan(),
+            reason: "test".to_string(),
+        }
+    }
+
+    fn executed_agent_lane_receipt(
+        dispatch_target: &str,
+        selected_backend: &str,
+        activation_agent_type: &str,
+        activation_runtime_role: &str,
+        downstream_dispatch_target: Option<&str>,
+    ) -> RunGraphDispatchReceipt {
+        RunGraphDispatchReceipt {
+            run_id: "run-mixed-backend-matrix".to_string(),
+            dispatch_target: dispatch_target.to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_complete".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some(format!("/tmp/{dispatch_target}-packet.json")),
+            dispatch_result_path: Some(format!("/tmp/{dispatch_target}-result.json")),
+            blocker_code: None,
+            downstream_dispatch_target: downstream_dispatch_target.map(str::to_string),
+            downstream_dispatch_command: downstream_dispatch_target
+                .map(|_| "vida agent-init".to_string()),
+            downstream_dispatch_note: downstream_dispatch_target.map(|target| {
+                format!(
+                    "after `{dispatch_target}` evidence is recorded, activate `{target}` for the next bounded lane"
+                )
+            }),
+            downstream_dispatch_ready: downstream_dispatch_target.is_some(),
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: downstream_dispatch_target
+                .map(|target| format!("/tmp/{target}-packet.json")),
+            downstream_dispatch_status: downstream_dispatch_target
+                .map(|_| "packet_ready".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: downstream_dispatch_target.map(str::to_string),
+            downstream_dispatch_last_target: downstream_dispatch_target.map(str::to_string),
+            activation_agent_type: Some(activation_agent_type.to_string()),
+            activation_runtime_role: Some(activation_runtime_role.to_string()),
+            selected_backend: Some(selected_backend.to_string()),
+            recorded_at: "2026-04-21T00:00:00Z".to_string(),
+        }
+    }
+
     fn agent_lane_test_request() -> &'static str {
         "Implement the bounded fix in crates/vida/src/runtime_dispatch_state.rs with regression tests."
     }
@@ -11700,6 +11834,201 @@ agent_system:
         );
 
         assert_eq!(selected.as_deref(), Some("internal_subagents"));
+    }
+
+    #[test]
+    fn mixed_backend_downstream_receipts_preserve_lane_specific_backend_lineage() {
+        let role_selection = mixed_backend_role_selection();
+        let implementer_receipt = executed_agent_lane_receipt(
+            "implementer",
+            "opencode_cli",
+            "junior",
+            "worker",
+            Some("coach"),
+        );
+
+        let coach_receipt = build_downstream_dispatch_receipt(&role_selection, &implementer_receipt)
+            .expect("coach downstream receipt should build");
+        assert_eq!(coach_receipt.dispatch_target, "coach");
+        assert_eq!(coach_receipt.selected_backend.as_deref(), Some("hermes_cli"));
+        assert_eq!(coach_receipt.activation_agent_type.as_deref(), Some("middle"));
+        assert_eq!(coach_receipt.activation_runtime_role.as_deref(), Some("coach"));
+        assert_eq!(coach_receipt.dispatch_status, "routed");
+
+        let mut executed_coach_receipt = coach_receipt.clone();
+        executed_coach_receipt.dispatch_status = "executed".to_string();
+        executed_coach_receipt.lane_status = "lane_complete".to_string();
+        executed_coach_receipt.dispatch_packet_path = Some("/tmp/coach-packet.json".to_string());
+        executed_coach_receipt.dispatch_result_path = Some("/tmp/coach-result.json".to_string());
+        executed_coach_receipt.downstream_dispatch_target = Some("verification".to_string());
+        executed_coach_receipt.downstream_dispatch_command = Some("vida agent-init".to_string());
+        executed_coach_receipt.downstream_dispatch_note = Some(
+            "after `coach` evidence is recorded, activate `verification` for the next bounded lane"
+                .to_string(),
+        );
+        executed_coach_receipt.downstream_dispatch_ready = true;
+        executed_coach_receipt.downstream_dispatch_blockers.clear();
+
+        let verification_receipt =
+            build_downstream_dispatch_receipt(&role_selection, &executed_coach_receipt)
+                .expect("verification downstream receipt should build");
+        assert_eq!(verification_receipt.dispatch_target, "verification");
+        assert_eq!(
+            verification_receipt.selected_backend.as_deref(),
+            Some("opencode_cli")
+        );
+        assert_eq!(
+            verification_receipt.activation_agent_type.as_deref(),
+            Some("senior")
+        );
+        assert_eq!(
+            verification_receipt.activation_runtime_role.as_deref(),
+            Some("verifier")
+        );
+        assert_eq!(verification_receipt.dispatch_status, "routed");
+    }
+
+    #[test]
+    fn mixed_backend_implementer_receipt_uses_internal_fallback_when_external_primary_is_inadmissible(
+    ) {
+        let mut execution_plan = mixed_backend_execution_plan();
+        execution_plan["backend_admissibility_matrix"] = json!([
+            {
+                "backend_id": "opencode_cli",
+                "backend_class": "external_cli",
+                "lane_admissibility": {
+                    "implementation": false,
+                    "coach": false,
+                    "verification": true
+                }
+            },
+            {
+                "backend_id": "hermes_cli",
+                "backend_class": "external_cli",
+                "lane_admissibility": {
+                    "implementation": false,
+                    "coach": true,
+                    "verification": true
+                }
+            },
+            {
+                "backend_id": "internal_subagents",
+                "backend_class": "internal",
+                "lane_admissibility": {
+                    "implementation": true,
+                    "coach": true,
+                    "verification": true
+                }
+            }
+        ]);
+        let mut role_selection = mixed_backend_role_selection();
+        role_selection.execution_plan = execution_plan;
+
+        let dev_pack_receipt = RunGraphDispatchReceipt {
+            run_id: "run-mixed-backend-matrix".to_string(),
+            dispatch_target: "dev-pack".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_complete".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida task ensure".to_string()),
+            dispatch_command: Some("vida task ensure".to_string()),
+            dispatch_packet_path: Some("/tmp/dev-pack-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/dev-pack-result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("implementer".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some(
+                "after `dev-pack` evidence is recorded, activate `implementer` for the next bounded lane"
+                    .to_string(),
+            ),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: Some("/tmp/implementer-packet.json".to_string()),
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("implementer".to_string()),
+            downstream_dispatch_last_target: Some("implementer".to_string()),
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("opencode_cli".to_string()),
+            recorded_at: "2026-04-21T00:00:00Z".to_string(),
+        };
+
+        let implementer_receipt =
+            build_downstream_dispatch_receipt(&role_selection, &dev_pack_receipt)
+                .expect("implementer downstream receipt should build");
+
+        assert_eq!(implementer_receipt.dispatch_target, "implementer");
+        assert_eq!(
+            implementer_receipt.selected_backend.as_deref(),
+            Some("internal_subagents")
+        );
+        assert_eq!(
+            implementer_receipt.activation_agent_type.as_deref(),
+            Some("junior")
+        );
+        assert_eq!(
+            implementer_receipt.activation_runtime_role.as_deref(),
+            Some("worker")
+        );
+    }
+
+    #[test]
+    fn apply_first_handoff_execution_keeps_selected_backend_across_mixed_lane_chain() {
+        let status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-mixed-backend-matrix",
+            "implementation",
+            "implementation",
+        );
+        let implementer_receipt = executed_agent_lane_receipt(
+            "implementer",
+            "opencode_cli",
+            "junior",
+            "worker",
+            Some("coach"),
+        );
+        let implemented_status =
+            apply_first_handoff_execution_to_run_graph_status(&status, &implementer_receipt);
+        assert_eq!(implemented_status.active_node, "implementer");
+        assert_eq!(implemented_status.next_node.as_deref(), Some("coach"));
+        assert_eq!(implemented_status.selected_backend, "opencode_cli");
+        assert_eq!(implemented_status.resume_target, "dispatch.coach");
+
+        let coach_receipt = executed_agent_lane_receipt(
+            "coach",
+            "hermes_cli",
+            "middle",
+            "coach",
+            Some("verification"),
+        );
+        let coached_status =
+            apply_first_handoff_execution_to_run_graph_status(&implemented_status, &coach_receipt);
+        assert_eq!(coached_status.active_node, "coach");
+        assert_eq!(coached_status.next_node.as_deref(), Some("verification"));
+        assert_eq!(coached_status.selected_backend, "hermes_cli");
+        assert_eq!(coached_status.resume_target, "dispatch.verification");
+    }
+
+    #[test]
+    fn review_ensemble_route_summary_preserves_fanout_and_internal_fallback_matrix() {
+        let role_selection = mixed_backend_role_selection();
+
+        let summary =
+            dispatch_execution_route_summary(&role_selection, "review_ensemble", Some("opencode_cli"));
+
+        assert_eq!(summary["effective_selected_backend"], "opencode_cli");
+        assert_eq!(summary["selected_backend_source"], "dispatch_receipt");
+        assert_eq!(summary["route_primary_backend"], "opencode_cli");
+        assert_eq!(summary["route_fallback_backend"], "internal_subagents");
+        assert_eq!(
+            summary["route_fanout_backends"],
+            serde_json::json!(["opencode_cli", "hermes_cli", "kilo_cli"])
+        );
+        assert_eq!(summary["effective_execution_posture"], "hybrid");
     }
 
     #[test]
