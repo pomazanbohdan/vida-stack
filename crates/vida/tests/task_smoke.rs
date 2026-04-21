@@ -878,7 +878,10 @@ fn task_list_json_ignores_render_color_emoji_styling() {
     assert_eq!(parsed["status"], "pass");
     assert_eq!(parsed["surface"], "vida task list");
     assert_eq!(parsed["view"], "full");
-    assert!(parsed["tasks"].is_array(), "task list tasks should be json array");
+    assert!(
+        parsed["tasks"].is_array(),
+        "task list tasks should be json array"
+    );
 
     let _ = fs::remove_dir_all(&state_dir);
 }
@@ -1130,7 +1133,7 @@ agent_system:
 }
 
 #[test]
-fn status_json_reports_non_codex_host_agents_summary() {
+fn status_json_reports_non_default_host_agents_summary() {
     let project_root = unique_state_dir();
     fs::create_dir_all(&project_root).expect("project root should exist");
     let state_dir = format!("{project_root}/.vida/data/state");

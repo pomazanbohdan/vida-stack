@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::project_activator_surface::{
     host_cli_system_enabled, host_cli_system_execution_class, host_cli_system_materialization_mode,
     host_cli_system_runtime_root, host_cli_system_runtime_surface, normalize_host_cli_system,
-    resolve_host_cli_template_source, HOST_CLI_PLACEHOLDER,
+    resolve_host_cli_template_source, HOST_CLI_PLACEHOLDER, HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE,
 };
 
 pub(crate) struct ProjectActivatorHostCliSummary {
@@ -85,7 +85,7 @@ pub(crate) fn build_project_activator_host_cli_summary(
         host_cli_runtime_root.as_deref(),
         host_cli_materialization_mode.as_deref(),
     ) {
-        (Some(root), Some("codex_toml_catalog_render")) => {
+        (Some(root), Some(HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE)) => {
             root.join("config.toml").is_file() && root.join("agents").is_dir()
         }
         (Some(root), Some("copy_tree_only")) => root.exists(),

@@ -1270,7 +1270,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_dispatch_aliases_are_loaded_from_overlay_not_rust_catalog() {
+    fn dispatch_aliases_are_loaded_from_overlay_not_rust_catalog() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());

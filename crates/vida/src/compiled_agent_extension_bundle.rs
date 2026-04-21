@@ -129,9 +129,9 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
 mod tests {
     use super::build_compiled_agent_extension_bundle_for_root;
     use crate::project_activator_surface::read_yaml_file_checked;
+    use crate::run;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
-    use crate::run;
     use std::fs;
     use std::process::ExitCode;
 
@@ -465,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_dispatch_aliases_require_canonical_overlay_key() {
+    fn dispatch_aliases_require_canonical_overlay_key() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -478,8 +478,8 @@ mod tests {
         let updated = config_body.replace("dispatch_aliases:", "named_lanes:");
         fs::write(&config_path, updated).expect("config should be rewritten");
 
-        let config = read_yaml_file_checked(&harness.path().join("vida.config.yaml"))
-            .expect("config");
+        let config =
+            read_yaml_file_checked(&harness.path().join("vida.config.yaml")).expect("config");
         let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
             .expect("bundle should compile");
         let carrier_runtime = bundle["carrier_runtime"].clone();

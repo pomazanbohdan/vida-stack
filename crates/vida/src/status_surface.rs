@@ -527,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_host_cli_system_entry_prefers_enabled_configured_system_without_codex_fallback() {
+    fn selected_host_cli_system_entry_prefers_enabled_configured_system_without_legacy_fallback() {
         let overlay: serde_yaml::Value = serde_yaml::from_str(
             r#"
 host_environment:

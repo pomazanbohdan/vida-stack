@@ -31,6 +31,7 @@ pub(crate) struct ProjectActivationStatusTruth {
 }
 
 pub(crate) const HOST_CLI_PLACEHOLDER: &str = "__HOST_CLI_SYSTEM__";
+pub(crate) const HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE: &str = "codex_toml_catalog_render";
 
 fn yaml_scalar(value: &str) -> String {
     if value
@@ -518,7 +519,7 @@ pub(crate) fn materialize_host_cli_template(
     let mode = host_cli_system_materialization_mode(&entry_ref, cli_system);
     let copy_tree_target = project_root.join(&runtime_root);
     match mode.as_str() {
-        "codex_toml_catalog_render" => {
+        HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE => {
             project_activator_host_cli_materialization::materialize_host_cli_template_with_catalog_render(
                 project_root,
                 cli_system,
@@ -592,7 +593,7 @@ pub(crate) fn resolved_host_cli_agent_catalog_for_root(
         if catalog_entry
             .map(|entry| host_cli_system_materialization_mode(entry, &selected_host_cli_system))
             .as_deref()
-            == Some("codex_toml_catalog_render")
+            == Some(HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE)
         {
             host_cli_agent_catalog = project_activator_host_cli_materialization::resolve_host_cli_agent_catalog_for_rendered_root(
                 project_root,

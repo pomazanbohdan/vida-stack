@@ -496,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_feedback_records_scorecard_for_non_codex_selected_system() {
+    fn agent_feedback_records_scorecard_for_non_default_selected_system() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());

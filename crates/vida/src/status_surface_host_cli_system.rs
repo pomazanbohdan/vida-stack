@@ -63,7 +63,7 @@ pub(crate) fn default_host_cli_materialization_mode(
         .map(|rows| !rows.is_empty())
         .unwrap_or(false);
     if has_carrier_catalog {
-        "codex_toml_catalog_render".to_string()
+        crate::project_activator_surface::HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE.to_string()
     } else {
         "copy_tree_only".to_string()
     }

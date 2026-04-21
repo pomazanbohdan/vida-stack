@@ -815,7 +815,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_system_snapshot_ignores_legacy_codex_multi_agent_alias() {
+    fn agent_system_snapshot_ignores_legacy_multi_agent_alias_field() {
         let activation_bundle = serde_json::json!({
             "agent_system": {
                 "mode": "native",

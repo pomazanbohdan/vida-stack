@@ -10,14 +10,6 @@ pub(crate) fn resolved_carrier_roles(
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn resolved_codex_roles(
-    config: &serde_yaml::Value,
-    codex_root: &std::path::Path,
-) -> Vec<serde_json::Value> {
-    resolved_carrier_roles(config, codex_root)
-}
-
 pub(crate) fn carrier_role_validation_errors(roles: &[serde_json::Value]) -> Vec<String> {
     roles
         .iter()
@@ -53,11 +45,6 @@ pub(crate) fn carrier_role_validation_errors(roles: &[serde_json::Value]) -> Vec
         .collect()
 }
 
-#[allow(dead_code)]
-pub(crate) fn codex_role_validation_errors(roles: &[serde_json::Value]) -> Vec<String> {
-    carrier_role_validation_errors(roles)
-}
-
 pub(crate) fn materialized_dispatch_aliases(
     config: &serde_yaml::Value,
     dispatch_alias_rows: &[serde_json::Value],
@@ -74,15 +61,6 @@ pub(crate) fn materialized_dispatch_aliases(
             carrier_roles,
         )
     }
-}
-
-#[allow(dead_code)]
-pub(crate) fn materialized_codex_dispatch_aliases(
-    config: &serde_yaml::Value,
-    dispatch_alias_rows: &[serde_json::Value],
-    codex_roles: &[serde_json::Value],
-) -> Vec<serde_json::Value> {
-    materialized_dispatch_aliases(config, dispatch_alias_rows, codex_roles)
 }
 
 pub(crate) fn carrier_dispatch_alias_validation_errors(
@@ -138,13 +116,6 @@ pub(crate) fn carrier_dispatch_alias_validation_errors(
             }
         })
         .collect()
-}
-
-#[allow(dead_code)]
-pub(crate) fn codex_dispatch_alias_validation_errors(
-    dispatch_aliases: &[serde_json::Value],
-) -> Vec<String> {
-    carrier_dispatch_alias_validation_errors(dispatch_aliases)
 }
 
 #[cfg(test)]
