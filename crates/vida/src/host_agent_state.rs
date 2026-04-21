@@ -9,9 +9,10 @@ use crate::carrier_runtime_metadata::{
     DEFAULT_RETIREMENT_FAILURE_LIMIT,
 };
 
-use super::{WORKER_SCORECARDS_STATE, WORKER_STRATEGY_STATE};
-
+pub(crate) const WORKER_SCORECARDS_STATE: &str = ".vida/state/worker-scorecards.json";
+pub(crate) const WORKER_STRATEGY_STATE: &str = ".vida/state/worker-strategy.json";
 pub(crate) const HOST_AGENT_OBSERVABILITY_STATE: &str = ".vida/state/host-agent-observability.json";
+pub(crate) const PROMPT_LIFECYCLE_STATE: &str = ".vida/state/prompt-lifecycle.json";
 
 pub(crate) fn worker_scorecards_state_path(project_root: &Path) -> PathBuf {
     project_root.join(WORKER_SCORECARDS_STATE)
@@ -26,7 +27,7 @@ pub(crate) fn host_agent_observability_state_path(project_root: &Path) -> PathBu
 }
 
 pub(crate) fn prompt_lifecycle_state_path(project_root: &Path) -> PathBuf {
-    project_root.join(crate::PROMPT_LIFECYCLE_STATE)
+    project_root.join(PROMPT_LIFECYCLE_STATE)
 }
 
 pub(crate) fn read_json_file_if_present(path: &Path) -> Option<serde_json::Value> {
@@ -65,7 +66,7 @@ pub(crate) fn load_or_initialize_prompt_lifecycle_state(project_root: &Path) -> 
             "updated_at": time::OffsetDateTime::now_utc()
                 .format(&Rfc3339)
                 .expect("rfc3339 timestamp should render"),
-            "store_path": crate::PROMPT_LIFECYCLE_STATE,
+            "store_path": PROMPT_LIFECYCLE_STATE,
             "workflows": {}
         })
     })

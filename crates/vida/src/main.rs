@@ -37,6 +37,7 @@ mod project_activator_host_cli_summary;
 mod project_activator_normal_work_defaults;
 mod project_activator_runtime_surface;
 mod project_activator_surface;
+mod project_bootstrap_defaults;
 mod project_root_paths;
 mod protocol_surface;
 mod registry_projection_utils;
@@ -133,7 +134,8 @@ pub(crate) use host_agent_state::{
     append_host_agent_observability_event, host_agent_observability_state_path,
     load_or_initialize_host_agent_observability_state, load_or_initialize_worker_scorecards,
     read_json_file_if_present, refresh_worker_strategy, worker_scorecards_state_path,
-    worker_strategy_state_path, HostAgentFeedbackInput,
+    worker_strategy_state_path, HostAgentFeedbackInput, HOST_AGENT_OBSERVABILITY_STATE,
+    PROMPT_LIFECYCLE_STATE, WORKER_SCORECARDS_STATE, WORKER_STRATEGY_STATE,
 };
 pub(crate) use init_surfaces::resolve_init_bootstrap_source_root;
 pub(crate) use launcher_activation_snapshot::{
@@ -147,6 +149,7 @@ use launcher_task_commands::{
 pub(crate) use project_activator_surface::build_project_activator_view;
 pub(crate) use project_activator_surface::merge_project_activation_into_init_view;
 pub(crate) use project_activator_surface::ProjectActivationAnswers;
+pub(crate) use project_bootstrap_defaults::*;
 pub(crate) use project_root_paths::{
     ensure_dir, looks_like_project_root, resolve_repo_root, resolve_runtime_project_root,
     resolve_status_project_root,
@@ -171,10 +174,15 @@ pub(crate) use runtime_assignment_projection_utils::{
     carrier_runtime_section, infer_task_class_from_task_payload, json_u64,
     runtime_assignment_alias_fields, runtime_assignment_from_execution_plan,
 };
+#[allow(unused_imports)]
 pub(crate) use runtime_consumption_state::{
     apply_runtime_consumption_final_dispatch_receipt_blocker,
     latest_admissible_retrieval_trust_signal,
     runtime_consumption_final_dispatch_receipt_blocker_code,
+    RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER,
+    RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION,
+    RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER,
+    RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_NEXT_ACTION,
 };
 pub(crate) use runtime_consumption_state::{
     latest_final_runtime_consumption_snapshot_path,
@@ -216,79 +224,6 @@ use taskflow_spec_bootstrap::{
     execute_taskflow_bootstrap_spec_with_store, execute_work_packet_create_with_store,
 };
 use time::format_description::well_known::Rfc3339;
-const DEFAULT_AGENT_EXTENSION_ROLES_YAML: &str =
-    include_str!("../../../docs/process/agent-extensions/roles.yaml");
-const DEFAULT_AGENT_EXTENSION_SKILLS_YAML: &str =
-    include_str!("../../../docs/process/agent-extensions/skills.yaml");
-const DEFAULT_AGENT_EXTENSION_PROFILES_YAML: &str =
-    include_str!("../../../docs/process/agent-extensions/profiles.yaml");
-const DEFAULT_AGENT_EXTENSION_FLOWS_YAML: &str =
-    include_str!("../../../docs/process/agent-extensions/flows.yaml");
-const DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_YAML: &str =
-    include_str!("../../../docs/process/agent-extensions/dispatch-aliases.yaml");
-const DEFAULT_RUNTIME_AGENT_EXTENSIONS_README: &str = r#"# Runtime Agent Extensions
-
-This directory holds the active runtime-owned agent-extension projections for the project.
-
-Runtime rule:
-
-1. `.vida/project/agent-extensions/*.yaml` is the active project-local runtime projection family.
-2. Matching `*.sidecar.yaml` files are the editable override surfaces for project-local changes.
-3. Root `docs/process/agent-extensions/**` remains source/export/import lineage only; it is not the live runtime source.
-4. Edited sidecars become active only through runtime validation and import-safe execution paths.
-"#;
-const DEFAULT_AGENT_EXTENSION_ROLES_SIDECAR_YAML: &str = "version: 1\nroles: []\n";
-const DEFAULT_AGENT_EXTENSION_SKILLS_SIDECAR_YAML: &str = "version: 1\nskills: []\n";
-const DEFAULT_AGENT_EXTENSION_PROFILES_SIDECAR_YAML: &str = "version: 1\nprofiles: []\n";
-const DEFAULT_AGENT_EXTENSION_FLOWS_SIDECAR_YAML: &str = "version: 1\nflow_sets: []\n";
-const DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_SIDECAR_YAML: &str =
-    "version: 1\ndispatch_aliases: []\n";
-pub(crate) const PROJECT_ID_PLACEHOLDER: &str = "__PROJECT_ID__";
-const DOCS_ROOT_PLACEHOLDER: &str = "__DOCS_ROOT__";
-const PROCESS_ROOT_PLACEHOLDER: &str = "__PROCESS_ROOT__";
-const RESEARCH_ROOT_PLACEHOLDER: &str = "__RESEARCH_ROOT__";
-const README_DOC_PLACEHOLDER: &str = "__README_DOC__";
-const ARCHITECTURE_DOC_PLACEHOLDER: &str = "__ARCHITECTURE_DOC__";
-const DECISIONS_DOC_PLACEHOLDER: &str = "__DECISIONS_DOC__";
-const ENVIRONMENTS_DOC_PLACEHOLDER: &str = "__ENVIRONMENTS_DOC__";
-const PROJECT_OPERATIONS_DOC_PLACEHOLDER: &str = "__PROJECT_OPERATIONS_DOC__";
-const AGENT_SYSTEM_DOC_PLACEHOLDER: &str = "__AGENT_SYSTEM_DOC__";
-pub(crate) const USER_COMMUNICATION_PLACEHOLDER: &str = "__USER_COMMUNICATION__";
-pub(crate) const REASONING_LANGUAGE_PLACEHOLDER: &str = "__REASONING_LANGUAGE__";
-pub(crate) const DOCUMENTATION_LANGUAGE_PLACEHOLDER: &str = "__DOCUMENTATION_LANGUAGE__";
-pub(crate) const TODO_PROTOCOL_LANGUAGE_PLACEHOLDER: &str = "__TODO_PROTOCOL_LANGUAGE__";
-const DEFAULT_PROJECT_DOCS_ROOT: &str = "docs";
-const DEFAULT_PROJECT_PROCESS_ROOT: &str = "docs/process";
-const DEFAULT_PROJECT_RESEARCH_ROOT: &str = "docs/research";
-const DEFAULT_PROJECT_ROOT_MAP: &str = "docs/project-root-map.md";
-const DEFAULT_PROJECT_PRODUCT_INDEX: &str = "docs/product/index.md";
-const DEFAULT_PROJECT_PRODUCT_SPEC_README: &str = "docs/product/spec/README.md";
-const DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE: &str =
-    "docs/product/spec/templates/feature-design-document.template.md";
-const DEFAULT_PROJECT_ARCHITECTURE_DOC: &str = "docs/product/architecture.md";
-const DEFAULT_PROJECT_PROCESS_README: &str = "docs/process/README.md";
-const DEFAULT_PROJECT_DECISIONS_DOC: &str = "docs/process/decisions.md";
-const DEFAULT_PROJECT_ENVIRONMENTS_DOC: &str = "docs/process/environments.md";
-const DEFAULT_PROJECT_OPERATIONS_DOC: &str = "docs/process/project-operations.md";
-const DEFAULT_PROJECT_AGENT_SYSTEM_DOC: &str = "docs/process/agent-system.md";
-const DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC: &str =
-    "docs/process/codex-agent-configuration-guide.md";
-const DEFAULT_PROJECT_DOC_TOOLING_DOC: &str = "docs/process/documentation-tooling-map.md";
-const DEFAULT_PROJECT_RESEARCH_README: &str = "docs/research/README.md";
-const PROJECT_ACTIVATION_RECEIPT_LATEST: &str = ".vida/receipts/project-activation.latest.json";
-const SPEC_BOOTSTRAP_RECEIPT_LATEST: &str = ".vida/receipts/spec-bootstrap.latest.json";
-const WORKER_SCORECARDS_STATE: &str = ".vida/state/worker-scorecards.json";
-const WORKER_STRATEGY_STATE: &str = ".vida/state/worker-strategy.json";
-const HOST_AGENT_OBSERVABILITY_STATE: &str = ".vida/state/host-agent-observability.json";
-const PROMPT_LIFECYCLE_STATE: &str = ".vida/state/prompt-lifecycle.json";
-const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER: &str =
-    "run_graph_latest_dispatch_receipt_summary_inconsistent";
-const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_NEXT_ACTION: &str =
-    "Refresh the latest run-graph dispatch receipt summary before rerunning consume-final.";
-const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER: &str =
-    "run_graph_latest_dispatch_receipt_checkpoint_leakage";
-const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION: &str = "Refresh the latest checkpoint evidence before rerunning consume-final so the latest status and checkpoint rows share the same run_id.";
-
 #[tokio::main]
 async fn main() -> ExitCode {
     run_root_command(Cli::parse()).await
@@ -386,5 +321,4 @@ mod tests {
         assert!(harness.path().join(".vida/scratchpad").is_dir());
         assert!(!harness.path().join("vida").exists());
     }
-
 }

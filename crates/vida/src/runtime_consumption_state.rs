@@ -44,6 +44,14 @@ pub(crate) const RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT: &str =
     "protocol_binding_receipt";
 pub(crate) const RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE: &str =
     "protocol_binding_receipt_runtime_gate";
+pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER: &str =
+    "run_graph_latest_dispatch_receipt_summary_inconsistent";
+pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_NEXT_ACTION:
+    &str = "Refresh the latest run-graph dispatch receipt summary before rerunning consume-final.";
+pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER: &str =
+    "run_graph_latest_dispatch_receipt_checkpoint_leakage";
+pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION: &str =
+    "Refresh the latest checkpoint evidence before rerunning consume-final so the latest status and checkpoint rows share the same run_id.";
 
 pub(crate) fn latest_admissible_retrieval_trust_signal(
     runtime_consumption: &RuntimeConsumptionSummary,
@@ -112,8 +120,7 @@ pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code(
         .filter(|value| !value.trim().is_empty())
     else {
         return Ok(Some(
-            super::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER
-                .to_string(),
+            RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER.to_string(),
         ));
     };
     runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result(
@@ -136,8 +143,7 @@ pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code_for_run(
         .filter(|value| !value.trim().is_empty())
     else {
         return Ok(Some(
-            super::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER
-                .to_string(),
+            RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER.to_string(),
         ));
     };
     let dispatch_receipt_summary = block_on_state_store(store.run_graph_dispatch_receipt(run_id))
@@ -161,21 +167,18 @@ pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code_from_summa
 ) -> Result<Option<String>, String> {
     if payload_run_id != latest_status_run_id {
         return Ok(Some(
-            super::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER
-                .to_string(),
+            RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER.to_string(),
         ));
     }
 
     match dispatch_receipt_summary {
         Ok(Some(summary)) if summary.run_id == latest_status_run_id => Ok(None),
         Ok(_) => Ok(Some(
-            super::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER
-                .to_string(),
+            RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER.to_string(),
         )),
         Err(error) if error.contains("latest checkpoint evidence must share the same run_id") => {
             Ok(Some(
-                super::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER
-                    .to_string(),
+                RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER.to_string(),
             ))
         }
         Err(error) => Err(error),
@@ -391,13 +394,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        latest_final_runtime_consumption_snapshot_path,
         apply_runtime_consumption_final_dispatch_receipt_blocker,
-        latest_admissible_retrieval_trust_signal,
+        latest_admissible_retrieval_trust_signal, latest_final_runtime_consumption_snapshot_path,
         runtime_consumption_final_dispatch_receipt_blocker_code,
-        runtime_consumption_snapshot_has_release_admission_evidence,
         runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result,
-        RuntimeConsumptionSummary, RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
+        runtime_consumption_snapshot_has_release_admission_evidence, RuntimeConsumptionSummary,
+        RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
         RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
         RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
         RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
@@ -707,9 +709,10 @@ mod tests {
             "direct_consumption_ready": true,
         });
 
-        let blocker_code = runtime_consumption_final_dispatch_receipt_blocker_code(&store, &payload)
-            .expect("blocker evaluation should succeed")
-            .expect("missing receipt summary should fail closed");
+        let blocker_code =
+            runtime_consumption_final_dispatch_receipt_blocker_code(&store, &payload)
+                .expect("blocker evaluation should succeed")
+                .expect("missing receipt summary should fail closed");
         assert_eq!(
             blocker_code,
             crate::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER

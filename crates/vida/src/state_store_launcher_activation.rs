@@ -91,3 +91,54 @@ impl LauncherActivationSnapshot {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[tokio::test]
+    async fn launcher_activation_snapshot_write_accepts_empty_source_config_path_as_provenance_only()
+     {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-launcher-activation-provenance-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let snapshot = LauncherActivationSnapshot {
+            source: "state_store".to_string(),
+            source_config_path: String::new(),
+            source_config_digest: "digest-123".to_string(),
+            captured_at: "2026-03-08T00:00:00Z".to_string(),
+            compiled_bundle: serde_json::json!({
+                "role_selection": {
+                    "fallback_role": "worker",
+                    "mode": "native"
+                },
+                "agent_system": {}
+            }),
+            pack_router_keywords: serde_json::json!({}),
+        };
+
+        store
+            .write_launcher_activation_snapshot(&snapshot)
+            .await
+            .expect("write launcher activation snapshot");
+
+        let read_back = store
+            .read_launcher_activation_snapshot()
+            .await
+            .expect("read launcher activation snapshot");
+        assert_eq!(read_back.source, "state_store");
+        assert_eq!(read_back.source_config_path, "");
+        assert_eq!(read_back.source_config_digest, "digest-123");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+}

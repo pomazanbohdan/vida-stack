@@ -815,6 +815,51 @@ mod tests {
     }
 
     #[test]
+    fn agent_system_snapshot_prefers_carrier_runtime_fields_without_legacy_aliases() {
+        let activation_bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 2
+            },
+            "autonomous_execution": {
+                "enabled": true
+            },
+            "carrier_runtime": {
+                "roles": [
+                    {
+                        "role_id": "canonical",
+                        "tier": "canonical",
+                        "rate": 1,
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "default_runtime_role": "worker",
+                        "reasoning_band": "low",
+                        "model_reasoning_effort": "low"
+                    }
+                ],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
+                    },
+                    "agents": {},
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": {
+                    "role_id": "canonical",
+                    "default_runtime_role": "worker"
+                }
+            }
+        });
+
+        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+        assert_eq!(snapshot["carriers"][0]["carrier_id"], "canonical");
+        assert_eq!(snapshot["dispatch_aliases"]["role_id"], "canonical");
+        assert!(snapshot.get("codex_multi_agent").is_none());
+    }
+
+    #[test]
     fn agent_system_snapshot_ignores_legacy_multi_agent_alias_field() {
         let activation_bundle = serde_json::json!({
             "agent_system": {
@@ -859,6 +904,7 @@ mod tests {
         let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
         assert_eq!(snapshot["carriers"][0]["carrier_id"], "canonical");
         assert_eq!(snapshot["dispatch_aliases"]["role_id"], "canonical");
+        assert!(snapshot.get("codex_multi_agent").is_none());
     }
 
     #[test]
