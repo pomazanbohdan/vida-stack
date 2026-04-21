@@ -2704,6 +2704,45 @@ fn taskflow_consume_bundle_check_fails_fast_under_state_lock_contention() {
 }
 
 #[test]
+fn status_and_doctor_fail_closed_with_lock_remediation_hint() {
+    let state_dir = unique_state_dir();
+
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+
+    let held_state_lock = StateStoreLockGuard::acquire(&state_dir);
+    let expected_hint =
+        "another VIDA process still holds the authoritative datastore lock";
+
+    for args in [["status", "--json"], ["doctor", "--json"]] {
+        let output = status_or_doctor_with_timeout(&state_dir, &args);
+        assert!(
+            !output.status.success(),
+            "{} should fail while the state store lock is held",
+            args[0]
+        );
+        assert_ne!(
+            output.status.code(),
+            Some(124),
+            "{} timed out instead of failing fast: stdout={} stderr={}",
+            args[0],
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("Failed to open authoritative state store:")
+                && stderr.contains(expected_hint),
+            "expected {} lock remediation hint in stderr, got {stderr}",
+            args[0]
+        );
+    }
+
+    drop(held_state_lock);
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn taskflow_consume_bundle_check_fails_closed_without_protocol_binding_receipt() {
     let project_root = unique_state_dir();
     let state_dir = format!("{project_root}/.vida/data/state");
