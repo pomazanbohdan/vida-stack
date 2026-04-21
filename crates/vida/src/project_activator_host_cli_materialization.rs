@@ -1,6 +1,7 @@
 use super::*;
 
 const CODEX_RUNTIME_LABEL: &str = "Codex";
+const HOST_RUNTIME_LABEL: &str = CODEX_RUNTIME_LABEL;
 
 pub(crate) fn render_host_cli_template_from_catalog(
     project_root: &Path,
@@ -10,7 +11,7 @@ pub(crate) fn render_host_cli_template_from_catalog(
     named_lane_catalog: &[serde_json::Value],
 ) -> Result<(), String> {
     crate::host_runtime_materialization::render_host_runtime_template_from_catalog(
-        CODEX_RUNTIME_LABEL,
+        HOST_RUNTIME_LABEL,
         project_root,
         runtime_root,
         template_root,
