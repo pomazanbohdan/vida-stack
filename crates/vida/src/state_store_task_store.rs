@@ -2,6 +2,51 @@ use super::*;
 use serde_json::Deserializer;
 
 impl StateStore {
+    pub(crate) fn canonical_task_snapshot_path_for_state_root(state_root: &Path) -> PathBuf {
+        if let Some(project_root) =
+            crate::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
+        {
+            return project_root.join(".vida/exports/tasks.snapshot.jsonl");
+        }
+
+        if state_root.file_name().and_then(|value| value.to_str()) == Some("state") {
+            if let Some(data_dir) = state_root.parent() {
+                if let Some(vida_dir) = data_dir.parent() {
+                    return vida_dir.join("exports/tasks.snapshot.jsonl");
+                }
+            }
+        }
+
+        state_root.join("exports/tasks.snapshot.jsonl")
+    }
+
+    pub(crate) fn read_tasks_from_jsonl_snapshot(
+        source_path: &Path,
+    ) -> Result<Vec<TaskRecord>, StateStoreError> {
+        let raw = fs::read_to_string(source_path)?;
+        let mut rows = Vec::new();
+
+        for (index, record) in Deserializer::from_str(&raw)
+            .into_iter::<TaskJsonlRecord>()
+            .enumerate()
+        {
+            let record = record.map_err(|error| StateStoreError::InvalidTaskJsonLine {
+                line: index + 1,
+                reason: error.to_string(),
+            })?;
+            let content = TaskContent::from(record);
+            rows.push(TaskRecord::from(TaskStorageRow::from(content)));
+        }
+
+        Ok(rows)
+    }
+
+    pub async fn refresh_task_snapshot(&self) -> Result<PathBuf, StateStoreError> {
+        let snapshot_path = Self::canonical_task_snapshot_path_for_state_root(self.root());
+        self.export_tasks_to_jsonl(&snapshot_path).await?;
+        Ok(snapshot_path)
+    }
+
     fn build_task_close_reconciled_binding(
         status: &RunGraphStatus,
         closed_task_id: &str,

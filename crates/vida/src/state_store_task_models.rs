@@ -86,7 +86,7 @@ pub(crate) struct TaskJsonlRecord {
 pub(crate) struct TaskDependencyJsonlRecord {
     pub(crate) issue_id: String,
     pub(crate) depends_on_id: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", alias = "edge_type")]
     pub(crate) edge_type: String,
     #[serde(default)]
     pub(crate) created_at: String,

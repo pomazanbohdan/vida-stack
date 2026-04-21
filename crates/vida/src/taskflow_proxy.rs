@@ -544,38 +544,33 @@ async fn route_taskflow_ready(command: TaskReadyArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let store = crate::task_surface::open_read_only_task_store(state_dir).await;
-    match store {
-        Ok(store) => match store.ready_tasks_scoped(command.scope.as_deref()).await {
-            Ok(tasks) => {
-                let payload =
-                    serde_json::to_value(&tasks).expect("taskflow ready payload should serialize");
-                if surface_render::print_surface_json(
-                    &payload,
-                    command.json,
-                    "taskflow ready payload should render as json",
-                ) {
-                    return ExitCode::SUCCESS;
-                }
-
-                print_surface_header(command.render, "vida taskflow task ready");
-                if tasks.is_empty() {
-                    print_surface_line(command.render, "ready tasks", "none");
-                    return ExitCode::SUCCESS;
-                }
-
-                for task in tasks {
-                    println!("{}\t{}\t{}", task.id, task.status, task.title);
-                }
-                ExitCode::SUCCESS
+    match crate::task_surface::ready_tasks_scoped_read_only(state_dir, command.scope.as_deref())
+        .await
+    {
+        Ok(tasks) => {
+            let payload =
+                serde_json::to_value(&tasks).expect("taskflow ready payload should serialize");
+            if surface_render::print_surface_json(
+                &payload,
+                command.json,
+                "taskflow ready payload should render as json",
+            ) {
+                return ExitCode::SUCCESS;
             }
-            Err(error) => {
-                eprintln!("Failed to compute taskflow ready tasks: {error}");
-                ExitCode::from(1)
+
+            print_surface_header(command.render, "vida taskflow task ready");
+            if tasks.is_empty() {
+                print_surface_line(command.render, "ready tasks", "none");
+                return ExitCode::SUCCESS;
             }
-        },
+
+            for task in tasks {
+                println!("{}\t{}\t{}", task.id, task.status, task.title);
+            }
+            ExitCode::SUCCESS
+        }
         Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
+            eprintln!("Failed to compute taskflow ready tasks: {error}");
             ExitCode::from(1)
         }
     }
@@ -681,48 +676,68 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         }
     };
 
-    let store = match crate::task_surface::open_read_only_task_store(state_dir).await {
-        Ok(store) => store,
-        Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            return ExitCode::from(1);
-        }
-    };
+    let ready_tasks =
+        match crate::task_surface::ready_tasks_scoped_read_only(state_dir.clone(), scope_task_id)
+            .await
+        {
+            Ok(tasks) => tasks,
+            Err(error) => {
+                eprintln!("Failed to compute ready tasks: {error}");
+                return ExitCode::from(1);
+            }
+        };
 
-    let ready_tasks = match store.ready_tasks_scoped(scope_task_id).await {
-        Ok(tasks) => tasks,
+    let store = match crate::task_surface::open_read_only_task_store(state_dir).await {
+        Ok(store) => Some(store),
         Err(error) => {
-            eprintln!("Failed to compute ready tasks: {error}");
-            return ExitCode::from(1);
+            let message = error.to_string();
+            if message.contains("LOCK") || message.contains("lock") {
+                None
+            } else {
+                eprintln!("Failed to open authoritative state store: {error}");
+                return ExitCode::from(1);
+            }
         }
     };
-    let latest_run_graph = match store.latest_run_graph_status().await {
-        Ok(summary) => summary,
-        Err(error) => {
-            eprintln!("Failed to read latest run-graph status: {error}");
-            return ExitCode::from(1);
-        }
+    let latest_run_graph = match store.as_ref() {
+        Some(store) => match store.latest_run_graph_status().await {
+            Ok(summary) => summary,
+            Err(error) => {
+                eprintln!("Failed to read latest run-graph status: {error}");
+                return ExitCode::from(1);
+            }
+        },
+        None => None,
     };
-    let recovery = match store.latest_run_graph_recovery_summary().await {
-        Ok(summary) => summary,
-        Err(error) => {
-            eprintln!("Failed to read latest recovery summary: {error}");
-            return ExitCode::from(1);
-        }
+    let recovery = match store.as_ref() {
+        Some(store) => match store.latest_run_graph_recovery_summary().await {
+            Ok(summary) => summary,
+            Err(error) => {
+                eprintln!("Failed to read latest recovery summary: {error}");
+                return ExitCode::from(1);
+            }
+        },
+        None => None,
     };
-    let gate = match store.latest_run_graph_gate_summary().await {
-        Ok(summary) => summary,
-        Err(error) => {
-            eprintln!("Failed to read latest gate summary: {error}");
-            return ExitCode::from(1);
-        }
+    let gate = match store.as_ref() {
+        Some(store) => match store.latest_run_graph_gate_summary().await {
+            Ok(summary) => summary,
+            Err(error) => {
+                eprintln!("Failed to read latest gate summary: {error}");
+                return ExitCode::from(1);
+            }
+        },
+        None => None,
     };
-    let dispatch = match store.latest_run_graph_dispatch_receipt_summary().await {
-        Ok(summary) => summary,
-        Err(error) => {
-            eprintln!("Failed to read latest dispatch receipt summary: {error}");
-            return ExitCode::from(1);
-        }
+    let dispatch = match store.as_ref() {
+        Some(store) => match store.latest_run_graph_dispatch_receipt_summary().await {
+            Ok(summary) => summary,
+            Err(error) => {
+                eprintln!("Failed to read latest dispatch receipt summary: {error}");
+                return ExitCode::from(1);
+            }
+        },
+        None => None,
     };
 
     let recovery_holds_active_bound_run = recovery_holds_active_bound_run(recovery.as_ref());

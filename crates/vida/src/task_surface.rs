@@ -52,6 +52,79 @@ pub(crate) async fn open_read_only_task_store(
     StateStore::open_existing_read_only(state_dir).await
 }
 
+fn is_authoritative_state_lock_error(error: &state_store::StateStoreError) -> bool {
+    let message = error.to_string();
+    message.contains("LOCK") || message.contains("lock")
+}
+
+fn load_task_snapshot_rows(
+    state_dir: &std::path::Path,
+) -> Result<Vec<state_store::TaskRecord>, state_store::StateStoreError> {
+    let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
+    StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path)
+}
+
+async fn load_task_snapshot_rows_with_retry(
+    state_dir: &std::path::Path,
+) -> Result<Vec<state_store::TaskRecord>, state_store::StateStoreError> {
+    let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
+    for attempt in 0..80 {
+        match StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path) {
+            Ok(rows) => return Ok(rows),
+            Err(error @ state_store::StateStoreError::Io(_)) if attempt < 79 => {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                let _ = error;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    load_task_snapshot_rows(state_dir)
+}
+
+async fn refresh_task_snapshot_after_mutation(
+    store: &StateStore,
+    surface: &str,
+) -> Result<(), ExitCode> {
+    store.refresh_task_snapshot().await.map(|_| ()).map_err(|error| {
+        eprintln!("Failed to refresh canonical task snapshot after {surface}: {error}");
+        ExitCode::from(1)
+    })
+}
+
+pub(crate) async fn ready_tasks_scoped_read_only(
+    state_dir: std::path::PathBuf,
+    scope_task_id: Option<&str>,
+) -> Result<Vec<state_store::TaskRecord>, state_store::StateStoreError> {
+    match open_read_only_task_store(state_dir.clone()).await {
+        Ok(store) => {
+            let _ = store.refresh_task_snapshot().await;
+            store.ready_tasks_scoped(scope_task_id).await
+        }
+        Err(error) if is_authoritative_state_lock_error(&error) => {
+            let rows = load_task_snapshot_rows_with_retry(&state_dir).await?;
+            StateStore::ready_tasks_scoped_from_rows(&rows, scope_task_id)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) async fn task_dependency_tree_read_only(
+    state_dir: std::path::PathBuf,
+    task_id: &str,
+) -> Result<state_store::TaskDependencyTreeNode, state_store::StateStoreError> {
+    match open_read_only_task_store(state_dir.clone()).await {
+        Ok(store) => {
+            let _ = store.refresh_task_snapshot().await;
+            store.task_dependency_tree(task_id).await
+        }
+        Err(error) if is_authoritative_state_lock_error(&error) => {
+            let rows = load_task_snapshot_rows_with_retry(&state_dir).await?;
+            StateStore::task_dependency_tree_from_rows(&rows, task_id)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn task_rows_as_values(
     tasks: &[state_store::TaskRecord],
 ) -> Result<Vec<serde_json::Value>, String> {
@@ -266,6 +339,11 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                 .await
             {
                 Ok(task) => {
+                    if let Err(code) =
+                        refresh_task_snapshot_after_mutation(&store, "vida task create").await
+                    {
+                        return code;
+                    }
                     print_task_mutation(
                         command.render,
                         if ensure_existing {
@@ -333,8 +411,13 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .unwrap_or_else(state_store::default_state_dir);
             match StateStore::open(state_dir).await {
                 Ok(store) => match store.import_tasks_from_jsonl(&command.path).await {
-                    Ok(summary) => {
-                        if command.json {
+                Ok(summary) => {
+                    if let Err(code) =
+                        refresh_task_snapshot_after_mutation(&store, "vida task import-jsonl").await
+                    {
+                        return code;
+                    }
+                    if command.json {
                             let mut summary_json = serde_json::json!({
                                 "status": task_json_success_status(),
                                 "source_path": summary.source_path,
@@ -380,6 +463,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     .await
                 {
                     Ok(()) => {
+                        if let Err(code) = refresh_task_snapshot_after_mutation(
+                            &store,
+                            "vida task replace-jsonl",
+                        )
+                        .await
+                        {
+                            return code;
+                        }
                         let source_path = command.path.display().to_string();
                         if command.json {
                             crate::print_json_pretty(&serde_json::json!({
@@ -711,6 +802,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     .await
                 {
                     Ok(task) => {
+                        if let Err(code) =
+                            refresh_task_snapshot_after_mutation(&store, "vida task update").await
+                        {
+                            return code;
+                        }
                         print_task_mutation(
                             command.render,
                             "vida task update",
@@ -739,7 +835,12 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let feedback_source = command.source.as_deref().unwrap_or("vida task close");
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.close_task(&command.task_id, &command.reason).await {
-                    Ok(task) => {
+                Ok(task) => {
+                        if let Err(code) =
+                            refresh_task_snapshot_after_mutation(&store, "vida task close").await
+                        {
+                            return code;
+                        }
                         if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_implementer_task_into_latest_receipt(&store, &command.task_id).await {
                             eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
                             return ExitCode::from(1);
@@ -879,19 +980,13 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match open_read_only_task_store(state_dir).await {
-                Ok(store) => match store.task_dependency_tree(&command.task_id).await {
-                    Ok(tree) => {
-                        print_task_direct_children(command.render, &tree, command.json);
-                        ExitCode::SUCCESS
-                    }
-                    Err(error) => {
-                        eprintln!("Failed to read task direct children: {error}");
-                        ExitCode::from(1)
-                    }
-                },
+            match task_dependency_tree_read_only(state_dir, &command.task_id).await {
+                Ok(tree) => {
+                    print_task_direct_children(command.render, &tree, command.json);
+                    ExitCode::SUCCESS
+                }
                 Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
+                    eprintln!("Failed to read task direct children: {error}");
                     ExitCode::from(1)
                 }
             }
@@ -900,19 +995,13 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match open_read_only_task_store(state_dir).await {
-                Ok(store) => match store.task_dependency_tree(&command.task_id).await {
-                    Ok(tree) => {
-                        print_task_dependency_tree(command.render, &tree, command.json);
-                        ExitCode::SUCCESS
-                    }
-                    Err(error) => {
-                        eprintln!("Failed to read task dependency tree: {error}");
-                        ExitCode::from(1)
-                    }
-                },
+            match task_dependency_tree_read_only(state_dir, &command.task_id).await {
+                Ok(tree) => {
+                    print_task_dependency_tree(command.render, &tree, command.json);
+                    ExitCode::SUCCESS
+                }
                 Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
+                    eprintln!("Failed to read task dependency tree: {error}");
                     ExitCode::from(1)
                 }
             }
@@ -932,6 +1021,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     .await
                 {
                     Ok(result) => {
+                        if let Err(code) = refresh_task_snapshot_after_mutation(
+                            &store,
+                            "vida task reparent-children",
+                        )
+                        .await
+                        {
+                            return code;
+                        }
                         print_task_bulk_reparent_result(command.render, &result, command.json);
                         ExitCode::SUCCESS
                     }
@@ -988,6 +1085,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         .await
                     {
                         Ok(dependency) => {
+                            if let Err(code) = refresh_task_snapshot_after_mutation(
+                                &store,
+                                "vida task dep add",
+                            )
+                            .await
+                            {
+                                return code;
+                            }
                             print_task_dependency_mutation(
                                 add.render,
                                 "vida task dep add",
@@ -1022,6 +1127,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         .await
                     {
                         Ok(dependency) => {
+                            if let Err(code) = refresh_task_snapshot_after_mutation(
+                                &store,
+                                "vida task dep remove",
+                            )
+                            .await
+                            {
+                                return code;
+                            }
                             print_task_dependency_mutation(
                                 remove.render,
                                 "vida task dep remove",

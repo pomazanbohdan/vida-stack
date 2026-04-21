@@ -105,11 +105,37 @@ impl StateStore {
         blockers
     }
 
-    pub async fn ready_tasks_scoped(
-        &self,
+    fn ready_scope_ids_from_rows(
+        rows: &[TaskRecord],
+        scope_task_id: &str,
+    ) -> Result<BTreeSet<String>, StateStoreError> {
+        if !rows.iter().any(|task| task.id == scope_task_id) {
+            return Err(StateStoreError::MissingTask {
+                task_id: scope_task_id.to_string(),
+            });
+        }
+
+        let children = Self::parent_child_reverse_index(rows);
+
+        let mut scope_ids = BTreeSet::new();
+        let mut stack = vec![scope_task_id.to_string()];
+        while let Some(current) = stack.pop() {
+            if !scope_ids.insert(current.clone()) {
+                continue;
+            }
+            if let Some(descendants) = children.get(&current) {
+                stack.extend(descendants.iter().cloned());
+            }
+        }
+
+        Ok(scope_ids)
+    }
+
+    pub(crate) fn ready_tasks_scoped_from_rows(
+        rows: &[TaskRecord],
         scope_task_id: Option<&str>,
     ) -> Result<Vec<TaskRecord>, StateStoreError> {
-        let mut rows = self.all_tasks().await?;
+        let mut rows = rows.to_vec();
         rows.sort_by(task_sort_key);
 
         let by_id = rows
@@ -118,7 +144,7 @@ impl StateStore {
             .map(|task| (task.id.clone(), task))
             .collect::<BTreeMap<_, _>>();
         let scope_ids = if let Some(scope_task_id) = scope_task_id {
-            Some(self.ready_scope_ids(&rows, scope_task_id)?)
+            Some(Self::ready_scope_ids_from_rows(&rows, scope_task_id)?)
         } else {
             None
         };
@@ -139,6 +165,14 @@ impl StateStore {
         Ok(ready)
     }
 
+    pub async fn ready_tasks_scoped(
+        &self,
+        scope_task_id: Option<&str>,
+    ) -> Result<Vec<TaskRecord>, StateStoreError> {
+        let rows = self.all_tasks().await?;
+        Self::ready_tasks_scoped_from_rows(&rows, scope_task_id)
+    }
+
     pub async fn scheduling_projection_scoped(
         &self,
         scope_task_id: Option<&str>,
@@ -148,7 +182,7 @@ impl StateStore {
         rows.sort_by(task_sort_key);
 
         let scope_ids = if let Some(scope_task_id) = scope_task_id {
-            Some(self.ready_scope_ids(&rows, scope_task_id)?)
+            Some(Self::ready_scope_ids_from_rows(&rows, scope_task_id)?)
         } else {
             None
         };
@@ -232,33 +266,6 @@ impl StateStore {
         })
     }
 
-    fn ready_scope_ids(
-        &self,
-        rows: &[TaskRecord],
-        scope_task_id: &str,
-    ) -> Result<BTreeSet<String>, StateStoreError> {
-        if !rows.iter().any(|task| task.id == scope_task_id) {
-            return Err(StateStoreError::MissingTask {
-                task_id: scope_task_id.to_string(),
-            });
-        }
-
-        let children = Self::parent_child_reverse_index(rows);
-
-        let mut scope_ids = BTreeSet::new();
-        let mut stack = vec![scope_task_id.to_string()];
-        while let Some(current) = stack.pop() {
-            if !scope_ids.insert(current.clone()) {
-                continue;
-            }
-            if let Some(descendants) = children.get(&current) {
-                stack.extend(descendants.iter().cloned());
-            }
-        }
-
-        Ok(scope_ids)
-    }
-
     pub async fn task_progress_summary(
         &self,
         task_id: &str,
@@ -272,7 +279,7 @@ impl StateStore {
                 task_id: task_id.to_string(),
             })?;
         let children_by_parent = Self::parent_child_reverse_index(&rows);
-        let scope_ids = self.ready_scope_ids(&rows, task_id)?;
+        let scope_ids = Self::ready_scope_ids_from_rows(&rows, task_id)?;
         let descendant_ids = scope_ids
             .into_iter()
             .filter(|candidate| candidate != task_id)
@@ -323,8 +330,16 @@ impl StateStore {
         task_id: &str,
     ) -> Result<TaskDependencyTreeNode, StateStoreError> {
         let tasks = self.all_tasks().await?;
+        Self::task_dependency_tree_from_rows(&tasks, task_id)
+    }
+
+    pub(crate) fn task_dependency_tree_from_rows(
+        tasks: &[TaskRecord],
+        task_id: &str,
+    ) -> Result<TaskDependencyTreeNode, StateStoreError> {
         let by_id = tasks
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|task| (task.id.clone(), task))
             .collect::<BTreeMap<_, _>>();
         let tree_rows = by_id.values().cloned().collect::<Vec<_>>();
