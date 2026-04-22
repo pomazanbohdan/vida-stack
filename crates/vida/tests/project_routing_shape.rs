@@ -65,11 +65,10 @@ fn project_routing_shape_diversifies_primary_external_backends() {
 }
 
 #[test]
-fn project_routing_shape_expands_research_and_ensemble_fanout_beyond_qwen() {
+fn project_routing_shape_matches_current_research_and_ensemble_fanout() {
     let config = project_config();
 
     let research_fanout = yaml_string_list(&route(&config, "research")["fanout_executor_backends"]);
-    assert!(research_fanout.iter().any(|backend| backend == "qwen_cli"));
     assert!(research_fanout
         .iter()
         .any(|backend| backend == "hermes_cli"));
@@ -78,17 +77,18 @@ fn project_routing_shape_expands_research_and_ensemble_fanout_beyond_qwen() {
         .any(|backend| backend == "opencode_cli"));
     assert!(research_fanout.iter().any(|backend| backend == "kilo_cli"));
     assert!(research_fanout.iter().any(|backend| backend == "vibe_cli"));
+    assert!(!research_fanout.iter().any(|backend| backend == "qwen_cli"));
 
     let review_ensemble_fanout =
         yaml_string_list(&route(&config, "review_ensemble")["fanout_executor_backends"]);
-    assert!(review_ensemble_fanout.len() >= 3);
+    assert_eq!(review_ensemble_fanout.len(), 2);
     assert!(review_ensemble_fanout
         .iter()
         .any(|backend| backend == "hermes_cli"));
     assert!(review_ensemble_fanout
         .iter()
         .any(|backend| backend == "opencode_cli"));
-    assert!(review_ensemble_fanout
+    assert!(!review_ensemble_fanout
         .iter()
         .any(|backend| backend == "qwen_cli"));
 
@@ -105,6 +105,9 @@ fn project_routing_shape_expands_research_and_ensemble_fanout_beyond_qwen() {
         .iter()
         .any(|backend| backend == "hermes_cli"));
     assert!(verification_ensemble_fanout
+        .iter()
+        .any(|backend| backend == "vibe_cli"));
+    assert!(!verification_ensemble_fanout
         .iter()
         .any(|backend| backend == "qwen_cli"));
 }

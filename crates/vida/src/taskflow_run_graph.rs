@@ -2561,6 +2561,50 @@ fn inferred_design_doc_path_for_task(task_id: &str) -> Option<String> {
     Some(format!("docs/product/spec/{slug}-design.md"))
 }
 
+fn design_doc_has_ready_markers(path: &std::path::Path) -> Option<bool> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let has_status_marker = contents.contains("Status:");
+    let has_bounded_file_set = contents.contains("## Bounded File Set");
+    Some(has_status_marker || has_bounded_file_set)
+}
+
+fn design_doc_has_bounded_file_set(path: &std::path::Path) -> Option<bool> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    Some(contents.contains("## Bounded File Set"))
+}
+
+fn registered_design_doc_path_for_task(task_id: &str) -> Option<String> {
+    let task_slug = task_id
+        .trim()
+        .strip_prefix("feature-")
+        .unwrap_or(task_id.trim())
+        .trim();
+    if task_slug.is_empty() {
+        return None;
+    }
+
+    let spec_root = std::path::Path::new("docs/product/spec");
+    let entries = std::fs::read_dir(spec_root).ok()?;
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let file_name = path.file_name()?.to_str()?;
+            let candidate_slug = file_name.strip_suffix("-design.md")?;
+            if candidate_slug.is_empty()
+                || (!task_slug.contains(candidate_slug) && !candidate_slug.contains(task_slug))
+            {
+                return None;
+            }
+            if !design_doc_has_ready_markers(&path)? {
+                return None;
+            }
+            Some((candidate_slug.len(), path.to_string_lossy().to_string()))
+        })
+        .max_by_key(|(score, _)| *score)
+        .map(|(_, path)| path)
+}
+
 async fn existing_design_backed_task_design_doc_path(
     store: &StateStore,
     task_id: &str,
@@ -2574,15 +2618,19 @@ async fn existing_design_backed_task_design_doc_path(
     }) {
         return None;
     }
-    let design_doc_path = inferred_design_doc_path_for_task(task_id)?;
+    let inferred = inferred_design_doc_path_for_task(task_id);
+    let design_doc_path = inferred
+        .as_deref()
+        .and_then(|path| {
+            let design_doc = std::path::Path::new(path);
+            design_doc.is_file().then_some(path.to_string())
+        })
+        .or_else(|| registered_design_doc_path_for_task(task_id))?;
     let design_doc = std::path::Path::new(&design_doc_path);
     if !design_doc.is_file() {
         return None;
     }
-    let contents = std::fs::read_to_string(design_doc).ok()?;
-    let has_status_marker = contents.contains("Status:");
-    let has_bounded_file_set = contents.contains("## Bounded File Set");
-    (has_status_marker || has_bounded_file_set).then_some(design_doc_path)
+    design_doc_has_ready_markers(design_doc)?.then_some(design_doc_path)
 }
 
 fn inject_tracked_design_doc_path(execution_plan: &mut serde_json::Value, design_doc_path: &str) {
@@ -2614,11 +2662,17 @@ async fn try_existing_design_backed_implementation_override(
     else {
         return Ok(());
     };
-    if selection.conversational_mode.as_deref() != Some("scope_discussion")
-        || selection.tracked_flow_entry.as_deref() != Some("spec-pack")
-    {
-        return Ok(());
-    }
+    let design_doc_has_bounded_scope =
+        design_doc_has_bounded_file_set(std::path::Path::new(&design_doc_path)).unwrap_or(false);
+    let existing_design_scope_discussion = selection.conversational_mode.as_deref()
+        == Some("scope_discussion")
+        && selection.tracked_flow_entry.as_deref() == Some("spec-pack");
+    let existing_design_work_pool_discussion = selection.conversational_mode.as_deref()
+        == Some("pbi_discussion")
+        && selection.tracked_flow_entry.as_deref() == Some("work-pool-pack");
+    let already_explicit_implementation = selection.conversational_mode.is_none()
+        && selection.selected_role == "worker"
+        && selection.reason.starts_with("auto_explicit_implementation_request");
 
     let normalized_request = request_text.to_lowercase();
     let implementation_terms =
@@ -2629,6 +2683,17 @@ async fn try_existing_design_backed_implementation_override(
         implementation_terms
     } else if !bounded_repair_terms.is_empty() {
         bounded_repair_terms
+    } else if design_doc_has_bounded_scope
+        && (existing_design_scope_discussion || already_explicit_implementation)
+    {
+        vec!["existing_design_backed_spec_override".to_string()]
+    } else if existing_design_work_pool_discussion {
+        vec!["existing_design_backed_work_pool_override".to_string()]
+    } else if already_explicit_implementation {
+        selection.execution_plan =
+            build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, selection);
+        inject_tracked_design_doc_path(&mut selection.execution_plan, &design_doc_path);
+        return Ok(());
     } else {
         return Ok(());
     };
@@ -2678,6 +2743,17 @@ pub(crate) fn approval_delegation_transition_kind(status: &RunGraphStatus) -> Op
     }
 
     None
+}
+
+pub(crate) fn implementation_lane_allows_terminal_completion(active_node: &str) -> bool {
+    matches!(
+        active_node,
+        "implementer" | "verification" | "approval" | "closure"
+    )
+}
+
+pub(crate) fn implementation_lane_is_diagnostic(active_node: &str) -> bool {
+    !implementation_lane_allows_terminal_completion(active_node)
 }
 
 pub(crate) async fn derive_seeded_run_graph_status(
@@ -4795,6 +4871,220 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn derive_seeded_run_graph_prefers_worker_for_existing_design_backed_qwen_remediation_task(
+    ) {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open state store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "feature-reconcile-qwen-cli-carrier-drift-across-config-code",
+                title: "Qwen carrier drift remediation",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create qwen remediation task");
+
+        let design_doc_path = harness
+            .path()
+            .join("docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md");
+        std::fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
+            .expect("create design doc directory");
+        std::fs::write(
+            &design_doc_path,
+            "# Qwen Remediation\n\nStatus: `approved`\n\n## Bounded File Set\n- `docs/process/agent-system.md`\n- `crates/vida/src/taskflow_run_graph.rs`\n- `crates/vida/src/taskflow_consume.rs`\n",
+        )
+        .expect("write qwen design doc");
+
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            "feature-reconcile-qwen-cli-carrier-drift-across-config-code",
+            "Bounded audit-remediation task. Remove qwen_cli from active runtime/config/code/test assumptions and retain it only in template/reference surfaces where it is intentionally documented as a non-active example carrier.",
+        )
+        .await
+        .expect("seed should be generated");
+
+        assert_eq!(payload.role_selection.selected_role, "worker");
+        assert!(payload.role_selection.conversational_mode.is_none());
+        assert_eq!(
+            payload.role_selection.tracked_flow_entry.as_deref(),
+            Some("dev-pack")
+        );
+        assert_eq!(
+            payload.role_selection.reason,
+            "auto_existing_design_backed_implementation_request_override"
+        );
+        assert!(payload
+            .role_selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "existing_design_backed_work_pool_override"));
+        assert_eq!(payload.status.task_class, "implementation");
+        assert_eq!(payload.status.route_task_class, "implementation");
+        assert_ne!(payload.status.next_node.as_deref(), Some("pm"));
+        assert_eq!(
+            payload.role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
+                .as_str(),
+            Some("docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md")
+        );
+    }
+
+    #[tokio::test]
+    async fn derive_seeded_run_graph_prefers_worker_for_existing_design_backed_blocker_without_file_terms(
+    ) {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open state store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "feature-design-backed-reseed-blocker",
+                title: "Design-backed reseed blocker",
+                display_id: None,
+                description: "Bounded audit-remediation blocker. A finalized design-backed task is still reseeded into specification/planning instead of continuing into the implementation lane.",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create design-backed blocker task");
+
+        let design_doc_path = harness
+            .path()
+            .join("docs/product/spec/design-backed-reseed-blocker-design.md");
+        std::fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
+            .expect("create design doc directory");
+        std::fs::write(
+            &design_doc_path,
+            "# Design-backed reseed blocker\n\nStatus: `approved`\n\n## Bounded File Set\n- `crates/vida/src/taskflow_run_graph.rs`\n",
+        )
+        .expect("write blocker design doc");
+
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            "feature-design-backed-reseed-blocker",
+            "Bounded audit-remediation blocker. A finalized design-backed task is still reseeded into specification/planning instead of continuing into the implementation lane.",
+        )
+        .await
+        .expect("seed should be generated");
+
+        assert_eq!(payload.role_selection.selected_role, "worker");
+        assert!(payload.role_selection.conversational_mode.is_none());
+        assert_eq!(
+            payload.role_selection.reason,
+            "auto_existing_design_backed_implementation_request_override"
+        );
+        assert!(payload
+            .role_selection
+            .matched_terms
+            .iter()
+            .all(|term| term != ".rs" && term != "crates/" && term != "src/"));
+        assert!(!payload.role_selection.matched_terms.is_empty());
+        assert_eq!(
+            payload.role_selection.tracked_flow_entry.as_deref(),
+            Some("dev-pack")
+        );
+        assert_eq!(payload.status.task_class, "implementation");
+        assert_eq!(payload.status.route_task_class, "implementation");
+        assert_eq!(
+            payload.role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
+                .as_str(),
+            Some("docs/product/spec/design-backed-reseed-blocker-design.md")
+        );
+    }
+
+    #[tokio::test]
+    async fn derive_seeded_run_graph_injects_design_doc_for_direct_explicit_implementation_seed() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open state store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "feature-direct-explicit-implementation-seed",
+                title: "Direct explicit implementation seed",
+                display_id: None,
+                description: "A design-backed implementation task that should seed directly into worker implementation.",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create direct explicit implementation task");
+
+        let design_doc_path = harness.path().join(
+            "docs/product/spec/direct-explicit-implementation-seed-design.md",
+        );
+        std::fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
+            .expect("create design doc directory");
+        std::fs::write(
+            &design_doc_path,
+            "# Direct Explicit Implementation Seed\n\nStatus: `approved`\n\n## Bounded File Set\n- `crates/vida/src/taskflow_run_graph.rs`\n- `crates/vida/src/runtime_dispatch_state.rs`\n",
+        )
+        .expect("write approved design doc");
+
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            "feature-direct-explicit-implementation-seed",
+            "Implement the bounded fix for the design-backed dispatch-init regression and keep the registered design scope.",
+        )
+        .await
+        .expect("seed should be generated");
+
+        assert_eq!(payload.role_selection.selected_role, "worker");
+        assert!(payload.role_selection.conversational_mode.is_none());
+        assert_eq!(
+            payload.role_selection.reason,
+            "auto_existing_design_backed_implementation_request_override"
+        );
+        assert_eq!(payload.status.task_class, "implementation");
+        assert_eq!(payload.status.route_task_class, "implementation");
+        assert_eq!(
+            payload.role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
+                .as_str(),
+            Some("docs/product/spec/direct-explicit-implementation-seed-design.md")
+        );
+    }
+
     #[test]
     fn implementation_analysis_gate_tracks_coach_and_verification_requirements() {
         let implementation = serde_json::json!({
@@ -4998,7 +5288,7 @@ mod tests {
             next_node: Some("implementer".to_string()),
             status: "ready".to_string(),
             route_task_class: "implementation".to_string(),
-            selected_backend: "qwen_cli".to_string(),
+            selected_backend: "legacy_removed_backend".to_string(),
             lane_id: "implementer_lane".to_string(),
             lifecycle_stage: "implementation_dispatch_ready".to_string(),
             policy_gate: "validation_report_required".to_string(),
@@ -5040,7 +5330,7 @@ mod tests {
                 downstream_dispatch_last_target: Some("implementer".to_string()),
                 activation_agent_type: Some("junior".to_string()),
                 activation_runtime_role: Some("worker".to_string()),
-                selected_backend: Some("qwen_cli".to_string()),
+                selected_backend: Some("legacy_removed_backend".to_string()),
                 recorded_at: "2026-04-16T00:00:00Z".to_string(),
             })
             .await
@@ -5055,7 +5345,7 @@ mod tests {
         .expect("seed should be generated");
         let reseeded_backend = payload.status.selected_backend.clone();
         assert_ne!(
-            reseeded_backend, "qwen_cli",
+            reseeded_backend, "legacy_removed_backend",
             "fresh reseed should not preserve stale blocked dispatch backend lineage"
         );
         assert!(payload.status.recovery_ready);
@@ -5166,6 +5456,158 @@ mod tests {
             .expect("reseeded receipt should exist");
         assert_eq!(reseeded_receipt.run_id, "task-new");
         assert!(reseeded_receipt.dispatch_packet_path.is_some());
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_reseeds_design_backed_explicit_binding_into_implementer_lane() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        let requested_run_id = "feature-reconcile-autonomous-execution-flag-runtime-drift";
+        let bound_task_id = "feature-repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen";
+        let request_text = "Bounded audit-remediation blocker. After fixing explicit continuation-bind preservation, `vida taskflow run-graph dispatch-init feature-reconcile-autonomous-execution-flag-runtime-drift --json` now lawfully reseeds the explicit qwen task into a fresh run `feature-reconcile-qwen-cli-carrier-drift-across-config-code`. But that fresh run is shaped as `task_class=pbi_discussion`, `next_node=pm`, `tracked_flow_entry=work-pool-pack`, while the rendered dispatch packet canonicalizes to `dispatch_target=specification`, `handoff_runtime_role=pm`, `activation_agent_type=null`, `selected_backend=null`; `vida agent-init --dispatch-packet ... --execute-dispatch --json` then fails closed with `Dispatch target `specification` is routed to an agent lane but no lawful backend could be resolved from the execution route`.";
+
+        let mut stale_status = default_run_graph_status(requested_run_id, "closure", "delivery");
+        stale_status.task_id = requested_run_id.to_string();
+        stale_status.active_node = "closure".to_string();
+        stale_status.status = "completed".to_string();
+        stale_status.lifecycle_stage = "closure_complete".to_string();
+        stale_status.policy_gate = "validation_report_required".to_string();
+        stale_status.context_state = "sealed".to_string();
+        stale_status.checkpoint_kind = "execution_cursor".to_string();
+        stale_status.resume_target = "none".to_string();
+        stale_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&stale_status)
+            .await
+            .expect("persist stale status");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: requested_run_id.to_string(),
+                    task_id: bound_task_id.to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": bound_task_id,
+                        "run_id": requested_run_id,
+                        "task_status": "in_progress",
+                        "issue_type": "task"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "reseed explicit qwen remediation blocker onto the bounded implementation task".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
+                    request_text: Some(request_text.to_string()),
+                    recorded_at: "2026-04-21T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist explicit continuation binding");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: bound_task_id,
+                title: "Design-backed reseed canonicalization qwen blocker",
+                display_id: None,
+                description:
+                    "Bounded audit-remediation blocker for design-backed reseed canonicalization.",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create bound task");
+
+        let design_doc_path = harness
+            .path()
+            .join("docs/product/spec/repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md");
+        std::fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
+            .expect("create design doc directory");
+        std::fs::write(
+            &design_doc_path,
+            "# Design-backed reseed canonicalization qwen blocker\n\nStatus: `approved`\n\n## Bounded File Set\n- `crates/vida/src/taskflow_run_graph.rs`\n- `crates/vida/src/taskflow_consume.rs`\n- `crates/vida/src/taskflow_consume_resume.rs`\n- `crates/vida/src/runtime_dispatch_state.rs`\n",
+        )
+        .expect("write approved design doc");
+
+        let payload = run_graph_dispatch_init(&store, requested_run_id)
+            .await
+            .expect("dispatch init should reseed and produce an implementer dispatch");
+
+        assert_eq!(payload["requested_run_id"], requested_run_id);
+        assert_eq!(payload["run_id"], bound_task_id);
+        assert_eq!(
+            payload["run_graph_bootstrap"]["latest_status"]["task_class"].as_str(),
+            Some("implementation")
+        );
+        assert_eq!(
+            payload["run_graph_bootstrap"]["latest_status"]["next_node"].as_str(),
+            Some("implementer")
+        );
+        assert_eq!(
+            payload["run_graph_bootstrap"]["latest_status"]["route_task_class"].as_str(),
+            Some("implementation")
+        );
+        assert_eq!(
+            payload["dispatch_receipt"]["dispatch_target"].as_str(),
+            Some("implementer")
+        );
+        assert_eq!(
+            payload["dispatch_receipt"]["activation_agent_type"].as_str(),
+            Some("junior")
+        );
+        assert_eq!(
+            payload["dispatch_receipt"]["activation_runtime_role"].as_str(),
+            Some("worker")
+        );
+        assert_eq!(
+            payload["dispatch_receipt"]["selected_backend"].as_str(),
+            Some("internal_subagents")
+        );
+
+        let dispatch_packet_path = payload["dispatch_packet_path"]
+            .as_str()
+            .expect("dispatch packet path should be present");
+        let dispatch_packet = crate::read_json_file_if_present(std::path::Path::new(
+            dispatch_packet_path,
+        ))
+        .expect("dispatch packet should load");
+        assert_eq!(dispatch_packet["dispatch_target"].as_str(), Some("implementer"));
+        assert_eq!(
+            dispatch_packet["delivery_task_packet"]["handoff_runtime_role"].as_str(),
+            Some("worker")
+        );
+        assert_eq!(
+            dispatch_packet["activation_agent_type"].as_str(),
+            Some("junior")
+        );
+        assert_eq!(
+            dispatch_packet["selected_backend"].as_str(),
+            Some("internal_subagents")
+        );
+        assert_ne!(dispatch_packet["dispatch_target"].as_str(), Some("specification"));
+        assert_eq!(
+            dispatch_packet["delivery_task_packet"]["owned_paths"],
+            serde_json::json!([
+                "crates/vida/src/taskflow_run_graph.rs",
+                "crates/vida/src/taskflow_consume.rs",
+                "crates/vida/src/taskflow_consume_resume.rs",
+                "crates/vida/src/runtime_dispatch_state.rs"
+            ])
+        );
     }
 
     #[tokio::test]

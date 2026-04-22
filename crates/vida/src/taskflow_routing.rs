@@ -286,7 +286,7 @@ mod tests {
             "development_flow": {
                 "implementation": {
                     "executor_backend": "internal_subagents",
-                    "subagents": "qwen_cli",
+                    "subagents": "hermes_cli",
                     "runtime_assignment": {
                         "selected_tier": "junior",
                         "activation_agent_type": "junior",
@@ -294,7 +294,7 @@ mod tests {
                 }
             },
             "default_route": {
-                "subagents": "qwen_cli"
+                "subagents": "hermes_cli"
             },
             "status": "execution_ready",
         });
@@ -502,12 +502,12 @@ mod tests {
             "activation": {
                 "activation_agent_type": "middle",
             },
-            "fallback_executor_backend": "qwen_cli"
+            "fallback_executor_backend": "hermes_cli"
         });
 
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, &route).as_deref(),
-            Some("qwen_cli")
+            Some("hermes_cli")
         );
     }
 }

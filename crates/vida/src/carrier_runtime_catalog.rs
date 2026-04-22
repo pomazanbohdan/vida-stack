@@ -16,9 +16,6 @@ pub(crate) fn carrier_role_validation_errors(roles: &[serde_json::Value]) -> Vec
         .filter_map(|row| {
             let role_id = row["role_id"].as_str().unwrap_or("<unknown>");
             let mut missing = Vec::new();
-            if row["rate"].as_u64().unwrap_or(0) == 0 {
-                missing.push("rate");
-            }
             if row["runtime_roles"]
                 .as_array()
                 .map(|rows| rows.is_empty())

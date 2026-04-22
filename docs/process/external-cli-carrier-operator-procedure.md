@@ -6,11 +6,10 @@ Purpose: define the bounded project-side operator procedure for external CLI car
 
 This procedure covers the current external CLI carriers wired into the active project runtime:
 
-1. `qwen_cli`
-2. `hermes_cli`
-3. `opencode_cli`
-4. `kilo_cli`
-5. `vibe_cli`
+1. `hermes_cli`
+2. `opencode_cli`
+3. `kilo_cli`
+4. `vibe_cli`
 
 It does not redefine runtime law. It explains how an operator should activate and validate the already-defined project/runtime posture.
 
@@ -47,12 +46,6 @@ Interpret `host_agents.external_cli_preflight` as follows:
    - the carrier-local model differs, but project dispatch pinning will execution-enforce the canonical model
 
 ## Carrier Rules
-
-### qwen
-
-1. CLI supports direct model pinning with `--model`.
-2. Project dispatch uses project-local `HOME` under `.vida/data/qwen-home`.
-3. If qwen auth or model posture must be repaired, prefer doing it through qwen's own auth/settings flow and then re-running `vida status --json`.
 
 ### hermes
 

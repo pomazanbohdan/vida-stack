@@ -135,10 +135,71 @@ fn model_ref_from_json_state(mode: &str, path: &str) -> Option<String> {
     }
 }
 
+fn external_backend_profile_projection(
+    backend_id: &str,
+    backend_entry: &serde_yaml::Value,
+) -> serde_json::Value {
+    let fallback_rate = crate::yaml_string(crate::yaml_lookup(
+        backend_entry,
+        &["budget_cost_units"],
+    ))
+    .and_then(|raw| raw.parse::<u64>().ok())
+    .or_else(|| {
+        crate::yaml_string(crate::yaml_lookup(backend_entry, &["normalized_cost_units"]))
+            .and_then(|raw| raw.parse::<u64>().ok())
+    })
+    .or_else(|| {
+        crate::yaml_string(crate::yaml_lookup(backend_entry, &["rate"]))
+            .and_then(|raw| raw.parse::<u64>().ok())
+    })
+    .unwrap_or(0);
+    let fallback_runtime_roles =
+        crate::yaml_string_list(crate::yaml_lookup(backend_entry, &["runtime_roles"]));
+    let fallback_task_classes =
+        crate::yaml_string_list(crate::yaml_lookup(backend_entry, &["task_classes"]));
+    crate::model_profile_contract::normalize_profile_projection_from_yaml(
+        backend_id,
+        backend_entry,
+        Some(fallback_rate),
+        &fallback_runtime_roles,
+        &fallback_task_classes,
+    )
+}
+
+fn profile_id_matching_model_ref(
+    profile_projection: &serde_json::Value,
+    model_ref: Option<&str>,
+) -> Option<String> {
+    let model_ref = model_ref
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    crate::model_profile_contract::model_profiles_from_json_row(profile_projection)
+        .into_iter()
+        .find(|profile| profile["model_ref"].as_str().map(str::trim) == Some(model_ref))
+        .and_then(|profile| profile["profile_id"].as_str().map(str::to_string))
+}
+
+fn selected_external_cli_profile(
+    profile_projection: &serde_json::Value,
+    current_model_ref: Option<&str>,
+) -> serde_json::Value {
+    profile_id_matching_model_ref(profile_projection, current_model_ref)
+        .map(serde_json::Value::String)
+        .or_else(|| {
+            profile_projection["current_model_profile"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| serde_json::Value::String(value.to_string()))
+        })
+        .unwrap_or_else(|| profile_projection["default_model_profile"].clone())
+}
+
 fn external_cli_carrier_readiness(
     backend_id: &str,
     backend_entry: &serde_yaml::Value,
 ) -> serde_json::Value {
+    let profile_projection = external_backend_profile_projection(backend_id, backend_entry);
     let readiness = crate::yaml_lookup(backend_entry, &["readiness"]);
     if readiness.is_none() {
         return serde_json::json!({
@@ -147,7 +208,11 @@ fn external_cli_carrier_readiness(
             "blocked": false,
             "blocker_code": serde_json::Value::Null,
             "current_model_ref": serde_json::Value::Null,
-            "expected_model_ref": serde_json::Value::Null,
+            "current_reasoning_effort": profile_projection["current_reasoning_effort"].clone(),
+            "expected_model_ref": profile_projection["model"].clone(),
+            "default_model_profile": profile_projection["default_model_profile"].clone(),
+            "selected_model_profile": profile_projection["default_model_profile"].clone(),
+            "model_profiles": profile_projection["model_profiles"].clone(),
             "next_actions": [],
         });
     }
@@ -177,7 +242,11 @@ fn external_cli_carrier_readiness(
                 crate::release1_contracts::BlockerCode::InteractiveAuthRequired
             ),
             "current_model_ref": serde_json::Value::Null,
-            "expected_model_ref": serde_json::Value::Null,
+            "current_reasoning_effort": profile_projection["current_reasoning_effort"].clone(),
+            "expected_model_ref": profile_projection["model"].clone(),
+            "default_model_profile": profile_projection["default_model_profile"].clone(),
+            "selected_model_profile": profile_projection["default_model_profile"].clone(),
+            "model_profiles": profile_projection["model_profiles"].clone(),
             "next_actions": ["Complete carrier authentication outside sandbox, then rerun `vida status --json`."],
         });
     }
@@ -192,8 +261,8 @@ fn external_cli_carrier_readiness(
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .or_else(|| {
-            crate::yaml_lookup(backend_entry, &["default_model"])
-                .and_then(serde_yaml::Value::as_str)
+            profile_projection["model"]
+                .as_str()
                 .map(str::trim)
                 .filter(|value| !value.is_empty() && !value.contains("provider-configured"))
                 .map(str::to_string)
@@ -235,6 +304,10 @@ fn external_cli_carrier_readiness(
         }
         _ => None,
     };
+    let selected_model_profile = selected_external_cli_profile(
+        &profile_projection,
+        current_model_ref.as_deref(),
+    );
 
     if let Some(expected_model_ref) = expected_model_ref.clone() {
         if current_model_ref.as_deref() != Some(expected_model_ref.as_str()) {
@@ -245,7 +318,11 @@ fn external_cli_carrier_readiness(
                     "blocked": false,
                     "blocker_code": serde_json::Value::Null,
                     "current_model_ref": current_model_ref,
+                    "current_reasoning_effort": profile_projection["current_reasoning_effort"].clone(),
                     "expected_model_ref": expected_model_ref,
+                    "default_model_profile": profile_projection["default_model_profile"].clone(),
+                    "selected_model_profile": selected_model_profile,
+                    "model_profiles": profile_projection["model_profiles"].clone(),
                     "next_actions": ["Carrier-local model state differs from project intent, but dispatch-level model pinning will override it."],
                 });
             }
@@ -257,7 +334,11 @@ fn external_cli_carrier_readiness(
                     crate::release1_contracts::BlockerCode::ModelNotPinned
                 ),
                 "current_model_ref": current_model_ref,
+                "current_reasoning_effort": profile_projection["current_reasoning_effort"].clone(),
                 "expected_model_ref": expected_model_ref,
+                "default_model_profile": profile_projection["default_model_profile"].clone(),
+                "selected_model_profile": selected_model_profile,
+                "model_profiles": profile_projection["model_profiles"].clone(),
                 "next_actions": ["Fix carrier-local model selection or add dispatch-level model pinning before external dispatch."],
             });
         }
@@ -333,7 +414,11 @@ fn external_cli_carrier_readiness(
             "blocked": true,
             "blocker_code": provider_failure_blocker_code,
             "current_model_ref": current_model_ref,
+            "current_reasoning_effort": profile_projection["current_reasoning_effort"].clone(),
             "expected_model_ref": expected_model_ref,
+            "default_model_profile": profile_projection["default_model_profile"].clone(),
+            "selected_model_profile": selected_model_profile,
+            "model_profiles": profile_projection["model_profiles"].clone(),
             "next_actions": next_actions,
         });
     }
@@ -344,7 +429,11 @@ fn external_cli_carrier_readiness(
         "blocked": false,
         "blocker_code": serde_json::Value::Null,
         "current_model_ref": current_model_ref,
+        "current_reasoning_effort": profile_projection["current_reasoning_effort"].clone(),
         "expected_model_ref": expected_model_ref,
+        "default_model_profile": profile_projection["default_model_profile"].clone(),
+        "selected_model_profile": selected_model_profile,
+        "model_profiles": profile_projection["model_profiles"].clone(),
         "next_actions": [],
     })
 }
@@ -741,7 +830,7 @@ host_environment:
       runtime_root: .codex
 agent_system:
   subagents:
-    qwen_cli:
+    hermes_cli:
       enabled: true
       subagent_backend_class: external_cli
 "#,
@@ -870,7 +959,7 @@ agent_system:
         fs::write(&auth_path, "{}").expect("auth file should write");
         fs::write(
             &model_path,
-            r#"{"recent":[{"providerID":"zai","modelID":"glm-5.1"}]}"#,
+            r#"{"recent":[{"providerID":"opencode","modelID":"gpt-5.1-codex-mini"}]}"#,
         )
         .expect("model file should write");
 
@@ -889,6 +978,22 @@ agent_system:
       enabled: true
       subagent_backend_class: external_cli
       default_model: opencode/minimax-m2.5-free
+      default_model_profile: opencode_minimax_free_review
+      model_profiles:
+        opencode_minimax_free_review:
+          provider: opencode
+          model_ref: opencode/minimax-m2.5-free
+          reasoning_effort: provider_default
+          normalized_cost_units: 0
+          runtime_roles: [coach]
+          task_classes: [review]
+        opencode_codex_mini_review:
+          provider: opencode
+          model_ref: opencode/gpt-5.1-codex-mini
+          reasoning_effort: low
+          normalized_cost_units: 1
+          runtime_roles: [coach]
+          task_classes: [review]
       dispatch:
         command: opencode
         static_args: ["run"]
@@ -914,6 +1019,88 @@ agent_system:
         assert_eq!(
             summary["carrier_readiness"]["carriers"][0]["status"],
             "carrier_ready_with_override"
+        );
+        assert_eq!(
+            summary["carrier_readiness"]["carriers"][0]["selected_model_profile"],
+            "opencode_codex_mini_review"
+        );
+    }
+
+    #[test]
+    fn external_cli_preflight_projects_current_nondefault_profile_when_model_is_not_pinned() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vida-external-cli-model-unpinned-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_root);
+        fs::create_dir_all(&temp_root).expect("temp root should exist");
+        let auth_path = temp_root.join("auth.json");
+        let model_path = temp_root.join("model.json");
+        fs::write(&auth_path, "{}").expect("auth file should write");
+        fs::write(
+            &model_path,
+            r#"{"recent":[{"providerID":"opencode","modelID":"gpt-5.1-codex-mini"}]}"#,
+        )
+        .expect("model file should write");
+
+        let overlay: serde_yaml::Value = serde_yaml::from_str(&format!(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      runtime_root: .codex
+agent_system:
+  subagents:
+    opencode_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      default_model: opencode/minimax-m2.5-free
+      default_model_profile: opencode_minimax_free_review
+      model_profiles:
+        opencode_minimax_free_review:
+          provider: opencode
+          model_ref: opencode/minimax-m2.5-free
+          reasoning_effort: provider_default
+          normalized_cost_units: 0
+          runtime_roles: [coach]
+          task_classes: [review]
+        opencode_codex_mini_review:
+          provider: opencode
+          model_ref: opencode/gpt-5.1-codex-mini
+          reasoning_effort: low
+          normalized_cost_units: 1
+          runtime_roles: [coach]
+          task_classes: [review]
+      dispatch:
+        command: opencode
+        static_args: ["run"]
+      readiness:
+        auth:
+          mode: file_present
+          path: {}
+        model:
+          mode: json_recent_ref
+          path: {}
+          expected_ref: opencode/minimax-m2.5-free
+"#,
+            auth_path.display(),
+            model_path.display()
+        ))
+        .expect("overlay yaml should parse");
+
+        let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
+        let summary = external_cli_preflight_summary(&overlay, "codex", entry);
+        assert_eq!(summary["status"], "blocked");
+        assert_eq!(
+            summary["carrier_readiness"]["carriers"][0]["status"],
+            "model_not_pinned"
+        );
+        assert_eq!(
+            summary["carrier_readiness"]["carriers"][0]["selected_model_profile"],
+            "opencode_codex_mini_review"
         );
     }
 
@@ -999,7 +1186,7 @@ host_environment:
       runtime_root: .codex
 agent_system:
   subagents:
-    qwen_cli:
+    hermes_cli:
       enabled: true
       subagent_backend_class: external_cli
       readiness:
@@ -1060,7 +1247,7 @@ host_environment:
       runtime_root: .codex
 agent_system:
   subagents:
-    qwen_cli:
+    hermes_cli:
       enabled: true
       subagent_backend_class: external_cli
       readiness:
@@ -1113,10 +1300,10 @@ host_environment:
 routing:
   development_flow:
     coach:
-      executor_backend: qwen_cli
+      executor_backend: hermes_cli
 agent_system:
   subagents:
-    qwen_cli:
+    hermes_cli:
       enabled: true
       subagent_backend_class: external_cli
       readiness:
@@ -1127,7 +1314,7 @@ agent_system:
           max_age_seconds: 3600
           status: provider_failure_detected
           blocker_code: tool_execution_failed
-    hermes_cli:
+    opencode_cli:
       enabled: true
       subagent_backend_class: external_cli
 "#,
@@ -1138,8 +1325,8 @@ agent_system:
         let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
         let summary = external_cli_preflight_summary(&overlay, "codex", entry);
         assert_eq!(summary["status"], "pass");
-        assert_eq!(summary["blocked_primary_backends"][0], "qwen_cli");
-        assert_eq!(summary["route_primary_external_backends"][0], "qwen_cli");
+        assert_eq!(summary["blocked_primary_backends"][0], "hermes_cli");
+        assert_eq!(summary["route_primary_external_backends"][0], "hermes_cli");
         assert!(summary["next_actions"][0]
             .as_str()
             .expect("next action should render")
@@ -1158,9 +1345,10 @@ agent_system:
         .expect("project config should parse");
 
         let backends = super::route_primary_external_backends(&overlay);
-        assert!(
-            backends.iter().any(|backend| backend == "qwen_cli"),
-            "expected qwen_cli in route_primary_external_backends, got {backends:?}"
-        );
+        assert!(backends.iter().any(|backend| backend == "hermes_cli"));
+        assert!(backends.iter().any(|backend| backend == "opencode_cli"));
+        assert!(backends.iter().any(|backend| backend == "kilo_cli"));
+        assert!(backends.iter().any(|backend| backend == "vibe_cli"));
+        assert!(!backends.iter().any(|backend| backend == "qwen_cli"));
     }
 }

@@ -655,11 +655,18 @@ fn build_taskflow_agent_system_snapshot(
                 "carrier_id": row["role_id"],
                 "tier": row["tier"],
                 "rate": row["rate"],
+                "normalized_cost_units": row["normalized_cost_units"],
                 "default_runtime_role": row["default_runtime_role"],
                 "runtime_roles": row["runtime_roles"],
                 "task_classes": row["task_classes"],
                 "reasoning_band": row["reasoning_band"],
+                "model": row["model"],
+                "model_provider": row["model_provider"],
                 "model_reasoning_effort": row["model_reasoning_effort"],
+                "plan_mode_reasoning_effort": row["plan_mode_reasoning_effort"],
+                "sandbox_mode": row["sandbox_mode"],
+                "default_model_profile": row["default_model_profile"],
+                "model_profiles": row["model_profiles"],
             })
         })
         .collect::<Vec<_>>();
@@ -692,7 +699,11 @@ fn build_taskflow_agent_system_snapshot(
         .collect::<Vec<_>>();
     runtime_roles.sort();
 
-    let selection_rule = crate::carrier_runtime_metadata::snapshot_selection_rule(carrier_runtime);
+    let selection_rule = carrier_runtime["model_selection"]["selection_rule"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| crate::carrier_runtime_metadata::snapshot_selection_rule(carrier_runtime));
     let max_parallel_agents =
         normalize_agent_system_max_parallel_agents(&activation_bundle["agent_system"]);
     let materialization_mode =
@@ -716,6 +727,8 @@ fn build_taskflow_agent_system_snapshot(
             "agent_identity": agent_identity,
             "runtime_role_identity": runtime_role_identity,
             "selection_rule": selection_rule,
+            "model_selection": carrier_runtime["model_selection"],
+            "model_selection_enabled": !carrier_runtime["model_selection"].is_null(),
         },
         "agent_system": {
             "mode": activation_bundle["agent_system"]["mode"],
@@ -1027,13 +1040,39 @@ mod tests {
                         "role_id": "middle",
                         "tier": "middle",
                         "rate": 4,
+                        "normalized_cost_units": 4,
                         "runtime_roles": ["business_analyst", "coach"],
                         "task_classes": ["specification"],
                         "default_runtime_role": "business_analyst",
                         "reasoning_band": "medium",
-                        "model_reasoning_effort": "medium"
+                        "model": "gpt-5.4",
+                        "model_provider": "openai",
+                        "model_reasoning_effort": "medium",
+                        "plan_mode_reasoning_effort": "high",
+                        "sandbox_mode": "workspace-write",
+                        "default_model_profile": "codex_gpt54_medium_write",
+                        "model_profiles": {
+                            "codex_gpt54_medium_write": {
+                                "profile_id": "codex_gpt54_medium_write",
+                                "model_ref": "gpt-5.4",
+                                "provider": "openai",
+                                "reasoning_effort": "medium",
+                                "plan_mode_reasoning_effort": "high",
+                                "sandbox_mode": "workspace-write",
+                                "normalized_cost_units": 4,
+                                "speed_tier": "fast",
+                                "quality_tier": "medium",
+                                "write_scope": "workspace-write",
+                                "runtime_roles": ["business_analyst", "coach"],
+                                "task_classes": ["specification"]
+                            }
+                        }
                     }
                 ],
+                "model_selection": {
+                    "enabled": true,
+                    "selection_rule": "role_task_then_readiness_then_score_then_cost_quality"
+                },
                 "worker_strategy": {
                     "selection_policy": {
                         "rule": "capability_first_then_score_guard_then_cheapest_tier"
@@ -1064,6 +1103,15 @@ mod tests {
             1
         );
         assert_eq!(snapshot["carriers"][0]["carrier_id"], "middle");
+        assert_eq!(
+            snapshot["carriers"][0]["default_model_profile"],
+            "codex_gpt54_medium_write"
+        );
+        assert_eq!(snapshot["agent_model"]["model_selection_enabled"], true);
+        assert_eq!(
+            snapshot["agent_model"]["selection_rule"],
+            "role_task_then_readiness_then_score_then_cost_quality"
+        );
         assert_eq!(snapshot["dispatch_aliases"][0]["role_id"], "specification");
     }
 

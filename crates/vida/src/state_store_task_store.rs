@@ -47,12 +47,17 @@ impl StateStore {
         Ok(snapshot_path)
     }
 
-    fn build_task_close_reconciled_binding(
+    async fn build_task_close_reconciled_binding(
+        &self,
         status: &RunGraphStatus,
         closed_task_id: &str,
-    ) -> Option<crate::state_store::RunGraphContinuationBinding> {
-        if status.task_id == closed_task_id {
-            return Some(crate::state_store::RunGraphContinuationBinding {
+    ) -> Result<Option<crate::state_store::RunGraphContinuationBinding>, StateStoreError> {
+        if status.task_id == closed_task_id
+            && self
+                .task_close_reconcile_has_persisted_receipt_truth(&status.run_id, closed_task_id)
+                .await?
+        {
+            return Ok(Some(crate::state_store::RunGraphContinuationBinding {
                 run_id: status.run_id.clone(),
                 task_id: status.task_id.clone(),
                 status: "bound".to_string(),
@@ -70,16 +75,57 @@ impl StateStore {
                 recorded_at: time::OffsetDateTime::now_utc()
                     .format(&time::format_description::well_known::Rfc3339)
                     .expect("rfc3339 timestamp should render"),
-            });
+            }));
         }
 
-        crate::taskflow_continuation::build_run_graph_continuation_binding(
-            status,
-            None,
-            "task_close_reconcile",
-            Some(
-                "Closing the active task reconciled the run into a completed state and bound downstream closure as the next lawful bounded unit.",
-            ),
+        Ok(None)
+    }
+
+    pub(crate) fn run_graph_status_allows_task_close_closure_binding(
+        status: &RunGraphStatus,
+    ) -> bool {
+        status.status == "completed"
+            && matches!(
+                status.lifecycle_stage.as_str(),
+                "implementation_complete" | "closure_complete"
+            )
+            && status.next_node.is_none()
+            && status.handoff_state == "none"
+            && status.resume_target == "none"
+    }
+
+    pub(crate) async fn task_close_reconcile_has_persisted_receipt_truth(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        let task = match self.show_task(task_id).await {
+            Ok(task) => task,
+            Err(StateStoreError::MissingTask { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if task.status != "closed" {
+            return Ok(false);
+        }
+
+        let receipt: Option<RunGraphDispatchReceiptStored> =
+            self.db.select(("run_graph_dispatch_receipt", run_id)).await?;
+        let Some(receipt) = receipt.map(
+            crate::state_store::state_store_run_graph_summary::normalize_legacy_downstream_preview_drift,
+        ) else {
+            return Ok(false);
+        };
+        let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
+        let receipt: RunGraphDispatchReceipt = receipt.into();
+        Ok(
+            receipt.run_id == run_id
+                && receipt.blocker_code.is_none()
+                && receipt
+                    .dispatch_packet_path
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|value| !value.is_empty())
+                && crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(&receipt),
         )
     }
 
@@ -214,7 +260,13 @@ impl StateStore {
 
         for run_id in affected_run_ids {
             let status = self.run_graph_status(&run_id).await?;
-            let Some(binding) = Self::build_task_close_reconciled_binding(&status, task_id) else {
+            if status.task_id == task_id {
+                self.record_run_graph_status(&status).await?;
+            }
+            let Some(binding) = self
+                .build_task_close_reconciled_binding(&status, task_id)
+                .await?
+            else {
                 self.clear_run_graph_continuation_binding(&run_id).await?;
                 continue;
             };
@@ -1277,6 +1329,16 @@ mod tests {
         .expect("closure-bound run should resolve after task close reconcile");
         assert_eq!(resolved.dispatch_receipt.dispatch_target, "closure");
         assert_eq!(resolved.dispatch_receipt.dispatch_status, "executed");
+        let reconciled_status = store
+            .run_graph_status("run-close-task")
+            .await
+            .expect("reconciled run status should load");
+        assert_eq!(reconciled_status.checkpoint_kind, "none");
+        let checkpoint_record = store
+            .run_graph_projection_checkpoint_record("run-close-task")
+            .await
+            .expect("checkpoint record lookup should succeed");
+        assert!(checkpoint_record.is_none());
 
         let _ = fs::remove_dir_all(&root);
     }

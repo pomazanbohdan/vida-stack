@@ -6601,7 +6601,7 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn run_graph_status_reconciles_closure_ready_downstream_receipt_into_closure_candidate() {
+    async fn run_graph_status_does_not_close_open_run_from_closure_ready_downstream_receipt() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6672,38 +6672,41 @@ hierarchy: framework,contracts
             .run_graph_status("run-closure-ready")
             .await
             .expect("reconciled run graph status should load");
-        assert_eq!(reconciled.active_node, "verification");
-        assert_eq!(reconciled.status, "completed");
-        assert_eq!(reconciled.lifecycle_stage, "implementation_complete");
-        assert_eq!(reconciled.policy_gate, "not_required");
+        assert_eq!(reconciled.active_node, "dev-pack");
+        assert_eq!(reconciled.status, "ready");
+        assert_eq!(reconciled.lifecycle_stage, "dev_pack_active");
+        assert_eq!(reconciled.policy_gate, "single_task_scope_required");
         assert_eq!(reconciled.handoff_state, "none");
         assert_eq!(reconciled.resume_target, "none");
-        assert!(!reconciled.recovery_ready);
+        assert!(reconciled.recovery_ready);
 
         let latest_status = store
             .latest_run_graph_status()
             .await
             .expect("latest reconciled run graph status should load")
             .expect("latest run graph status should exist");
-        assert_eq!(latest_status.active_node, "verification");
-        assert_eq!(latest_status.status, "completed");
-        assert_eq!(latest_status.lifecycle_stage, "implementation_complete");
-        assert_eq!(latest_status.policy_gate, "not_required");
+        assert_eq!(latest_status.active_node, "dev-pack");
+        assert_eq!(latest_status.status, "ready");
+        assert_eq!(latest_status.lifecycle_stage, "dev_pack_active");
+        assert_eq!(latest_status.policy_gate, "single_task_scope_required");
         assert_eq!(latest_status.handoff_state, "none");
         assert_eq!(latest_status.resume_target, "none");
-        assert!(!latest_status.recovery_ready);
+        assert!(latest_status.recovery_ready);
 
         let recovery = store
             .run_graph_recovery_summary("run-closure-ready")
             .await
             .expect("reconciled recovery summary should load");
-        assert_eq!(recovery.active_node, "verification");
-        assert_eq!(recovery.resume_status, "completed");
-        assert_eq!(recovery.lifecycle_stage, "implementation_complete");
-        assert_eq!(recovery.delegation_gate.blocker_code, None);
+        assert_eq!(recovery.active_node, "dev-pack");
+        assert_eq!(recovery.resume_status, "ready");
+        assert_eq!(recovery.lifecycle_stage, "dev_pack_active");
+        assert_eq!(
+            recovery.delegation_gate.blocker_code.as_deref(),
+            Some("open_delegated_cycle")
+        );
         assert_eq!(
             recovery.delegation_gate.reporting_pause_gate,
-            "closure_candidate"
+            "non_blocking_only"
         );
 
         let latest_recovery = store
@@ -6711,13 +6714,16 @@ hierarchy: framework,contracts
             .await
             .expect("latest reconciled recovery summary should load")
             .expect("latest run graph recovery summary should exist");
-        assert_eq!(latest_recovery.active_node, "verification");
-        assert_eq!(latest_recovery.resume_status, "completed");
-        assert_eq!(latest_recovery.lifecycle_stage, "implementation_complete");
-        assert_eq!(latest_recovery.delegation_gate.blocker_code, None);
+        assert_eq!(latest_recovery.active_node, "dev-pack");
+        assert_eq!(latest_recovery.resume_status, "ready");
+        assert_eq!(latest_recovery.lifecycle_stage, "dev_pack_active");
+        assert_eq!(
+            latest_recovery.delegation_gate.blocker_code.as_deref(),
+            Some("open_delegated_cycle")
+        );
         assert_eq!(
             latest_recovery.delegation_gate.reporting_pause_gate,
-            "closure_candidate"
+            "non_blocking_only"
         );
 
         let _ = fs::remove_dir_all(&root);

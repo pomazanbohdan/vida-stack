@@ -34,6 +34,27 @@ host_environment:
         model: gpt-5.4
         model_reasoning_effort: low
         sandbox_mode: workspace-write
+        default_model_profile: codex_gpt54_low_write
+        model_profiles:
+          codex_gpt54_low_write:
+            provider: openai
+            model_ref: gpt-5.4
+            reasoning_effort: low
+            plan_mode_reasoning_effort: medium
+            sandbox_mode: workspace-write
+            normalized_cost_units: 1
+            speed_tier: fast
+            quality_tier: medium
+            write_scope: workspace-write
+            runtime_roles:
+              - worker
+            task_classes:
+              - implementation
+              - delivery_task
+              - execution_block
+            readiness:
+              mode: codex_profile
+              required: true
         default_runtime_role: worker
         runtime_roles:
           - worker
@@ -49,6 +70,31 @@ host_environment:
         model: gpt-5.4
         model_reasoning_effort: medium
         sandbox_mode: workspace-write
+        default_model_profile: codex_gpt54_medium_write
+        model_profiles:
+          codex_gpt54_medium_write:
+            provider: openai
+            model_ref: gpt-5.4
+            reasoning_effort: medium
+            plan_mode_reasoning_effort: high
+            sandbox_mode: workspace-write
+            normalized_cost_units: 4
+            speed_tier: fast
+            quality_tier: medium
+            write_scope: workspace-write
+            runtime_roles:
+              - business_analyst
+              - pm
+              - coach
+              - worker
+            task_classes:
+              - specification
+              - planning
+              - coach
+              - implementation_medium
+            readiness:
+              mode: codex_profile
+              required: true
         default_runtime_role: coach
         runtime_roles:
           - business_analyst
@@ -68,6 +114,29 @@ host_environment:
         model: gpt-5.3-codex-spark
         model_reasoning_effort: high
         sandbox_mode: read-only
+        default_model_profile: codex_spark_high_readonly
+        model_profiles:
+          codex_spark_high_readonly:
+            provider: openai
+            model_ref: gpt-5.3-codex-spark
+            reasoning_effort: high
+            plan_mode_reasoning_effort: high
+            sandbox_mode: read-only
+            normalized_cost_units: 16
+            speed_tier: medium
+            quality_tier: high
+            write_scope: read-only
+            runtime_roles:
+              - verifier
+              - prover
+            task_classes:
+              - verification
+              - review
+              - quality_gate
+              - release_readiness
+            readiness:
+              mode: codex_profile
+              required: true
         default_runtime_role: verifier
         runtime_roles:
           - verifier
@@ -85,6 +154,47 @@ host_environment:
         model: gpt-5.3-codex-spark
         model_reasoning_effort: high
         sandbox_mode: read-only
+        default_model_profile: codex_spark_high_arch
+        model_profiles:
+          codex_spark_high_arch:
+            provider: openai
+            model_ref: gpt-5.3-codex-spark
+            reasoning_effort: high
+            plan_mode_reasoning_effort: high
+            sandbox_mode: read-only
+            normalized_cost_units: 32
+            speed_tier: medium
+            quality_tier: high
+            write_scope: read-only
+            runtime_roles:
+              - solution_architect
+            task_classes:
+              - architecture
+              - execution_preparation
+              - hard_escalation
+              - meta_analysis
+            readiness:
+              mode: codex_profile
+              required: true
+          codex_spark_xhigh_arch:
+            provider: openai
+            model_ref: gpt-5.3-codex-spark
+            reasoning_effort: xhigh
+            plan_mode_reasoning_effort: xhigh
+            sandbox_mode: read-only
+            normalized_cost_units: 48
+            speed_tier: slow
+            quality_tier: very_high
+            write_scope: read-only
+            runtime_roles:
+              - solution_architect
+            task_classes:
+              - hard_escalation
+              - architecture
+              - meta_analysis
+            readiness:
+              mode: codex_profile
+              required: true
         default_runtime_role: solution_architect
         runtime_roles:
           - solution_architect
@@ -325,9 +435,7 @@ autonomous_execution:
   dependent_coverage_autoupdate: true
   agent_only_development: true
   continue_after_reports: true
-  spec_ready_auto_development: true
   validation_report_required_before_implementation: true
-  resume_after_validation_gate: true
 
 framework_self_diagnosis:
   enabled: true
@@ -378,6 +486,41 @@ agent_system:
       anthropic: structured prompt templates, explicit sections, and evaluation-backed refinement loops
       microsoft: record one bounded decision/design artifact per change and route on explicit cost-quality tradeoffs instead of ad hoc escalation
 
+  model_selection:
+    enabled: true
+    candidate_scope: unified_carrier_model_profiles
+    default_strategy: balanced_cost_quality
+    selection_rule: role_task_then_readiness_then_score_then_cost_quality
+    free_profiles_allowed: true
+    zero_cost_profiles_allowed: true
+    quality_floor_by_runtime_role:
+      worker: medium
+      business_analyst: medium
+      pm: medium
+      coach: medium
+      verifier: high
+      prover: high
+      solution_architect: high
+    reasoning_floor_by_task_class:
+      implementation: low
+      delivery_task: low
+      execution_block: low
+      specification: medium
+      planning: medium
+      coach: medium
+      implementation_medium: medium
+      verification: high
+      review: high
+      quality_gate: high
+      release_readiness: high
+      architecture: high
+      execution_preparation: high
+      hard_escalation: xhigh
+      meta_analysis: high
+    budget_policy:
+      enforce_max_budget_units: true
+      allow_escalation_over_budget_with_blocker: true
+
   subagents:
     internal_subagents:
       enabled: true
@@ -388,11 +531,84 @@ agent_system:
       budget_cost_units: 10
       profiles: internal_fast,internal_arch,internal_review
       default_profile: internal_fast
+      default_model_profile: internal_fast
       capability_band: implementation_safe,architecture_safe,review_safe
+      default_runtime_role: worker
       write_scope: orchestrator_native
       billing_tier: internal
       speed_tier: medium
       quality_tier: high
+      runtime_roles:
+        - worker
+        - business_analyst
+        - coach
+        - verifier
+        - solution_architect
+      task_classes:
+        - implementation
+        - analysis
+        - delivery_task
+        - review
+        - verification
+        - architecture
+        - execution_preparation
+        - hard_escalation
+      model_profiles:
+        internal_fast:
+          provider: internal
+          model_ref: internal_fast
+          reasoning_effort: low
+          normalized_cost_units: 6
+          speed_tier: fast
+          quality_tier: medium_high
+          write_scope: orchestrator_native
+          runtime_roles:
+            - worker
+            - business_analyst
+          task_classes:
+            - implementation
+            - analysis
+            - delivery_task
+          readiness:
+            mode: internal_profile
+            required: true
+        internal_review:
+          provider: internal
+          model_ref: internal_review
+          reasoning_effort: medium
+          normalized_cost_units: 8
+          speed_tier: medium
+          quality_tier: high
+          write_scope: read_or_review
+          runtime_roles:
+            - coach
+            - verifier
+            - prover
+          task_classes:
+            - review
+            - verification
+            - coach
+            - release_readiness
+          readiness:
+            mode: internal_profile
+            required: true
+        internal_arch:
+          provider: internal
+          model_ref: internal_arch
+          reasoning_effort: high
+          normalized_cost_units: 12
+          speed_tier: medium
+          quality_tier: very_high
+          write_scope: architecture_safe
+          runtime_roles:
+            - solution_architect
+          task_classes:
+            - architecture
+            - execution_preparation
+            - hard_escalation
+          readiness:
+            mode: internal_profile
+            required: true
       specialties: implementation,architecture,integration,review,verification
     hermes_cli:
       enabled: true
@@ -404,13 +620,49 @@ agent_system:
       budget_cost_units: 0
       models_hint: hermes/provider-configured
       default_model: hermes/provider-configured
+      default_model_profile: hermes_provider_configured_review
       capability_band: read_only,review_safe
+      default_runtime_role: coach
       write_scope: none
       max_runtime_seconds: 180
       min_output_bytes: 260
       billing_tier: free
       speed_tier: medium
       quality_tier: medium
+      runtime_roles:
+        - business_analyst
+        - coach
+        - verifier
+      task_classes:
+        - analysis
+        - specification
+        - planning
+        - review
+        - coach
+      model_profiles:
+        hermes_provider_configured_review:
+          provider: hermes
+          model_ref: hermes/provider-configured
+          reasoning_effort: provider_default
+          normalized_cost_units: 0
+          speed_tier: medium
+          quality_tier: medium
+          write_scope: none
+          runtime_roles:
+            - business_analyst
+            - coach
+            - verifier
+          task_classes:
+            - analysis
+            - specification
+            - planning
+            - review
+            - coach
+          reasoning_control:
+            mode: provider_default
+          readiness:
+            mode: external_cli_profile
+            required: true
       specialties: planning,spec,review
       dispatch:
         command: hermes
@@ -438,13 +690,70 @@ agent_system:
       budget_cost_units: 0
       models_hint: opencode/minimax-m2.5-free,opencode/gpt-5.1-codex-mini
       default_model: opencode/minimax-m2.5-free
+      default_model_profile: opencode_minimax_free_review
       capability_band: read_only,review_safe
+      default_runtime_role: coach
       write_scope: none
       max_runtime_seconds: 180
       min_output_bytes: 260
       billing_tier: free
       speed_tier: fast
       quality_tier: medium
+      runtime_roles:
+        - business_analyst
+        - coach
+        - verifier
+      task_classes:
+        - analysis
+        - specification
+        - planning
+        - review
+        - coach
+        - verification
+      model_profiles:
+        opencode_minimax_free_review:
+          provider: opencode
+          model_ref: opencode/minimax-m2.5-free
+          reasoning_effort: provider_default
+          normalized_cost_units: 0
+          speed_tier: fast
+          quality_tier: medium
+          write_scope: none
+          runtime_roles:
+            - business_analyst
+            - coach
+            - verifier
+          task_classes:
+            - analysis
+            - specification
+            - planning
+            - review
+            - coach
+          reasoning_control:
+            mode: provider_default
+          readiness:
+            mode: external_cli_profile
+            required: true
+        opencode_codex_mini_review:
+          provider: opencode
+          model_ref: opencode/gpt-5.1-codex-mini
+          reasoning_effort: low
+          normalized_cost_units: 1
+          speed_tier: fast
+          quality_tier: high
+          write_scope: none
+          runtime_roles:
+            - coach
+            - verifier
+          task_classes:
+            - review
+            - verification
+            - coach
+          reasoning_control:
+            mode: provider_default
+          readiness:
+            mode: external_cli_profile
+            required: true
       specialties: planning,spec,review
       dispatch:
         command: opencode
@@ -484,13 +793,45 @@ agent_system:
       budget_cost_units: 0
       models_hint: kilo/x-ai/grok-code-fast-1:optimized:free
       default_model: kilo/x-ai/grok-code-fast-1:optimized:free
+      default_model_profile: kilo_grok_code_fast_free
       capability_band: read_only,review_safe
+      default_runtime_role: coach
       write_scope: none
       max_runtime_seconds: 180
       min_output_bytes: 260
       billing_tier: free
       speed_tier: fast
       quality_tier: medium
+      runtime_roles:
+        - business_analyst
+        - coach
+        - verifier
+      task_classes:
+        - research
+        - analysis
+        - review
+      model_profiles:
+        kilo_grok_code_fast_free:
+          provider: kilo
+          model_ref: kilo/x-ai/grok-code-fast-1:optimized:free
+          reasoning_effort: provider_default
+          normalized_cost_units: 0
+          speed_tier: fast
+          quality_tier: medium
+          write_scope: none
+          runtime_roles:
+            - business_analyst
+            - coach
+            - verifier
+          task_classes:
+            - research
+            - analysis
+            - review
+          reasoning_control:
+            mode: provider_default
+          readiness:
+            mode: external_cli_profile
+            required: true
       specialties: planning,spec,review
       dispatch:
         command: kilo
@@ -523,13 +864,45 @@ agent_system:
       budget_cost_units: 0
       models_hint: vibe/devstral-2
       default_model: vibe/devstral-2
+      default_model_profile: vibe_devstral2_review
       capability_band: read_only,review_safe
+      default_runtime_role: coach
       write_scope: none
       max_runtime_seconds: 180
       min_output_bytes: 260
       billing_tier: free
       speed_tier: medium
       quality_tier: medium
+      runtime_roles:
+        - coach
+        - verifier
+      task_classes:
+        - ui_review
+        - review
+        - analysis
+      model_profiles:
+        vibe_devstral2_review:
+          provider: vibe
+          model_ref: vibe/devstral-2
+          reasoning_effort: provider_default
+          normalized_cost_units: 0
+          speed_tier: medium
+          quality_tier: medium
+          write_scope: none
+          runtime_roles:
+            - coach
+            - verifier
+          task_classes:
+            - ui_review
+            - review
+            - analysis
+          reasoning_control:
+            mode: config_file
+            path: ~/.vibe/config.toml
+            expected_substring: 'active_model = "devstral-2"'
+          readiness:
+            mode: external_cli_profile
+            required: true
       specialties: planning,spec,review
       dispatch:
         command: vibe

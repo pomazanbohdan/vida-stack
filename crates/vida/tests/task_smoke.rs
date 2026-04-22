@@ -1160,7 +1160,7 @@ fn status_json_reports_non_default_host_agents_summary() {
         .expect("host_environment should exist");
     host_env.insert(
         serde_yaml::Value::String("cli_system".to_string()),
-        serde_yaml::Value::String("qwen".to_string()),
+        serde_yaml::Value::String("hermes".to_string()),
     );
     fs::write(
         &config_path,
@@ -1172,9 +1172,9 @@ fn status_json_reports_non_default_host_agents_summary() {
         .args([
             "project-activator",
             "--project-id",
-            "status-qwen",
+            "status-hermes",
             "--host-cli-system",
-            "qwen",
+            "hermes",
             "--language",
             "english",
             "--json",
@@ -1222,25 +1222,25 @@ fn status_json_reports_non_default_host_agents_summary() {
     let parsed: serde_json::Value =
         serde_json::from_slice(&status.stdout).expect("status should render json");
     let host_agents = &parsed["host_agents"];
-    assert_eq!(host_agents["host_cli_system"], "qwen");
-    assert_eq!(host_agents["runtime_surface"], ".qwen");
+    assert_eq!(host_agents["host_cli_system"], "hermes");
+    assert_eq!(host_agents["runtime_surface"], ".hermes");
     assert_eq!(host_agents["root_session_write_guard"]["status"], "missing");
     assert_eq!(parsed["root_session_write_guard"]["status"], "missing");
     let runtime_root = host_agents["runtime_root"]
         .as_str()
         .expect("runtime_root present");
-    assert!(runtime_root.contains(".qwen"));
+    assert!(runtime_root.contains(".hermes"));
     let system_entry = &host_agents["system_entry"];
     assert!(system_entry.is_object());
     assert_eq!(
         system_entry["template_root"]
             .as_str()
             .expect("template_root"),
-        ".qwen"
+        ".hermes"
     );
     assert_eq!(
         system_entry["runtime_root"].as_str().expect("runtime_root"),
-        ".qwen"
+        ".hermes"
     );
     assert_eq!(
         system_entry["materialization_mode"]
@@ -1250,32 +1250,32 @@ fn status_json_reports_non_default_host_agents_summary() {
     );
     assert_eq!(system_entry["enabled"].as_bool(), Some(true));
     assert_eq!(
-        system_entry["carriers"]["qwen-primary"]["tier"]
+        system_entry["carriers"]["hermes-primary"]["tier"]
             .as_str()
             .expect("carrier tier"),
-        "qwen"
+        "hermes"
     );
     assert_eq!(
-        system_entry["carriers"]["qwen-primary"]["rate"].as_i64(),
+        system_entry["carriers"]["hermes-primary"]["rate"].as_i64(),
         Some(4)
     );
     let agents = host_agents["agents"]
         .as_object()
         .expect("agents summary should render");
-    let qwen = agents
-        .get("qwen-primary")
-        .expect("qwen carrier summary should render");
-    assert_eq!(qwen["tier"].as_str().expect("tier"), "qwen");
-    assert_eq!(qwen["rate"].as_i64(), Some(4));
+    let hermes = agents
+        .get("hermes-primary")
+        .expect("hermes carrier summary should render");
+    assert_eq!(hermes["tier"].as_str().expect("tier"), "hermes");
+    assert_eq!(hermes["rate"].as_i64(), Some(4));
     assert_eq!(
-        qwen["default_runtime_role"]
+        hermes["default_runtime_role"]
             .as_str()
             .expect("default runtime role"),
         "worker"
     );
-    assert_eq!(qwen["feedback_count"].as_u64(), Some(0));
-    assert!(qwen["effective_score"].is_null());
-    assert!(qwen["lifecycle_state"].is_null());
+    assert_eq!(hermes["feedback_count"].as_u64(), Some(0));
+    assert!(hermes["effective_score"].is_null());
+    assert!(hermes["lifecycle_state"].is_null());
     assert_eq!(
         host_agents["selection_policy"]["rule"],
         "capability_first_then_score_guard_then_cheapest_tier"

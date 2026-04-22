@@ -107,16 +107,6 @@ pub(crate) fn task_complexity_multiplier(task_class: &str) -> u64 {
     }
 }
 
-pub(crate) fn role_supports_runtime_role(role: &serde_json::Value, runtime_role: &str) -> bool {
-    let runtime_roles = role["runtime_roles"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .collect::<Vec<_>>();
-    runtime_roles.is_empty() || runtime_roles.contains(&runtime_role)
-}
-
 pub(crate) fn role_supports_task_class(role: &serde_json::Value, task_class: &str) -> bool {
     let task_classes = role["task_classes"]
         .as_array()

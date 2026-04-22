@@ -205,9 +205,7 @@ Supported `autonomous_execution` keys:
 3. `next_task_boundary_report_gating`
 4. `dependent_coverage_autoupdate`
 5. `continue_after_reports`
-6. `spec_ready_auto_development`
-7. `validation_report_required_before_implementation`
-8. `resume_after_validation_gate`
+6. `validation_report_required_before_implementation`
 
 Autonomous execution overlay rule:
 
@@ -218,9 +216,8 @@ Autonomous execution overlay rule:
 5. `continue_after_reports=true` means intermediate lawful reports should auto-advance into the next already-authorized step when no blocker, approval gate, validation gate, explicit user pause, or explicit user request to discuss the report exists.
 6. `continue_after_reports` must not bypass research/spec/approval/verification sequencing; it only removes unnecessary stopping after a lawful intermediate report.
 7. Pre-execution validation reports remain gating even when `continue_after_reports=true`.
-8. `spec_ready_auto_development=true` allows autonomous entry into implementation flow after spec readiness, but only through the normal execution-entry gates.
-9. `validation_report_required_before_implementation=true` inserts a mandatory validation-report gate before each implementation slice or implementation-bearing task.
-10. `resume_after_validation_gate=true` means that once the validation report is accepted and no other stop condition exists, runtime should continue directly into the authorized implementation step instead of stopping again by inertia.
+8. `validation_report_required_before_implementation=true` inserts a mandatory validation-report gate before each implementation slice or implementation-bearing task.
+9. Spec-ready transition into downstream implementation flow and post-validation continuation remain runtime-defined execution-entry behaviors, not supported project overlay keys.
 
 Current supported `agent_system` keys:
 

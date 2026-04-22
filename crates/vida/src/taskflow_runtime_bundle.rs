@@ -5,6 +5,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::taskflow_protocol_binding::TASKFLOW_PROTOCOL_BINDING_AUTHORITY;
 use crate::{
     build_project_activator_view, doctor_launcher_summary_for_root,
+    latest_final_runtime_consumption_snapshot_path,
     merge_project_activation_into_init_view, read_or_sync_launcher_activation_snapshot,
     runtime_consumption_state::latest_admissible_retrieval_trust_signal,
     surface_render::operator_command_map, DoctorLauncherSummary, StateStore,
@@ -47,11 +48,12 @@ const RETRIEVAL_OPTIONAL_CONTEXT_BOUNDARY_REQUIRED: [&str; 3] = [
 
 fn runtime_bundle_retrieval_trust_evidence(
     runtime_consumption: &crate::runtime_consumption_state::RuntimeConsumptionSummary,
+    latest_final_snapshot_path: Option<&str>,
     protocol_binding_receipt_id: Option<&str>,
 ) -> serde_json::Value {
     latest_admissible_retrieval_trust_signal(
         runtime_consumption,
-        runtime_consumption.latest_snapshot_path.as_deref(),
+        latest_final_snapshot_path,
         protocol_binding_receipt_id,
     )
     .unwrap_or_else(|| serde_json::json!({}))
@@ -134,6 +136,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             continuation_binding_evidence_ambiguous,
         );
     let runtime_consumption = crate::runtime_consumption_summary(store.root())?;
+    let latest_final_snapshot_path = latest_final_runtime_consumption_snapshot_path(store.root())?;
     let protocol_binding_receipt = store
         .latest_protocol_binding_receipt()
         .await
@@ -231,6 +234,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .unwrap_or(serde_json::Value::String(String::new()));
     let retrieval_trust_evidence = runtime_bundle_retrieval_trust_evidence(
         &runtime_consumption,
+        latest_final_snapshot_path.as_deref(),
         protocol_binding_receipt
             .as_ref()
             .map(|receipt| receipt.receipt_id.as_str()),
@@ -2486,6 +2490,7 @@ mod tests {
 
         let evidence = runtime_bundle_retrieval_trust_evidence(
             &runtime_consumption,
+            Some("/tmp/project/.vida/data/state/runtime-consumption/final-2.json"),
             Some("protocol-binding-receipt-2"),
         );
 
@@ -2520,6 +2525,33 @@ mod tests {
             evidence["acl_propagation"],
             serde_json::json!("protocol_binding_receipt_runtime_gate")
         );
+    }
+
+    #[test]
+    fn runtime_bundle_retrieval_trust_evidence_prefers_latest_admissible_final_snapshot() {
+        let runtime_consumption = crate::runtime_consumption_state::RuntimeConsumptionSummary {
+            total_snapshots: 4,
+            bundle_snapshots: 1,
+            bundle_check_snapshots: 1,
+            final_snapshots: 2,
+            latest_kind: Some("bundle-check".to_string()),
+            latest_snapshot_path: Some(
+                "/tmp/project/.vida/data/state/runtime-consumption/bundle-check-9.json"
+                    .to_string(),
+            ),
+        };
+
+        let evidence = runtime_bundle_retrieval_trust_evidence(
+            &runtime_consumption,
+            Some("/tmp/project/.vida/data/state/runtime-consumption/final-8.json"),
+            Some("protocol-binding-receipt-2"),
+        );
+
+        assert_eq!(
+            evidence["citation"],
+            serde_json::json!("/tmp/project/.vida/data/state/runtime-consumption/final-8.json")
+        );
+        assert_eq!(evidence["freshness"], serde_json::json!("final"));
     }
 
     #[test]

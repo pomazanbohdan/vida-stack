@@ -56,6 +56,8 @@ Active design docs:
 
 Current promoted runtime-control specs:
 
+- `docs/product/spec/agent-role-skill-profile-flow-model.md`
+- `docs/product/spec/compiled-runtime-bundle-contract.md`
 - `docs/product/spec/autonomous-report-continuation-law.md`
 - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 - `docs/product/spec/checkpoint-commit-and-replay-model.md`
@@ -69,6 +71,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-20T10:36:00+03:00
+updated_at: 2026-04-22T15:34:20.331474658Z
 changelog_ref: README.changelog.jsonl
-- `docs/product/spec/bounded-release-retrieval-identity-memory-govern-design.md`

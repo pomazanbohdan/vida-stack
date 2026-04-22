@@ -76,7 +76,7 @@ These inputs compile when active and valid:
 3. selected profile,
 4. enabled skills,
 5. selected flow set,
-6. model/backend policy,
+6. carrier/model-profile policy,
 7. approval/escalation posture,
 8. project output/render posture,
 9. promoted project protocols admitted for execution.
@@ -94,7 +94,7 @@ Instead, the system must compile one runtime control bundle from:
 5. project role/skill/profile/flow registries,
 6. enabled shared skills,
 7. route and gate constraints,
-8. model/backend policy,
+8. carrier/model-profile policy,
 9. runtime-family discovery maps,
 10. current evidence/gate requirements.
 
@@ -168,8 +168,10 @@ The root `metadata` block must expose at least:
 7. active teams when present,
 8. model policy,
 9. backend policy,
-10. activation scope.
-11. promoted compact project startup projections when they are admitted for execution.
+10. model-profile catalog and default-profile bindings for active carriers/backends,
+11. profile-selection strategy, quality/reasoning floors, and budget posture when the runtime enforces them,
+12. activation scope.
+13. promoted compact project startup projections when they are admitted for execution.
 
 ### 5.4 `protocol_binding_registry`
 
@@ -231,6 +233,7 @@ That means:
 2. known project protocols do not automatically become executable,
 3. only promoted project protocols admitted by the project protocol promotion rule may enter executable bundles.
 4. compact project startup bundles and runtime capsules may be admitted here as promoted executable project protocols when they are explicitly bound to orchestrator-init or agent-init startup use points.
+5. active carrier catalogs may compile compatibility shorthand such as legacy `model`, `model_reasoning_effort`, `default_model`, or `models_hint`, but executable runtime control must normalize those aliases into canonical `default_model_profile` plus `model_profiles` truth before selection or dispatch.
 
 `activation_bundle` must not contain:
 
@@ -389,5 +392,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/compiled-runtime-bundle-contract.md
 created_at: '2026-03-11T23:01:49+02:00'
-updated_at: '2026-03-13T08:47:25+02:00'
+updated_at: 2026-04-22T15:34:41.16837616Z
 changelog_ref: compiled-runtime-bundle-contract.changelog.jsonl

@@ -238,20 +238,25 @@ The orchestrator must consume this compiled identity instead of rediscovering th
 `cost_quality_constraints` should expose at least:
 
 1. selected executor tier when the host CLI provides a tier ladder,
-2. local effective score for that tier,
-3. internal rate for that tier,
-4. pricing basis used for the bounded task estimate,
-5. local score-store path when score refresh is runtime-local,
-6. local observability/history store path when host-agent telemetry is runtime-local,
-7. local budget rollup surface when spend tracking is runtime-local.
+2. selected model profile id and model ref when one carrier exposes multiple admissible model profiles,
+3. selected reasoning effort / sandbox posture when the executor exposes them explicitly,
+4. local effective score for that tier or profile,
+5. internal rate or normalized cost units used for that tier/profile,
+6. pricing basis used for the bounded task estimate,
+7. local score-store path when score refresh is runtime-local,
+8. local observability/history store path when host-agent telemetry is runtime-local,
+9. local budget rollup surface when spend tracking is runtime-local.
 
 Carrier-selection proof fields should expose at least:
 
 1. selected carrier id/tier,
-2. activation runtime role,
-3. admissibility evidence (`supports_runtime_role`, `supports_task_class`),
-4. effective score and lifecycle state from telemetry stores,
-5. selection rule path (`capability -> score guard -> cheapest`).
+2. selected model profile id and selected model ref,
+3. activation runtime role,
+4. admissibility evidence (`supports_runtime_role`, `supports_task_class`, `write_scope`, `readiness`),
+5. effective score and lifecycle state from telemetry stores,
+6. selected quality/speed posture when the executor catalog exposes them,
+7. selection rule path (`role/task admissibility -> readiness -> score guard -> cost/quality`),
+8. rejected candidate diagnostics when admissible competitors were filtered out.
 
 ## 9. Validation Rule
 
@@ -328,5 +333,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/agent-role-skill-profile-flow-model.md
 created_at: '2026-03-10T15:45:00+02:00'
-updated_at: '2026-03-13T11:20:00+02:00'
+updated_at: 2026-04-22T15:34:41.118728061Z
 changelog_ref: agent-role-skill-profile-flow-model.changelog.jsonl

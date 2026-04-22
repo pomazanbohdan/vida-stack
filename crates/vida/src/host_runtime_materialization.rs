@@ -320,25 +320,58 @@ pub(crate) fn read_host_runtime_agent_catalog(runtime_root: &Path) -> Vec<serde_
                 .get("vida_tier")
                 .cloned()
                 .unwrap_or_else(|| role_id.to_string());
+            let runtime_roles =
+                csv_string_list(role_config.get("vida_runtime_roles"));
+            let task_classes =
+                csv_string_list(role_config.get("vida_task_classes"));
+            let rate = role_config
+                .get("vida_rate")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            let compatibility_row = serde_json::json!({
+                "role_id": role_id,
+                "model": role_config.get("model").cloned().unwrap_or_default(),
+                "model_provider": role_config.get("model_provider").cloned().unwrap_or_default(),
+                "model_reasoning_effort": role_config.get("model_reasoning_effort").cloned().unwrap_or_default(),
+                "plan_mode_reasoning_effort": role_config.get("plan_mode_reasoning_effort").cloned().unwrap_or_default(),
+                "sandbox_mode": role_config.get("sandbox_mode").cloned().unwrap_or_default(),
+                "rate": rate,
+                "runtime_roles": runtime_roles.clone(),
+                "task_classes": task_classes.clone(),
+            });
+            let profile_projection =
+                crate::model_profile_contract::normalize_profile_projection_from_json_compat(
+                    role_id,
+                    &compatibility_row,
+                    Some(rate),
+                    &runtime_roles,
+                    &task_classes,
+                );
             Some(serde_json::json!({
                 "role_id": role_id,
                 "description": values.get("description").cloned().unwrap_or_default(),
                 "config_file": config_file,
-                "model": role_config.get("model").cloned().unwrap_or_default(),
-                "model_reasoning_effort": role_config.get("model_reasoning_effort").cloned().unwrap_or_default(),
-                "sandbox_mode": role_config.get("sandbox_mode").cloned().unwrap_or_default(),
+                "model": profile_projection["model"].clone(),
+                "model_provider": profile_projection["model_provider"].clone(),
+                "model_reasoning_effort": profile_projection["model_reasoning_effort"].clone(),
+                "plan_mode_reasoning_effort": profile_projection["plan_mode_reasoning_effort"].clone(),
+                "sandbox_mode": profile_projection["sandbox_mode"].clone(),
+                "default_model_profile": profile_projection["default_model_profile"].clone(),
+                "model_profiles": profile_projection["model_profiles"].clone(),
                 "tier": tier,
-                "rate": role_config
-                    .get("vida_rate")
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .unwrap_or(0),
+                "rate": rate,
+                "normalized_cost_units": profile_projection["model_profiles"]
+                    .as_object()
+                    .and_then(|profiles| profile_projection["default_model_profile"].as_str().and_then(|profile_id| profiles.get(profile_id)))
+                    .and_then(|profile| profile["normalized_cost_units"].as_u64())
+                    .unwrap_or(rate),
                 "reasoning_band": role_config
                     .get("vida_reasoning_band")
                     .cloned()
                     .unwrap_or_else(|| role_config.get("model_reasoning_effort").cloned().unwrap_or_default()),
                 "default_runtime_role": role_config.get("vida_default_runtime_role").cloned().unwrap_or_default(),
-                "runtime_roles": csv_string_list(role_config.get("vida_runtime_roles")),
-                "task_classes": csv_string_list(role_config.get("vida_task_classes")),
+                "runtime_roles": runtime_roles,
+                "task_classes": task_classes,
             }))
         })
         .collect::<Vec<_>>();
@@ -372,21 +405,41 @@ pub(crate) fn overlay_host_runtime_agent_catalog(
                 serde_yaml::Value::String(text) if !text.trim().is_empty() => text.trim(),
                 _ => return None,
             };
+            let runtime_roles = yaml_string_list(yaml_lookup(value, &["runtime_roles"]));
+            let task_classes = yaml_string_list(yaml_lookup(value, &["task_classes"]));
+            let rate = yaml_string(yaml_lookup(value, &["rate"]))
+                .and_then(|raw| raw.parse::<u64>().ok())
+                .unwrap_or(0);
+            let profile_projection =
+                crate::model_profile_contract::normalize_profile_projection_from_yaml(
+                    role_id,
+                    value,
+                    Some(rate),
+                    &runtime_roles,
+                    &task_classes,
+                );
             Some(serde_json::json!({
                 "role_id": role_id,
                 "description": yaml_string(yaml_lookup(value, &["description"])).unwrap_or_default(),
                 "config_file": format!("agents/{role_id}.toml"),
-                "model": yaml_string(yaml_lookup(value, &["model"])).unwrap_or_default(),
-                "model_reasoning_effort": yaml_string(yaml_lookup(value, &["model_reasoning_effort"])).unwrap_or_default(),
-                "sandbox_mode": yaml_string(yaml_lookup(value, &["sandbox_mode"])).unwrap_or_default(),
+                "model": profile_projection["model"].clone(),
+                "model_provider": profile_projection["model_provider"].clone(),
+                "model_reasoning_effort": profile_projection["model_reasoning_effort"].clone(),
+                "plan_mode_reasoning_effort": profile_projection["plan_mode_reasoning_effort"].clone(),
+                "sandbox_mode": profile_projection["sandbox_mode"].clone(),
+                "default_model_profile": profile_projection["default_model_profile"].clone(),
+                "model_profiles": profile_projection["model_profiles"].clone(),
                 "tier": yaml_string(yaml_lookup(value, &["tier"])).unwrap_or_else(|| role_id.to_string()),
-                "rate": yaml_string(yaml_lookup(value, &["rate"]))
-                    .and_then(|raw| raw.parse::<u64>().ok())
-                    .unwrap_or(0),
+                "rate": rate,
+                "normalized_cost_units": profile_projection["model_profiles"]
+                    .as_object()
+                    .and_then(|profiles| profile_projection["default_model_profile"].as_str().and_then(|profile_id| profiles.get(profile_id)))
+                    .and_then(|profile| profile["normalized_cost_units"].as_u64())
+                    .unwrap_or(rate),
                 "reasoning_band": yaml_string(yaml_lookup(value, &["reasoning_band"])).unwrap_or_default(),
                 "default_runtime_role": yaml_string(yaml_lookup(value, &["default_runtime_role"])).unwrap_or_default(),
-                "runtime_roles": yaml_string_list(yaml_lookup(value, &["runtime_roles"])),
-                "task_classes": yaml_string_list(yaml_lookup(value, &["task_classes"])),
+                "runtime_roles": runtime_roles,
+                "task_classes": task_classes,
             }))
         })
         .collect::<Vec<_>>();
@@ -420,21 +473,41 @@ pub(crate) fn host_runtime_entry_carrier_catalog(
                 serde_yaml::Value::String(text) if !text.trim().is_empty() => text.trim(),
                 _ => return None,
             };
+            let runtime_roles = yaml_string_list(yaml_lookup(value, &["runtime_roles"]));
+            let task_classes = yaml_string_list(yaml_lookup(value, &["task_classes"]));
+            let rate = yaml_string(yaml_lookup(value, &["rate"]))
+                .and_then(|raw| raw.parse::<u64>().ok())
+                .unwrap_or(0);
+            let profile_projection =
+                crate::model_profile_contract::normalize_profile_projection_from_yaml(
+                    role_id,
+                    value,
+                    Some(rate),
+                    &runtime_roles,
+                    &task_classes,
+                );
             Some(serde_json::json!({
                 "role_id": role_id,
                 "description": yaml_string(yaml_lookup(value, &["description"])).unwrap_or_default(),
                 "config_file": "",
-                "model": yaml_string(yaml_lookup(value, &["model"])).unwrap_or_default(),
-                "model_reasoning_effort": yaml_string(yaml_lookup(value, &["model_reasoning_effort"])).unwrap_or_default(),
-                "sandbox_mode": yaml_string(yaml_lookup(value, &["sandbox_mode"])).unwrap_or_default(),
+                "model": profile_projection["model"].clone(),
+                "model_provider": profile_projection["model_provider"].clone(),
+                "model_reasoning_effort": profile_projection["model_reasoning_effort"].clone(),
+                "plan_mode_reasoning_effort": profile_projection["plan_mode_reasoning_effort"].clone(),
+                "sandbox_mode": profile_projection["sandbox_mode"].clone(),
+                "default_model_profile": profile_projection["default_model_profile"].clone(),
+                "model_profiles": profile_projection["model_profiles"].clone(),
                 "tier": yaml_string(yaml_lookup(value, &["tier"])).unwrap_or_else(|| role_id.to_string()),
-                "rate": yaml_string(yaml_lookup(value, &["rate"]))
-                    .and_then(|raw| raw.parse::<u64>().ok())
-                    .unwrap_or(0),
+                "rate": rate,
+                "normalized_cost_units": profile_projection["model_profiles"]
+                    .as_object()
+                    .and_then(|profiles| profile_projection["default_model_profile"].as_str().and_then(|profile_id| profiles.get(profile_id)))
+                    .and_then(|profile| profile["normalized_cost_units"].as_u64())
+                    .unwrap_or(rate),
                 "reasoning_band": yaml_string(yaml_lookup(value, &["reasoning_band"])).unwrap_or_default(),
                 "default_runtime_role": yaml_string(yaml_lookup(value, &["default_runtime_role"])).unwrap_or_default(),
-                "runtime_roles": yaml_string_list(yaml_lookup(value, &["runtime_roles"])),
-                "task_classes": yaml_string_list(yaml_lookup(value, &["task_classes"])),
+                "runtime_roles": runtime_roles,
+                "task_classes": task_classes,
             }))
         })
         .collect::<Vec<_>>();

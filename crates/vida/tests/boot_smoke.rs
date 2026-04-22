@@ -267,7 +267,6 @@ fn bootstrap_project_runtime(project_id: &str, project_name: &str) -> (String, S
         "{}",
         String::from_utf8_lossy(&init.stderr)
     );
-
     let activator = vida()
         .args([
             "project-activator",
@@ -5649,6 +5648,93 @@ fn project_activator_materializes_codex_spark_for_read_only_codex_tiers() {
         ".codex"
     );
 
+    let config_path = std::path::Path::new(&project_root).join("vida.config.yaml");
+    let config = fs::read_to_string(&config_path).expect("config should exist");
+    let updated = config.replace(
+        r#"      architect:
+        tier: architect
+        rate: 32
+        reasoning_band: xhigh
+        model: gpt-5.3-codex-spark
+        model_reasoning_effort: high
+        sandbox_mode: read-only
+        default_runtime_role: solution_architect
+        runtime_roles:
+          - solution_architect
+        task_classes:
+          - architecture
+          - execution_preparation
+          - hard_escalation
+          - meta_analysis
+"#,
+        r#"      architect:
+        tier: architect
+        rate: 32
+        reasoning_band: xhigh
+        default_model_profile: codex_spark_xhigh_arch
+        model_profiles:
+          codex_spark_high_arch:
+            model: gpt-5.3-codex-spark
+            reasoning_effort: high
+            sandbox_mode: read-only
+            runtime_roles:
+              - solution_architect
+            task_classes:
+              - architecture
+              - execution_preparation
+              - hard_escalation
+              - meta_analysis
+          codex_spark_xhigh_arch:
+            model: gpt-5.3-codex-spark
+            reasoning_effort: xhigh
+            sandbox_mode: read-only
+            runtime_roles:
+              - solution_architect
+            task_classes:
+              - architecture
+              - execution_preparation
+              - hard_escalation
+              - meta_analysis
+        default_runtime_role: solution_architect
+        runtime_roles:
+          - solution_architect
+        task_classes:
+          - architecture
+          - execution_preparation
+          - hard_escalation
+          - meta_analysis
+"#,
+    );
+    assert_ne!(
+        updated, config,
+        "expected architect legacy carrier block replacement"
+    );
+    fs::write(&config_path, updated).expect("config should update");
+
+    let rerender = vida()
+        .args([
+            "project-activator",
+            "--project-id",
+            "codex-spark-materialization",
+            "--project-name",
+            "Codex Spark Materialization",
+            "--language",
+            "english",
+            "--host-cli-system",
+            "codex",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("project activator rerender should run");
+    assert!(
+        rerender.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rerender.stderr)
+    );
+
     let junior = fs::read_to_string(format!("{project_root}/.codex/agents/junior.toml"))
         .expect("junior codex carrier should materialize");
     let middle = fs::read_to_string(format!("{project_root}/.codex/agents/middle.toml"))
@@ -5664,6 +5750,8 @@ fn project_activator_materializes_codex_spark_for_read_only_codex_tiers() {
     assert!(architect.contains("model = \"gpt-5.3-codex-spark\""));
     assert!(senior.contains("sandbox_mode = \"read-only\""));
     assert!(architect.contains("sandbox_mode = \"read-only\""));
+    assert!(senior.contains("model_reasoning_effort = \"high\""));
+    assert!(architect.contains("model_reasoning_effort = \"xhigh\""));
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }

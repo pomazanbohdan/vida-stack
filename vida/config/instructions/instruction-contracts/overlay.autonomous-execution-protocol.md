@@ -40,10 +40,10 @@ Default boundary behavior:
 
 Execution-entry validation rule:
 
-1. If overlay enables `spec_ready_auto_development=true`, autonomous execution may enter implementation flow after spec readiness without a new user prompt.
-2. If overlay also enables `validation_report_required_before_implementation=true`, implementation entry must pause for a validation report before each implementation-bearing slice or task.
-3. That validation report is gating, not merely informational.
-4. If overlay also enables `resume_after_validation_gate=true`, accepted validation should resume autonomous execution directly into the implementation step rather than waiting for another redundant confirmation.
+1. `validation_report_required_before_implementation=true` makes implementation entry pause for a validation report before each implementation-bearing slice or task.
+2. That validation report is gating, not merely informational.
+3. Spec-ready transition into downstream implementation flow and post-validation continuation are runtime-defined execution-entry behaviors, not live project overlay toggles.
+4. Project overlay must not advertise additional execution-entry toggles unless runtime compilation and continuation surfaces consume them directly.
 
 User-prompt minimization rule:
 

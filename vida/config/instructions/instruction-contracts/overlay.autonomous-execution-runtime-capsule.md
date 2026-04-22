@@ -23,9 +23,10 @@ Boundary rule:
 3. after one `execution_block` closes, reconcile through the parent `delivery_task` before any task-boundary or session-boundary behavior,
 4. after one task closes, run next-task boundary analysis before entering the next task,
 5. if the next lawful task or block is already known and no stop condition is active, continue automatically,
-6. validation-before-implementation remains gating even when `continue_after_reports=true` or `spec_ready_auto_development=true`,
-7. worker-first and verification law remain active during autonomous follow-through; AEP does not authorize root-session local writing by itself,
-8. if another lawful ready task exists in the same authorized pool, task-local closure does not mean execution is finished.
+6. validation-before-implementation remains gating even when `continue_after_reports=true`,
+7. spec-ready transition into downstream implementation flow and post-validation continuation are runtime-defined behaviors, not live project overlay toggles,
+8. worker-first and verification law remain active during autonomous follow-through; AEP does not authorize root-session local writing by itself,
+9. if another lawful ready task exists in the same authorized pool, task-local closure does not mean execution is finished.
 
 ## Stop Conditions
 

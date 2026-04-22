@@ -27,9 +27,7 @@ Project overlay surface:
 
 1. `vida.config.yaml`
 2. `autonomous_execution.continue_after_reports`
-3. `autonomous_execution.spec_ready_auto_development`
-4. `autonomous_execution.validation_report_required_before_implementation`
-5. `autonomous_execution.resume_after_validation_gate`
+3. `autonomous_execution.validation_report_required_before_implementation`
 
 Recommended default:
 
@@ -44,9 +42,8 @@ Meaning:
 
 Execution-entry meaning:
 
-1. `spec_ready_auto_development=true` allows autonomous transition from ready spec state into implementation flow,
-2. `validation_report_required_before_implementation=true` inserts a mandatory validation report before each implementation-bearing slice,
-3. `resume_after_validation_gate=true` means accepted validation should resume autonomous execution directly into the authorized implementation step.
+1. `validation_report_required_before_implementation=true` inserts a mandatory validation report before each implementation-bearing slice.
+2. spec-ready transition into work-pool/dev shaping and post-validation continuation are currently runtime-defined behaviors, not live `autonomous_execution` overlay toggles.
 
 ## 3. Lawful Report Stages
 
@@ -84,14 +81,14 @@ Therefore:
 
 Implementation-entry rule:
 
-1. `spec_ready_auto_development` does not bypass the validation gate when `validation_report_required_before_implementation=true`,
+1. spec readiness does not bypass the validation gate when `validation_report_required_before_implementation=true`,
 2. the lawful execution-entry order is:
    - spec ready,
-   - implementation auto-entry allowed,
+   - runtime reaches the implementation-entry handoff,
    - validation report generated,
    - validation accepted,
    - implementation starts,
-3. after implementation validation passes, `resume_after_validation_gate=true` returns the flow to autonomous continuation for the rest of the lawful task chain.
+3. after implementation validation passes, runtime resumes the next lawful bounded continuation according to the compiled lane chain.
 
 ## 5. TaskFlow Routing Effect
 
@@ -145,8 +142,8 @@ It normalizes one explicit policy surface across:
 This policy is considered wired when:
 
 1. `vida.config.yaml` contains `autonomous_execution.continue_after_reports`,
-2. `vida.config.yaml` contains the execution-entry keys for spec-ready auto development and validation-gated implementation,
-3. the project overlay protocol documents those keys,
+2. `vida.config.yaml` contains the live validation-gate key `autonomous_execution.validation_report_required_before_implementation`,
+3. the project overlay protocol documents only the autonomous-execution keys that runtime actually consumes,
 4. command-layer/research/TaskFlow protocols state that non-gating reports do not stop lawful continuation by default,
 5. user-facing reporting still remains bounded by approval, verification, and closure law.
 

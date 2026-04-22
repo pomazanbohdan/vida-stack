@@ -1,8 +1,33 @@
 use std::process::ExitCode;
+use std::time::Duration;
 use time::format_description::well_known::Rfc3339;
 
-use crate::display_lane_label;
 use crate::BlockerCode;
+use crate::display_lane_label;
+
+const CONSUME_FINAL_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn fail_fast_state_store_open_with_timeout(
+    state_root: std::path::PathBuf,
+    label: &str,
+    timeout: Duration,
+) -> Result<super::StateStore, String> {
+    match tokio::time::timeout(timeout, super::StateStore::open_existing(state_root)).await {
+        Ok(result) => {
+            result.map_err(|error| format!("consume final failed fast: {label}: {error}"))
+        }
+        Err(_) => Err(format!(
+            "consume final failed fast: {label} timed out while waiting for authoritative datastore lock"
+        )),
+    }
+}
+
+async fn fail_fast_state_store_open(
+    state_root: std::path::PathBuf,
+    label: &str,
+) -> Result<super::StateStore, String> {
+    fail_fast_state_store_open_with_timeout(state_root, label, CONSUME_FINAL_LOCK_TIMEOUT).await
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConsumeFinalMode {
@@ -127,7 +152,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
             }
 
             let state_dir = super::taskflow_task_bridge::proxy_state_dir();
-            match super::StateStore::open_existing(state_dir).await {
+            match fail_fast_state_store_open(state_dir, "opening authoritative state store").await {
                 Ok(store) => match super::build_taskflow_consume_bundle_payload(&store).await {
                     Ok(runtime_bundle) => {
                         let bundle_check = super::taskflow_consume_bundle_check(&runtime_bundle);
@@ -486,18 +511,6 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         }
-                        let store = match super::StateStore::open_existing(state_root.clone()).await
-                        {
-                            Ok(store) => store,
-                            Err(error) => {
-                                eprintln!(
-                                    "Failed to reopen authoritative state store after runtime dispatch: {error}"
-                                );
-                                return ExitCode::from(1);
-                            }
-                        };
-                        let state_root = store.root().to_path_buf();
-                        drop(store);
                         if !consume_final_mode.is_read_only() && direct_consumption_ready {
                             if let Err(error) = super::execute_downstream_dispatch_chain(
                                 &state_root,
@@ -511,7 +524,11 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         }
-                        let store = match super::StateStore::open_existing(state_root.clone()).await
+                        let store = match fail_fast_state_store_open(
+                            state_root.clone(),
+                            "reopening authoritative state store before receipt persistence",
+                        )
+                        .await
                         {
                             Ok(store) => store,
                             Err(error) => {
@@ -1481,12 +1498,13 @@ fn canonical_dispatch_target_from_latest_status(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_approval_delegation_evidence_gate, build_execution_preparation_evidence_gate,
-        build_retrieval_policy_decision_gate, build_runtime_consumption_dispatch_receipt,
-        normalize_runtime_consumption_statuses, parse_taskflow_consume_final_args,
         ApprovalDelegationEvidenceGate, ConsumeFinalMode, ExecutionPreparationEvidenceGate,
-        RetrievalPolicyDecisionGate,
+        RetrievalPolicyDecisionGate, build_approval_delegation_evidence_gate,
+        build_execution_preparation_evidence_gate, build_retrieval_policy_decision_gate,
+        build_runtime_consumption_dispatch_receipt, fail_fast_state_store_open_with_timeout,
+        normalize_runtime_consumption_statuses, parse_taskflow_consume_final_args,
     };
+    use std::time::Duration;
 
     #[test]
     fn parse_taskflow_consume_final_args_supports_preview_and_validate_only_modes() {
@@ -1536,7 +1554,7 @@ mod tests {
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "coach": {
-                        "executor_backend": "qwen_cli",
+                        "executor_backend": "hermes_cli",
                         "subagents": "legacy_hint_should_not_win"
                     },
                     "dispatch_contract": {
@@ -1568,12 +1586,12 @@ mod tests {
         assert_eq!(receipt.dispatch_target, "coach");
         assert_eq!(receipt.activation_agent_type.as_deref(), Some("middle"));
         assert_eq!(receipt.activation_runtime_role.as_deref(), Some("coach"));
-        assert_eq!(receipt.selected_backend.as_deref(), Some("qwen_cli"));
+        assert_eq!(receipt.selected_backend.as_deref(), Some("hermes_cli"));
     }
 
     #[test]
-    fn runtime_consumption_dispatch_receipt_canonicalizes_specification_target_from_business_analyst_alias(
-    ) {
+    fn runtime_consumption_dispatch_receipt_canonicalizes_specification_target_from_business_analyst_alias()
+     {
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -1646,7 +1664,7 @@ mod tests {
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "implementation": {
-                        "executor_backend": "qwen_cli",
+                        "executor_backend": "hermes_cli",
                         "fallback_executor_backend": "internal_subagents",
                         "activation": {
                             "activation_agent_type": "junior",
@@ -1675,13 +1693,13 @@ mod tests {
 
         assert_eq!(receipt.dispatch_target, "implementer");
         assert_eq!(receipt.dispatch_surface.as_deref(), Some("vida agent-init"));
-        assert_eq!(receipt.selected_backend.as_deref(), Some("qwen_cli"));
+        assert_eq!(receipt.selected_backend.as_deref(), Some("hermes_cli"));
         assert_eq!(receipt.dispatch_command.as_deref(), Some("vida agent-init"));
     }
 
     #[test]
-    fn runtime_consumption_dispatch_receipt_canonicalizes_real_bootstrap_shape_with_spec_pack_route_task_class(
-    ) {
+    fn runtime_consumption_dispatch_receipt_canonicalizes_real_bootstrap_shape_with_spec_pack_route_task_class()
+     {
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -2087,8 +2105,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn approval_delegation_gate_passes_when_latest_status_is_absent_for_fresh_consume_final_bootstrap(
-    ) {
+    async fn approval_delegation_gate_passes_when_latest_status_is_absent_for_fresh_consume_final_bootstrap()
+     {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -2319,19 +2337,23 @@ mod tests {
         let mut docflow_verdict = crate::RuntimeConsumptionDocflowVerdict {
             status: "blocked".to_string(),
             ready: false,
-            blockers: vec![crate::release1_contracts::blocker_code_value(
-                crate::release1_contracts::BlockerCode::MissingProofVerdict,
-            )
-            .expect("missing proof verdict blocker should be canonical")],
+            blockers: vec![
+                crate::release1_contracts::blocker_code_value(
+                    crate::release1_contracts::BlockerCode::MissingProofVerdict,
+                )
+                .expect("missing proof verdict blocker should be canonical"),
+            ],
             proof_surfaces: vec![],
         };
         let mut closure_admission = crate::RuntimeConsumptionClosureAdmission {
             status: "blocked".to_string(),
             admitted: false,
-            blockers: vec![crate::release1_contracts::blocker_code_value(
-                crate::release1_contracts::BlockerCode::MissingClosureProof,
-            )
-            .expect("missing closure proof blocker should be canonical")],
+            blockers: vec![
+                crate::release1_contracts::blocker_code_value(
+                    crate::release1_contracts::BlockerCode::MissingClosureProof,
+                )
+                .expect("missing closure proof blocker should be canonical"),
+            ],
             proof_surfaces: vec![],
         };
 
@@ -2410,5 +2432,41 @@ mod tests {
         assert!(!as_json);
         assert_eq!(mode, super::ConsumeFinalMode::ValidateOnly);
         assert_eq!(request_text, "shape packet");
+    }
+
+    #[test]
+    fn consume_final_fail_fast_open_returns_prompt_lock_error() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-final-lock-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(root.clone())
+                .await
+                .expect("open store");
+            let result = tokio::time::timeout(
+                Duration::from_secs(3),
+                fail_fast_state_store_open_with_timeout(
+                    root.clone(),
+                    "opening authoritative state store",
+                    Duration::from_secs(3),
+                ),
+            )
+            .await
+            .expect("helper should return inside the bounded window")
+            .expect_err("helper should fail while the write guard is held");
+            assert!(
+                result.contains("consume final failed fast: opening authoritative state store"),
+                "expected contextual fail-fast error, got {result}"
+            );
+            drop(store);
+            let _ = std::fs::remove_dir_all(&root);
+        });
     }
 }

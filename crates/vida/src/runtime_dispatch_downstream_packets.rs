@@ -109,11 +109,13 @@ pub(crate) fn downstream_dispatch_packet_body(
             activation_agent_type.as_deref(),
             Some(&host_runtime),
             crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(receipt),
+            None,
         );
     let execution_truth = crate::runtime_dispatch_state::dispatch_execution_route_summary(
         role_selection,
         downstream_target,
         selected_backend.as_deref(),
+        None,
     );
     let activation_evidence = if downstream_target.is_empty() {
         crate::runtime_dispatch_state::dispatch_activation_evidence_summary(receipt)

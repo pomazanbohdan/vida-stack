@@ -1,12 +1,64 @@
 use crate::taskflow_run_graph::validate_run_graph_resume_gate;
 use std::process::ExitCode;
+use std::time::Duration;
 
 const DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS: [&str; 3] = [
     ".vida/data/state/runtime-consumption",
     "docs/product/spec",
     "docs/process",
 ];
-const STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS: i64 = 10;
+const CONSUME_RESUME_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn fail_fast_state_store_open(
+    state_root: std::path::PathBuf,
+    label: &str,
+) -> Result<super::StateStore, String> {
+    match tokio::time::timeout(
+        CONSUME_RESUME_LOCK_TIMEOUT,
+        super::StateStore::open_existing(state_root),
+    )
+    .await
+    {
+        Ok(result) => {
+            result.map_err(|error| format!("consume continue failed fast: {label}: {error}"))
+        }
+        Err(_) => Err(format!(
+            "consume continue failed fast: {label} timed out while waiting for authoritative datastore lock"
+        )),
+    }
+}
+
+async fn fail_fast_state_store_open_read_only(
+    state_root: std::path::PathBuf,
+    label: &str,
+) -> Result<super::StateStore, String> {
+    fail_fast_state_store_open_read_only_with_timeout(
+        state_root,
+        label,
+        CONSUME_RESUME_LOCK_TIMEOUT,
+    )
+    .await
+}
+
+async fn fail_fast_state_store_open_read_only_with_timeout(
+    state_root: std::path::PathBuf,
+    label: &str,
+    timeout: Duration,
+) -> Result<super::StateStore, String> {
+    match tokio::time::timeout(
+        timeout,
+        super::StateStore::open_existing_read_only(state_root),
+    )
+    .await
+    {
+        Ok(result) => {
+            result.map_err(|error| format!("consume continue failed fast: {label}: {error}"))
+        }
+        Err(_) => Err(format!(
+            "consume continue failed fast: {label} timed out while waiting for authoritative datastore lock"
+        )),
+    }
+}
 
 fn missing_dispatch_packet_path_error(latest: bool) -> String {
     let _ = super::blocker_code_str(super::BlockerCode::MissingPacket);
@@ -258,10 +310,6 @@ async fn validate_explicit_task_graph_binding_lineage_for_resume(
                 "Failed to read persisted run-graph state for `{run_id}` while reconciling explicit continuation binding: {error}"
             )
         })?;
-    if status.status != "completed" {
-        return Ok(());
-    }
-
     let binding = store
         .run_graph_continuation_binding(run_id)
         .await
@@ -281,10 +329,22 @@ async fn validate_explicit_task_graph_binding_lineage_for_resume(
         .as_str()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(binding.task_id.as_str());
+    if status.task_id.trim() != bound_task_id {
+        return Err(format!(
+            "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but persisted run-graph status still points to task `{}` with lifecycle `{}` and status `{}`. Resume must fail closed until fresh run-graph truth is recorded for the bound task.",
+            status.task_id, status.lifecycle_stage, status.status
+        ));
+    }
+    if status.status != "completed" {
+        return Ok(());
+    }
     let Some(packet_path) = receipt.dispatch_packet_path.as_deref() else {
         return Ok(());
     };
-    let packet = read_dispatch_packet(packet_path)?;
+    let packet = read_dispatch_packet(packet_path).or_else(|_| {
+        crate::read_json_file_if_present(std::path::Path::new(packet_path))
+            .ok_or_else(|| format!("Failed to read persisted dispatch packet `{packet_path}`"))
+    })?;
     validate_receipt_packet_pair(receipt, &packet, packet_path, "dispatch packet")?;
     let Some(lineage_task_id) = persisted_dispatch_packet_lineage_task_id(&packet) else {
         return Ok(());
@@ -1222,67 +1282,148 @@ fn dispatch_receipt_retry_eligible(
             .is_some_and(|path| !path.trim().is_empty())
 }
 
-fn dispatch_receipt_same_lane_resume_ready(
+fn dispatch_receipt_effective_retry_eligible(
+    project_root: Option<&std::path::Path>,
+    role_selection: Option<&super::RuntimeConsumptionLaneSelection>,
     dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
-    dispatch_receipt.dispatch_kind == "agent_lane"
-        && dispatch_receipt.dispatch_status == "blocked"
-        && matches!(
-            dispatch_receipt.blocker_code.as_deref(),
-            Some("configured_backend_dispatch_failed" | "timeout_without_takeover_authority")
-        )
-        && dispatch_receipt
-            .dispatch_packet_path
-            .as_deref()
-            .is_some_and(|path| !path.trim().is_empty())
+    dispatch_receipt_retry_eligible(dispatch_receipt)
+        || project_root
+            .zip(role_selection)
+            .is_some_and(|(project_root, role_selection)| {
+                dispatch_receipt_internal_retry_eligible(
+                    project_root,
+                    role_selection,
+                    dispatch_receipt,
+                )
+            })
 }
 
 fn allow_downstream_resume_lineage(
+    project_root: Option<&std::path::Path>,
+    role_selection: Option<&super::RuntimeConsumptionLaneSelection>,
     dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
-    !dispatch_receipt_retry_eligible(dispatch_receipt)
+    !dispatch_receipt_effective_retry_eligible(project_root, role_selection, dispatch_receipt)
 }
 
 fn retry_backend_for_dispatch_receipt(
     role_selection: &super::RuntimeConsumptionLaneSelection,
     dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Option<String> {
-    let fallback = super::execution_plan_route_for_dispatch_target(
+    let current_backend = dispatch_receipt
+        .selected_backend
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let route = super::execution_plan_route_for_dispatch_target(
         &role_selection.execution_plan,
         &dispatch_receipt.dispatch_target,
-    )
-    .and_then(crate::taskflow_routing::fallback_executor_backend_from_route)
-    .or_else(|| {
-        dispatch_receipt
-            .dispatch_packet_path
-            .as_deref()
-            .filter(|path| !path.trim().is_empty())
-            .and_then(|path| {
-                retry_backend_from_dispatch_packet(path, &dispatch_receipt.dispatch_target)
-            })
-    })?;
-    if dispatch_receipt.selected_backend.as_deref() == Some(fallback.as_str()) {
-        return None;
+    );
+    if let Some(next_review_backend) = distinct_review_retry_backend_from_route(
+        &role_selection.execution_plan,
+        &dispatch_receipt.dispatch_target,
+        route,
+        current_backend,
+    ) {
+        return Some(next_review_backend);
     }
-    Some(fallback)
+
+    route
+        .and_then(crate::taskflow_routing::fallback_executor_backend_from_route)
+        .or_else(|| {
+            dispatch_receipt
+                .dispatch_packet_path
+                .as_deref()
+                .filter(|path| !path.trim().is_empty())
+                .and_then(|path| {
+                    retry_backend_from_dispatch_packet(
+                        path,
+                        &dispatch_receipt.dispatch_target,
+                        current_backend,
+                    )
+                })
+        })
+        .filter(|fallback| Some(fallback.as_str()) != current_backend)
 }
 
-fn retry_backend_from_dispatch_packet(packet_path: &str, dispatch_target: &str) -> Option<String> {
+fn retry_backend_from_dispatch_packet(
+    packet_path: &str,
+    dispatch_target: &str,
+    current_backend: Option<&str>,
+) -> Option<String> {
     let packet = read_dispatch_packet(packet_path)
         .ok()
         .or_else(|| crate::read_json_file_if_present(std::path::Path::new(packet_path)))?;
-    super::execution_plan_route_for_dispatch_target(
-        &packet["role_selection_full"]["execution_plan"],
+    let execution_plan = &packet["role_selection_full"]["execution_plan"];
+    let route = super::execution_plan_route_for_dispatch_target(execution_plan, dispatch_target);
+    if let Some(next_review_backend) = distinct_review_retry_backend_from_route(
+        execution_plan,
         dispatch_target,
+        route,
+        current_backend,
+    ) {
+        return Some(next_review_backend);
+    }
+    route
+        .and_then(crate::taskflow_routing::fallback_executor_backend_from_route)
+        .or_else(|| {
+            packet["execution_truth"]["route_fallback_backend"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn distinct_review_retry_backend_from_route(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+    route: Option<&serde_json::Value>,
+    current_backend: Option<&str>,
+) -> Option<String> {
+    if dispatch_target != "coach" {
+        return None;
+    }
+    let route = route?;
+    crate::taskflow_routing::fanout_executor_backends_from_route(route)
+        .into_iter()
+        .map(|backend| backend.trim().to_string())
+        .find(|backend| {
+            !backend.is_empty()
+                && Some(backend.as_str()) != current_backend
+                && crate::runtime_dispatch_state::backend_is_admissible_for_dispatch_target(
+                    execution_plan,
+                    backend,
+                    dispatch_target,
+                )
+        })
+}
+
+fn retry_transition_backend_for_dispatch_receipt(
+    project_root: Option<&std::path::Path>,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Option<String> {
+    if dispatch_receipt_effective_retry_eligible(
+        project_root,
+        Some(role_selection),
+        dispatch_receipt,
+    ) {
+        return retry_backend_for_dispatch_receipt(role_selection, dispatch_receipt);
+    }
+
+    let project_root = project_root?;
+    if let Some(primary_backend) =
+        primary_backend_for_dispatch_receipt(project_root, role_selection, dispatch_receipt)
+    {
+        return Some(primary_backend);
+    }
+    super::fallback_backend_for_blocked_primary_dispatch_receipt(
+        project_root,
+        role_selection,
+        dispatch_receipt,
     )
-    .and_then(crate::taskflow_routing::fallback_executor_backend_from_route)
-    .or_else(|| {
-        packet["execution_truth"]["route_fallback_backend"]
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    })
 }
 
 fn dispatch_receipt_primary_rebind_eligible(
@@ -1311,6 +1452,13 @@ fn dispatch_receipt_primary_rebind_eligible(
     ) else {
         return false;
     };
+    if !crate::runtime_dispatch_state::backend_is_admissible_for_dispatch_target(
+        &role_selection.execution_plan,
+        &primary_backend,
+        &dispatch_receipt.dispatch_target,
+    ) {
+        return false;
+    }
     let Some(fallback_backend) =
         crate::taskflow_routing::fallback_executor_backend_from_route(route)
     else {
@@ -1333,6 +1481,13 @@ fn dispatch_receipt_internal_retry_eligible(
             .as_deref()
             .is_some_and(|path| !path.trim().is_empty())
     {
+        return false;
+    }
+    if super::internal_host_activation_view_only_requires_terminal_blocker(
+        project_root,
+        role_selection,
+        dispatch_receipt,
+    ) {
         return false;
     }
     let overlay = match super::load_project_overlay_yaml_for_root(project_root) {
@@ -1426,7 +1581,10 @@ async fn resume_inputs_from_downstream_packet(
     requested_run_id: Option<&str>,
     packet_path: &str,
 ) -> Result<ResumeInputs, String> {
-    let packet = read_dispatch_packet(packet_path)?;
+    let packet = read_dispatch_packet(packet_path).or_else(|_| {
+        crate::read_json_file_if_present(std::path::Path::new(packet_path))
+            .ok_or_else(|| format!("Failed to read persisted dispatch packet `{packet_path}`"))
+    })?;
     let run_id = packet
         .get("run_id")
         .and_then(serde_json::Value::as_str)
@@ -1674,7 +1832,10 @@ async fn maybe_resume_inputs_from_ready_downstream_packet(
     let Some(packet_path) = receipt.downstream_dispatch_packet_path.as_deref() else {
         return Ok(None);
     };
-    let packet = read_dispatch_packet(packet_path)?;
+    let packet = read_dispatch_packet(packet_path).or_else(|_| {
+        crate::read_json_file_if_present(std::path::Path::new(packet_path))
+            .ok_or_else(|| format!("Failed to read persisted dispatch packet `{packet_path}`"))
+    })?;
     let packet_ready = packet
         .get("downstream_dispatch_ready")
         .and_then(serde_json::Value::as_bool)
@@ -1903,22 +2064,49 @@ fn normalize_stale_in_flight_dispatch_receipt(
     let Some(result) = crate::read_json_file_if_present(std::path::Path::new(result_path)) else {
         return Ok(false);
     };
+    let preserves_internal_activation_view =
+        stale_in_flight_dispatch_preserves_internal_activation_view(receipt, &result);
     if blocked_external_dispatch_artifact_mismatched_as_internal_activation(receipt, &result) {
-        super::apply_dispatch_execution_timeout_to_receipt(
-            state_root,
-            receipt,
-            STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS as u64,
-        )?;
+        let timeout_seconds = super::dispatch_result_stale_after_seconds(&result) as u64;
+        super::apply_dispatch_execution_timeout_to_receipt(state_root, receipt, timeout_seconds)?;
         return Ok(true);
     }
     if timeout_blocked_receipt
-        && stale_in_flight_dispatch_preserves_internal_activation_view(receipt, &result)
+        && preserves_internal_activation_view
         && result["blocker_code"].as_str() == Some("timeout_without_takeover_authority")
     {
+        let timeout_seconds = super::stale_in_flight_dispatch_timeout_seconds_for_receipt(
+            state_root, receipt, &result,
+        ) as u64;
+        let project_root =
+            super::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
+                .unwrap_or_else(|| state_root.parent().unwrap_or(state_root).to_path_buf());
+        let role_selection = super::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "timeout-normalization".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: String::new(),
+            selected_role: receipt
+                .activation_runtime_role
+                .clone()
+                .unwrap_or_else(|| receipt.dispatch_target.clone()),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::Value::Null,
+            reason: "timeout-normalization".to_string(),
+        };
         super::apply_internal_activation_timeout_to_receipt(
             state_root,
+            &project_root,
+            &role_selection,
             receipt,
-            STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS as u64,
+            timeout_seconds,
         )?;
         return Ok(true);
     }
@@ -1926,11 +2114,8 @@ fn normalize_stale_in_flight_dispatch_receipt(
         return Ok(false);
     }
     if dispatch_packet_uses_downstream_carrier(receipt.dispatch_packet_path.as_deref(), &result) {
-        super::apply_dispatch_execution_timeout_to_receipt(
-            state_root,
-            receipt,
-            STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS as u64,
-        )?;
+        let timeout_seconds = super::dispatch_result_stale_after_seconds(&result) as u64;
+        super::apply_dispatch_execution_timeout_to_receipt(state_root, receipt, timeout_seconds)?;
         return Ok(true);
     }
     let Some(recorded_at) = result["recorded_at"].as_str() else {
@@ -1941,22 +2126,49 @@ fn normalize_stale_in_flight_dispatch_receipt(
     else {
         return Ok(false);
     };
+    let stale_after_seconds = if preserves_internal_activation_view {
+        super::stale_in_flight_dispatch_timeout_seconds_for_receipt(state_root, receipt, &result)
+    } else {
+        super::dispatch_result_stale_after_seconds(&result)
+    };
     let age_seconds = (time::OffsetDateTime::now_utc() - recorded_at).whole_seconds();
-    if age_seconds <= STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS {
+    if age_seconds <= stale_after_seconds {
         return Ok(false);
     }
-    if stale_in_flight_dispatch_preserves_internal_activation_view(receipt, &result) {
+    let timeout_seconds = stale_after_seconds as u64;
+    if preserves_internal_activation_view {
+        let project_root =
+            super::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
+                .unwrap_or_else(|| state_root.parent().unwrap_or(state_root).to_path_buf());
+        let role_selection = super::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "stale-normalization".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: String::new(),
+            selected_role: receipt
+                .activation_runtime_role
+                .clone()
+                .unwrap_or_else(|| receipt.dispatch_target.clone()),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::Value::Null,
+            reason: "stale-normalization".to_string(),
+        };
         super::apply_internal_activation_timeout_to_receipt(
             state_root,
+            &project_root,
+            &role_selection,
             receipt,
-            STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS as u64,
+            timeout_seconds,
         )?;
     } else {
-        super::apply_dispatch_execution_timeout_to_receipt(
-            state_root,
-            receipt,
-            STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS as u64,
-        )?;
+        super::apply_dispatch_execution_timeout_to_receipt(state_root, receipt, timeout_seconds)?;
     }
     Ok(true)
 }
@@ -2398,7 +2610,18 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
             })?;
     }
     validate_explicit_task_graph_binding_lineage_for_resume(store, run_id, &receipt).await?;
-    let allow_downstream_lineage = allow_downstream_resume_lineage(&receipt);
+    let project_root =
+        super::taskflow_task_bridge::infer_project_root_from_state_root(store.root());
+    let preloaded_role_selection = receipt
+        .dispatch_packet_path
+        .as_deref()
+        .and_then(|path| read_dispatch_packet(path).ok())
+        .and_then(|packet| decode_role_selection_from_packet(&packet, "dispatch packet").ok());
+    let allow_downstream_lineage = allow_downstream_resume_lineage(
+        project_root.as_deref(),
+        preloaded_role_selection.as_ref(),
+        &receipt,
+    );
     let explicit_downstream_target =
         completed_run_explicit_downstream_target_for_resume(store, run_id).await?;
     if let Some(bound_target) = explicit_downstream_target.as_deref() {
@@ -2694,33 +2917,14 @@ fn prepare_explicit_resume_retry_artifact(
     role_selection: &super::RuntimeConsumptionLaneSelection,
     dispatch_receipt: &mut crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
-    if dispatch_receipt_retry_eligible(dispatch_receipt) {
-        if let Some(fallback_backend) =
-            retry_backend_for_dispatch_receipt(role_selection, dispatch_receipt)
-        {
-            dispatch_receipt.selected_backend = Some(fallback_backend);
-        }
-        return true;
-    }
-
-    let Some(project_root) = project_root else {
-        return false;
-    };
-    let _internal_retry_eligible =
-        dispatch_receipt_internal_retry_eligible(project_root, role_selection, dispatch_receipt);
-    if let Some(primary_backend) =
-        primary_backend_for_dispatch_receipt(project_root, role_selection, dispatch_receipt)
-    {
-        dispatch_receipt.selected_backend = Some(primary_backend);
-        return true;
-    }
-    if let Some(fallback_backend) = super::fallback_backend_for_blocked_primary_dispatch_receipt(
+    let original_backend = dispatch_receipt.selected_backend.clone();
+    if let Some(retry_backend) = retry_transition_backend_for_dispatch_receipt(
         project_root,
         role_selection,
         dispatch_receipt,
     ) {
-        dispatch_receipt.selected_backend = Some(fallback_backend);
-        return true;
+        dispatch_receipt.selected_backend = Some(retry_backend);
+        return dispatch_receipt.selected_backend != original_backend;
     }
     false
 }
@@ -2742,11 +2946,11 @@ fn rewrite_retry_dispatch_packet_if_downstream_carrier(
     role_selection: &super::RuntimeConsumptionLaneSelection,
     run_graph_bootstrap: &serde_json::Value,
     dispatch_receipt: &mut crate::state_store::RunGraphDispatchReceipt,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if dispatch_receipt.dispatch_kind != "agent_lane"
         || dispatch_receipt.dispatch_status != "blocked"
     {
-        return Ok(());
+        return Ok(false);
     }
     let Some(packet_path) = dispatch_receipt
         .dispatch_packet_path
@@ -2754,20 +2958,55 @@ fn rewrite_retry_dispatch_packet_if_downstream_carrier(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Ok(());
+        return Ok(false);
     };
-    let packet = read_dispatch_packet(packet_path)?;
-    if packet
+    let packet = read_dispatch_packet(packet_path).or_else(|_| {
+        crate::read_json_file_if_present(std::path::Path::new(packet_path))
+            .ok_or_else(|| format!("Failed to read persisted dispatch packet `{packet_path}`"))
+    })?;
+    let packet_kind = packet
         .get("packet_kind")
         .and_then(serde_json::Value::as_str)
-        != Some("runtime_downstream_dispatch_packet")
-    {
-        return Ok(());
+        .unwrap_or("");
+    if !matches!(
+        packet_kind,
+        "runtime_downstream_dispatch_packet" | "runtime_dispatch_packet"
+    ) {
+        return Ok(false);
     }
-    if let Some(retry_backend) =
-        retry_backend_for_dispatch_receipt(role_selection, dispatch_receipt)
-    {
-        dispatch_receipt.selected_backend = Some(retry_backend);
+    let project_root =
+        super::taskflow_task_bridge::infer_project_root_from_state_root(store.root());
+    let current_packet_backend = packet
+        .get("selected_backend")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let target_backend = dispatch_receipt
+        .selected_backend
+        .clone()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .filter(|backend| Some(backend.as_str()) != current_packet_backend)
+        .or_else(|| {
+            retry_transition_backend_for_dispatch_receipt(
+                project_root.as_deref(),
+                role_selection,
+                dispatch_receipt,
+            )
+        })
+        .or_else(|| super::canonical_selected_backend_for_receipt(role_selection, dispatch_receipt))
+        .or_else(|| dispatch_receipt.selected_backend.clone());
+    let target_backend = target_backend
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let rewrite_required = target_backend.as_deref() != current_packet_backend;
+    if !rewrite_required {
+        return Ok(false);
+    }
+    if let Some(target_backend) = target_backend.clone() {
+        dispatch_receipt.selected_backend = Some(target_backend);
     }
 
     let taskflow_handoff_plan = super::build_taskflow_handoff_plan(role_selection);
@@ -2777,14 +3016,15 @@ fn rewrite_retry_dispatch_packet_if_downstream_carrier(
         dispatch_receipt,
         &taskflow_handoff_plan,
         run_graph_bootstrap,
-    );
+    )
+    .with_selected_backend_override(target_backend);
     let canonical_packet_path = super::write_runtime_dispatch_packet(&ctx)?;
     dispatch_receipt.dispatch_packet_path = Some(canonical_packet_path);
     dispatch_receipt.dispatch_command = super::runtime_dispatch_command_for_target(
         role_selection,
         &dispatch_receipt.dispatch_target,
     );
-    Ok(())
+    Ok(true)
 }
 
 type TaskflowConsumeContinueArgs = (bool, Option<String>, Option<String>, Option<String>);
@@ -2902,7 +3142,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
     surface_name: &str,
     emit_output: bool,
 ) -> ExitCode {
-    match super::StateStore::open_existing(state_dir).await {
+    match fail_fast_state_store_open(state_dir, "opening authoritative state store").await {
         Ok(store) => {
             let mut dispatch_receipt;
             let dispatch_packet_path;
@@ -3000,17 +3240,23 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     .dispatch_packet_path
                     .as_deref()
                     .is_some_and(|path| !path.trim().is_empty());
-            let restore_same_lane_resume_ready = prepared_retry_artifact
-                || dispatch_receipt_same_lane_resume_ready(&dispatch_receipt);
+            let mut retry_packet_rewritten = false;
             if rewrite_retry_packet {
-                if let Err(error) = rewrite_retry_dispatch_packet_if_downstream_carrier(
+                match rewrite_retry_dispatch_packet_if_downstream_carrier(
                     &store,
                     &role_selection,
                     &run_graph_bootstrap,
                     &mut dispatch_receipt,
                 ) {
-                    eprintln!("Failed to rewrite retry dispatch packet into canonical dispatch packet: {error}");
-                    return ExitCode::from(1);
+                    Ok(rewritten) => {
+                        retry_packet_rewritten = rewritten;
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "Failed to rewrite retry dispatch packet into canonical dispatch packet: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
                 }
                 if should_refresh_resumed_downstream_preview(&dispatch_receipt) {
                     if let Err(error) = super::refresh_downstream_dispatch_preview(
@@ -3036,6 +3282,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     return ExitCode::from(1);
                 }
             }
+            let restore_same_lane_resume_ready = retry_packet_rewritten;
             if restore_same_lane_resume_ready {
                 if dispatch_receipt.dispatch_kind == "agent_lane" {
                     dispatch_receipt.selected_backend = resumed_selected_backend_for_agent_lane(
@@ -3162,7 +3409,12 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         eprintln!("Failed to execute resumed runtime dispatch handoff: {error}");
                         return ExitCode::from(1);
                     }
-                    let store = match super::StateStore::open_existing(state_root.clone()).await {
+                    let store = match fail_fast_state_store_open_read_only(
+                        state_root.clone(),
+                        "reopening authoritative state store after resumed runtime dispatch",
+                    )
+                    .await
+                    {
                         Ok(store) => store,
                         Err(error) => {
                             eprintln!(
@@ -3221,7 +3473,12 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 eprintln!("{error}");
                 return ExitCode::from(1);
             }
-            let store = match super::StateStore::open_existing(state_root.clone()).await {
+            let store = match fail_fast_state_store_open(
+                state_root.clone(),
+                "reopening authoritative state store before resumed receipt persistence",
+            )
+            .await
+            {
                 Ok(store) => store,
                 Err(error) => {
                     eprintln!(
@@ -3248,7 +3505,9 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         )
                         .await
                     {
-                        eprintln!("Failed to re-sync continuation binding after downstream dispatch chain: {error}");
+                        eprintln!(
+                            "Failed to re-sync continuation binding after downstream dispatch chain: {error}"
+                        );
                         return ExitCode::from(1);
                     }
                 }
@@ -3303,7 +3562,12 @@ pub(crate) async fn run_taskflow_consume_advance_command(
         None;
 
     while rounds < max_rounds {
-        let before_status = match super::StateStore::open_existing(state_dir.clone()).await {
+        let before_status = match fail_fast_state_store_open(
+            state_dir.clone(),
+            "opening authoritative state store before advance",
+        )
+        .await
+        {
             Ok(store) => match resolve_runtime_consumption_resume_inputs(
                 &store,
                 requested_run_id.as_deref(),
@@ -3336,7 +3600,12 @@ pub(crate) async fn run_taskflow_consume_advance_command(
             return exit;
         }
 
-        let store = match super::StateStore::open_existing(state_dir.clone()).await {
+        let store = match fail_fast_state_store_open_read_only(
+            state_dir.clone(),
+            "reopening authoritative state store after advance",
+        )
+        .await
+        {
             Ok(store) => store,
             Err(error) => {
                 eprintln!("Failed to reopen authoritative state store after advance: {error}");
@@ -3446,8 +3715,8 @@ mod tests {
         canonical_resume_lane_status, canonical_resume_string_array_entries,
         dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
         dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
-        normalize_runtime_dispatch_packet, normalize_stale_in_flight_dispatch_receipt,
-        persisted_dispatch_packet_lineage_task_id,
+        fail_fast_state_store_open_read_only_with_timeout, normalize_runtime_dispatch_packet,
+        normalize_stale_in_flight_dispatch_receipt, persisted_dispatch_packet_lineage_task_id,
         prefer_ready_downstream_packet_over_active_result, prepare_explicit_resume_retry_artifact,
         primary_backend_for_dispatch_receipt, read_dispatch_packet,
         reconcile_blocked_implementer_timeout_with_tracked_close_evidence,
@@ -3467,7 +3736,41 @@ mod tests {
     use crate::{RuntimeConsumptionLaneSelection, StateStore};
     use std::fs;
     use std::process::ExitCode;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn read_only_reopen_fails_fast_while_write_guard_is_held() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-read-only-lock-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+        runtime.block_on(async {
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            let error = tokio::time::timeout(
+                Duration::from_secs(1),
+                fail_fast_state_store_open_read_only_with_timeout(
+                    root.clone(),
+                    "reopening authoritative state store after resumed runtime dispatch",
+                    Duration::from_secs(1),
+                ),
+            )
+            .await
+            .expect("read-only reopen should stay bounded")
+            .expect_err("read-only reopen should fail fast under held write contention");
+            assert!(
+                error.contains("consume continue failed fast"),
+                "expected contextual fail-fast error, got {error}"
+            );
+            drop(store);
+            let _ = fs::remove_dir_all(&root);
+        });
+    }
 
     #[test]
     fn configured_backend_dispatch_failure_with_packet_is_retry_eligible() {
@@ -3498,7 +3801,7 @@ mod tests {
             downstream_dispatch_last_target: None,
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
-            selected_backend: Some("qwen_cli".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -3515,8 +3818,8 @@ mod tests {
             supersedes_receipt_id: None,
             exception_path_receipt_id: None,
             dispatch_kind: "agent_lane".to_string(),
-            dispatch_surface: Some("external_cli:qwen_cli".to_string()),
-            dispatch_command: Some("qwen ...".to_string()),
+            dispatch_surface: Some("external_cli:hermes_cli".to_string()),
+            dispatch_command: Some("hermes ...".to_string()),
             dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
             dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
             blocker_code: Some("timeout_without_takeover_authority".to_string()),
@@ -3534,7 +3837,7 @@ mod tests {
             downstream_dispatch_last_target: None,
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
-            selected_backend: Some("qwen_cli".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -3693,9 +3996,9 @@ mod tests {
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "coach": {
-                        "executor_backend": "qwen_cli",
+                        "executor_backend": "hermes_cli",
                         "fallback_executor_backend": "internal_subagents",
-                        "subagents": "qwen_cli"
+                        "subagents": "hermes_cli"
                     }
                 }
             }),
@@ -3710,7 +4013,7 @@ mod tests {
             exception_path_receipt_id: None,
             dispatch_kind: "agent_lane".to_string(),
             dispatch_surface: Some("vida agent-init".to_string()),
-            dispatch_command: Some("qwen ...".to_string()),
+            dispatch_command: Some("hermes ...".to_string()),
             dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
             dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
             blocker_code: Some("configured_backend_dispatch_failed".to_string()),
@@ -3728,13 +4031,77 @@ mod tests {
             downstream_dispatch_last_target: None,
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
-            selected_backend: Some("qwen_cli".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
         assert_eq!(
             retry_backend_for_dispatch_receipt(&role_selection, &receipt).as_deref(),
             Some("internal_subagents")
+        );
+    }
+
+    #[test]
+    fn retry_backend_prefers_distinct_review_fanout_backend_before_fallback() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue coach review".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string(), "coach".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "hermes_cli",
+                        "fallback_executor_backend": "internal_subagents",
+                        "fanout_executor_backends": ["hermes_cli", "opencode_cli"]
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-review-fanout-retry".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:hermes_cli".to_string()),
+            dispatch_command: Some("hermes chat".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: Some("coach".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-18T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            retry_backend_for_dispatch_receipt(&role_selection, &receipt).as_deref(),
+            Some("opencode_cli")
         );
     }
 
@@ -3757,7 +4124,7 @@ mod tests {
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "coach": {
-                        "executor_backend": "qwen_cli",
+                        "executor_backend": "hermes_cli",
                         "fallback_executor_backend": "internal_subagents"
                     }
                 }
@@ -4087,7 +4454,7 @@ host_environment:
       execution_class: internal
 agent_system:
   subagents:
-    qwen_cli:
+    hermes_cli:
       enabled: true
       subagent_backend_class: external_cli
       readiness:
@@ -4118,7 +4485,7 @@ agent_system:
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "coach": {
-                        "executor_backend": "qwen_cli",
+                        "executor_backend": "hermes_cli",
                         "fallback_executor_backend": "internal_subagents"
                     }
                 }
@@ -4158,7 +4525,7 @@ agent_system:
 
         assert_eq!(
             primary_backend_for_dispatch_receipt(&root, &role_selection, &receipt).as_deref(),
-            Some("qwen_cli")
+            Some("hermes_cli")
         );
 
         fs::remove_dir_all(root).expect("cleanup temp root");
@@ -4185,7 +4552,7 @@ host_environment:
       execution_class: internal
 agent_system:
   subagents:
-    qwen_cli:
+    hermes_cli:
       enabled: true
       subagent_backend_class: external_cli
       readiness:
@@ -4217,7 +4584,7 @@ agent_system:
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "coach": {
-                        "executor_backend": "qwen_cli",
+                        "executor_backend": "hermes_cli",
                         "fallback_executor_backend": "internal_subagents"
                     }
                 }
@@ -4284,7 +4651,7 @@ host_environment:
       execution_class: internal
 agent_system:
   subagents:
-    qwen_cli:
+    vibe_cli:
       enabled: true
       subagent_backend_class: external_cli
       readiness:
@@ -4316,7 +4683,7 @@ agent_system:
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "coach": {
-                        "executor_backend": "qwen_cli",
+                        "executor_backend": "vibe_cli",
                         "fallback_executor_backend": "internal_subagents"
                     }
                 }
@@ -4350,7 +4717,7 @@ agent_system:
             downstream_dispatch_last_target: None,
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
-            selected_backend: Some("qwen_cli".to_string()),
+            selected_backend: Some("vibe_cli".to_string()),
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -4697,6 +5064,7 @@ agent_system:
                 "artifact_kind": "runtime_dispatch_result",
                 "status": "pass",
                 "execution_state": "executing",
+                "stale_after_seconds": 39,
                 "recorded_at": "2000-01-01T00:00:00Z"
             })
             .to_string(),
@@ -4761,6 +5129,189 @@ agent_system:
             normalized_result["blocker_code"],
             "internal_activation_view_only"
         );
+        assert!(normalized_result["provider_error"]
+            .as_str()
+            .expect("provider error should render")
+            .contains("timed out after 39s"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn normalize_stale_in_flight_dispatch_receipt_keeps_executing_inside_recorded_window() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-stale-in-flight-window-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&root).expect("create temp root");
+        let result_path = root.join("dispatch-result.json");
+        let recorded_at = (time::OffsetDateTime::now_utc() - time::Duration::seconds(3))
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("timestamp should render");
+        fs::write(
+            &result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "pass",
+                "execution_state": "executing",
+                "stale_after_seconds": 39,
+                "recorded_at": recorded_at
+            })
+            .to_string(),
+        )
+        .expect("write in-flight result");
+
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-still-in-flight".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("exc-timeout".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/implementer-packet.json".to_string()),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-17T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            !normalize_stale_in_flight_dispatch_receipt(&root, &mut receipt)
+                .expect("normalization should leave still-executing receipt alone")
+        );
+        assert_eq!(receipt.dispatch_status, "executing");
+        assert_eq!(receipt.lane_status, "lane_running");
+        assert!(receipt.blocker_code.is_none());
+        assert_eq!(
+            crate::read_json_file_if_present(std::path::Path::new(
+                receipt
+                    .dispatch_result_path
+                    .as_deref()
+                    .expect("dispatch result path should remain")
+            ))
+            .expect("original result should remain readable")["execution_state"],
+            "executing"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn normalize_stale_in_flight_dispatch_receipt_keeps_legacy_internal_execution_inside_host_window(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-legacy-internal-host-window-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let state_root = root.join(crate::state_store::default_state_dir());
+        fs::create_dir_all(&state_root).expect("create state root");
+        fs::create_dir_all(root.join(".vida/config")).expect("config dir");
+        fs::create_dir_all(root.join(".vida/db")).expect("db dir");
+        fs::create_dir_all(root.join(".vida/project")).expect("project dir");
+        fs::write(root.join("AGENTS.md"), "test").expect("agents");
+        fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      max_runtime_seconds: 37
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("config");
+        let result_path = root.join("dispatch-result.json");
+        let recorded_at = (time::OffsetDateTime::now_utc() - time::Duration::seconds(11))
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("timestamp should render");
+        fs::write(
+            &result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "surface": "internal_cli:codex",
+                "backend_dispatch": {
+                    "backend_class": "internal"
+                },
+                "status": "pass",
+                "execution_state": "executing",
+                "recorded_at": recorded_at
+            })
+            .to_string(),
+        )
+        .expect("write in-flight result");
+
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-legacy-internal-window".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("exc-timeout".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/implementer-packet.json".to_string()),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-17T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            !normalize_stale_in_flight_dispatch_receipt(&state_root, &mut receipt)
+                .expect("legacy internal host timeout should preserve executing state inside configured window")
+        );
+        assert_eq!(receipt.dispatch_status, "executing");
+        assert_eq!(receipt.lane_status, "lane_running");
+        assert!(receipt.blocker_code.is_none());
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -4784,6 +5335,7 @@ agent_system:
                 "artifact_kind": "runtime_dispatch_result",
                 "status": "pass",
                 "execution_state": "executing",
+                "stale_after_seconds": 17,
                 "recorded_at": "2000-01-01T00:00:00Z"
             })
             .to_string(),
@@ -4846,6 +5398,10 @@ agent_system:
             normalized_result["blocker_code"],
             "internal_activation_view_only"
         );
+        assert!(normalized_result["provider_error"]
+            .as_str()
+            .expect("provider error should render")
+            .contains("timed out after 17s"));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -4883,6 +5439,7 @@ agent_system:
                 "artifact_kind": "runtime_dispatch_result",
                 "status": "pass",
                 "execution_state": "executing",
+                "stale_after_seconds": 39,
                 "recorded_at": "2000-01-01T00:00:00Z"
             })
             .to_string(),
@@ -7087,9 +7644,9 @@ agent_system:
                 run_id: run_id.to_string(),
                 dispatch_target: "implementer".to_string(),
                 dispatch_status: "blocked".to_string(),
-                lane_status: "lane_blocked".to_string(),
-                supersedes_receipt_id: None,
-                exception_path_receipt_id: None,
+                lane_status: "lane_exception_recorded".to_string(),
+                supersedes_receipt_id: Some("sup-task-close-heal".to_string()),
+                exception_path_receipt_id: Some("exc-task-close-heal".to_string()),
                 dispatch_kind: "agent_lane".to_string(),
                 dispatch_surface: Some("vida agent-init".to_string()),
                 dispatch_command: Some("vida agent-init".to_string()),
@@ -7187,13 +7744,369 @@ agent_system:
         };
 
         assert!(
-            !super::allow_downstream_resume_lineage(&retry_eligible),
+            !super::allow_downstream_resume_lineage(None, None, &retry_eligible),
             "retry-eligible receipt must suppress stale downstream lineage reuse"
         );
         assert!(
-            super::allow_downstream_resume_lineage(&non_retry_receipt),
+            super::allow_downstream_resume_lineage(None, None, &non_retry_receipt),
             "non-retry receipts may still resolve downstream lineage"
         );
+    }
+
+    #[test]
+    fn allow_downstream_resume_lineage_fails_closed_for_internal_activation_view_only_retry() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-allow-downstream-internal-retry-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("temp root");
+        fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      carriers:
+        middle:
+          model: gpt-5.4
+          sandbox_mode: workspace-write
+          model_reasoning_effort: medium
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("config");
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue coach review".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string(), "coach".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-internal-downstream-retry".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec".to_string()),
+            dispatch_packet_path: Some("/tmp/coach-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/coach-result.json".to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("stale verifier lineage".to_string()),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: Some("/tmp/stale-verifier-packet.json".to_string()),
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("/tmp/stale-verifier-result.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_active_target: Some("verification".to_string()),
+            downstream_dispatch_last_target: Some("verification".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-22T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            !super::allow_downstream_resume_lineage(
+                Some(root.as_path()),
+                Some(&role_selection),
+                &receipt
+            ),
+            "internal activation-view retry receipts must suppress stale downstream lineage reuse"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_runtime_consumption_resume_inputs_for_run_id_ignores_stale_downstream_result_for_internal_activation_view_only_retry_receipt(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-resolve-internal-retry-stale-downstream-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(root.join("AGENTS.md"), "test bootstrap carrier").expect("agents bootstrap");
+        fs::create_dir_all(root.join(".vida/config")).expect("create .vida/config");
+        fs::create_dir_all(root.join(".vida/db")).expect("create .vida/db");
+        fs::create_dir_all(root.join(".vida/project")).expect("create .vida/project");
+        fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      carriers:
+        middle:
+          model: gpt-5.4
+          sandbox_mode: workspace-write
+          model_reasoning_effort: medium
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("config");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let run_id = "run-internal-retry-stale-downstream";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "closure", "delivery");
+        status.task_id = run_id.to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let dispatch_packet_dir = root.join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&dispatch_packet_dir).expect("create dispatch packet dir");
+        let root_packet_path = dispatch_packet_dir.join(format!("{run_id}.json"));
+        let root_role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "runtime".to_string(),
+            fallback_role: "worker".to_string(),
+            request: "continue coach review".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string(), "coach".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "hermes_cli",
+                        "fallback_executor_backend": "internal_subagents"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        fs::write(
+            &root_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "coach_review_packet",
+                "run_id": run_id,
+                "dispatch_target": "coach",
+                "dispatch_surface": "internal_cli:codex",
+                "dispatch_command": "codex exec",
+                "activation_agent_type": "middle",
+                "activation_runtime_role": "coach",
+                "selected_backend": "internal_subagents",
+                "role_selection_full": root_role_selection,
+                "coach_review_packet": {
+                    "review_goal": "review bounded packet",
+                    "definition_of_done": ["return bounded review evidence"],
+                    "proof_target": "bounded coach proof",
+                    "read_only_paths": ["crates/vida/src"],
+                    "blocking_question": "What remains blocked?"
+                },
+                "run_graph_bootstrap": {
+                    "run_id": run_id
+                }
+            }))
+            .expect("encode root dispatch packet"),
+        )
+        .expect("write root dispatch packet");
+
+        let downstream_packet_dir = root.join("runtime-consumption/downstream-dispatch-packets");
+        fs::create_dir_all(&downstream_packet_dir).expect("create downstream packet dir");
+        let downstream_packet_path =
+            downstream_packet_dir.join(format!("{run_id}-verification.json"));
+        let downstream_role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "runtime".to_string(),
+            fallback_role: "worker".to_string(),
+            request: "resume downstream verification".to_string(),
+            selected_role: "verifier".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["verification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::Value::Null,
+            reason: "test".to_string(),
+        };
+        fs::write(
+            &downstream_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "run_id": run_id,
+                "downstream_dispatch_target": "verification",
+                "dispatch_surface": "vida agent-init",
+                "dispatch_command": "vida agent-init",
+                "activation_agent_type": "senior",
+                "activation_runtime_role": "verifier",
+                "selected_backend": "internal_subagents",
+                "role_selection_full": downstream_role_selection,
+                "delivery_task_packet": {
+                    "packet_id": format!("{run_id}::verification::delivery"),
+                    "goal": "Execute bounded verification handoff",
+                    "scope_in": ["dispatch_target:verification"],
+                    "read_only_paths": ["runtime-consumption"],
+                    "definition_of_done": ["write bounded dispatch result"],
+                    "verification_command": format!("vida taskflow consume continue --run-id {run_id} --json"),
+                    "proof_target": "bounded verification receipt",
+                    "stop_rules": ["stop after bounded verification result"],
+                    "blocking_question": "What is the next bounded action required for `verification`?"
+                },
+                "run_graph_bootstrap": {
+                    "run_id": run_id
+                }
+            }))
+            .expect("encode downstream packet"),
+        )
+        .expect("write downstream packet");
+
+        let downstream_result_dir = root.join("runtime-consumption/dispatch-results");
+        fs::create_dir_all(&downstream_result_dir).expect("create downstream result dir");
+        let downstream_result_path =
+            downstream_result_dir.join(format!("{run_id}-verification.json"));
+        fs::write(
+            &downstream_result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "surface": "internal_cli:codex",
+                "execution_state": "blocked",
+                "blocker_code": "internal_activation_view_only",
+                "dispatch_packet_path": downstream_packet_path.display().to_string(),
+                "activation_command": "vida agent-init --downstream-packet verification.json --json",
+                "backend_dispatch": {
+                    "backend_id": "internal_subagents"
+                }
+            }))
+            .expect("encode downstream result"),
+        )
+        .expect("write downstream result");
+
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec".to_string()),
+            dispatch_packet_path: Some(root_packet_path.display().to_string()),
+            dispatch_result_path: Some(
+                root.join("runtime-consumption/dispatch-results/root-blocked.json")
+                    .display()
+                    .to_string(),
+            ),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("stale verifier lineage".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["internal_activation_view_only".to_string()],
+            downstream_dispatch_packet_path: Some(downstream_packet_path.display().to_string()),
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: Some(downstream_result_path.display().to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_active_target: Some("verification".to_string()),
+            downstream_dispatch_last_target: Some("verification".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-22T00:00:00Z".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        let mut resume_ready_status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "coach", "delivery");
+        resume_ready_status.task_id = run_id.to_string();
+        resume_ready_status.active_node = "coach".to_string();
+        resume_ready_status.next_node = Some("coach".to_string());
+        resume_ready_status.status = "ready".to_string();
+        resume_ready_status.lifecycle_stage = "coach_active".to_string();
+        resume_ready_status.policy_gate = "single_task_scope_required".to_string();
+        resume_ready_status.handoff_state = "awaiting_coach".to_string();
+        resume_ready_status.context_state = "sealed".to_string();
+        resume_ready_status.checkpoint_kind = "conversation_cursor".to_string();
+        resume_ready_status.resume_target = "dispatch.coach_lane".to_string();
+        resume_ready_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&resume_ready_status)
+            .await
+            .expect("persist resume-ready status");
+
+        let resolved = resolve_runtime_consumption_resume_inputs_for_run_id(&store, run_id)
+            .await
+            .expect("resolver should stay on root packet for internal retry receipt");
+        assert_eq!(resolved.dispatch_receipt.dispatch_target, "coach");
+        assert_eq!(
+            resolved.dispatch_packet_path,
+            root_packet_path.display().to_string()
+        );
+
+        let replay_lineage = store
+            .run_graph_replay_lineage_receipt(run_id)
+            .await
+            .expect("replay lineage lookup should succeed")
+            .expect("replay lineage receipt should exist");
+        assert_eq!(replay_lineage.lineage_kind, "root_dispatch_packet");
+        assert_eq!(replay_lineage.resolved_dispatch_target, "coach");
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -7242,15 +8155,15 @@ agent_system:
             downstream_dispatch_last_target: Some("implementer".to_string()),
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
-            selected_backend: Some("qwen_cli".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
             recorded_at: "2026-04-13T00:00:00Z".to_string(),
         };
 
         let prepared = prepare_explicit_resume_retry_artifact(None, &role_selection, &mut receipt);
 
         assert!(
-            prepared,
-            "retry eligibility may still be admitted as a candidate"
+            !prepared,
+            "retry eligibility alone must not restore packet readiness without a changed retry contract"
         );
         assert_eq!(receipt.dispatch_status, "blocked");
         assert_eq!(receipt.lane_status, "lane_blocked");
@@ -7258,6 +8171,7 @@ agent_system:
             receipt.blocker_code.as_deref(),
             Some("timeout_without_takeover_authority")
         );
+        assert_eq!(receipt.selected_backend.as_deref(), Some("hermes_cli"));
     }
 
     #[test]
@@ -7443,13 +8357,17 @@ agent_system:
             Some("internal_subagents")
         );
 
-        super::rewrite_retry_dispatch_packet_if_downstream_carrier(
+        let rewritten = super::rewrite_retry_dispatch_packet_if_downstream_carrier(
             &store,
             &role_selection,
             &serde_json::json!({ "run_id": "run-rewrite-timeout" }),
             &mut receipt,
         )
         .expect("rewrite should succeed");
+        assert!(
+            rewritten,
+            "backend rotation must produce a fresh canonical packet"
+        );
 
         let rewritten_path = receipt
             .dispatch_packet_path
@@ -7476,7 +8394,7 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn rewrite_retry_dispatch_packet_rewrites_blocked_downstream_carrier_even_without_retry_gate(
+    async fn rewrite_retry_dispatch_packet_does_not_rotate_internal_activation_view_only_without_effective_retry_gate(
     ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -7584,13 +8502,173 @@ agent_system:
             recorded_at: "2026-04-19T00:00:00Z".to_string(),
         };
 
-        super::rewrite_retry_dispatch_packet_if_downstream_carrier(
+        let rewritten = super::rewrite_retry_dispatch_packet_if_downstream_carrier(
             &store,
             &role_selection,
             &serde_json::json!({ "run_id": "run-rewrite-blocked-carrier" }),
             &mut receipt,
         )
         .expect("rewrite should succeed");
+        assert!(
+            !rewritten,
+            "internal_activation_view_only must not rotate blocked downstream packets without the unified effective-retry gate"
+        );
+        assert_eq!(
+            receipt.dispatch_packet_path.as_deref(),
+            Some(packet_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(receipt.selected_backend.as_deref(), Some("hermes_cli"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn rewrite_retry_dispatch_packet_rotates_internal_activation_view_only_when_effective_retry_gate_is_satisfied(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-rewrite-internal-activation-effective-retry-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(root.join("AGENTS.md"), "test bootstrap carrier").expect("agents bootstrap");
+        fs::create_dir_all(root.join(".vida/config")).expect("create .vida/config");
+        fs::create_dir_all(root.join(".vida/db")).expect("create .vida/db");
+        fs::create_dir_all(root.join(".vida/project")).expect("create .vida/project");
+        fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      carriers:
+        middle:
+          model: gpt-5.4
+          sandbox_mode: workspace-write
+          model_reasoning_effort: medium
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("config");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue coach review".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string(), "coach".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "hermes_cli",
+                        "fallback_executor_backend": "internal_subagents"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let packet_dir = root.join("runtime-consumption/downstream-dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create downstream packet dir");
+        let packet_path = packet_dir.join("run-rewrite-internal-activation-gated.json");
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "coach_review_packet",
+                "run_id": "run-rewrite-internal-activation-gated",
+                "downstream_dispatch_target": "coach",
+                "dispatch_surface": "internal_cli:codex",
+                "dispatch_command": "codex exec",
+                "activation_agent_type": "middle",
+                "activation_runtime_role": "coach",
+                "selected_backend": "hermes_cli",
+                "role_selection_full": {
+                    "execution_plan": {
+                        "development_flow": {
+                            "coach": {
+                                "executor_backend": "hermes_cli",
+                                "fallback_executor_backend": "internal_subagents"
+                            }
+                        }
+                    }
+                },
+                "coach_review_packet": {
+                    "review_goal": "review bounded packet",
+                    "definition_of_done": ["return bounded review evidence"],
+                    "proof_target": "bounded coach proof",
+                    "read_only_paths": ["crates/vida/src"],
+                    "blocking_question": "What remains blocked?"
+                },
+                "run_graph_bootstrap": {
+                    "run_id": "run-rewrite-internal-activation-gated"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write downstream packet");
+
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-rewrite-internal-activation-gated".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("after review".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["internal_activation_view_only".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-22T00:00:00Z".to_string(),
+        };
+
+        let rewritten = super::rewrite_retry_dispatch_packet_if_downstream_carrier(
+            &store,
+            &role_selection,
+            &serde_json::json!({ "run_id": "run-rewrite-internal-activation-gated" }),
+            &mut receipt,
+        )
+        .expect("rewrite should succeed");
+        assert!(
+            rewritten,
+            "internal_activation_view_only must rotate only when the unified effective-retry gate is satisfied"
+        );
 
         let rewritten_path = receipt
             .dispatch_packet_path
@@ -7612,6 +8690,135 @@ agent_system:
         assert_eq!(
             rewritten_packet["selected_backend"].as_str(),
             Some("internal_subagents")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn rewrite_retry_dispatch_packet_rewrites_runtime_dispatch_packet_after_backend_rotation()
+    {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-rewrite-runtime-dispatch-retry-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue coach review".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string(), "coach".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "hermes_cli",
+                        "fallback_executor_backend": "internal_subagents",
+                        "fanout_executor_backends": ["hermes_cli", "opencode_cli"]
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path = packet_dir.join("run-runtime-rewrite-timeout.json");
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "coach_review_packet",
+                "run_id": "run-runtime-rewrite-timeout",
+                "dispatch_target": "coach",
+                "selected_backend": "hermes_cli",
+                "role_selection_full": {
+                    "execution_plan": role_selection.execution_plan
+                },
+                "run_graph_bootstrap": {
+                    "run_id": "run-runtime-rewrite-timeout"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write runtime dispatch packet");
+
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-runtime-rewrite-timeout".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:hermes_cli".to_string()),
+            dispatch_command: Some("hermes chat".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("after review".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["timeout_without_takeover_authority".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: Some("coach".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-21T00:00:00Z".to_string(),
+        };
+
+        let prepared =
+            super::prepare_explicit_resume_retry_artifact(None, &role_selection, &mut receipt);
+        assert!(prepared);
+        assert_eq!(receipt.selected_backend.as_deref(), Some("opencode_cli"));
+
+        let rewritten = super::rewrite_retry_dispatch_packet_if_downstream_carrier(
+            &store,
+            &role_selection,
+            &serde_json::json!({ "run_id": "run-runtime-rewrite-timeout" }),
+            &mut receipt,
+        )
+        .expect("rewrite should succeed");
+        assert!(
+            rewritten,
+            "runtime dispatch retry must write a fresh packet"
+        );
+
+        let rewritten_path = receipt
+            .dispatch_packet_path
+            .clone()
+            .expect("rewritten dispatch packet path");
+        assert_ne!(rewritten_path, packet_path.display().to_string());
+        let rewritten_packet =
+            crate::read_json_file_if_present(std::path::Path::new(&rewritten_path))
+                .expect("rewritten packet should exist");
+        assert_eq!(
+            rewritten_packet["packet_kind"].as_str(),
+            Some("runtime_dispatch_packet")
+        );
+        assert_eq!(
+            rewritten_packet["selected_backend"].as_str(),
+            Some("opencode_cli")
         );
 
         let _ = fs::remove_dir_all(&root);
@@ -7701,6 +8908,171 @@ agent_system:
 
         assert_eq!(fallback.as_deref(), Some("internal_subagents"));
         let _ = fs::remove_file(packet_path);
+    }
+
+    #[test]
+    fn retry_backend_for_dispatch_receipt_uses_persisted_packet_review_fanout_before_fallback() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let packet_path = std::env::temp_dir().join(format!(
+            "vida-retry-review-fanout-packet-{}-{}.json",
+            std::process::id(),
+            nanos
+        ));
+        fs::write(
+            &packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "role_selection_full": {
+                    "execution_plan": {
+                        "development_flow": {
+                            "coach": {
+                                "executor_backend": "hermes_cli",
+                                "fallback_executor_backend": "internal_subagents",
+                                "fanout_executor_backends": ["hermes_cli", "opencode_cli"]
+                            }
+                        },
+                        "backend_admissibility_matrix": [
+                            {
+                                "backend_id": "hermes_cli",
+                                "lane_admissibility": {
+                                    "coach": true
+                                }
+                            },
+                            {
+                                "backend_id": "opencode_cli",
+                                "lane_admissibility": {
+                                    "coach": true
+                                }
+                            }
+                        ]
+                    }
+                }
+            }))
+            .expect("dispatch packet should encode"),
+        )
+        .expect("dispatch packet should write");
+
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-retry-review-fanout-from-packet".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:hermes_cli".to_string()),
+            dispatch_command: Some("hermes chat".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: Some("coach".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-22T00:00:00Z".to_string(),
+        };
+
+        let fallback = retry_backend_for_dispatch_receipt(&role_selection, &receipt);
+
+        assert_eq!(fallback.as_deref(), Some("opencode_cli"));
+        let _ = fs::remove_file(packet_path);
+    }
+
+    #[test]
+    fn retry_backend_for_dispatch_receipt_does_not_use_review_fanout_for_non_coach_target() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "implementer": {
+                        "executor_backend": "hermes_cli",
+                        "fallback_executor_backend": "internal_subagents",
+                        "fanout_executor_backends": ["hermes_cli", "opencode_cli"]
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-no-review-fanout".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:hermes_cli".to_string()),
+            dispatch_command: Some("hermes chat".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("implementer".to_string()),
+            downstream_dispatch_last_target: Some("implementer".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-22T00:00:00Z".to_string(),
+        };
+
+        let fallback = retry_backend_for_dispatch_receipt(&role_selection, &receipt);
+
+        assert_eq!(
+            fallback.as_deref(),
+            Some("internal_subagents"),
+            "non-coach retries must use route fallback instead of review fanout rotation"
+        );
     }
 
     #[test]
@@ -7799,6 +9171,85 @@ agent_system:
         );
 
         fs::remove_dir_all(root).expect("cleanup temp root");
+    }
+
+    #[test]
+    fn dispatch_receipt_primary_rebind_eligible_rejects_inadmissible_implementer_primary_backend() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "implementer": {
+                        "executor_backend": "opencode_cli",
+                        "fallback_executor_backend": "internal_subagents"
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "opencode_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "implementation": false
+                        }
+                    },
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-implementer-primary-rebind-guard".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init ...".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: Some("coach".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("after implementer".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_implementation_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("implementer".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-22T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            !super::dispatch_receipt_primary_rebind_eligible(&role_selection, &receipt),
+            "internal_activation_view_only must not rebind implementer retries onto an inadmissible external primary backend"
+        );
     }
 
     #[tokio::test]
@@ -9176,6 +10627,125 @@ agent_system:
     }
 
     #[tokio::test]
+    async fn resolve_runtime_consumption_resume_inputs_for_run_id_fails_closed_when_explicit_task_graph_binding_mismatches_persisted_status(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-explicit-binding-status-mismatch-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let run_id = "run-explicit-binding-status-mismatch";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "closure", "delivery");
+        status.task_id = "task-old".to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "closure_blocked".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "blocked_on_closure".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.closure".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist stale run graph status");
+
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "closure".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida taskflow consume".to_string()),
+            dispatch_command: Some(format!(
+                "vida taskflow consume continue --run-id {run_id} --json"
+            )),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: Some("pending_downstream_dispatch".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("taskflow_state_store".to_string()),
+            recorded_at: "2026-04-21T00:00:00Z".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist stale dispatch receipt");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: run_id.to_string(),
+                    task_id: "task-new".to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": "task-new",
+                        "run_id": run_id,
+                        "task_status": "in_progress",
+                        "issue_type": "task"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "operator rebound work to the new task".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
+                    request_text: Some("continue development".to_string()),
+                    recorded_at: "2026-04-21T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist explicit continuation binding");
+
+        let error = match resolve_runtime_consumption_resume_inputs_for_run_id(&store, run_id).await
+        {
+            Ok(_) => panic!("stale run-graph status must fail closed"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("explicit continuation binding to task_graph_task `task-new`"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("persisted run-graph status still points to task `task-old`"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            store
+                .run_graph_replay_lineage_receipt(run_id)
+                .await
+                .expect("replay lineage lookup should succeed")
+                .is_none(),
+            "fail-closed status mismatch must not persist a replay-lineage receipt"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn resolve_runtime_consumption_resume_inputs_without_run_id_fails_closed_on_cross_run_explicit_task_binding(
     ) {
         let nanos = SystemTime::now()
@@ -10140,7 +11710,7 @@ agent_system:
             downstream_dispatch_last_target: Some("implementer".to_string()),
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
-            selected_backend: Some("qwen_cli".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
             recorded_at: "2026-04-15T00:00:00Z".to_string(),
         };
 
@@ -10605,7 +12175,7 @@ agent_system:
             downstream_dispatch_last_target: Some("implementer".to_string()),
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
-            selected_backend: Some("qwen_cli".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
             recorded_at: "2026-04-15T00:00:00Z".to_string(),
         };
 

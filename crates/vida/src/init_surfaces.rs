@@ -6,13 +6,72 @@ use crate::state_store::StateStore;
 use crate::surface_render::print_compact_command_families;
 
 use super::{
-    build_runtime_lane_selection_with_store, ensure_launcher_bootstrap, normalize_root_arg,
-    print_surface_header, print_surface_line, role_exists_in_lane_bundle, state_store,
-    sync_launcher_activation_snapshot, AgentInitArgs, BootArgs, InitArgs, RenderMode,
+    AgentInitArgs, BootArgs, InitArgs, RenderMode, build_runtime_lane_selection_with_store,
+    ensure_launcher_bootstrap, normalize_root_arg, print_surface_header, print_surface_line,
+    role_exists_in_lane_bundle, state_store, sync_launcher_activation_snapshot,
 };
 use crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload;
 
 const DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS: u64 = 10;
+
+async fn best_effort_record_agent_init_dispatch_timeout_receipt(
+    state_root: &Path,
+    run_graph_bootstrap: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    execute_dispatch_timeout_seconds: u64,
+) -> Option<String> {
+    let store = match tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+        StateStore::open_existing(state_root.to_path_buf()),
+    )
+    .await
+    {
+        Ok(Ok(store)) => store,
+        Ok(Err(error)) => {
+            return Some(format!(
+                "Timed out executing agent-init dispatch packet after {execute_dispatch_timeout_seconds}s total without receipt-backed completion; authoritative timeout reconciliation deferred until next safe reopen: failed to reopen authoritative state store: {error}"
+            ));
+        }
+        Err(_) => {
+            return Some(format!(
+                "Timed out executing agent-init dispatch packet after {execute_dispatch_timeout_seconds}s total without receipt-backed completion; authoritative timeout reconciliation deferred until next safe reopen: timed out reopening authoritative state store after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+            ));
+        }
+    };
+    if let Err(error) = store.record_run_graph_dispatch_receipt(receipt).await {
+        return Some(format!(
+            "Timed out executing agent-init dispatch packet after {execute_dispatch_timeout_seconds}s total without receipt-backed completion; authoritative timeout reconciliation deferred until next safe reopen: failed to persist timeout-blocked dispatch receipt: {error}"
+        ));
+    }
+    if let Some(run_id) = run_graph_bootstrap
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        match store.run_graph_status(run_id).await {
+            Ok(status) => {
+                if let Err(error) =
+                    crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                        &store,
+                        &status,
+                        "agent_init_execute_dispatch_timeout",
+                    )
+                    .await
+                {
+                    return Some(format!(
+                        "Timed out executing agent-init dispatch packet after {execute_dispatch_timeout_seconds}s total without receipt-backed completion; authoritative timeout reconciliation deferred until next safe reopen: failed to synchronize continuation binding after timeout: {error}"
+                    ));
+                }
+            }
+            Err(error) => {
+                return Some(format!(
+                    "Timed out executing agent-init dispatch packet after {execute_dispatch_timeout_seconds}s total without receipt-backed completion; authoritative timeout reconciliation deferred until next safe reopen: failed to read run-graph status after timeout: {error}"
+                ));
+            }
+        }
+    }
+    None
+}
 
 pub(crate) fn resolve_init_bootstrap_source_root() -> PathBuf {
     if let Some(installed_root) = resolve_installed_runtime_root() {
@@ -146,7 +205,7 @@ mod tests {
     use super::*;
     use crate::run;
     use crate::runtime_dispatch_state::{
-        write_runtime_dispatch_packet, RuntimeDispatchPacketContext,
+        RuntimeDispatchPacketContext, write_runtime_dispatch_packet,
     };
     use crate::state_store::{RunGraphDispatchReceipt, RunGraphStatus, StateStore};
     use crate::temp_state::TempStateHarness;
@@ -380,7 +439,70 @@ mod tests {
     }
 
     #[test]
-    fn agent_init_execute_dispatch_timeout_materializes_blocked_timeout_receipt() {
+    fn agent_init_timeout_reconciliation_defers_when_reopen_is_contended() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-agent-init-timeout-reopen-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            let receipt = RunGraphDispatchReceipt {
+                run_id: "run-agent-init-timeout-reopen".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_blocked".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
+                dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/result.json".to_string()),
+                blocker_code: Some("internal_dispatch_timeout_without_receipt".to_string()),
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["pending_implementation_evidence".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("implementer".to_string()),
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-22T00:00:00Z".to_string(),
+            };
+            let warning = best_effort_record_agent_init_dispatch_timeout_receipt(
+                &root,
+                &json!({ "run_id": "run-agent-init-timeout-reopen" }),
+                &receipt,
+                12,
+            )
+            .await
+            .expect("reopen contention should return a deferral warning");
+            assert!(
+                warning.contains(
+                    "authoritative timeout reconciliation deferred until next safe reopen"
+                ),
+                "expected deferred reconciliation warning, got {warning}"
+            );
+            drop(store);
+            let _ = fs::remove_dir_all(&root);
+        });
+    }
+
+    #[test]
+    fn agent_init_execute_dispatch_timeout_materializes_internal_timeout_receipt() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -403,6 +525,14 @@ mod tests {
         wait_for_state_unlock(harness.path());
         assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
+
+        let config_path = harness.path().join("vida.config.yaml");
+        let config = fs::read_to_string(&config_path).expect("config should exist");
+        let updated = config.replace(
+            "      execution_class: internal\n",
+            "      execution_class: internal\n      max_runtime_seconds: 1\n",
+        );
+        fs::write(&config_path, updated).expect("config should update");
 
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
@@ -551,7 +681,7 @@ mod tests {
         assert_eq!(recorded_receipt.dispatch_status, "blocked");
         assert_eq!(
             recorded_receipt.blocker_code.as_deref(),
-            Some("timeout_without_takeover_authority")
+            Some("internal_dispatch_timeout_without_receipt")
         );
         let dispatch_result_path = recorded_receipt
             .dispatch_result_path
@@ -563,7 +693,16 @@ mod tests {
             serde_json::from_str(&rendered).expect("execute-dispatch json should parse");
         assert_eq!(parsed["status"], "blocked");
         assert_eq!(parsed["execution_state"], "blocked");
-        assert_eq!(parsed["blocker_code"], "timeout_without_takeover_authority");
+        assert_eq!(
+            parsed["blocker_code"],
+            "internal_dispatch_timeout_without_receipt"
+        );
+        assert!(
+            parsed["provider_error"]
+                .as_str()
+                .expect("provider error should render")
+                .contains("timed out after 1s")
+        );
 
         if let Some(original_path) = original_path {
             std::env::set_var("PATH", original_path);
@@ -1916,8 +2055,16 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     };
                 let state_root = store.root().to_path_buf();
                 drop(store);
+                let dispatch_handoff_timeout_seconds =
+                    super::dispatch_handoff_timeout_seconds_for_state_root(
+                        &state_root,
+                        &resume_inputs.role_selection,
+                        &resume_inputs.dispatch_receipt,
+                    );
+                let execute_dispatch_timeout_seconds = dispatch_handoff_timeout_seconds
+                    .saturating_add(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS);
                 match tokio::time::timeout(
-                    std::time::Duration::from_secs(10),
+                    std::time::Duration::from_secs(execute_dispatch_timeout_seconds),
                     super::execute_and_record_dispatch_receipt(
                         &state_root,
                         &resume_inputs.role_selection,
@@ -1933,69 +2080,32 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                     Err(_) => {
-                        if let Err(error) = super::apply_dispatch_execution_timeout_to_receipt(
-                            &state_root,
-                            &mut resume_inputs.dispatch_receipt,
-                            DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS,
-                        ) {
+                        if let Err(error) =
+                            super::apply_dispatch_handoff_timeout_to_receipt_for_state_root(
+                                &state_root,
+                                &resume_inputs.role_selection,
+                                &mut resume_inputs.dispatch_receipt,
+                                dispatch_handoff_timeout_seconds,
+                            )
+                        {
                             eprintln!(
-                                "Timed out executing agent-init dispatch packet after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s without receipt-backed completion, and failed to materialize timeout receipt: {error}"
+                                "Timed out executing agent-init dispatch packet after {execute_dispatch_timeout_seconds}s total without receipt-backed completion, and failed to materialize timeout receipt: {error}"
                             );
                             return ExitCode::from(1);
                         }
-                        let store = match tokio::time::timeout(
-                            std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
-                            StateStore::open_existing(state_root.clone()),
-                        )
-                        .await
-                        {
-                            Ok(Ok(store)) => store,
-                            Ok(Err(error)) => {
-                                eprintln!(
-                                    "Timed out executing agent-init dispatch packet after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s without receipt-backed completion, and failed to reopen authoritative state store: {error}"
-                                );
-                                return ExitCode::from(1);
-                            }
-                            Err(_) => {
-                                eprintln!(
-                                    "Timed out executing agent-init dispatch packet after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s without receipt-backed completion, and timed out reopening authoritative state store after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
-                                );
-                                return ExitCode::from(1);
-                            }
-                        };
-                        if let Err(error) = store
-                            .record_run_graph_dispatch_receipt(&resume_inputs.dispatch_receipt)
+                        if let Some(warning) =
+                            best_effort_record_agent_init_dispatch_timeout_receipt(
+                                &state_root,
+                                &resume_inputs.run_graph_bootstrap,
+                                &resume_inputs.dispatch_receipt,
+                                execute_dispatch_timeout_seconds,
+                            )
                             .await
                         {
-                            eprintln!(
-                                "Timed out executing agent-init dispatch packet after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s without receipt-backed completion, and failed to persist timeout-blocked dispatch receipt: {error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                        if let Some(run_id) = resume_inputs
-                            .run_graph_bootstrap
-                            .get("run_id")
-                            .and_then(serde_json::Value::as_str)
-                            .filter(|value| !value.is_empty())
-                        {
-                            if let Ok(status) = store.run_graph_status(run_id).await {
-                                if let Err(error) =
-                                    crate::taskflow_continuation::sync_run_graph_continuation_binding(
-                                        &store,
-                                        &status,
-                                        "agent_init_execute_dispatch_timeout",
-                                    )
-                                    .await
-                                {
-                                    eprintln!(
-                                        "Timed out executing agent-init dispatch packet after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s without receipt-backed completion, and failed to synchronize continuation binding after timeout: {error}"
-                                    );
-                                    return ExitCode::from(1);
-                                }
-                            }
+                            eprintln!("{warning}");
                         }
                         eprintln!(
-                            "Timed out executing agent-init dispatch packet after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s without receipt-backed completion"
+                            "Timed out executing agent-init dispatch packet after {execute_dispatch_timeout_seconds}s total without receipt-backed completion"
                         );
                         return ExitCode::from(1);
                     }
@@ -2253,6 +2363,9 @@ fn agent_init_execution_truth(selection: &serde_json::Value) -> serde_json::Valu
                     packet
                         .get("selected_backend")
                         .and_then(serde_json::Value::as_str),
+                    packet
+                        .get("selected_backend_override")
+                        .and_then(serde_json::Value::as_str),
                 ),
             )
         })
@@ -2421,10 +2534,10 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
 #[cfg(test)]
 mod agent_init_surface_tests {
     use super::*;
+    use crate::RuntimeConsumptionLaneSelection;
     use crate::run;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
-    use crate::RuntimeConsumptionLaneSelection;
     use std::path::Path;
     use std::process::ExitCode;
     use std::time::{Duration, Instant};
@@ -2461,13 +2574,13 @@ mod agent_init_surface_tests {
             execution_plan: serde_json::json!({
                 "development_flow": {
                     "implementer": {
-                        "executor_backend": "qwen_cli",
+                        "executor_backend": "hermes_cli",
                         "fallback_executor_backend": "internal_subagents"
                     }
                 },
                 "backend_admissibility_matrix": [
                     {
-                        "backend_id": "qwen_cli",
+                        "backend_id": "hermes_cli",
                         "backend_class": "external_cli",
                         "lane_admissibility": {
                             "implementation": false
@@ -2520,7 +2633,7 @@ mod agent_init_surface_tests {
         );
         assert_eq!(
             payload["backend_truth"]["route_primary_backend"],
-            "qwen_cli"
+            "hermes_cli"
         );
         assert_eq!(
             payload["backend_truth"]["route_fallback_backend"],
@@ -2556,7 +2669,7 @@ mod agent_init_surface_tests {
         assert_eq!(payload["selection"]["mode"], "downstream_packet");
         assert_eq!(
             payload["execution_truth"]["route_primary_backend"],
-            "qwen_cli"
+            "hermes_cli"
         );
         assert_eq!(
             payload["execution_truth"]["route_fallback_backend"],

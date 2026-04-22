@@ -955,9 +955,30 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 eprintln!("Missing lane receipt for `{run_id}`.");
                 return ExitCode::from(2);
             };
-            let Some(packet_path) = receipt.downstream_dispatch_packet_path.clone() else {
+            let mut recovery = store.run_graph_recovery_summary(run_id).await.ok();
+            let mut status = store.run_graph_status(run_id).await.ok();
+            if let Err(error) =
+                lane_mutation_status_guard(run_id, status.as_ref(), recovery.as_ref(), &receipt)
+            {
+                eprintln!("{error}");
+                return ExitCode::from(2);
+            }
+            let exception_path_metadata =
+                match read_exception_takeover_metadata(store.root(), run_id) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let takeover_active = lane_takeover_state(&receipt, recovery.as_ref()).is_active();
+            let Some(packet_path) = receipt.downstream_dispatch_packet_path.clone().or_else(|| {
+                (takeover_active && exception_path_metadata.is_some())
+                    .then(|| receipt.dispatch_packet_path.clone())
+                    .flatten()
+            }) else {
                 eprintln!(
-                    "Lane `{run_id}` has no persisted downstream dispatch packet for bounded completion evidence."
+                    "Lane `{run_id}` has no persisted dispatch packet evidence for bounded completion."
                 );
                 return ExitCode::from(2);
             };
@@ -1008,25 +1029,56 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             receipt.downstream_dispatch_result_path = Some(completion_result_path);
             receipt.downstream_dispatch_active_target = Some(completed_target.clone());
             receipt.downstream_dispatch_last_target = Some(completed_target);
+            receipt.dispatch_status = "executed".to_string();
+            receipt.blocker_code = None;
+            receipt.exception_path_receipt_id = None;
+            receipt.supersedes_receipt_id = None;
+            if receipt.dispatch_result_path.is_none() {
+                receipt.dispatch_result_path = receipt.downstream_dispatch_result_path.clone();
+            }
+            receipt.lane_status = if receipt.dispatch_target == "closure" {
+                crate::LaneStatus::LaneCompleted.as_str().to_string()
+            } else {
+                crate::derive_lane_status(&receipt.dispatch_status, None, None)
+                    .as_str()
+                    .to_string()
+            };
+            if receipt.dispatch_status == "executed" {
+                if let Some(current_status) = status.as_ref() {
+                    let executed_status = crate::runtime_dispatch_state::apply_first_handoff_execution_to_run_graph_status(
+                        current_status,
+                        &receipt,
+                    );
+                    if let Err(error) = store.record_run_graph_status(&executed_status).await {
+                        eprintln!("Failed to persist run-graph status after lane completion: {error}");
+                        return ExitCode::from(1);
+                    }
+                    if let Err(error) = crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                        &store,
+                        &executed_status,
+                        "lane_complete",
+                    )
+                    .await
+                    {
+                        eprintln!(
+                            "Failed to synchronize continuation binding after lane completion: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                }
+            }
             if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
                 eprintln!("Failed to persist lane completion evidence: {error}");
                 return ExitCode::from(1);
             }
+            status = store.run_graph_status(run_id).await.ok();
+            recovery = store.run_graph_recovery_summary(run_id).await.ok();
 
             let updated_summary =
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
-            let status = store.run_graph_status(run_id).await.ok();
-            let truth = derive_lane_show_truth(&updated_summary, None);
+            let truth = derive_lane_show_truth(&updated_summary, recovery.as_ref());
             let exception_path_metadata_path =
                 exception_takeover_metadata_path(store.root(), run_id);
-            let exception_path_metadata =
-                match read_exception_takeover_metadata(store.root(), run_id) {
-                    Ok(metadata) => metadata,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                };
             let envelope = build_lane_envelope(
                 updated_summary,
                 status,
@@ -1794,6 +1846,26 @@ mod tests {
         let store = StateStore::open(root.clone()).await.expect("open store");
         let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
         let run_id = "run-lane-complete";
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "implementation",
+            "implementation",
+        );
+        status.task_id = run_id.to_string();
+        status.active_node = "implementer".to_string();
+        status.next_node = Some("implementer".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+        status.policy_gate = "single_task_scope_required".to_string();
+        status.handoff_state = "awaiting_implementer".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.implementer_lane".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
         let packet_path =
             root.join("runtime-consumption/downstream-dispatch-packets/run-lane-complete.json");
         std::fs::create_dir_all(
@@ -1858,6 +1930,15 @@ mod tests {
             .await
             .expect("read receipt after")
             .expect("receipt should exist");
+        let advanced_status = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read advanced run graph status");
+        let binding = store
+            .run_graph_continuation_binding(run_id)
+            .await
+            .expect("read run graph continuation binding")
+            .expect("continuation binding should exist");
         assert!(after.downstream_dispatch_ready);
         assert!(after.downstream_dispatch_blockers.is_empty());
         assert_eq!(
@@ -1884,6 +1965,199 @@ mod tests {
         assert_eq!(packet_json["downstream_dispatch_status"], "packet_ready");
         assert_eq!(packet_json["downstream_lane_status"], "packet_ready");
         assert_eq!(packet_json["downstream_dispatch_result_path"], result_path);
+        assert_eq!(advanced_status.active_node, "implementer");
+        assert_eq!(advanced_status.next_node.as_deref(), Some("coach"));
+        assert_eq!(advanced_status.status, "ready");
+        assert_eq!(advanced_status.lifecycle_stage, "implementer_active");
+        assert_eq!(advanced_status.handoff_state, "awaiting_coach");
+        assert_eq!(advanced_status.resume_target, "dispatch.coach");
+        assert!(advanced_status.recovery_ready);
+        assert_eq!(binding.binding_source, "lane_complete");
+        assert_eq!(binding.active_bounded_unit["kind"], "run_graph_task");
+        assert_eq!(binding.active_bounded_unit["active_node"], "implementer");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_complete_accepts_active_exception_takeover_with_root_dispatch_packet_evidence() {
+        let _guard = lane_surface_test_lock()
+            .lock()
+            .expect("lane surface test lock should acquire");
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-complete-exception-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-lane-complete-exception";
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "implementation",
+            "implementation",
+        );
+        status.task_id = run_id.to_string();
+        status.active_node = "implementer".to_string();
+        status.next_node = Some("implementer".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+        status.policy_gate = "single_task_scope_required".to_string();
+        status.handoff_state = "awaiting_implementer".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.implementer_lane".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let packet_path =
+            root.join("runtime-consumption/dispatch-packets/run-lane-complete-exception.json");
+        std::fs::create_dir_all(
+            packet_path
+                .parent()
+                .expect("dispatch packet path should have parent"),
+        )
+        .expect("create dispatch packet dir");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": run_id,
+                "dispatch_target": "implementer",
+                "downstream_dispatch_active_target": "implementer",
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_blockers": ["pending_implementation_evidence"],
+                "downstream_dispatch_status": "blocked",
+                "downstream_lane_status": "lane_exception_takeover"
+            })
+            .to_string(),
+        )
+        .expect("write root dispatch packet");
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "implementer".to_string();
+        receipt.dispatch_kind = "agent_lane".to_string();
+        receipt.dispatch_surface = Some("vida agent-init".to_string());
+        receipt.dispatch_command = Some("vida agent-init".to_string());
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.downstream_dispatch_target = Some("coach".to_string());
+        receipt.downstream_dispatch_command = Some("vida agent-init".to_string());
+        receipt.downstream_dispatch_note =
+            Some("after `implementer` evidence is recorded, activate `coach`".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec!["pending_implementation_evidence".to_string()];
+        receipt.downstream_dispatch_packet_path = None;
+        receipt.downstream_dispatch_status = None;
+        receipt.downstream_dispatch_active_target = Some("implementer".to_string());
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("superseded-1".to_string());
+        receipt.lane_status = crate::LaneStatus::LaneExceptionTakeover
+            .as_str()
+            .to_string();
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        let metadata = ExceptionTakeoverMetadata {
+            reason_class: "runtime_lane_complete_exception_followup".to_string(),
+            active_bounded_unit: format!("{run_id}:implementer:lane-complete-followup"),
+            owned_write_scope: vec!["crates/vida/src/lane_surface.rs".to_string()],
+            why_delegated_or_rerouted_path_is_not_currently_lawful:
+                "active exception takeover is already the lawful execution path".to_string(),
+            why_local_write_is_the_smallest_safe_bounded_workaround:
+                "lane complete only needs bounded operator-surface correction".to_string(),
+            return_to_normal_posture_condition:
+                "lane complete succeeds from root dispatch packet evidence".to_string(),
+            verification_plan: vec!["cargo test -p vida lane_complete".to_string()],
+            recorded_at: "2026-04-22T15:01:35Z".to_string(),
+        };
+        write_exception_takeover_metadata(store.root(), run_id, &metadata)
+            .expect("persist exception takeover metadata");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec![
+                "complete".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "completion-exception-1".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after lane command");
+        let after = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read receipt after")
+            .expect("receipt should exist");
+        let advanced_status = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read advanced run graph status");
+        let binding = store
+            .run_graph_continuation_binding(run_id)
+            .await
+            .expect("read run graph continuation binding")
+            .expect("continuation binding should exist");
+        assert!(after.downstream_dispatch_ready);
+        assert!(after.downstream_dispatch_blockers.is_empty());
+        assert_eq!(
+            after.downstream_dispatch_status.as_deref(),
+            Some("packet_ready")
+        );
+        assert!(
+            after.downstream_dispatch_packet_path.is_none(),
+            "active exception takeover completion should not invent a downstream packet path"
+        );
+        let result_path = after
+            .downstream_dispatch_result_path
+            .clone()
+            .expect("completion result path should be recorded");
+        let result = std::fs::read_to_string(&result_path).expect("read completion result");
+        let result_json: serde_json::Value =
+            serde_json::from_str(&result).expect("completion result should be json");
+        assert_eq!(
+            result_json["artifact_kind"],
+            "runtime_lane_completion_result"
+        );
+        assert_eq!(
+            result_json["completion_receipt_id"],
+            "completion-exception-1"
+        );
+        assert_eq!(
+            result_json["source_dispatch_packet_path"],
+            packet_path.display().to_string()
+        );
+
+        let packet = std::fs::read_to_string(&packet_path).expect("read updated packet");
+        let packet_json: serde_json::Value =
+            serde_json::from_str(&packet).expect("updated packet should be json");
+        assert_eq!(packet_json["downstream_dispatch_ready"], true);
+        assert_eq!(packet_json["downstream_dispatch_status"], "packet_ready");
+        assert_eq!(packet_json["downstream_lane_status"], "packet_ready");
+        assert_eq!(packet_json["downstream_dispatch_result_path"], result_path);
+        assert_eq!(advanced_status.active_node, "implementer");
+        assert_eq!(advanced_status.next_node.as_deref(), Some("coach"));
+        assert_eq!(advanced_status.status, "ready");
+        assert_eq!(advanced_status.lifecycle_stage, "implementer_active");
+        assert_eq!(advanced_status.handoff_state, "awaiting_coach");
+        assert_eq!(advanced_status.resume_target, "dispatch.coach");
+        assert!(advanced_status.recovery_ready);
+        assert_eq!(binding.binding_source, "lane_complete");
+        assert_eq!(binding.active_bounded_unit["kind"], "run_graph_task");
+        assert_eq!(binding.active_bounded_unit["active_node"], "implementer");
 
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -819,7 +819,7 @@ mod tests {
                     "capability_band": ["implementation_safe", "review_safe"],
                     "specialties": ["implementation", "verification"]
                 },
-                "qwen_cli": {
+                "hermes_cli": {
                     "enabled": true,
                     "subagent_backend_class": "external_cli",
                     "write_scope": "none",
@@ -842,8 +842,8 @@ mod tests {
 
         let qwen = rows
             .iter()
-            .find(|row| row["backend_id"] == "qwen_cli")
-            .expect("qwen row should exist");
+            .find(|row| row["backend_id"] == "hermes_cli")
+            .expect("hermes row should exist");
         assert_eq!(qwen["lane_admissibility"]["analysis"], true);
         assert_eq!(qwen["lane_admissibility"]["coach"], true);
         assert_eq!(qwen["lane_admissibility"]["implementation"], false);
@@ -872,7 +872,7 @@ mod tests {
         assert_eq!(analysis["executor_backend"], "opencode_cli");
         assert_eq!(
             analysis["fanout_executor_backends"],
-            serde_json::json!(["qwen_cli", "hermes_cli", "opencode_cli", "kilo_cli"])
+            serde_json::json!(["hermes_cli", "opencode_cli", "kilo_cli", "vibe_cli"])
         );
         assert_eq!(
             analysis["executor_backend_policy"]["lane_admissibility"]["implementation"],
@@ -886,8 +886,9 @@ mod tests {
             .as_array()
             .expect("coach fanout should be an array");
         assert!(coach_fanout.iter().any(|value| value == "hermes_cli"));
-        assert!(coach_fanout.iter().any(|value| value == "qwen_cli"));
         assert!(coach_fanout.iter().any(|value| value == "opencode_cli"));
+        assert!(coach_fanout.iter().any(|value| value == "kilo_cli"));
+        assert!(coach_fanout.iter().any(|value| value == "vibe_cli"));
 
         let verification = summarize_agent_route_from_snapshot(
             &serde_json::Value::Null,
@@ -906,13 +907,16 @@ mod tests {
             .expect("review ensemble fanout should be an array");
         assert!(review_ensemble_fanout
             .iter()
-            .any(|value| value == "qwen_cli"));
-        assert!(review_ensemble_fanout
-            .iter()
             .any(|value| value == "hermes_cli"));
         assert!(review_ensemble_fanout
             .iter()
             .any(|value| value == "opencode_cli"));
+        assert!(review_ensemble_fanout
+            .iter()
+            .any(|value| value == "kilo_cli"));
+        assert!(review_ensemble_fanout
+            .iter()
+            .any(|value| value == "vibe_cli"));
     }
 
     #[test]

@@ -241,10 +241,13 @@ Companion rule:
 34. [internal-dispatch-timeout-does-not-return-design.md](internal-dispatch-timeout-does-not-return-design.md)
    Config families: bounded internal-host delegated handoff timeout return semantics, prompt blocked receipt/result truth for stranded implementer handoffs, and runtime dispatch wrapper hardening beyond in-flight `executing` artifacts
    Registered path: `docs/product/spec/internal-dispatch-timeout-does-not-return-design.md`
-35. [coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md](coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md)
+35. [internal-codex-activation-view-timeout-holder-release-design.md](internal-codex-activation-view-timeout-holder-release-design.md)
+   Config families: bounded stale in-flight reconciliation, canonical dispatch timeout reuse for internal-host handoff truth, legacy fallback compatibility, and truthful continue/recovery status for still-executing delegated work
+   Registered path: `docs/product/spec/internal-codex-activation-view-timeout-holder-release-design.md`
+36. [coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md](coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md)
    Config families: bounded coach-lane backend canonicalization, explicit review-route preference over inherited internal fallback, mixed-lane backend lineage, and runtime dispatch receipt/status alignment
    Registered path: `docs/product/spec/coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md`
-36. [external-coach-timeout-truth-does-not-return-cleanly-design.md](external-coach-timeout-truth-does-not-return-cleanly-design.md)
+37. [external-coach-timeout-truth-does-not-return-cleanly-design.md](external-coach-timeout-truth-does-not-return-cleanly-design.md)
    Config families: bounded external coach timeout truth, timeout classification by actual backend class, bounded parent return after kill-after grace, and external dispatch artifact/status alignment
    Registered path: `docs/product/spec/external-coach-timeout-truth-does-not-return-cleanly-design.md`
 37. [taskflow-execution-semantics-and-scheduler-design.md](taskflow-execution-semantics-and-scheduler-design.md)
@@ -268,6 +271,30 @@ Companion rule:
 40. [reconciled-runtime-projection-output-design.md](reconciled-runtime-projection-output-design.md)
    Config families: bounded reconciled runtime projection truth output, effective projection source/reason reporting, downstream target/blocker parity, stale-state suspicion, and next-lawful-operator-action surfaces across init/status/recovery/continue
    Registered path: `docs/product/spec/reconciled-runtime-projection-output-design.md`
+41. [repair-task-close-closure-truth-exception-design.md](repair-task-close-closure-truth-exception-design.md)
+   Config families: bounded downstream closure/task-close receipt sanitation for exception-path lineage, authoritative closure truth after lawful exception-backed task close, and resume/run-graph parity without stale implementer rebinding
+   Registered path: `docs/product/spec/repair-task-close-closure-truth-exception-design.md`
+42. [reconcile-qwen-cli-carrier-drift-design.md](reconcile-qwen-cli-carrier-drift-design.md)
+   Config families: bounded reconciliation of stale `qwen_cli` assumptions across active docs/specs and Rust test fixtures, template-only retention policy for qwen references, and runtime/operator parity with the current config-driven external carrier catalog
+   Registered path: `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
+43. [repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md](repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md)
+   Config families: bounded repair for explicit post-closure task binding authority, agent-init activation-view truth preservation, and fail-closed consume-continue behavior until fresh same-task packet evidence exists
+   Registered path: `docs/product/spec/repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md`
+44. [repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md](repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md)
+   Config families: design-backed reseed routing, dispatch-target canonicalization, and activation/backend alignment so explicit qwen remediation does not deadlock in `pbi_discussion/specification`
+   Registered path: `docs/product/spec/repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md`
+45. [coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md](coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md)
+   Config families: coach-lane retry artifact law, explicit review-backend rotation before internal fallback, fresh runtime-dispatch packet materialization for lawful retries, and fail-closed prevention of identical same-packet timeout loops
+   Registered path: `docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md`
+46. [analysis-lane-can-close-implementation-without-write-evidence-design.md](analysis-lane-can-close-implementation-without-write-evidence-design.md)
+   Config families: implementation completion truth, closure-candidate reconciliation gates, diagnostic-lane versus write-evidence law, and fail-closed prevention of closure-ready projection from read-only analysis execution
+   Registered path: `docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md`
+47. [explicit-implementation-seed-drops-design-backed-owned-paths-design.md](explicit-implementation-seed-drops-design-backed-owned-paths-design.md)
+   Config families: design-backed explicit implementation seeding, tracked design-doc injection into run-graph seed, implementer packet owned-path derivation from bounded file sets, and fail-closed dispatch-init without generic placeholder scope
+   Registered path: `docs/product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design.md`
+48. [carrier-model-profile-selection-runtime-design.md](carrier-model-profile-selection-runtime-design.md)
+   Config families: bounded carrier plus model-profile contract normalization across Codex/internal/external execution surfaces, profile-aware runtime assignment truth, dispatch/status profile projection, and parity-safe materialization from legacy and new-style config
+   Registered path: `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
 
 ### Support
 
@@ -323,5 +350,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-21T12:43:35.155658937Z
+updated_at: 2026-04-22T10:13:29.709595354Z
 changelog_ref: current-spec-map.changelog.jsonl

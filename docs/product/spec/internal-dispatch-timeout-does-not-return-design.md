@@ -1,16 +1,14 @@
 # Internal delegated dispatch timeout handoff blocker design
 
-Purpose: Bound the current-release fix for internal delegated implementer handoff that outlives the bounded timeout window and strands consume continue instead of returning blocked timeout truth.
+Purpose: Bound the audit-wave fix for internal delegated implementer handoff that reaches a lawful `agent-init` implementer packet but still outlives the bounded timeout window instead of settling promptly into receipt-backed execution or canonical blocked timeout truth.
 
-Status: `proposed`
-
-Use this template for one bounded feature/change design before implementation.
+Status: `approved`
 
 ## Summary
 - Feature / change: restore bounded fail-closed return semantics when internal delegated dispatch starts an implementer handoff but no receipt-backed completion evidence arrives before the configured timeout window.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher`
-- Status: `proposed`
+- Status: `approved`
 
 ## Current Context
 - Existing system overview
@@ -23,9 +21,9 @@ Use this template for one bounded feature/change design before implementation.
   - `crates/vida/src/taskflow_consume_resume.rs` and recovery surfaces project the run as `awaiting_implementer` / `implementation_dispatch_ready`.
   - `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md` already governs truthful fail-closed semantics for internal Codex execution.
 - Current pain point or gap
-  - Live proof for `feature-serialize-authoritative-state-access-lock-mitigation` shows routing now reaches implementer correctly, but `cargo run -p vida -- taskflow consume continue --run-id feature-serialize-authoritative-state-access-lock-mitigation --json` remains alive after the internal timeout window instead of returning a blocked timeout result promptly.
-  - The run writes a dispatch result with `status = "pass"` and `execution_state = "executing"` plus note `terminal completion is still pending`, then strands the root orchestrator process.
-  - Because internal-host dispatch does not use the outer timeout, a stuck inner wrapper can hold the entire `consume continue` path open.
+  - Live proof for `feature-repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen` now shows routing is repaired: `cargo run -p vida -- taskflow run-graph dispatch-init feature-reconcile-autonomous-execution-flag-runtime-drift --json` records a lawful implementer packet with `dispatch_target = implementer`, `handoff_runtime_role = worker`, `activation_agent_type = junior`, and `selected_backend = internal_subagents`.
+  - Executing that packet via `cargo run -p vida -- agent-init --dispatch-packet ... --execute-dispatch --json` still records an in-flight artifact with `status = "pass"` and `execution_state = "executing"` plus `activation_view_only`, then only later returns `Timed out executing runtime dispatch handoff after 242s`.
+  - Recovery truth eventually settles to `dispatch_status = blocked`, `lane_status = lane_blocked`, and `blocker_code = internal_activation_view_only`, but the launcher path still holds the operator call open until the full timeout window instead of returning more promptly once terminal blocked truth is known.
 
 ## Goal
 - What this change should achieve
@@ -33,9 +31,9 @@ Use this template for one bounded feature/change design before implementation.
   - Preserve truthful blocked timeout state in receipts and runtime artifacts instead of leaving the orchestrator process hanging.
   - Keep routing/implementer selection unchanged; this slice is only about timeout-return correctness after lawful handoff start.
 - What success looks like
-  - Internal implementer handoff returns within the bounded timeout window plus small grace.
+  - Internal implementer handoff through both `vida agent-init --execute-dispatch` and the resumed TaskFlow path returns within the bounded timeout window plus small grace.
   - Persisted dispatch receipt/result move to blocked timeout truth instead of staying indefinitely in `executing` / `lane_running`.
-  - The serialization slice can resume past this blocker without regressing back into specification routing.
+  - The qwen carrier-drift remediation slice can resume past this blocker without regressing back into specification routing.
 - What is explicitly out of scope
   - Implementing the serialization lock-mitigation code itself.
   - Replacing the internal Codex backend or redesigning carrier topology.
@@ -44,6 +42,7 @@ Use this template for one bounded feature/change design before implementation.
 ## Requirements
 
 ### Functional Requirements
+- Must return control from `vida agent-init --dispatch-packet ... --execute-dispatch --json` promptly when an internal delegated handoff exceeds its bounded timeout.
 - Must return control from `vida taskflow consume continue` promptly when an internal delegated handoff exceeds its bounded timeout.
 - Must persist blocked timeout truth for the in-flight dispatch receipt and runtime dispatch result.
 - Must not leave the run indefinitely in `execution_state = "executing"` when no terminal completion evidence exists.
@@ -137,6 +136,7 @@ Will implement / choose:
 - APIs
   - none external
 - Runtime-family handoffs
+  - `taskflow run-graph dispatch-init` -> `agent-init --execute-dispatch` -> internal delegated dispatch -> dispatch receipt/result reconciliation
   - `taskflow consume continue` -> internal delegated dispatch -> dispatch receipt/result reconciliation
 - Cross-document / cross-protocol dependencies
   - `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
@@ -175,9 +175,12 @@ Will implement / choose:
   - targeted `cargo test -p vida` for internal dispatch timeout return behavior
 
 ### Phase 3
-- Re-run the serialization continuation path with the source-built binary and confirm prompt blocked timeout return or lawful completion.
+- Re-run the repaired implementer launcher path with the source-built binary and confirm prompt blocked timeout return or lawful completion.
 - Final proof target
-  - targeted cargo tests plus live `cargo run -p vida -- taskflow consume continue --run-id feature-serialize-authoritative-state-access-lock-mitigation --json`
+  - targeted cargo tests plus live
+    - `cargo run -p vida -- taskflow run-graph dispatch-init feature-reconcile-autonomous-execution-flag-runtime-drift --json`
+    - `cargo run -p vida -- agent-init --dispatch-packet <fresh-implementer-packet> --execute-dispatch --json`
+    - `cargo run -p vida -- taskflow recovery status feature-repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen --json`
 
 ## Validation / Proof
 - Unit tests:
@@ -186,8 +189,9 @@ Will implement / choose:
 - Integration tests:
   - `execute_and_record_dispatch_receipt` prompt-return regression for internal delegated implementer handoff
 - Runtime checks:
-  - `cargo run -p vida -- taskflow recovery status feature-serialize-authoritative-state-access-lock-mitigation --json`
-  - `cargo run -p vida -- taskflow consume continue --run-id feature-serialize-authoritative-state-access-lock-mitigation --json`
+  - `cargo run -p vida -- taskflow run-graph dispatch-init feature-reconcile-autonomous-execution-flag-runtime-drift --json`
+  - `cargo run -p vida -- agent-init --dispatch-packet <fresh-implementer-packet> --execute-dispatch --json`
+  - `cargo run -p vida -- taskflow recovery status feature-repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen --json`
 - Canonical checks:
   - `vida docflow check --root . docs/product/spec/internal-dispatch-timeout-does-not-return-design.md docs/product/spec/current-spec-map.md`
 
@@ -204,7 +208,7 @@ Will implement / choose:
 
 ## Rollout Strategy
 - Development rollout
-  - land as one bounded blocker fix before resuming serialization implementation
+  - land as one bounded blocker fix before resuming qwen carrier-drift remediation
 - Migration / compatibility notes
   - no schema migration
 - Operator or user restart / restart-notice requirements
@@ -239,5 +243,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/internal-dispatch-timeout-does-not-return-design.md
 created_at: 2026-04-21T12:18:33.729195679Z
-updated_at: 2026-04-21T12:19:44.239249304Z
+updated_at: 2026-04-21T19:04:07.801125127Z
 changelog_ref: internal-dispatch-timeout-does-not-return-design.changelog.jsonl

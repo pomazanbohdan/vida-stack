@@ -59,17 +59,9 @@ pub(crate) fn latest_admissible_retrieval_trust_signal(
     protocol_binding_latest_receipt_id: Option<&str>,
 ) -> Option<serde_json::Value> {
     let citation = latest_final_snapshot_path?.trim();
-    let latest_snapshot_path = runtime_consumption.latest_snapshot_path.as_deref()?.trim();
-    let latest_kind = runtime_consumption.latest_kind.as_deref()?.trim();
     let acl = protocol_binding_latest_receipt_id?.trim();
 
-    if citation.is_empty()
-        || latest_snapshot_path.is_empty()
-        || latest_kind.is_empty()
-        || acl.is_empty()
-        || latest_kind != "final"
-        || latest_snapshot_path != citation
-    {
+    if citation.is_empty() || acl.is_empty() || runtime_consumption.final_snapshots == 0 {
         return None;
     }
 
@@ -77,7 +69,7 @@ pub(crate) fn latest_admissible_retrieval_trust_signal(
         "source": RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
         "source_registry_ref": RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
         "citation": citation,
-        "freshness": latest_kind,
+        "freshness": "final",
         "freshness_posture": RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
         "acl": acl,
         "acl_context": format!(
@@ -316,13 +308,64 @@ pub(crate) fn runtime_consumption_snapshot_has_release_admission_evidence(
     status_ok && operator_status_ok && release_admission.is_some()
 }
 
+fn runtime_consumption_snapshot_release_admission(
+    snapshot: &serde_json::Value,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    snapshot
+        .get("release_admission")
+        .and_then(serde_json::Value::as_object)
+        .or_else(|| {
+            snapshot
+                .get("closure_admission")
+                .and_then(serde_json::Value::as_object)
+        })
+        .or_else(|| {
+            snapshot
+                .get("payload")
+                .and_then(|payload| payload.get("closure_admission"))
+                .and_then(serde_json::Value::as_object)
+        })
+        .or_else(|| {
+            snapshot
+                .get("payload")
+                .and_then(|payload| payload.get("release_admission"))
+                .and_then(serde_json::Value::as_object)
+        })
+}
+
+fn runtime_consumption_snapshot_has_admissible_release_admission(
+    snapshot: &serde_json::Value,
+) -> bool {
+    if !runtime_consumption_snapshot_has_release_admission_evidence(snapshot) {
+        return false;
+    }
+
+    let Some(release_admission) = runtime_consumption_snapshot_release_admission(snapshot) else {
+        return false;
+    };
+    let admitted = release_admission
+        .get("admitted")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let blockers_clear = release_admission
+        .get("blockers")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|rows| rows.is_empty());
+    let status = release_admission
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+
+    admitted && blockers_clear && !matches!(status, "" | "block" | "blocked")
+}
+
 pub(crate) fn latest_final_runtime_consumption_snapshot_path(
     state_root: &Path,
 ) -> Result<Option<String>, String> {
     let snapshot_dir = state_root.join("runtime-consumption");
     latest_runtime_consumption_snapshot_path_matching(&snapshot_dir, |file_name, snapshot| {
         file_name.starts_with("final-")
-            && runtime_consumption_snapshot_has_release_admission_evidence(snapshot)
+            && runtime_consumption_snapshot_has_admissible_release_admission(snapshot)
     })
 }
 
@@ -478,7 +521,7 @@ mod tests {
             Some("/tmp/project/runtime-consumption/final-2.json"),
             Some("protocol-binding-receipt-2"),
         )
-        .is_none());
+        .is_some());
 
         let stale_final_runtime_consumption = sample_runtime_consumption_summary(
             Some("final"),
@@ -489,7 +532,7 @@ mod tests {
             Some("/tmp/project/runtime-consumption/final-1.json"),
             Some("protocol-binding-receipt-2"),
         )
-        .is_none());
+        .is_some());
 
         assert!(latest_admissible_retrieval_trust_signal(
             &stale_final_runtime_consumption,
@@ -497,6 +540,33 @@ mod tests {
             None,
         )
         .is_none());
+    }
+
+    #[test]
+    fn latest_admissible_retrieval_trust_signal_ignores_newer_non_final_snapshot() {
+        let runtime_consumption = RuntimeConsumptionSummary {
+            total_snapshots: 4,
+            bundle_snapshots: 1,
+            bundle_check_snapshots: 1,
+            final_snapshots: 2,
+            latest_kind: Some("bundle-check".to_string()),
+            latest_snapshot_path: Some(
+                "/tmp/project/runtime-consumption/bundle-check-9.json".to_string(),
+            ),
+        };
+
+        let signal = latest_admissible_retrieval_trust_signal(
+            &runtime_consumption,
+            Some("/tmp/project/runtime-consumption/final-8.json"),
+            Some("protocol-binding-receipt-2"),
+        )
+        .expect("latest admissible final snapshot should remain trusted");
+
+        assert_eq!(
+            signal["citation"],
+            "/tmp/project/runtime-consumption/final-8.json"
+        );
+        assert_eq!(signal["freshness"], "final");
     }
 
     #[test]
@@ -581,6 +651,79 @@ mod tests {
             .expect("latest valid final snapshot should resolve")
             .expect("one valid final snapshot should be available");
         assert_eq!(selected, valid_path.display().to_string());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn latest_final_runtime_consumption_snapshot_path_ignores_newer_blocked_final_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-admissible-final-snapshot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let runtime_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
+
+        let admissible_path = runtime_dir.join("final-admissible.json");
+        fs::write(
+            &admissible_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "status": "pass",
+                "operator_contracts": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {}
+                },
+                "payload": {
+                    "closure_admission": {
+                        "status": "admit",
+                        "admitted": true,
+                        "blockers": [],
+                        "proof_surfaces": ["vida taskflow consume final"]
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("admissible final snapshot should be writable");
+
+        thread::sleep(Duration::from_millis(5));
+
+        let blocked_path = runtime_dir.join("final-blocked.json");
+        fs::write(
+            &blocked_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "status": "blocked",
+                "operator_contracts": {
+                    "status": "blocked",
+                    "blocker_codes": ["missing_retrieval_trust_evidence"],
+                    "next_actions": [],
+                    "artifact_refs": {}
+                },
+                "payload": {
+                    "closure_admission": {
+                        "status": "block",
+                        "admitted": false,
+                        "blockers": ["missing_retrieval_trust_evidence"],
+                        "proof_surfaces": ["vida taskflow consume final"]
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("blocked final snapshot should be writable");
+
+        let selected = latest_final_runtime_consumption_snapshot_path(&root)
+            .expect("latest admissible final snapshot should resolve")
+            .expect("one admissible final snapshot should be available");
+        assert_eq!(selected, admissible_path.display().to_string());
 
         let _ = fs::remove_dir_all(root);
     }

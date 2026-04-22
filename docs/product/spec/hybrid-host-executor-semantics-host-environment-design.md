@@ -96,7 +96,7 @@ Will implement / choose:
 ### Config Shape
 - Canonical registry
   - `agent_system.subagents.internal_subagents`
-  - `agent_system.subagents.qwen_cli`
+  - `agent_system.subagents.kilo_cli`
   - `agent_system.subagents.hermes_cli`
   - `agent_system.subagents.opencode_cli`
 - Canonical route fields

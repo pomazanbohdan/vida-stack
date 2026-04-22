@@ -71,12 +71,13 @@ Project-local Codex configuration should live under:
 4. `.codex/agents/senior.toml`
 5. `.codex/agents/architect.toml`
 6. `vida.config.yaml -> host_environment.codex.agents`
-   - canonical project-owned source of truth for tier metadata, rates, runtime-role fit, and task-class fit
+   - canonical project-owned source of truth for carrier-tier metadata, rates, runtime-role fit, task-class fit, and profile-aware model selection metadata (`default_model_profile`, `model_profiles`)
 
 Layout rule:
 
 1. the active root Codex session is the orchestrator and must remain outside the delegated agent list,
 2. `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier/rate/runtime-role/task-class metadata,
+   and also owns the canonical default-profile/model-profile catalog for each Codex carrier tier,
 3. `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` is the canonical internal alias registry for executor-local overlays and is not the primary project-visible agent model,
 4. `.codex/config.toml` is the rendered delegated carrier-tier registration surface, including thread/depth caps and per-role config-file mapping,
 5. `.codex/agents/*.toml` are rendered host-executor surfaces and must not become the owner of tier or dispatch-alias policy,
@@ -186,31 +187,34 @@ Coach separation rule:
 Current project decision for Codex development agents:
 
 1. use the selected `GPT-5.4` family with a four-level reasoning ladder,
-2. use four Codex execution tiers:
-   - `junior` -> reasoning `low` -> rate `1`
-   - `middle` -> reasoning `medium` -> rate `4`
-   - `senior` -> reasoning `high` -> rate `16`
-   - `architect` -> VIDA reasoning band `xhigh` mapped onto Codex `high` reasoning effort -> rate `32`
+2. use four Codex execution tiers whose default execution settings are now carried by canonical model profiles:
+   - `junior` -> default profile `codex_gpt54_low_write` -> reasoning `low` -> rate `1`
+   - `middle` -> default profile `codex_gpt54_medium_write` -> reasoning `medium` -> rate `4`
+   - `senior` -> default profile `codex_spark_high_readonly` -> reasoning `high` -> rate `16`
+   - `architect` -> default profile `codex_spark_high_arch` -> rate `32`
 3. keep write-capable carrier tiers on the frontier general model and prefer `GPT-5.3-Codex-Spark` only for read-only Codex tiers used for fast host-side analysis, exploration, verification, and architecture preparation,
 4. map that preference in the active project overlay as:
    - `junior` -> `gpt-5.4`
    - `middle` -> `gpt-5.4`
    - `senior` -> `gpt-5.3-codex-spark`
    - `architect` -> `gpt-5.3-codex-spark`
-5. do not use the highest tier as the normal default,
-6. choose the cheapest tier that satisfies:
+5. preserve `architect` default execution on `high`, but keep an explicit `codex_spark_xhigh_arch` escalation profile available for `hard_escalation`, `cross_scope_conflict`, and other xhigh-worthy work instead of globally promoting every architecture task,
+6. treat legacy per-tier `model` and `model_reasoning_effort` fields as compatibility shorthand only; runtime should normalize them into a synthetic default model profile when the explicit profile catalog is absent,
+7. rendered `.codex/agents/*.toml` files are projections of the selected default model profile and must not become the authority surface for tier/model policy,
+8. do not use the highest tier as the normal default,
+9. choose the cheapest tier that satisfies:
    - the required task-class minimum,
    - the local score guard from `.vida/state/worker-strategy.json`,
    - the lane/packet role boundary,
-7. use local scorecards and strategy state to refresh effective tier score dynamically:
+10. use local scorecards and strategy state to refresh effective tier score dynamically:
    - `.vida/state/worker-scorecards.json`
    - `.vida/state/worker-strategy.json`
-8. record post-task feedback through:
+11. record post-task feedback through:
    - `vida agent-feedback --agent-id <tier> --score <0-100> --task-class <task_class> [--outcome <success|failure|neutral>] [--notes "..."]`
-9. use the local host-agent observability ledger for automatic feedback history and budget rollup:
+12. use the local host-agent observability ledger for automatic feedback history and budget rollup:
    - `.vida/state/host-agent-observability.json`
-10. use `vida status --json` as the bounded operator surface for current tier state, recent host-agent events, and total estimated budget units recorded so far,
-11. prefer `vida taskflow task close ...` over ad hoc task finalization when the task belongs to the tracked Codex execution path, because close-time telemetry now refreshes the same score/observability loop automatically.
+13. use `vida status --json` as the bounded operator surface for current tier state, current/default model-profile truth, rejected-candidate diagnostics, recent host-agent events, and total estimated budget units recorded so far,
+14. prefer `vida taskflow task close ...` over ad hoc task finalization when the task belongs to the tracked Codex execution path, because close-time telemetry now refreshes the same score/observability loop automatically.
 
 Policy note:
 
@@ -322,5 +326,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/codex-agent-configuration-guide.md
 created_at: '2026-03-12T08:35:27+02:00'
-updated_at: 2026-04-05T06:19:10.134108261Z
+updated_at: 2026-04-22T15:33:06.920846955Z
 changelog_ref: codex-agent-configuration-guide.changelog.jsonl

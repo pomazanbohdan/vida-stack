@@ -42,9 +42,7 @@ autonomous_execution:
   next_task_boundary_report_gating: false
   dependent_coverage_autoupdate: true
   continue_after_reports: true
-  spec_ready_auto_development: false
   validation_report_required_before_implementation: false
-  resume_after_validation_gate: false
 
 framework_self_diagnosis:
   enabled: false

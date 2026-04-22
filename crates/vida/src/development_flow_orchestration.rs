@@ -660,6 +660,22 @@ fn build_root_session_write_guard() -> serde_json::Value {
     })
 }
 
+fn supported_autonomous_execution_settings(
+    compiled_bundle: &serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "agent_only_development": crate::json_bool(
+            compiled_bundle["autonomous_execution"].get("agent_only_development"),
+            false,
+        ),
+        "validation_report_required_before_implementation": crate::json_bool(
+            compiled_bundle["autonomous_execution"]
+                .get("validation_report_required_before_implementation"),
+            false,
+        ),
+    })
+}
+
 pub(crate) fn build_runtime_execution_plan_from_snapshot(
     compiled_bundle: &serde_json::Value,
     selection: &crate::RuntimeConsumptionLaneSelection,
@@ -690,10 +706,9 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
     } else {
         serde_json::Value::Null
     };
-    let agent_only_development = crate::json_bool(
-        compiled_bundle["autonomous_execution"].get("agent_only_development"),
-        false,
-    );
+    let autonomous_execution = supported_autonomous_execution_settings(compiled_bundle);
+    let agent_only_development =
+        crate::json_bool(autonomous_execution.get("agent_only_development"), false);
     let dispatch_contract = build_resolved_development_dispatch_contract(
         compiled_bundle,
         selection,
@@ -721,9 +736,7 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
         "system_mode": crate::json_string(crate::json_lookup(agent_system, &["mode"])).unwrap_or_default(),
         "state_owner": crate::json_string(crate::json_lookup(agent_system, &["state_owner"])).unwrap_or_default(),
         "max_parallel_agents": crate::json_lookup(agent_system, &["max_parallel_agents"]).cloned().unwrap_or(serde_json::Value::Null),
-        "autonomous_execution": {
-            "agent_only_development": agent_only_development,
-        },
+        "autonomous_execution": autonomous_execution,
         "backend_admissibility_matrix": backend_admissibility_matrix,
         "orchestration_contract": orchestration_contract,
         "default_route": crate::runtime_lane_summary::summarize_agent_route_from_snapshot(compiled_bundle, agent_system, "default"),
@@ -870,7 +883,10 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use super::build_design_first_tracked_flow_bootstrap;
+    use super::{
+        build_design_first_tracked_flow_bootstrap, supported_autonomous_execution_settings,
+    };
+    use serde_json::json;
 
     #[test]
     fn design_first_bootstrap_canonicalizes_moved_project_activator_test_proof_target() {
@@ -892,6 +908,26 @@ mod tests {
                 "cargo test -p vida project_activator_command_accepts_json_output -- --nocapture"
             ),
             "bootstrap command should not retain the bare moved-test proof target"
+        );
+    }
+
+    #[test]
+    fn supported_autonomous_execution_settings_excludes_unwired_overlay_toggles() {
+        let settings = supported_autonomous_execution_settings(&json!({
+            "autonomous_execution": {
+                "agent_only_development": true,
+                "validation_report_required_before_implementation": true,
+                "spec_ready_auto_development": true,
+                "resume_after_validation_gate": true
+            }
+        }));
+
+        assert_eq!(
+            settings,
+            json!({
+                "agent_only_development": true,
+                "validation_report_required_before_implementation": true
+            })
         );
     }
 }

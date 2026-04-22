@@ -631,7 +631,7 @@ host_environment:
       runtime_root: .codex
 agent_system:
   subagents:
-    qwen_cli:
+    hermes_cli:
       enabled: true
       subagent_backend_class: external_cli
 "#,

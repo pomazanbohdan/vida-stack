@@ -21,19 +21,20 @@ Use this design to record the bounded runtime hardening slice for external CLI c
   - `crates/vida/src/release1_contracts.rs` owns blocker-code vocabulary and tool-contract helpers.
   - `vida.config.yaml` already declares `default_model` and `models_hint` for some carriers, but dispatch does not execution-enforce them.
 - Current pain point or gap
-  - project config can declare a canonical model, but runtime dispatch still falls through to carrier-local recent/default state.
+  - project config historically declared only `default_model` / `models_hint`, so runtime and status did not yet consume one canonical `default_model_profile` plus `model_profiles` contract.
+  - project config can declare a canonical model, but runtime dispatch still falls through to carrier-local recent/default state when the bounded profile contract is not used as the execution source of truth.
   - preflight can say `pass` even when the only reachable provider/model path is not actually runnable.
   - `opencode` demonstrates the defect clearly: an explicit pinned model works, but the default provider/model path can still fail due to carrier-local drift.
-  - `kilo` and `vibe` have working runtime behavior, but the active project config does not yet reflect that reality as first-class bounded carrier policy.
+  - `kilo` and `vibe` have working runtime behavior, but the active project config/design must represent them as first-class bounded model-profile policy rather than a flat model string.
 
 ## Goal
 - What this change should achieve
-  - make external CLI model/provider selection execution-enforced when the carrier exposes CLI flags for it
+  - make external CLI model/provider selection execution-enforced from `default_model_profile` / `model_profiles` when the carrier exposes CLI flags for it
   - distinguish transport readiness from carrier readiness in status/preflight
-  - normalize the project carrier registry so `opencode`, `kilo`, and `vibe` are represented according to the researched working paths
+  - normalize the project carrier registry so `opencode`, `kilo`, `vibe`, and `hermes` expose canonical model-profile metadata, reasoning-control posture, and compatibility aliases explicitly
   - give operators one bounded smoke-proof path for sandbox posture, auth state, model fixation, and one-shot validation
 - What success looks like
-  - `default_model` stops being metadata-only for carriers that support CLI model flags
+  - `default_model_profile` plus `model_profiles` become the execution authority for external backends, while `default_model` / `models_hint` remain compatibility aliases only
   - operator status can distinguish `sandbox_blocked`, `interactive_auth_required`, `provider_auth_failed`, and `model_not_pinned`
   - `opencode` dispatch is forced onto the canonical working model instead of ambient recent-model drift
   - `kilo` is represented as a first-class external carrier in config and routing
@@ -46,11 +47,12 @@ Use this design to record the bounded runtime hardening slice for external CLI c
 ## Requirements
 
 ### Functional Requirements
-- Must let external CLI dispatch inject `default_model` into the actual activation command when the carrier supports a model flag.
+- Must let external CLI dispatch inject the resolved `selected_model_profile.model_ref` into the actual activation command when the carrier supports a model flag.
 - Must support optional provider pinning for carriers that expose a provider flag.
 - Must keep carriers without direct CLI model/provider flags admissible through config-driven readiness rules rather than forcing fake flags.
 - Must extend external CLI readiness so operator-visible status is not limited to sandbox/network/tool-contract checks.
-- Must keep existing `qwen`, `hermes`, and `opencode` flows compatible while adding `kilo` and deciding `vibe` posture explicitly.
+- Must keep legacy `default_model` / `models_hint` config readable as compatibility shorthand while making `default_model_profile` / `model_profiles` the canonical source of truth.
+- Must keep existing `hermes`, `opencode`, `kilo`, and `vibe` flows compatible under the canonical profile contract.
 
 ### Non-Functional Requirements
 - Clarity
@@ -81,7 +83,7 @@ Use this design to record the bounded runtime hardening slice for external CLI c
 
 ### 1. Dispatch must execution-enforce pinned model/provider intent
 Will implement / choose:
-- add explicit dispatch-level model/provider flag support and wire `default_model` into the actual command line for carriers that support it
+- add explicit dispatch-level model/provider flag support and wire the resolved external model profile into the actual command line for carriers that support it
 - Why
   - project-owned carrier intent must beat carrier-local recent/default state
 - Trade-offs
@@ -140,18 +142,24 @@ Will implement / choose:
 ### Data / State Model
 - Important entities
   - external CLI backend entry
+  - external CLI model profile
   - flag-driven carrier
   - config-driven carrier
   - transport readiness
   - carrier readiness
 - Receipts / runtime state / config fields
+  - `agent_system.subagents.<backend>.default_model_profile`
+  - `agent_system.subagents.<backend>.model_profiles`
   - `agent_system.subagents.<backend>.default_model`
   - `agent_system.subagents.<backend>.models_hint`
+  - `agent_system.subagents.<backend>.model_profiles.<profile>.reasoning_control`
   - `agent_system.subagents.<backend>.dispatch.model_flag`
   - `agent_system.subagents.<backend>.dispatch.provider_flag`
   - `agent_system.subagents.<backend>.dispatch.provider_value`
   - `host_agents.external_cli_preflight`
 - Migration or compatibility notes
+  - legacy `default_model` / `models_hint` remain readable compatibility aliases and shorthand input
+  - the active execution authority is `default_model_profile` plus `model_profiles`
   - missing `dispatch.model_flag` / `dispatch.provider_flag` remains legal
   - carriers that do not declare flags remain config-driven rather than broken
 
@@ -272,5 +280,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/external-cli-carrier-hardening-design.md
 created_at: '2026-04-10T08:05:00+03:00'
-updated_at: 2026-04-10T07:52:55.524470406Z
+updated_at: 2026-04-22T15:33:07.061051557Z
 changelog_ref: external-cli-carrier-hardening-design.changelog.jsonl

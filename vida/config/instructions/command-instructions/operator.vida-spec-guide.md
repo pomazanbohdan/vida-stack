@@ -20,7 +20,7 @@ Handoff boundary:
 
 1. `/vida-spec` owns the approved product/technical contract.
 2. Task-pool creation starts in `/vida-form-task`.
-3. When overlay enables `autonomous_execution.spec_ready_auto_development=true`, spec-ready state may auto-enter downstream implementation flow only through the execution-entry gates defined by autonomous-execution and validation-report law.
+3. Spec-ready state may auto-enter downstream implementation flow only through the execution-entry gates defined by autonomous-execution and validation-report law; there is no separate live project overlay toggle for that behavior.
 
 ## Position in Current Engine
 

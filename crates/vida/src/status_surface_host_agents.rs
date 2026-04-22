@@ -118,7 +118,17 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
         latest_event["safety_baseline"].clone(),
     );
     payload.insert("selection_policy".to_string(), serde_json::Value::Null);
+    payload.insert(
+        "model_selection".to_string(),
+        serde_json::to_value(
+            crate::yaml_lookup(&overlay, &["agent_system", "model_selection"])
+                .cloned()
+                .unwrap_or(serde_yaml::Value::Null),
+        )
+        .unwrap_or(serde_json::Value::Null),
+    );
     payload.insert("agents".to_string(), serde_json::json!({}));
+    payload.insert("subagent_backends".to_string(), serde_json::json!({}));
     payload.insert(
         "internal_dispatch_alias_count".to_string(),
         serde_json::Value::Null,
@@ -164,7 +174,17 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
             serde_json::json!({
                 "tier": role["tier"],
                 "rate": role["rate"],
+                "normalized_cost_units": role["normalized_cost_units"],
                 "reasoning_band": role["reasoning_band"],
+                "model": role["model"],
+                "model_provider": role["model_provider"],
+                "model_reasoning_effort": role["model_reasoning_effort"],
+                "plan_mode_reasoning_effort": role["plan_mode_reasoning_effort"],
+                "sandbox_mode": role["sandbox_mode"],
+                "default_model_profile": role["default_model_profile"],
+                "current_model_ref": role["current_model_ref"],
+                "current_reasoning_effort": role["current_reasoning_effort"],
+                "model_profiles": role["model_profiles"],
                 "default_runtime_role": role["default_runtime_role"],
                 "runtime_roles": role["runtime_roles"],
                 "task_classes": role["task_classes"],
@@ -187,6 +207,62 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
     payload.insert(
         "agents".to_string(),
         serde_json::Value::Object(agents.clone()),
+    );
+    let mut subagent_backends = serde_json::Map::new();
+    if let Some(entries) = crate::yaml_lookup(&overlay, &["agent_system", "subagents"])
+        .and_then(serde_yaml::Value::as_mapping)
+    {
+        for (key, entry) in entries {
+            let Some(backend_id) = key.as_str().map(str::trim).filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            if !crate::yaml_bool(crate::yaml_lookup(entry, &["enabled"]), false) {
+                continue;
+            }
+            let fallback_rate = crate::yaml_string(
+                crate::yaml_lookup(entry, &["budget_cost_units"]),
+            )
+            .and_then(|raw| raw.parse::<u64>().ok())
+            .or_else(|| {
+                crate::yaml_string(crate::yaml_lookup(entry, &["normalized_cost_units"]))
+                    .and_then(|raw| raw.parse::<u64>().ok())
+            })
+            .or_else(|| {
+                crate::yaml_string(crate::yaml_lookup(entry, &["rate"]))
+                    .and_then(|raw| raw.parse::<u64>().ok())
+            })
+            .unwrap_or(0);
+            let fallback_runtime_roles =
+                crate::yaml_string_list(crate::yaml_lookup(entry, &["runtime_roles"]));
+            let fallback_task_classes =
+                crate::yaml_string_list(crate::yaml_lookup(entry, &["task_classes"]));
+            let projection =
+                crate::model_profile_contract::normalize_profile_projection_from_yaml(
+                    backend_id,
+                    entry,
+                    Some(fallback_rate),
+                    &fallback_runtime_roles,
+                    &fallback_task_classes,
+                );
+            subagent_backends.insert(
+                backend_id.to_string(),
+                serde_json::json!({
+                    "backend_class": crate::yaml_lookup(entry, &["subagent_backend_class"]).and_then(serde_yaml::Value::as_str).unwrap_or_default(),
+                    "orchestration_tier": crate::yaml_lookup(entry, &["orchestration_tier"]).and_then(serde_yaml::Value::as_str).unwrap_or_default(),
+                    "budget_cost_units": fallback_rate,
+                    "write_scope": crate::yaml_lookup(entry, &["write_scope"]).and_then(serde_yaml::Value::as_str).unwrap_or_default(),
+                    "default_model_profile": projection["default_model_profile"],
+                    "current_model_ref": projection["current_model_ref"],
+                    "current_reasoning_effort": projection["current_reasoning_effort"],
+                    "model_profiles": projection["model_profiles"],
+                }),
+            );
+        }
+    }
+    payload.insert(
+        "subagent_backends".to_string(),
+        serde_json::Value::Object(subagent_backends),
     );
     let overlay_dispatch_aliases_result =
         host_runtime_dispatch_alias_catalog_for_root(&overlay, project_root, &carrier_catalog);
@@ -235,6 +311,17 @@ mod tests {
         );
         assert_eq!(summary["effective_execution_posture"], "mixed");
         assert_eq!(summary["mixed_posture"], true);
+        assert_eq!(summary["model_selection"]["enabled"], true);
+        assert!(
+            summary["agents"]["junior"]["default_model_profile"]
+                .as_str()
+                .is_some()
+        );
+        assert_eq!(summary["agents"]["senior"]["model"], "gpt-5.3-codex-spark");
+        assert_eq!(
+            summary["subagent_backends"]["internal_subagents"]["default_model_profile"],
+            "internal_fast"
+        );
     }
 
     #[test]
@@ -271,7 +358,7 @@ mod tests {
                     }
                 })
                 .collect::<Vec<_>>();
-        assert_eq!(enabled_external_systems, vec!["qwen", "hermes", "opencode"]);
+        assert_eq!(enabled_external_systems, vec!["hermes", "opencode"]);
 
         let enabled_external_backends =
             crate::yaml_lookup(&overlay, &["agent_system", "subagents"])
@@ -294,7 +381,6 @@ mod tests {
         assert_eq!(
             enabled_external_backends,
             vec![
-                "qwen_cli",
                 "hermes_cli",
                 "opencode_cli",
                 "kilo_cli",
