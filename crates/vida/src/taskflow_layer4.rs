@@ -70,6 +70,12 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!(
                 "  vida task update <task-id> --execution-mode parallel_safe --order-bucket <bucket> --parallel-group <group> --conflict-domain <domain> --json"
             );
+            println!(
+                "  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" --json"
+            );
+            println!(
+                "  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json"
+            );
             println!("  vida task close <task-id> --reason \"...\" --json");
             println!("  vida task help parallelism");
             println!("  vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json");
@@ -291,6 +297,65 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  Materialization fails closed when draft validation or task graph validation finds blockers.");
             println!(
                 "  Generated drafts are not task truth until materialized through this surface."
+            );
+            return;
+        }
+        Some("replan") => {
+            println!("VIDA TaskFlow help: replan");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Preview or apply bounded adaptive graph mutations over the canonical task store."
+            );
+            println!();
+            println!("Canonical commands:");
+            println!(
+                "  vida taskflow replan split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" [--apply] [--json]"
+            );
+            println!(
+                "  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" [--apply] [--json]"
+            );
+            println!("  vida task split <task-id> ... --json");
+            println!("  vida task spawn-blocker <task-id> ... --json");
+            println!();
+            println!("Failure modes:");
+            println!("  Replan preview is dry-run by default; use `--apply` to write mutations.");
+            println!(
+                "  Invalid child specs, duplicate task ids, existing open child tasks, and invalid graph mutations fail closed."
+            );
+            return;
+        }
+        Some("scheduler") => {
+            println!("VIDA TaskFlow help: scheduler");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Preview canonical scheduler selection for one critical-path task plus compatible parallel-safe siblings under the configured max_parallel_agents ceiling."
+            );
+            println!(
+                "  This surface is preview-first for this wave and must not be treated as autonomous multi-run launch authority."
+            );
+            println!();
+            println!("Canonical commands:");
+            println!(
+                "  vida taskflow scheduler dispatch [--scope <task-id>] [--current-task-id <task-id>] [--dry-run] [--json]"
+            );
+            println!(
+                "  vida taskflow scheduler dispatch --execute [--scope <task-id>] [--current-task-id <task-id>] [--json]"
+            );
+            println!();
+            println!("Returned semantics:");
+            println!(
+                "  status, blocker_codes, next_actions, max_parallel_agents, selection_source, selected_primary_task, selected_parallel_tasks, selected_task_ids, rejected_candidates, scheduling"
+            );
+            println!();
+            println!("Failure modes:");
+            println!("  Missing or unreadable authoritative state fails closed.");
+            println!(
+                "  `--execute` is intentionally blocked in this wave; scheduler dispatch remains preview-first until multi-run recovery parity is proven."
+            );
+            println!(
+                "  Missing readiness or explicit parallel-safe semantics never widen execution; incompatible candidates stay in rejected_candidates with reasons."
             );
             return;
         }
@@ -659,7 +724,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Usage:");
     println!("  vida taskflow <args...>");
     println!(
-        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph-summary|plan|status|consume|continuation|packet|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
+        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph-summary|plan|replan|scheduler|status|consume|continuation|packet|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
     );
     println!("  vida taskflow <command> --help");
     println!();
@@ -694,6 +759,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  next        aggregate next lawful step across backlog and recovery state");
     println!("  graph-summary  ready/blocked pressure plus critical-path summary");
     println!("  plan       deterministic PlanGraph draft generation and materialization");
+    println!("  replan     preview-first adaptive split/spawn-blocker mutation planning");
+    println!("  scheduler  preview-first task selection under max_parallel_agents");
     println!("  parallelism explicit sequencing and parallel-safe scheduling contract");
     println!("  status      family-scoped alias to the root operator status surface");
     println!("  continuation explicit bounded-unit binding");
@@ -716,6 +783,13 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
         "  vida taskflow plan generate --source-text \"Implement feature X\" --task-prefix feature-x --json"
     );
     println!("  vida taskflow plan materialize draft.json --dry-run --json");
+    println!(
+        "  vida taskflow replan split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" --json"
+    );
+    println!(
+        "  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json"
+    );
+    println!("  vida taskflow scheduler dispatch --json");
     println!("  vida taskflow help dependencies");
     println!("  vida taskflow help queue");
     println!("  vida taskflow help dispatch");

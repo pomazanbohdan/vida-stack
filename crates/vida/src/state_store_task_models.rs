@@ -42,6 +42,57 @@ impl<'de> serde::Deserialize<'de> for TaskExecutionSemantics {
     }
 }
 
+#[derive(Debug, Default, serde::Serialize, SurrealValue, Clone, PartialEq, Eq)]
+pub struct TaskPlannerMetadata {
+    #[serde(default)]
+    pub owned_paths: Vec<String>,
+    #[serde(default)]
+    pub acceptance_targets: Vec<String>,
+    #[serde(default)]
+    pub proof_targets: Vec<String>,
+    #[serde(default)]
+    pub risk: Option<String>,
+    #[serde(default)]
+    pub estimate: Option<String>,
+    #[serde(default)]
+    pub lane_hint: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TaskPlannerMetadataWire {
+    #[serde(default)]
+    owned_paths: Option<Vec<String>>,
+    #[serde(default)]
+    acceptance_targets: Option<Vec<String>>,
+    #[serde(default)]
+    proof_targets: Option<Vec<String>>,
+    #[serde(default)]
+    risk: Option<String>,
+    #[serde(default)]
+    estimate: Option<String>,
+    #[serde(default)]
+    lane_hint: Option<String>,
+}
+
+impl<'de> serde::Deserialize<'de> for TaskPlannerMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <Option<TaskPlannerMetadataWire> as Deserialize>::deserialize(deserializer)?;
+        Ok(value
+            .map(|wire| Self {
+                owned_paths: wire.owned_paths.unwrap_or_default(),
+                acceptance_targets: wire.acceptance_targets.unwrap_or_default(),
+                proof_targets: wire.proof_targets.unwrap_or_default(),
+                risk: wire.risk,
+                estimate: wire.estimate,
+                lane_hint: wire.lane_hint,
+            })
+            .unwrap_or_default())
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct TaskJsonlRecord {
     pub(crate) id: String,
@@ -78,6 +129,8 @@ pub(crate) struct TaskJsonlRecord {
     pub(crate) labels: Vec<String>,
     #[serde(default)]
     pub(crate) execution_semantics: TaskExecutionSemantics,
+    #[serde(default)]
+    pub(crate) planner_metadata: TaskPlannerMetadata,
     #[serde(default)]
     pub(crate) dependencies: Vec<TaskDependencyJsonlRecord>,
 }
@@ -119,6 +172,8 @@ pub(crate) struct TaskContent {
     pub(crate) labels: Vec<String>,
     #[serde(default)]
     pub(crate) execution_semantics: TaskExecutionSemantics,
+    #[serde(default)]
+    pub(crate) planner_metadata: TaskPlannerMetadata,
     pub(crate) dependencies: Vec<TaskDependencyRecord>,
 }
 
@@ -144,6 +199,35 @@ pub(crate) struct TaskStorageRow {
     pub(crate) labels: Vec<String>,
     #[serde(default)]
     pub(crate) execution_semantics: TaskExecutionSemantics,
+    #[serde(default)]
+    pub(crate) planner_metadata: TaskPlannerMetadata,
+    pub(crate) dependencies: Vec<TaskDependencyRecord>,
+}
+
+#[derive(Debug, serde::Deserialize, SurrealValue, Clone, PartialEq, Eq)]
+pub(crate) struct TaskStorageRowStored {
+    pub(crate) task_id: String,
+    #[serde(default)]
+    pub(crate) display_id: Option<String>,
+    pub(crate) title: String,
+    pub(crate) description: String,
+    pub(crate) status: String,
+    pub(crate) priority: u32,
+    pub(crate) issue_type: String,
+    pub(crate) created_at: String,
+    pub(crate) created_by: String,
+    pub(crate) updated_at: String,
+    pub(crate) closed_at: Option<String>,
+    pub(crate) close_reason: Option<String>,
+    pub(crate) source_repo: String,
+    pub(crate) compaction_level: u32,
+    pub(crate) original_size: u32,
+    pub(crate) notes: Option<String>,
+    pub(crate) labels: Vec<String>,
+    #[serde(default)]
+    pub(crate) execution_semantics: Option<TaskExecutionSemantics>,
+    #[serde(default)]
+    pub(crate) planner_metadata: Option<TaskPlannerMetadata>,
     pub(crate) dependencies: Vec<TaskDependencyRecord>,
 }
 
@@ -169,6 +253,8 @@ pub struct TaskRecord {
     pub labels: Vec<String>,
     #[serde(default)]
     pub execution_semantics: TaskExecutionSemantics,
+    #[serde(default)]
+    pub planner_metadata: TaskPlannerMetadata,
     pub dependencies: Vec<TaskDependencyRecord>,
 }
 
@@ -184,6 +270,7 @@ pub struct CreateTaskRequest<'a> {
     pub parent_id: Option<&'a str>,
     pub labels: &'a [String],
     pub execution_semantics: TaskExecutionSemantics,
+    pub planner_metadata: TaskPlannerMetadata,
     pub created_by: &'a str,
     pub source_repo: &'a str,
 }
@@ -202,6 +289,7 @@ pub struct UpdateTaskRequest<'a> {
     pub order_bucket: Option<Option<&'a str>>,
     pub parallel_group: Option<Option<&'a str>>,
     pub conflict_domain: Option<Option<&'a str>>,
+    pub planner_metadata: Option<TaskPlannerMetadata>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
@@ -388,6 +476,7 @@ impl From<TaskJsonlRecord> for TaskContent {
             notes: value.notes,
             labels: value.labels,
             execution_semantics: value.execution_semantics,
+            planner_metadata: value.planner_metadata,
             dependencies: value
                 .dependencies
                 .into_iter()
@@ -418,6 +507,7 @@ impl From<TaskContent> for TaskStorageRow {
             notes: value.notes,
             labels: value.labels,
             execution_semantics: value.execution_semantics,
+            planner_metadata: value.planner_metadata,
             dependencies: value.dependencies,
         }
     }
@@ -444,6 +534,34 @@ impl From<TaskStorageRow> for TaskRecord {
             notes: value.notes,
             labels: value.labels,
             execution_semantics: value.execution_semantics,
+            planner_metadata: value.planner_metadata,
+            dependencies: value.dependencies,
+        }
+    }
+}
+
+impl From<TaskStorageRowStored> for TaskStorageRow {
+    fn from(value: TaskStorageRowStored) -> Self {
+        Self {
+            task_id: value.task_id,
+            display_id: value.display_id,
+            title: value.title,
+            description: value.description,
+            status: value.status,
+            priority: value.priority,
+            issue_type: value.issue_type,
+            created_at: value.created_at,
+            created_by: value.created_by,
+            updated_at: value.updated_at,
+            closed_at: value.closed_at,
+            close_reason: value.close_reason,
+            source_repo: value.source_repo,
+            compaction_level: value.compaction_level,
+            original_size: value.original_size,
+            notes: value.notes,
+            labels: value.labels,
+            execution_semantics: value.execution_semantics.unwrap_or_default(),
+            planner_metadata: value.planner_metadata.unwrap_or_default(),
             dependencies: value.dependencies,
         }
     }
@@ -470,6 +588,7 @@ impl From<TaskRecord> for TaskStorageRow {
             notes: value.notes,
             labels: value.labels,
             execution_semantics: value.execution_semantics,
+            planner_metadata: value.planner_metadata,
             dependencies: value.dependencies,
         }
     }
@@ -486,5 +605,111 @@ impl From<TaskDependencyJsonlRecord> for TaskDependencyRecord {
             metadata: value.metadata,
             thread_id: value.thread_id,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TaskPlannerMetadata, TaskStorageRow};
+
+    #[test]
+    fn task_planner_metadata_deserializes_from_null_as_default() {
+        let metadata: TaskPlannerMetadata =
+            serde_json::from_value(serde_json::Value::Null).expect("null planner metadata");
+
+        assert_eq!(metadata, TaskPlannerMetadata::default());
+    }
+
+    #[test]
+    fn task_storage_row_deserializes_missing_planner_metadata_as_default() {
+        let row: TaskStorageRow = serde_json::from_value(serde_json::json!({
+            "task_id": "task-1",
+            "display_id": null,
+            "title": "Task",
+            "description": "desc",
+            "status": "open",
+            "priority": 1,
+            "issue_type": "task",
+            "created_at": "0",
+            "created_by": "test",
+            "updated_at": "0",
+            "closed_at": null,
+            "close_reason": null,
+            "source_repo": ".",
+            "compaction_level": 0,
+            "original_size": 0,
+            "notes": null,
+            "labels": [],
+            "execution_semantics": null,
+            "dependencies": []
+        }))
+        .expect("task storage row should deserialize without planner_metadata");
+
+        assert_eq!(row.planner_metadata, TaskPlannerMetadata::default());
+    }
+
+    #[test]
+    fn task_storage_row_deserializes_null_planner_metadata_as_default() {
+        let row: TaskStorageRow = serde_json::from_value(serde_json::json!({
+            "task_id": "task-1",
+            "display_id": null,
+            "title": "Task",
+            "description": "desc",
+            "status": "open",
+            "priority": 1,
+            "issue_type": "task",
+            "created_at": "0",
+            "created_by": "test",
+            "updated_at": "0",
+            "closed_at": null,
+            "close_reason": null,
+            "source_repo": ".",
+            "compaction_level": 0,
+            "original_size": 0,
+            "notes": null,
+            "labels": [],
+            "execution_semantics": null,
+            "planner_metadata": null,
+            "dependencies": []
+        }))
+        .expect("task storage row should deserialize null planner_metadata");
+
+        assert_eq!(row.planner_metadata, TaskPlannerMetadata::default());
+    }
+
+    #[test]
+    fn task_storage_row_deserializes_planner_metadata_with_null_list_fields_as_default() {
+        let row: TaskStorageRow = serde_json::from_value(serde_json::json!({
+            "task_id": "task-1",
+            "display_id": null,
+            "title": "Task",
+            "description": "desc",
+            "status": "open",
+            "priority": 1,
+            "issue_type": "task",
+            "created_at": "0",
+            "created_by": "test",
+            "updated_at": "0",
+            "closed_at": null,
+            "close_reason": null,
+            "source_repo": ".",
+            "compaction_level": 0,
+            "original_size": 0,
+            "notes": null,
+            "labels": [],
+            "execution_semantics": null,
+            "planner_metadata": {
+                "owned_paths": null,
+                "acceptance_targets": null,
+                "proof_targets": null,
+                "risk": null,
+                "estimate": null,
+                "lane_hint": null
+            },
+            "dependencies": []
+        }))
+        .expect("task storage row should deserialize planner_metadata with null list fields");
+
+        assert_eq!(row.planner_metadata, TaskPlannerMetadata::default());
     }
 }

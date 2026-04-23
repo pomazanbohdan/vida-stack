@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use super::{
     CanonicalDependencyEdge, CanonicalIssueType, CanonicalTaskId, CanonicalTaskRecord,
     CanonicalTaskStatus, CanonicalTimestamp, OffsetDateTime, Rfc3339, StateStore, StateStoreError,
-    TaskDependencyRecord, TaskRecord, TaskSnapshot,
+    TaskDependencyRecord, TaskPlannerMetadata, TaskRecord, TaskSnapshot,
 };
 
 #[allow(dead_code)]
@@ -160,6 +160,7 @@ pub(super) fn canonical_snapshot_row_to_task_record(
         notes: None,
         labels: Vec::new(),
         execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+        planner_metadata: TaskPlannerMetadata::default(),
         dependencies: Vec::new(),
     })
 }

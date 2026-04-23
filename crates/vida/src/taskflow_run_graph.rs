@@ -1,6 +1,6 @@
 use crate::{
-    build_runtime_execution_plan_from_snapshot, build_runtime_lane_selection_with_store,
-    dispatch_contract_execution_lane_sequence,
+    RenderMode, RuntimeConsumptionLaneSelection, build_runtime_execution_plan_from_snapshot,
+    build_runtime_lane_selection_with_store, dispatch_contract_execution_lane_sequence,
     operator_contracts::{
         canonical_release1_blocker_code_entries, finalize_release1_operator_truth,
         shared_operator_output_contract_parity_error,
@@ -12,7 +12,6 @@ use crate::{
     },
     taskflow_layer4::print_taskflow_proxy_help,
     taskflow_task_bridge::proxy_state_dir,
-    RenderMode, RuntimeConsumptionLaneSelection,
 };
 use std::process::ExitCode;
 use time::format_description::well_known::Rfc3339;
@@ -1792,52 +1791,52 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         {
             let state_dir = proxy_state_dir();
             match StateStore::open_existing(state_dir).await {
-                Ok(store) => {
-                    match store.latest_run_graph_status().await {
-                        Ok(Some(status)) => {
-                            match build_run_graph_diagnosis(&store, &status.run_id).await {
-                                Ok(diagnosis) => {
-                                    match build_run_graph_diagnosis_json_payload(&diagnosis) {
-                                        Ok(payload) => {
-                                            println!(
-                                                "{}",
-                                                serde_json::to_string_pretty(&payload).expect(
-                                                    "run-graph diagnose-latest should render as json"
-                                                )
-                                            );
-                                            ExitCode::SUCCESS
-                                        }
-                                        Err(error) => {
-                                            eprintln!(
-                                                "Failed to render normalized run-graph diagnose payload: {error}"
-                                            );
-                                            ExitCode::from(1)
-                                        }
+                Ok(store) => match store.latest_run_graph_status().await {
+                    Ok(Some(status)) => {
+                        match build_run_graph_diagnosis(&store, &status.run_id).await {
+                            Ok(diagnosis) => {
+                                match build_run_graph_diagnosis_json_payload(&diagnosis) {
+                                    Ok(payload) => {
+                                        println!(
+                                            "{}",
+                                            serde_json::to_string_pretty(&payload).expect(
+                                                "run-graph diagnose-latest should render as json"
+                                            )
+                                        );
+                                        ExitCode::SUCCESS
+                                    }
+                                    Err(error) => {
+                                        eprintln!(
+                                            "Failed to render normalized run-graph diagnose payload: {error}"
+                                        );
+                                        ExitCode::from(1)
                                     }
                                 }
-                                Err(error) => {
-                                    eprintln!("Failed to diagnose latest run-graph dispatch state: {error}");
-                                    ExitCode::from(1)
-                                }
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to diagnose latest run-graph dispatch state: {error}"
+                                );
+                                ExitCode::from(1)
                             }
                         }
-                        Ok(None) => {
-                            println!(
-                                "{}",
-                                serde_json::to_string_pretty(&serde_json::json!({
-                                    "surface": "vida taskflow run-graph diagnose-latest",
-                                    "status": null,
-                                }))
-                                .expect("run-graph diagnose-latest should render as json")
-                            );
-                            ExitCode::SUCCESS
-                        }
-                        Err(error) => {
-                            eprintln!("Failed to read latest run-graph status: {error}");
-                            ExitCode::from(1)
-                        }
                     }
-                }
+                    Ok(None) => {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "surface": "vida taskflow run-graph diagnose-latest",
+                                "status": null,
+                            }))
+                            .expect("run-graph diagnose-latest should render as json")
+                        );
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to read latest run-graph status: {error}");
+                        ExitCode::from(1)
+                    }
+                },
                 Err(error) => {
                     eprintln!("Failed to open authoritative state store: {error}");
                     ExitCode::from(1)
@@ -2184,14 +2183,14 @@ fn run_graph_blocker_evidence(
             args.run_id, args.status
         )
     })?;
-    let canonical_blocker_codes =
-        canonical_release1_blocker_code_entries(&serde_json::json!([blocker_code])).ok_or_else(
-            || {
-                format!(
+    let canonical_blocker_codes = canonical_release1_blocker_code_entries(&serde_json::json!([
+        blocker_code
+    ]))
+    .ok_or_else(|| {
+        format!(
             "run-graph blocker code `{blocker_code}` is not canonical (must be lowercase/digits/_)"
         )
-            },
-        )?;
+    })?;
     let canonical_blocker_code = canonical_blocker_codes
         .first()
         .expect("canonical block list always non-empty")
@@ -3245,6 +3244,26 @@ pub(crate) async fn derive_advanced_run_graph_status(
             );
         }
 
+        if existing.next_node.is_none() {
+            let (next_node, policy_gate, recovery_ready) =
+                implementation_analysis_gate(&implementation);
+            return Ok(TaskflowRunGraphAdvancePayload {
+                status: run_graph_transition(
+                    &existing,
+                    RunGraphTransitionArgs {
+                        active_node: existing.active_node.clone(),
+                        next_node,
+                        lane_id: existing.lane_id.clone(),
+                        lifecycle_stage: "analysis_active".to_string(),
+                        policy_gate,
+                        checkpoint_kind: "execution_cursor".to_string(),
+                        target_format: DispatchTargetFormat::Lane,
+                        recovery_ready,
+                    },
+                ),
+            });
+        }
+
         let writer_node = implementation_writer_node(&implementation);
         if existing.next_node.as_deref() != Some(writer_node.as_str()) {
             return Err(format!(
@@ -3914,9 +3933,15 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 }
             }
         }
-        [head, subcommand, task_id, task_class, node, status, route_task_class]
-            if head == "run-graph" && subcommand == "update" =>
-        {
+        [
+            head,
+            subcommand,
+            task_id,
+            task_class,
+            node,
+            status,
+            route_task_class,
+        ] if head == "run-graph" && subcommand == "update" => {
             let existing = match store.run_graph_status(task_id).await {
                 Ok(existing) => existing,
                 Err(StateStoreError::MissingTask { .. }) => {
@@ -3969,9 +3994,16 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 }
             }
         }
-        [head, subcommand, task_id, task_class, node, status, route_task_class, meta_json]
-            if head == "run-graph" && subcommand == "update" =>
-        {
+        [
+            head,
+            subcommand,
+            task_id,
+            task_class,
+            node,
+            status,
+            route_task_class,
+            meta_json,
+        ] if head == "run-graph" && subcommand == "update" => {
             let meta: serde_json::Value = match serde_json::from_str(meta_json) {
                 Ok(meta) => meta,
                 Err(error) => {
@@ -4065,6 +4097,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RuntimeConsumptionLaneSelection;
     use crate::build_compiled_agent_extension_bundle_for_root;
     use crate::launcher_activation_snapshot::config_file_digest;
     use crate::launcher_activation_snapshot::pack_router_keywords_json;
@@ -4072,7 +4105,6 @@ mod tests {
     use crate::state_store::LauncherActivationSnapshot;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::guard_current_dir;
-    use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
     use std::path::Path;
 
@@ -4758,10 +4790,12 @@ mod tests {
         .expect("compact summary should exist");
 
         assert!(summary.stale_state_suspected);
-        assert!(summary
-            .route_truth
-            .projection_reason
-            .contains("looks stale"));
+        assert!(
+            summary
+                .route_truth
+                .projection_reason
+                .contains("looks stale")
+        );
         assert_eq!(
             summary.recommended_command.as_deref(),
             Some("vida taskflow run-graph status run-stale --json")
@@ -4868,6 +4902,7 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -4917,8 +4952,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn derive_seeded_run_graph_prefers_worker_for_existing_design_backed_qwen_remediation_task(
-    ) {
+    async fn derive_seeded_run_graph_prefers_worker_for_existing_design_backed_qwen_remediation_task()
+     {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
 
@@ -4941,6 +4976,7 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -4976,11 +5012,13 @@ mod tests {
             payload.role_selection.reason,
             "auto_existing_design_backed_implementation_request_override"
         );
-        assert!(payload
-            .role_selection
-            .matched_terms
-            .iter()
-            .any(|term| term == "existing_design_backed_work_pool_override"));
+        assert!(
+            payload
+                .role_selection
+                .matched_terms
+                .iter()
+                .any(|term| term == "existing_design_backed_work_pool_override")
+        );
         assert_eq!(payload.status.task_class, "implementation");
         assert_eq!(payload.status.route_task_class, "implementation");
         assert_ne!(payload.status.next_node.as_deref(), Some("pm"));
@@ -4992,8 +5030,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn derive_seeded_run_graph_prefers_worker_for_existing_design_backed_blocker_without_file_terms(
-    ) {
+    async fn derive_seeded_run_graph_prefers_worker_for_existing_design_backed_blocker_without_file_terms()
+     {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
 
@@ -5016,6 +5054,7 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -5047,11 +5086,13 @@ mod tests {
             payload.role_selection.reason,
             "auto_existing_design_backed_implementation_request_override"
         );
-        assert!(payload
-            .role_selection
-            .matched_terms
-            .iter()
-            .all(|term| term != ".rs" && term != "crates/" && term != "src/"));
+        assert!(
+            payload
+                .role_selection
+                .matched_terms
+                .iter()
+                .all(|term| term != ".rs" && term != "crates/" && term != "src/")
+        );
         assert!(!payload.role_selection.matched_terms.is_empty());
         assert_eq!(
             payload.role_selection.tracked_flow_entry.as_deref(),
@@ -5090,6 +5131,7 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -5572,6 +5614,7 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -5970,11 +6013,13 @@ mod tests {
             .expect("reconciled status should load");
         assert_eq!(reconciled.status, "completed");
         assert_eq!(reconciled.lifecycle_stage, "closure_complete");
-        assert!(store
-            .run_graph_continuation_binding("run-terminal-update")
-            .await
-            .expect("continuation binding lookup should succeed")
-            .is_none());
+        assert!(
+            store
+                .run_graph_continuation_binding("run-terminal-update")
+                .await
+                .expect("continuation binding lookup should succeed")
+                .is_none()
+        );
     }
 
     #[test]
@@ -6466,16 +6511,20 @@ mod tests {
         let (_codes, why_not_now, next_action, _command, _surface) =
             recovery_surface_contract(&summary, &projection_truth);
 
-        assert!(why_not_now
-            .as_ref()
-            .map(|value| value.summary.contains("looks stale"))
-            .unwrap_or(false));
-        assert!(next_action
-            .as_ref()
-            .map(|value| value
-                .reason
-                .contains("stale delegated execution is suspected"))
-            .unwrap_or(false));
+        assert!(
+            why_not_now
+                .as_ref()
+                .map(|value| value.summary.contains("looks stale"))
+                .unwrap_or(false)
+        );
+        assert!(
+            next_action
+                .as_ref()
+                .map(|value| value
+                    .reason
+                    .contains("stale delegated execution is suspected"))
+                .unwrap_or(false)
+        );
     }
 
     #[test]

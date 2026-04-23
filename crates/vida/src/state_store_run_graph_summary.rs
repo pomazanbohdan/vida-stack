@@ -139,6 +139,30 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
     if status.status == "completed" {
         return Ok(status);
     }
+    if receipt.dispatch_target == "analysis"
+        && receipt.dispatch_status == "executed"
+        && status.active_node == "analysis"
+    {
+        if let Some(next_target) = receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let next_node = next_target.replace('-', "_");
+            if status.next_node.is_none() {
+                status.next_node = Some(next_node.clone());
+            }
+            status.status = "ready".to_string();
+            status.lifecycle_stage = "analysis_active".to_string();
+            if status.policy_gate == "validation_report_required" {
+                status.policy_gate = "targeted_verification".to_string();
+            }
+            status.handoff_state = format!("awaiting_{next_node}");
+            status.resume_target = format!("dispatch.{next_node}_lane");
+            status.recovery_ready = true;
+        }
+    }
     Ok(status)
 }
 
@@ -2118,6 +2142,7 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -2166,8 +2191,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch(
-    ) {
+    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -2579,8 +2604,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active(
-    ) {
+    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -3142,6 +3167,7 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -3245,6 +3271,7 @@ mod tests {
                 parent_id: None,
                 labels: &labels,
                 execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "test",
             })
@@ -3333,6 +3360,7 @@ mod tests {
                 parent_id: None,
                 labels: &labels,
                 execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "test",
             })
@@ -3425,8 +3453,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open(
-    ) {
+    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -3450,6 +3478,7 @@ mod tests {
                 parent_id: None,
                 labels: &labels,
                 execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "test",
             })
@@ -3924,8 +3953,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none(
-    ) {
+    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())

@@ -13,6 +13,35 @@ fn selection_strategy(carrier_runtime: &serde_json::Value) -> String {
         .to_string()
 }
 
+fn model_selection_enabled(
+    compiled_bundle: &serde_json::Value,
+    carrier_runtime: &serde_json::Value,
+) -> bool {
+    json_lookup(
+        &compiled_bundle["agent_system"]["model_selection"],
+        &["enabled"],
+    )
+    .or_else(|| json_lookup(&carrier_runtime["model_selection"], &["enabled"]))
+    .and_then(serde_json::Value::as_bool)
+    .unwrap_or(true)
+}
+
+fn candidate_scope(
+    compiled_bundle: &serde_json::Value,
+    carrier_runtime: &serde_json::Value,
+) -> String {
+    json_lookup(
+        &compiled_bundle["agent_system"]["model_selection"],
+        &["candidate_scope"],
+    )
+    .or_else(|| json_lookup(&carrier_runtime["model_selection"], &["candidate_scope"]))
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .unwrap_or("unified_carrier_model_profiles")
+    .to_string()
+}
+
 fn free_profiles_allowed(carrier_runtime: &serde_json::Value) -> bool {
     carrier_runtime["model_selection"]["free_profiles_allowed"]
         .as_bool()
@@ -327,6 +356,15 @@ fn write_scope_allows_task_class(write_scope: &str, task_class: &str) -> bool {
     )
 }
 
+fn reasoning_control_mode(profile: &serde_json::Value) -> Option<&'static str> {
+    let reasoning_control = &profile["reasoning_control"];
+    match reasoning_control {
+        serde_json::Value::Null => None,
+        serde_json::Value::Object(entries) if entries.is_empty() => None,
+        _ => Some("metadata_only"),
+    }
+}
+
 #[derive(Clone)]
 struct ProfileCandidate {
     role: serde_json::Value,
@@ -489,16 +527,57 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
     execution_runtime_role: &str,
 ) -> serde_json::Value {
     let carrier_runtime = carrier_runtime_section(compiled_bundle);
+    let selection_rule = selection_rule_for_runtime(carrier_runtime);
+    let selection_strategy = selection_strategy(carrier_runtime);
+    let model_selection_enabled = model_selection_enabled(compiled_bundle, carrier_runtime);
+    let candidate_scope = candidate_scope(compiled_bundle, carrier_runtime);
+    if !model_selection_enabled {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "model_selection_disabled",
+            "task_class": task_class,
+            "runtime_role": execution_runtime_role,
+            "conversation_role": conversation_role,
+            "selection_strategy": selection_strategy,
+            "selection_rule": selection_rule,
+            "model_selection_enabled": false,
+            "candidate_scope": candidate_scope,
+            "rejected_candidates": [],
+        });
+    }
+    if candidate_scope != "unified_carrier_model_profiles" {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "candidate_scope_not_supported",
+            "task_class": task_class,
+            "runtime_role": execution_runtime_role,
+            "conversation_role": conversation_role,
+            "selection_strategy": selection_strategy,
+            "selection_rule": selection_rule,
+            "model_selection_enabled": true,
+            "candidate_scope": candidate_scope,
+            "supported_candidate_scope": "unified_carrier_model_profiles",
+            "rejected_candidates": [],
+        });
+    }
     let Some(roles) = carrier_runtime["roles"].as_array() else {
         return serde_json::json!({
             "enabled": false,
-            "reason": "carrier_runtime_roles_missing"
+            "reason": "carrier_runtime_roles_missing",
+            "selection_strategy": selection_strategy,
+            "selection_rule": selection_rule,
+            "model_selection_enabled": true,
+            "candidate_scope": candidate_scope,
         });
     };
     if roles.is_empty() {
         return serde_json::json!({
             "enabled": false,
-            "reason": "carrier_runtime_roles_missing"
+            "reason": "carrier_runtime_roles_missing",
+            "selection_strategy": selection_strategy,
+            "selection_rule": selection_rule,
+            "model_selection_enabled": true,
+            "candidate_scope": candidate_scope,
         });
     }
 
@@ -507,7 +586,6 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         &["selection_policy", "demotion_score"],
     ))
     .unwrap_or(crate::carrier_runtime_metadata::DEFAULT_DEMOTION_SCORE);
-    let selection_strategy = selection_strategy(carrier_runtime);
     let free_profiles_allowed = free_profiles_allowed(carrier_runtime);
     let quality_floor = quality_floor_for_runtime_role(carrier_runtime, execution_runtime_role);
     let reasoning_floor = reasoning_floor_for_task_class(carrier_runtime, task_class);
@@ -595,6 +673,10 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
             "task_class": task_class,
             "runtime_role": execution_runtime_role,
             "conversation_role": conversation_role,
+            "selection_strategy": selection_strategy,
+            "selection_rule": selection_rule,
+            "model_selection_enabled": true,
+            "candidate_scope": candidate_scope,
             "rejected_candidates": rejected_candidates
         });
     }
@@ -713,6 +795,9 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
             "runtime_role": execution_runtime_role,
             "conversation_role": conversation_role,
             "selection_strategy": selection_strategy,
+            "selection_rule": selection_rule,
+            "model_selection_enabled": true,
+            "candidate_scope": candidate_scope,
             "rejected_candidates": rejected_candidates,
         });
     };
@@ -741,7 +826,6 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
     let complexity_multiplier = task_complexity_multiplier(task_class);
     let effective_score = selected_candidate.effective_score;
     let lifecycle_state = selected_candidate.lifecycle_state.as_str();
-    let selection_rule = selection_rule_for_runtime(carrier_runtime);
     let rationale = vec![
         format!("task_class={task_class}"),
         format!("conversation_role={conversation_role}"),
@@ -794,13 +878,44 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         "effective_score": effective_score,
         "lifecycle_state": lifecycle_state,
         "strategy_store": carrier_runtime["worker_strategy"]["store_path"],
-        "scorecards_store": carrier_runtime["worker_strategy"]["scorecards_path"],
-        "selection_strategy": selection_strategy,
-        "selection_rule": selection_rule,
-        "rejected_candidates": rejected_candidates,
-        "rationale": rationale
+        "scorecards_store": carrier_runtime["worker_strategy"]["scorecards_path"]
     });
     if let Some(map) = assignment.as_object_mut() {
+        map.insert(
+            "selection_strategy".to_string(),
+            serde_json::Value::String(selection_strategy),
+        );
+        map.insert(
+            "selection_rule".to_string(),
+            serde_json::Value::String(selection_rule),
+        );
+        map.insert(
+            "model_selection_enabled".to_string(),
+            serde_json::Value::Bool(true),
+        );
+        map.insert(
+            "candidate_scope".to_string(),
+            serde_json::Value::String(candidate_scope),
+        );
+        map.insert(
+            "rejected_candidates".to_string(),
+            serde_json::Value::Array(rejected_candidates),
+        );
+        map.insert(
+            "rationale".to_string(),
+            serde_json::Value::Array(
+                rationale
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
+        map.insert(
+            "selected_reasoning_control_mode".to_string(),
+            reasoning_control_mode(selected_profile)
+                .map(|value| serde_json::Value::String(value.to_string()))
+                .unwrap_or(serde_json::Value::Null),
+        );
         map.insert(
             "budget_policy".to_string(),
             serde_json::Value::String(budget_policy),
@@ -1461,5 +1576,109 @@ mod tests {
                         .flatten()
                         .any(|reason| reason.as_str() == Some("route_profile_mapping_mismatch"))
             }));
+    }
+
+    #[test]
+    fn disabled_model_selection_returns_disabled_runtime_assignment() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "middle",
+            "tier": "middle",
+            "rate": 4,
+            "normalized_cost_units": 4,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "reasoning_band": "medium",
+            "default_model_profile": "codex_gpt54_medium_write",
+            "model_profiles": {
+                "codex_gpt54_medium_write": {
+                    "profile_id": "codex_gpt54_medium_write",
+                    "model_ref": "gpt-5.4",
+                    "provider": "openai",
+                    "reasoning_effort": "medium",
+                    "normalized_cost_units": 4,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "model_selection": {
+                "enabled": false,
+                "candidate_scope": "unified_carrier_model_profiles"
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(assignment["reason"], "model_selection_disabled");
+        assert_eq!(assignment["model_selection_enabled"], false);
+        assert_eq!(
+            assignment["candidate_scope"],
+            "unified_carrier_model_profiles"
+        );
+        assert!(assignment["selected_carrier_id"].is_null());
+    }
+
+    #[test]
+    fn unsupported_candidate_scope_fail_closes_runtime_assignment() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "middle",
+            "tier": "middle",
+            "rate": 4,
+            "normalized_cost_units": 4,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "reasoning_band": "medium",
+            "default_model_profile": "codex_gpt54_medium_write",
+            "model_profiles": {
+                "codex_gpt54_medium_write": {
+                    "profile_id": "codex_gpt54_medium_write",
+                    "model_ref": "gpt-5.4",
+                    "provider": "openai",
+                    "reasoning_effort": "medium",
+                    "normalized_cost_units": 4,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "model_selection": {
+                "enabled": true,
+                "candidate_scope": "legacy_route_backends_only"
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(assignment["reason"], "candidate_scope_not_supported");
+        assert_eq!(assignment["model_selection_enabled"], true);
+        assert_eq!(assignment["candidate_scope"], "legacy_route_backends_only");
+        assert_eq!(
+            assignment["supported_candidate_scope"],
+            "unified_carrier_model_profiles"
+        );
     }
 }

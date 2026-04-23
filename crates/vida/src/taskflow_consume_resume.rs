@@ -6123,6 +6123,7 @@ agent_system:
                     parent_id: None,
                     labels: &labels,
                     execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                     created_by: "test",
                     source_repo: "",
                 })
@@ -7551,6 +7552,7 @@ agent_system:
                 parent_id: None,
                 labels: &[],
                 execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -9631,6 +9633,7 @@ agent_system:
                 parent_id: None,
                 labels: &labels,
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "tester",
                 source_repo: ".",
             })
@@ -11847,6 +11850,7 @@ agent_system:
                 parent_id: None,
                 labels: &[String::from("dev-pack")],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "",
             })

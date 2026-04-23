@@ -699,6 +699,7 @@ mod tests {
                     parallel_group: parallel_group.map(ToOwned::to_owned),
                     conflict_domain: conflict_domain.map(ToOwned::to_owned),
                 },
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: ".",
             })

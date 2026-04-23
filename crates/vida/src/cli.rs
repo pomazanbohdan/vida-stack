@@ -6,11 +6,11 @@ const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
 
-const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task progress <task-id> --json\n  vida task deps <task-id> --json\n  vida task tree <task-id> --json\n  vida task reparent-children <from-parent-id> <to-parent-id> --json\n  vida task critical-path --json\n  vida taskflow help parallelism\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
+const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task progress <task-id> --json\n  vida task deps <task-id> --json\n  vida task tree <task-id> --json\n  vida task split <task-id> --child child-a:\"First slice\" --reason \"oversized task\" --json\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida task reparent-children <from-parent-id> <to-parent-id> --json\n  vida task critical-path --json\n  vida taskflow help parallelism\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
 
 const TASKFLOW_LONG_ABOUT: &str = "Delegate to the TaskFlow runtime family.\n\nTaskFlow is the execution/runtime authority. Use it for tracked execution, backlog pressure, run-graph state, packet inspection, continuation binding, and closure handoff.";
 
-const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  vida taskflow help task\n  vida taskflow help parallelism\n  vida taskflow help dependencies\n  vida taskflow help queue\n  vida taskflow help dispatch\n  vida task tree <task-id> --json\n  vida taskflow graph-summary --json\n  vida taskflow route explain --json\n  vida taskflow validate-routing --json\n  vida taskflow status --summary --json\n  vida taskflow run-graph status <run-id> --json\n  vida taskflow recovery status <run-id> --json\n  vida taskflow packet latest --json\n  vida taskflow bootstrap-spec \"feature request\" --json\n  vida task next --json\n\nParallelism guidance:\n  `vida taskflow graph-summary --json` exposes `current_task_id`, `scheduling.ready[*].ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  `vida taskflow help parallelism` explains execution semantics fields and fail-closed scheduling rules.";
+const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  vida taskflow help task\n  vida taskflow help parallelism\n  vida taskflow help dependencies\n  vida taskflow help queue\n  vida taskflow help dispatch\n  vida taskflow help scheduler\n  vida task tree <task-id> --json\n  vida taskflow graph-summary --json\n  vida taskflow plan generate --json\n  vida taskflow replan split <task-id> --child child-a:\"First slice\" --reason \"oversized task\" --json\n  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida taskflow scheduler dispatch --json\n  vida taskflow route explain --json\n  vida taskflow validate-routing --json\n  vida taskflow status --summary --json\n  vida taskflow run-graph status <run-id> --json\n  vida taskflow recovery status <run-id> --json\n  vida taskflow packet latest --json\n  vida taskflow bootstrap-spec \"feature request\" --json\n  vida task next --json\n\nParallelism guidance:\n  `vida taskflow graph-summary --json` exposes `current_task_id`, `scheduling.ready[*].ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  `vida taskflow scheduler dispatch --json` turns that projection into a preview-first launch plan capped by `max_parallel_agents`.\n  `vida taskflow help parallelism` explains execution semantics fields and fail-closed scheduling rules.";
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
@@ -134,6 +134,10 @@ pub(crate) enum TaskCommand {
     )]
     Update(TaskUpdateArgs),
     Close(TaskCloseArgs),
+    #[command(about = "split one oversized task into bounded child tasks")]
+    Split(TaskSplitArgs),
+    #[command(about = "create a blocker/dependency task linked to one blocked source task")]
+    SpawnBlocker(TaskSpawnBlockerArgs),
     Deps(TaskDepsArgs),
     ReverseDeps(TaskDepsArgs),
     Blocked(TaskBlockedArgs),
@@ -440,6 +444,74 @@ pub(crate) struct TaskCloseArgs {
 
     #[arg(long = "source", hide = true)]
     pub(crate) source: Option<String>,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskSplitArgs {
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "child",
+        required = true,
+        help = "Child spec in `<task-id>:<title>` form. Repeat for multiple bounded children."
+    )]
+    pub(crate) children: Vec<String>,
+
+    #[arg(long = "reason")]
+    pub(crate) reason: String,
+
+    #[arg(long = "dry-run")]
+    pub(crate) dry_run: bool,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskSpawnBlockerArgs {
+    pub(crate) task_id: String,
+    pub(crate) blocker_task_id: String,
+    pub(crate) title: String,
+
+    #[arg(long = "reason")]
+    pub(crate) reason: String,
+
+    #[arg(long = "description")]
+    pub(crate) description: Option<String>,
+
+    #[arg(long = "type", default_value = "task")]
+    pub(crate) issue_type: String,
+
+    #[arg(long = "status", default_value = "open")]
+    pub(crate) status: String,
+
+    #[arg(long = "priority")]
+    pub(crate) priority: Option<u32>,
+
+    #[arg(
+        long = "labels",
+        value_delimiter = ',',
+        help = "Blocker task labels. Accepts comma-separated values and repeated flags."
+    )]
+    pub(crate) labels: Vec<String>,
+
+    #[arg(long = "dry-run")]
+    pub(crate) dry_run: bool,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,

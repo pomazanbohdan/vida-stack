@@ -180,6 +180,43 @@ impl StateStore {
         Ok(normalized)
     }
 
+    fn normalize_planner_metadata_list(values: Vec<String>) -> Vec<String> {
+        let mut normalized = values
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        normalized.sort();
+        normalized.dedup();
+        normalized
+    }
+
+    fn normalize_planner_metadata_text(value: Option<String>) -> Option<String> {
+        value
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn normalize_planner_metadata(metadata: TaskPlannerMetadata) -> TaskPlannerMetadata {
+        TaskPlannerMetadata {
+            owned_paths: Self::normalize_planner_metadata_list(metadata.owned_paths),
+            acceptance_targets: Self::normalize_planner_metadata_list(metadata.acceptance_targets),
+            proof_targets: Self::normalize_planner_metadata_list(metadata.proof_targets),
+            risk: Self::normalize_planner_metadata_text(metadata.risk),
+            estimate: Self::normalize_planner_metadata_text(metadata.estimate),
+            lane_hint: Self::normalize_planner_metadata_text(metadata.lane_hint),
+        }
+    }
+
+    fn normalize_stored_task_row(row: TaskStorageRowStored) -> TaskStorageRow {
+        let mut normalized = TaskStorageRow::from(row);
+        normalized.execution_semantics =
+            Self::validate_execution_semantics(&normalized.task_id, normalized.execution_semantics)
+                .unwrap_or_default();
+        normalized.planner_metadata = Self::normalize_planner_metadata(normalized.planner_metadata);
+        normalized
+    }
+
     async fn materialize_task_close_closure_artifacts(
         &self,
         status: &RunGraphStatus,
@@ -313,12 +350,19 @@ impl StateStore {
             }
 
             let content = TaskContent::from(record);
-            let existing: Option<TaskStorageRow> =
+            let existing: Option<TaskStorageRowStored> =
                 self.db.select(("task", task_id.as_str())).await?;
             match existing {
                 None => imported += 1,
-                Some(current) if current == TaskStorageRow::from(content.clone()) => unchanged += 1,
-                Some(_) => updated += 1,
+                Some(current) => {
+                    if Self::normalize_stored_task_row(current)
+                        == TaskStorageRow::from(content.clone())
+                    {
+                        unchanged += 1
+                    } else {
+                        updated += 1
+                    }
+                }
             }
 
             let _: Option<TaskStorageRow> = self
@@ -399,8 +443,9 @@ impl StateStore {
     }
 
     pub async fn show_task(&self, task_id: &str) -> Result<TaskRecord, StateStoreError> {
-        let row: Option<TaskStorageRow> = self.db.select(("task", task_id)).await?;
-        row.map(TaskRecord::from)
+        let row: Option<TaskStorageRowStored> = self.db.select(("task", task_id)).await?;
+        row.map(Self::normalize_stored_task_row)
+            .map(TaskRecord::from)
             .ok_or_else(|| StateStoreError::MissingTask {
                 task_id: task_id.to_string(),
             })
@@ -652,6 +697,7 @@ impl StateStore {
             parent_id,
             labels,
             execution_semantics,
+            planner_metadata,
             created_by,
             source_repo,
         } = request;
@@ -697,6 +743,7 @@ impl StateStore {
             }
         }
         let execution_semantics = Self::validate_execution_semantics(task_id, execution_semantics)?;
+        let planner_metadata = Self::normalize_planner_metadata(planner_metadata);
 
         let now = unix_timestamp_nanos().to_string();
         let mut normalized_labels = labels
@@ -739,6 +786,7 @@ impl StateStore {
             notes: None,
             labels: normalized_labels,
             execution_semantics,
+            planner_metadata,
             dependencies,
         };
         if status == "closed" {
@@ -778,6 +826,7 @@ impl StateStore {
             order_bucket,
             parallel_group,
             conflict_domain,
+            planner_metadata,
         } = request;
         let mut task = self.show_task(task_id).await?;
         if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
@@ -880,6 +929,9 @@ impl StateStore {
         }
         task.execution_semantics =
             Self::validate_execution_semantics(task_id, task.execution_semantics.clone())?;
+        if let Some(planner_metadata) = planner_metadata {
+            task.planner_metadata = Self::normalize_planner_metadata(planner_metadata);
+        }
         task.labels.sort();
         task.labels.dedup();
         task.updated_at = unix_timestamp_nanos().to_string();
@@ -1129,8 +1181,12 @@ impl StateStore {
             .db
             .query("SELECT * FROM task ORDER BY priority ASC, id ASC;")
             .await?;
-        let rows: Vec<TaskStorageRow> = query.take(0)?;
-        Ok(rows.into_iter().map(TaskRecord::from).collect())
+        let rows: Vec<TaskStorageRowStored> = query.take(0)?;
+        Ok(rows
+            .into_iter()
+            .map(Self::normalize_stored_task_row)
+            .map(TaskRecord::from)
+            .collect())
     }
 }
 
@@ -1165,6 +1221,7 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -1319,10 +1376,12 @@ mod tests {
         assert!(!receipt.downstream_dispatch_ready);
         assert!(receipt.downstream_dispatch_blockers.is_empty());
         assert!(receipt.downstream_dispatch_packet_path.is_none());
-        assert!(receipt
-            .downstream_dispatch_result_path
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty()));
+        assert!(
+            receipt
+                .downstream_dispatch_result_path
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+        );
         let resolved = crate::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
             &store,
             Some("run-close-task"),
@@ -1372,6 +1431,7 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -1389,6 +1449,7 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -1482,6 +1543,7 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
                 created_by: "test",
                 source_repo: ".",
             })
@@ -1503,6 +1565,189 @@ mod tests {
             .await
             .expect("legacy task should load");
         assert_eq!(task.execution_semantics, TaskExecutionSemantics::default());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn read_only_task_reads_default_planner_metadata_when_legacy_row_has_none() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-task-legacy-planner-metadata-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "legacy-planner-task",
+                display_id: None,
+                title: "Legacy planner task",
+                description: "",
+                status: "open",
+                issue_type: "task",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("legacy planner row should insert");
+        let _ = store
+            .db
+            .query("UPDATE task:legacy-planner-task SET planner_metadata = NONE;")
+            .await
+            .expect("legacy row should downgrade planner metadata");
+
+        drop(store);
+
+        let reopened = StateStore::open_existing_read_only(root.clone())
+            .await
+            .expect("reopen store in read-only mode after legacy downgrade");
+        let task = reopened
+            .show_task("legacy-planner-task")
+            .await
+            .expect("legacy planner task should load");
+        assert_eq!(task.planner_metadata, TaskPlannerMetadata::default());
+
+        let tasks = reopened
+            .all_tasks()
+            .await
+            .expect("legacy planner task should appear in all_tasks");
+        let loaded = tasks
+            .into_iter()
+            .find(|task| task.id == "legacy-planner-task")
+            .expect("legacy planner task should be present");
+        assert_eq!(loaded.planner_metadata, TaskPlannerMetadata::default());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn open_existing_sanitizes_legacy_planner_metadata_nested_none_fields() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-task-legacy-planner-metadata-nested-none-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "legacy-planner-nested-none-task",
+                display_id: None,
+                title: "Legacy planner nested none task",
+                description: "",
+                status: "open",
+                issue_type: "task",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("legacy planner row should insert");
+        let _ = store
+            .db
+            .query(
+                "UPDATE task:legacy-planner-nested-none-task SET planner_metadata = { owned_paths: NONE, acceptance_targets: NONE, proof_targets: NONE, risk: NONE, estimate: NONE, lane_hint: NONE };",
+            )
+            .await
+            .expect("legacy row should downgrade nested planner metadata");
+
+        drop(store);
+
+        let reopened = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store should sanitize nested planner metadata drift");
+        let task = reopened
+            .show_task("legacy-planner-nested-none-task")
+            .await
+            .expect("legacy planner nested none task should load");
+        assert_eq!(task.planner_metadata, TaskPlannerMetadata::default());
+
+        let tasks = reopened
+            .all_tasks()
+            .await
+            .expect("legacy planner nested none task should appear in all_tasks");
+        let loaded = tasks
+            .into_iter()
+            .find(|task| task.id == "legacy-planner-nested-none-task")
+            .expect("legacy planner nested none task should be present");
+        assert_eq!(loaded.planner_metadata, TaskPlannerMetadata::default());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn create_task_persists_structured_planner_metadata() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-task-planner-metadata-persist-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let planner_metadata = TaskPlannerMetadata {
+            owned_paths: vec![
+                "crates/vida/src/taskflow_plan_graph.rs".to_string(),
+                "crates/vida/src/state_store_task_models.rs".to_string(),
+            ],
+            acceptance_targets: vec!["planner metadata is queryable".to_string()],
+            proof_targets: vec!["cargo test -p vida taskflow_plan_graph".to_string()],
+            risk: Some("medium".to_string()),
+            estimate: Some("M".to_string()),
+            lane_hint: Some("worker".to_string()),
+        };
+        let expected_planner_metadata = TaskPlannerMetadata {
+            owned_paths: vec![
+                "crates/vida/src/state_store_task_models.rs".to_string(),
+                "crates/vida/src/taskflow_plan_graph.rs".to_string(),
+            ],
+            ..planner_metadata.clone()
+        };
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "planner-metadata-task",
+                title: "Planner metadata task",
+                display_id: None,
+                description: "structured planner metadata should persist",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: planner_metadata.clone(),
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create task with planner metadata");
+
+        let loaded = store
+            .show_task("planner-metadata-task")
+            .await
+            .expect("planner metadata task should load");
+        assert_eq!(loaded.planner_metadata, expected_planner_metadata);
 
         let _ = fs::remove_dir_all(&root);
     }

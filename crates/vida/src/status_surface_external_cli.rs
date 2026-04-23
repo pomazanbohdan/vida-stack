@@ -181,7 +181,16 @@ fn profile_id_matching_model_ref(
 fn selected_external_cli_profile(
     profile_projection: &serde_json::Value,
     current_model_ref: Option<&str>,
+    preferred_profile_id: Option<&str>,
 ) -> serde_json::Value {
+    if let Some(selected_profile) =
+        crate::model_profile_contract::selected_model_profile_from_json_row(
+            profile_projection,
+            preferred_profile_id,
+        )
+    {
+        return selected_profile["profile_id"].clone();
+    }
     profile_id_matching_model_ref(profile_projection, current_model_ref)
         .map(serde_json::Value::String)
         .or_else(|| {
@@ -197,6 +206,7 @@ fn selected_external_cli_profile(
 fn external_cli_carrier_readiness(
     backend_id: &str,
     backend_entry: &serde_yaml::Value,
+    preferred_profile_id: Option<&str>,
 ) -> serde_json::Value {
     let profile_projection = external_backend_profile_projection(backend_id, backend_entry);
     let readiness = crate::yaml_lookup(backend_entry, &["readiness"]);
@@ -254,11 +264,23 @@ fn external_cli_carrier_readiness(
         .and_then(serde_yaml::Value::as_str)
         .map(str::trim)
         .unwrap_or("none");
+    let preferred_profile = crate::model_profile_contract::selected_model_profile_from_json_row(
+        &profile_projection,
+        preferred_profile_id,
+    )
+    .unwrap_or(serde_json::Value::Null);
     let expected_model_ref = crate::yaml_lookup(readiness, &["model", "expected_ref"])
         .and_then(serde_yaml::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+        .or_else(|| {
+            preferred_profile["model_ref"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && !value.contains("provider-configured"))
+                .map(str::to_string)
+        })
         .or_else(|| {
             profile_projection["model"]
                 .as_str()
@@ -303,8 +325,11 @@ fn external_cli_carrier_readiness(
         }
         _ => None,
     };
-    let selected_model_profile =
-        selected_external_cli_profile(&profile_projection, current_model_ref.as_deref());
+    let selected_model_profile = selected_external_cli_profile(
+        &profile_projection,
+        current_model_ref.as_deref(),
+        preferred_profile_id,
+    );
 
     if let Some(expected_model_ref) = expected_model_ref.clone() {
         if current_model_ref.as_deref() != Some(expected_model_ref.as_str()) {
@@ -439,7 +464,15 @@ pub(crate) fn external_cli_backend_readiness_verdict(
     backend_id: &str,
     backend_entry: &serde_yaml::Value,
 ) -> serde_json::Value {
-    external_cli_carrier_readiness(backend_id, backend_entry)
+    external_cli_carrier_readiness(backend_id, backend_entry, None)
+}
+
+pub(crate) fn external_cli_backend_readiness_verdict_for_profile(
+    backend_id: &str,
+    backend_entry: &serde_yaml::Value,
+    preferred_profile_id: Option<&str>,
+) -> serde_json::Value {
+    external_cli_carrier_readiness(backend_id, backend_entry, preferred_profile_id)
 }
 
 fn external_cli_readiness_summaries(overlay: &serde_yaml::Value) -> serde_json::Value {
@@ -791,7 +824,9 @@ pub(crate) fn external_cli_preflight_summary(
 
 #[cfg(test)]
 mod tests {
-    use super::external_cli_preflight_summary;
+    use super::{
+        external_cli_backend_readiness_verdict_for_profile, external_cli_preflight_summary,
+    };
     use std::fs;
 
     #[test]
@@ -1103,6 +1138,85 @@ agent_system:
         assert_eq!(
             summary["carrier_readiness"]["carriers"][0]["selected_model_profile"],
             "opencode_codex_mini_review"
+        );
+    }
+
+    #[test]
+    fn external_cli_readiness_can_be_pinned_to_preferred_profile() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vida-external-cli-profile-aware-readiness-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_root);
+        fs::create_dir_all(&temp_root).expect("temp root should exist");
+        let auth_path = temp_root.join("auth.json");
+        let model_path = temp_root.join("model.json");
+        fs::write(&auth_path, "{}").expect("auth file should write");
+        fs::write(
+            &model_path,
+            r#"{"recent":[{"providerID":"opencode","modelID":"minimax-m2.5-free"}]}"#,
+        )
+        .expect("model file should write");
+
+        let overlay: serde_yaml::Value = serde_yaml::from_str(&format!(
+            r#"
+agent_system:
+  subagents:
+    opencode_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      default_model: opencode/minimax-m2.5-free
+      default_model_profile: opencode_minimax_free_review
+      model_profiles:
+        opencode_minimax_free_review:
+          provider: opencode
+          model_ref: opencode/minimax-m2.5-free
+          reasoning_effort: provider_default
+          normalized_cost_units: 0
+          runtime_roles: [coach]
+          task_classes: [review]
+        opencode_codex_mini_review:
+          provider: opencode
+          model_ref: opencode/gpt-5.1-codex-mini
+          reasoning_effort: low
+          normalized_cost_units: 1
+          runtime_roles: [coach]
+          task_classes: [review]
+      dispatch:
+        command: opencode
+        static_args: ["run"]
+        model_flag: --model
+      readiness:
+        auth:
+          mode: file_present
+          path: {}
+        model:
+          mode: json_recent_ref
+          path: {}
+          allow_dispatch_override: true
+"#,
+            auth_path.display(),
+            model_path.display()
+        ))
+        .expect("overlay yaml should parse");
+
+        let backend_entry =
+            crate::yaml_lookup(&overlay, &["agent_system", "subagents", "opencode_cli"])
+                .expect("backend entry should exist");
+        let readiness = external_cli_backend_readiness_verdict_for_profile(
+            "opencode_cli",
+            backend_entry,
+            Some("opencode_codex_mini_review"),
+        );
+
+        assert_eq!(readiness["status"], "carrier_ready_with_override");
+        assert_eq!(
+            readiness["selected_model_profile"],
+            "opencode_codex_mini_review"
+        );
+        assert_eq!(
+            readiness["expected_model_ref"],
+            "opencode/gpt-5.1-codex-mini"
         );
     }
 

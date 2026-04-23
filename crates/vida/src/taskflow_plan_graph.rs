@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::state_store::{
     CreateTaskRequest, StateStore, StateStoreError, TaskDependencyRecord, TaskExecutionSemantics,
-    TaskGraphIssue, TaskRecord,
+    TaskGraphIssue, TaskPlannerMetadata, TaskRecord,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,6 +86,36 @@ struct PlanMaterializeOptions {
     state_dir: PathBuf,
     dry_run: bool,
     json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlanSourceAnalysis {
+    work_items: Vec<PlanWorkItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PlanWorkItemKind {
+    Core,
+    State,
+    Runtime,
+    Docs,
+    Proof,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlanWorkItem {
+    slug_hint: String,
+    title: String,
+    description: String,
+    labels: Vec<String>,
+    kind: PlanWorkItemKind,
+    owned_paths: Vec<String>,
+    acceptance_targets: Vec<String>,
+    proof_targets: Vec<String>,
+    risk: String,
+    estimate: String,
+    lane_hint: String,
+    execution_semantics: TaskExecutionSemantics,
 }
 
 pub(crate) async fn run_taskflow_plan(args: &[String]) -> ExitCode {
@@ -275,16 +305,9 @@ fn generate_plan_graph_draft(options: &PlanGenerateOptions) -> Result<TaskPlanGr
         return Err("--task-prefix must contain at least one ASCII letter or digit".to_string());
     }
     let source_hash = stable_hash_hex(&normalized_source);
-    let nodes = build_nodes(&task_prefix, options.parent_id.clone(), &normalized_source);
-    let mut edges = Vec::new();
-    for pair in nodes.windows(2) {
-        edges.push(TaskPlanEdgeDraft {
-            task_id: pair[1].task_id.clone(),
-            depends_on_id: pair[0].task_id.clone(),
-            edge_type: "blocks".to_string(),
-            reason: "deterministic sequential proof dependency".to_string(),
-        });
-    }
+    let analysis = analyze_plan_source(&normalized_source);
+    let nodes = build_nodes(&task_prefix, options.parent_id.clone(), &analysis);
+    let edges = build_edges(&nodes, &analysis.work_items);
     let mut draft = TaskPlanGraphDraft {
         draft_id: format!("plan-{task_prefix}-{source_hash}"),
         source_kind,
@@ -306,82 +329,819 @@ fn generate_plan_graph_draft(options: &PlanGenerateOptions) -> Result<TaskPlanGr
     Ok(draft)
 }
 
+fn analyze_plan_source(normalized_source: &str) -> PlanSourceAnalysis {
+    let title = first_meaningful_line(normalized_source)
+        .unwrap_or("Implement bounded project work")
+        .to_string();
+    let summary = summarize_source(normalized_source);
+    let repo_paths = extract_repo_paths(normalized_source);
+    let explicit_items = extract_preferred_work_item_texts(normalized_source);
+    let work_items = if explicit_items.len() >= 2 {
+        explicit_items
+            .iter()
+            .map(|item| build_explicit_work_item(item, &title, &summary, &repo_paths))
+            .collect::<Vec<_>>()
+    } else {
+        build_semantic_work_items(&title, &summary, normalized_source, &repo_paths)
+    };
+    PlanSourceAnalysis { work_items }
+}
+
 fn build_nodes(
     task_prefix: &str,
     parent_id: Option<String>,
-    normalized_source: &str,
+    analysis: &PlanSourceAnalysis,
 ) -> Vec<TaskPlanNodeDraft> {
-    let title = first_meaningful_line(normalized_source)
-        .unwrap_or("Implement bounded PlanGraph work")
+    let mut slug_counts = BTreeMap::<String, usize>::new();
+    analysis
+        .work_items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let mut slug = normalize_task_id_segment(&item.slug_hint);
+            if slug.is_empty() {
+                slug = format!("work-item-{}", index + 1);
+            }
+            let ordinal = slug_counts.entry(slug.clone()).or_default();
+            *ordinal += 1;
+            let slug = if *ordinal > 1 {
+                format!("{slug}-{}", ordinal)
+            } else {
+                slug
+            };
+            TaskPlanNodeDraft {
+                task_id: format!("{task_prefix}-{slug}"),
+                title: item.title.clone(),
+                description: item.description.clone(),
+                issue_type: "delivery_task".to_string(),
+                status: "open".to_string(),
+                priority: (index + 1) as u32,
+                parent_id: parent_id.clone(),
+                labels: item.labels.clone(),
+                execution_semantics: item.execution_semantics.clone(),
+                owned_paths: item.owned_paths.clone(),
+                acceptance_targets: item.acceptance_targets.clone(),
+                proof_targets: item.proof_targets.clone(),
+                risk: item.risk.clone(),
+                estimate: item.estimate.clone(),
+                lane_hint: item.lane_hint.clone(),
+            }
+        })
+        .collect()
+}
+
+fn build_edges(nodes: &[TaskPlanNodeDraft], work_items: &[PlanWorkItem]) -> Vec<TaskPlanEdgeDraft> {
+    let mut edges = Vec::new();
+    let mut last_primary_index = None;
+    let mut last_docs_or_proof_index = None;
+    for (index, item) in work_items.iter().enumerate() {
+        let depends_on_index = match item.kind {
+            PlanWorkItemKind::Docs | PlanWorkItemKind::Proof => last_docs_or_proof_index
+                .or(last_primary_index)
+                .or(index.checked_sub(1)),
+            PlanWorkItemKind::Core | PlanWorkItemKind::State | PlanWorkItemKind::Runtime => {
+                index.checked_sub(1)
+            }
+        };
+        if let Some(depends_on_index) = depends_on_index {
+            edges.push(TaskPlanEdgeDraft {
+                task_id: nodes[index].task_id.clone(),
+                depends_on_id: nodes[depends_on_index].task_id.clone(),
+                edge_type: "blocks".to_string(),
+                reason: dependency_reason_for_kind(&item.kind).to_string(),
+            });
+        }
+        match item.kind {
+            PlanWorkItemKind::Docs | PlanWorkItemKind::Proof => {
+                last_docs_or_proof_index = Some(index);
+            }
+            PlanWorkItemKind::Core | PlanWorkItemKind::State | PlanWorkItemKind::Runtime => {
+                last_primary_index = Some(index);
+            }
+        }
+    }
+    edges
+}
+
+fn dependency_reason_for_kind(kind: &PlanWorkItemKind) -> &'static str {
+    match kind {
+        PlanWorkItemKind::Core | PlanWorkItemKind::State | PlanWorkItemKind::Runtime => {
+            "deterministic bounded implementation dependency"
+        }
+        PlanWorkItemKind::Docs => {
+            "documentation and artifact alignment follows implementation surfaces"
+        }
+        PlanWorkItemKind::Proof => "proof and validation follow bounded implementation work",
+    }
+}
+
+fn build_explicit_work_item(
+    item_text: &str,
+    source_title: &str,
+    source_summary: &str,
+    repo_paths: &[String],
+) -> PlanWorkItem {
+    let cleaned = clean_work_item_text(item_text);
+    let kind = classify_work_item(&cleaned);
+    let local_paths = extract_repo_paths(item_text);
+    let owned_paths = suggest_owned_paths(&cleaned, &local_paths, repo_paths, &kind);
+    let labels = labels_for_kind(&kind);
+    let lane_hint = lane_hint_for_kind(&kind).to_string();
+    let title = title_for_explicit_item(&cleaned, &kind);
+    let description = format!(
+        "Source-derived bounded work item for `{source_title}`: {}. Source summary: {source_summary}",
+        compact_text(&cleaned, 220)
+    );
+    let acceptance_targets = acceptance_targets_for_item(&cleaned, &kind, &owned_paths);
+    let proof_targets = proof_targets_for_item(&kind, &owned_paths);
+    let risk = risk_for_kind(&kind).to_string();
+    let estimate = estimate_for_kind(&kind).to_string();
+    let execution_semantics = execution_semantics_for_item(&kind, &cleaned);
+    PlanWorkItem {
+        slug_hint: cleaned.clone(),
+        title,
+        description,
+        labels,
+        kind,
+        owned_paths,
+        acceptance_targets,
+        proof_targets,
+        risk,
+        estimate,
+        lane_hint,
+        execution_semantics,
+    }
+}
+
+fn build_semantic_work_items(
+    source_title: &str,
+    source_summary: &str,
+    normalized_source: &str,
+    repo_paths: &[String],
+) -> Vec<PlanWorkItem> {
+    let source_lower = normalized_source.to_ascii_lowercase();
+    let mut items = Vec::new();
+    items.push(build_semantic_work_item(
+        format!("Implement core scope for {source_title}"),
+        format!(
+            "Build the primary bounded implementation scope for `{source_title}` from source summary: {source_summary}"
+        ),
+        PlanWorkItemKind::Core,
+        repo_paths,
+    ));
+    if contains_any(
+        &source_lower,
+        &[
+            "state",
+            "schema",
+            "metadata",
+            "model",
+            "store",
+            "persistence",
+        ],
+    ) {
+        items.push(build_semantic_work_item(
+            format!("Wire task state and schema surfaces for {source_title}"),
+            format!(
+                "Persist and align task/state model changes required by `{source_title}` using the source summary: {source_summary}"
+            ),
+            PlanWorkItemKind::State,
+            repo_paths,
+        ));
+    }
+    if contains_any(
+        &source_lower,
+        &[
+            "dispatch",
+            "scheduler",
+            "parallel",
+            "routing",
+            "selection",
+            "config",
+            "runtime",
+            "replan",
+            "split",
+            "spawn",
+        ],
+    ) {
+        items.push(build_semantic_work_item(
+            format!("Wire runtime and orchestration surfaces for {source_title}"),
+            format!(
+                "Align runtime, routing, or orchestration behavior for `{source_title}` from source summary: {source_summary}"
+            ),
+            PlanWorkItemKind::Runtime,
+            repo_paths,
+        ));
+    }
+    if contains_any(
+        &source_lower,
+        &[
+            "doc",
+            "spec",
+            "artifact",
+            "handoff",
+            "preparation",
+            "report",
+        ],
+    ) {
+        items.push(build_semantic_work_item(
+            format!("Align docs and artifact surfaces for {source_title}"),
+            "Bring docs, reports, or artifact surfaces into parity with the bounded implementation scope."
+                .to_string(),
+            PlanWorkItemKind::Docs,
+            repo_paths,
+        ));
+    }
+    items.push(build_semantic_work_item(
+        format!("Prove {source_title}"),
+        format!(
+            "Validate bounded graph safety, operator output, and proof targets for `{source_title}`."
+        ),
+        PlanWorkItemKind::Proof,
+        repo_paths,
+    ));
+    items
+}
+
+fn build_semantic_work_item(
+    title: String,
+    description: String,
+    kind: PlanWorkItemKind,
+    repo_paths: &[String],
+) -> PlanWorkItem {
+    let owned_paths = suggest_owned_paths(&title, &[], repo_paths, &kind);
+    PlanWorkItem {
+        slug_hint: title.clone(),
+        labels: labels_for_kind(&kind),
+        acceptance_targets: acceptance_targets_for_item(&title, &kind, &owned_paths),
+        proof_targets: proof_targets_for_item(&kind, &owned_paths),
+        risk: risk_for_kind(&kind).to_string(),
+        estimate: estimate_for_kind(&kind).to_string(),
+        lane_hint: lane_hint_for_kind(&kind).to_string(),
+        execution_semantics: execution_semantics_for_item(&kind, &title),
+        title,
+        description,
+        kind,
+        owned_paths,
+    }
+}
+
+fn extract_preferred_work_item_texts(normalized_source: &str) -> Vec<String> {
+    let lines = normalized_source.lines().collect::<Vec<_>>();
+    let lowercase_lines = lines
+        .iter()
+        .map(|line| line.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    for (index, line) in lowercase_lines.iter().enumerate() {
+        if contains_any(
+            line,
+            &[
+                "bounded items",
+                "recommended split",
+                "backlog split",
+                "minimal fix waves",
+                "fix waves",
+                "recommended backlog",
+            ],
+        ) {
+            let items = collect_list_block(&lines, index + 1);
+            if items.len() >= 2 {
+                return items;
+            }
+        }
+    }
+    let numbered_items = collect_list_block(&lines, 0);
+    if (2..=6).contains(&numbered_items.len()) {
+        return numbered_items;
+    }
+    Vec::new()
+}
+
+fn collect_list_block(lines: &[&str], start_index: usize) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut inside_list = false;
+    for line in lines.iter().skip(start_index) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if inside_list && !current.is_empty() {
+                items.push(clean_work_item_text(&current));
+                current.clear();
+            } else if inside_list && !items.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if let Some(item_body) = strip_list_marker(trimmed) {
+            if !current.is_empty() {
+                items.push(clean_work_item_text(&current));
+                current.clear();
+            }
+            current.push_str(item_body);
+            inside_list = true;
+            continue;
+        }
+        if !inside_list {
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            break;
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(trimmed);
+    }
+    if !current.is_empty() {
+        items.push(clean_work_item_text(&current));
+    }
+    items
+        .into_iter()
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>()
+}
+
+fn strip_list_marker(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(rest) = trimmed.strip_prefix(marker) {
+            return Some(rest.trim());
+        }
+    }
+    let bytes = trimmed.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() && bytes[index].is_ascii_digit() {
+        index += 1;
+    }
+    if index > 0
+        && index + 1 < bytes.len()
+        && matches!(bytes[index] as char, '.' | ')')
+        && bytes[index + 1] == b' '
+    {
+        return Some(trimmed[index + 2..].trim());
+    }
+    None
+}
+
+fn clean_work_item_text(value: &str) -> String {
+    compact_text(
+        &value
+            .replace("**", "")
+            .replace('`', "")
+            .trim_matches(|ch: char| matches!(ch, '-' | '*' | '+' | ':' | ';'))
+            .trim()
+            .to_string(),
+        220,
+    )
+}
+
+fn compact_text(value: &str, max_chars: usize) -> String {
+    let mut compact = value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .trim_end_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ':'))
         .to_string();
-    let summary = summarize_source(normalized_source);
-    vec![
-        TaskPlanNodeDraft {
-            task_id: format!("{task_prefix}-plan-surfaces"),
-            title: format!("Implement {title} plan surfaces"),
-            description: format!(
-                "Implement deterministic PlanGraph generation/materialization for: {summary}"
-            ),
-            issue_type: "delivery_task".to_string(),
-            status: "open".to_string(),
-            priority: 1,
-            parent_id: parent_id.clone(),
-            labels: vec!["taskflow".to_string(), "plan-graph".to_string()],
-            execution_semantics: TaskExecutionSemantics {
-                execution_mode: Some("sequential".to_string()),
-                order_bucket: Some("plan-graph-phase-1".to_string()),
-                parallel_group: None,
-                conflict_domain: Some("taskflow-plan-graph".to_string()),
-            },
-            owned_paths: vec![
-                "crates/vida/src/taskflow_plan_graph.rs".to_string(),
+    if compact.chars().count() > max_chars {
+        compact = compact
+            .chars()
+            .take(max_chars.saturating_sub(3))
+            .collect::<String>();
+        compact.push_str("...");
+    }
+    compact
+}
+
+fn classify_work_item(value: &str) -> PlanWorkItemKind {
+    let lower = value.to_ascii_lowercase();
+    if contains_any(
+        &lower,
+        &[
+            "proof",
+            "prove",
+            "test",
+            "validate",
+            "verification",
+            "smoke",
+        ],
+    ) {
+        PlanWorkItemKind::Proof
+    } else if contains_any(
+        &lower,
+        &["doc", "spec", "artifact", "handoff", "report", "parity"],
+    ) {
+        PlanWorkItemKind::Docs
+    } else if contains_any(
+        &lower,
+        &[
+            "state",
+            "schema",
+            "metadata",
+            "model",
+            "persist",
+            "queryable",
+        ],
+    ) {
+        PlanWorkItemKind::State
+    } else if contains_any(
+        &lower,
+        &[
+            "dispatch",
+            "scheduler",
+            "parallel",
+            "routing",
+            "selection",
+            "budget",
+            "config",
+            "readiness",
+            "replan",
+            "split",
+            "spawn",
+        ],
+    ) {
+        PlanWorkItemKind::Runtime
+    } else {
+        PlanWorkItemKind::Core
+    }
+}
+
+fn title_for_explicit_item(value: &str, kind: &PlanWorkItemKind) -> String {
+    let title = compact_text(value, 96);
+    let lower = title.to_ascii_lowercase();
+    if contains_any(
+        &lower,
+        &[
+            "implement",
+            "replace",
+            "persist",
+            "add",
+            "wire",
+            "align",
+            "actuate",
+            "prove",
+            "validate",
+            "audit",
+            "split",
+            "spawn",
+        ],
+    ) {
+        uppercase_first(&title)
+    } else {
+        match kind {
+            PlanWorkItemKind::Proof => format!("Prove {}", lowercase_first(&title)),
+            _ => format!("Implement {}", lowercase_first(&title)),
+        }
+    }
+}
+
+fn uppercase_first(value: &str) -> String {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    format!("{}{}", first.to_uppercase(), chars.collect::<String>())
+}
+
+fn lowercase_first(value: &str) -> String {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    format!("{}{}", first.to_lowercase(), chars.collect::<String>())
+}
+
+fn labels_for_kind(kind: &PlanWorkItemKind) -> Vec<String> {
+    let mut labels = vec!["taskflow".to_string(), "plan-graph".to_string()];
+    labels.push(
+        match kind {
+            PlanWorkItemKind::Core => "planner-core",
+            PlanWorkItemKind::State => "planner-state",
+            PlanWorkItemKind::Runtime => "planner-runtime",
+            PlanWorkItemKind::Docs => "planner-docs",
+            PlanWorkItemKind::Proof => "planner-proof",
+        }
+        .to_string(),
+    );
+    labels
+}
+
+fn lane_hint_for_kind(kind: &PlanWorkItemKind) -> &'static str {
+    match kind {
+        PlanWorkItemKind::Proof => "verifier",
+        PlanWorkItemKind::Docs => "coach",
+        PlanWorkItemKind::Core | PlanWorkItemKind::State | PlanWorkItemKind::Runtime => {
+            "implementer"
+        }
+    }
+}
+
+fn risk_for_kind(kind: &PlanWorkItemKind) -> &'static str {
+    match kind {
+        PlanWorkItemKind::Core => "medium",
+        PlanWorkItemKind::State | PlanWorkItemKind::Runtime => "high",
+        PlanWorkItemKind::Docs | PlanWorkItemKind::Proof => "medium",
+    }
+}
+
+fn estimate_for_kind(kind: &PlanWorkItemKind) -> &'static str {
+    match kind {
+        PlanWorkItemKind::Core => "bounded implementation packet",
+        PlanWorkItemKind::State => "bounded state/schema packet",
+        PlanWorkItemKind::Runtime => "bounded runtime/orchestration packet",
+        PlanWorkItemKind::Docs => "bounded docs/artifact packet",
+        PlanWorkItemKind::Proof => "bounded verification packet",
+    }
+}
+
+fn execution_semantics_for_item(kind: &PlanWorkItemKind, value: &str) -> TaskExecutionSemantics {
+    let slug = normalize_task_id_segment(value);
+    let order_bucket = match kind {
+        PlanWorkItemKind::Core => "plan-wave-core",
+        PlanWorkItemKind::State => "plan-wave-state",
+        PlanWorkItemKind::Runtime => "plan-wave-runtime",
+        PlanWorkItemKind::Docs => "plan-wave-docs",
+        PlanWorkItemKind::Proof => "plan-wave-proof",
+    }
+    .to_string();
+    let conflict_prefix = match kind {
+        PlanWorkItemKind::Core => "planner-core",
+        PlanWorkItemKind::State => "planner-state",
+        PlanWorkItemKind::Runtime => "planner-runtime",
+        PlanWorkItemKind::Docs => "planner-docs",
+        PlanWorkItemKind::Proof => "planner-proof",
+    };
+    TaskExecutionSemantics {
+        execution_mode: Some("sequential".to_string()),
+        order_bucket: Some(order_bucket),
+        parallel_group: None,
+        conflict_domain: Some(format!("{conflict_prefix}-{slug}")),
+    }
+}
+
+fn acceptance_targets_for_item(
+    title: &str,
+    kind: &PlanWorkItemKind,
+    owned_paths: &[String],
+) -> Vec<String> {
+    let mut targets = match kind {
+        PlanWorkItemKind::Core => vec![
+            format!("PlanGraph draft decomposes `{title}` into bounded project-specific task nodes instead of template placeholders"),
+            "generated task nodes carry deterministic ids, labels, execution semantics, and graph-safe dependency shape".to_string(),
+        ],
+        PlanWorkItemKind::State => vec![
+            format!("task/state surfaces required by `{title}` are wired into deterministic PlanGraph output"),
+            "generated nodes remain compatible with task materialization and graph validation".to_string(),
+        ],
+        PlanWorkItemKind::Runtime => vec![
+            format!("runtime and orchestration surfaces for `{title}` are represented by explicit bounded nodes and dependency edges"),
+            "generated plan keeps scheduling and dispatch work explicit instead of collapsing it into one generic task".to_string(),
+        ],
+        PlanWorkItemKind::Docs => vec![
+            format!("documentation or artifact alignment work for `{title}` is explicit in the plan graph"),
+            "bounded docs/artifact work stays queryable as its own planned node".to_string(),
+        ],
+        PlanWorkItemKind::Proof => vec![
+            format!("proof and validation work for `{title}` is explicit and sequenced after implementation work"),
+            "generated plan preserves graph-safe proof coverage targets".to_string(),
+        ],
+    };
+    if !owned_paths.is_empty() {
+        targets.push(format!(
+            "owned paths stay project-aware and source-derived: {}",
+            owned_paths.join(", ")
+        ));
+    }
+    targets
+}
+
+fn proof_targets_for_item(kind: &PlanWorkItemKind, owned_paths: &[String]) -> Vec<String> {
+    let mut targets = vec!["vida taskflow plan generate --json".to_string()];
+    match kind {
+        PlanWorkItemKind::Docs => {
+            if owned_paths.iter().any(|path| path.starts_with("docs/")) {
+                targets.push(
+                    "vida docflow check --root . docs/product/spec/current-spec-map.md".to_string(),
+                );
+            } else {
+                targets.push("vida taskflow plan materialize --dry-run --json".to_string());
+            }
+        }
+        PlanWorkItemKind::Proof => {
+            targets.push("cargo test -p vida taskflow_plan_graph".to_string());
+            targets.push("vida task validate-graph --json".to_string());
+        }
+        PlanWorkItemKind::Core | PlanWorkItemKind::State | PlanWorkItemKind::Runtime => {
+            targets.push("vida taskflow plan materialize --dry-run --json".to_string());
+        }
+    }
+    targets
+}
+
+fn suggest_owned_paths(
+    item_text: &str,
+    local_paths: &[String],
+    repo_paths: &[String],
+    kind: &PlanWorkItemKind,
+) -> Vec<String> {
+    if !local_paths.is_empty() {
+        return local_paths.to_vec();
+    }
+    let item_tokens = keyword_tokens(item_text);
+    let mut scored = repo_paths
+        .iter()
+        .map(|path| {
+            let path_lower = path.to_ascii_lowercase();
+            let path_tokens = keyword_tokens(&path_lower);
+            let mut score = item_tokens
+                .iter()
+                .filter(|token| {
+                    path_tokens.iter().any(|path_token| path_token == *token)
+                        || path_lower.contains(token.as_str())
+                })
+                .count() as i32;
+            if path_lower.ends_with(".rs") {
+                score += 1;
+            }
+            if path_lower.starts_with("docs/") {
+                score += match kind {
+                    PlanWorkItemKind::Docs | PlanWorkItemKind::Proof => 3,
+                    _ => 0,
+                };
+            }
+            score += match kind {
+                PlanWorkItemKind::Core if contains_any(&path_lower, &["plan", "graph"]) => 6,
+                PlanWorkItemKind::State
+                    if contains_any(
+                        &path_lower,
+                        &["state_store", "task_models", "task_store", "snapshot"],
+                    ) =>
+                {
+                    6
+                }
+                PlanWorkItemKind::Runtime
+                    if contains_any(
+                        &path_lower,
+                        &[
+                            "routing",
+                            "dispatch",
+                            "runtime_assignment",
+                            "consume_bundle",
+                            "proxy",
+                            "graph",
+                            "scheduler",
+                            "carrier",
+                            "profile",
+                        ],
+                    ) =>
+                {
+                    6
+                }
+                PlanWorkItemKind::Docs
+                    if contains_any(
+                        &path_lower,
+                        &[
+                            "docs/",
+                            "spec",
+                            "runtime_dispatch_state",
+                            "taskflow_consume",
+                        ],
+                    ) =>
+                {
+                    5
+                }
+                PlanWorkItemKind::Proof
+                    if contains_any(&path_lower, &["tests", "validate", "graph", "taskflow"]) =>
+                {
+                    5
+                }
+                _ => 0,
+            };
+            (score, path)
+        })
+        .filter(|(score, _)| *score > 0)
+        .collect::<Vec<_>>();
+    if matches!(kind, PlanWorkItemKind::Proof) {
+        scored.retain(|(_, path)| contains_any(path, &["tests", "validate"]));
+    }
+    scored.sort_by(|(left_score, left_path), (right_score, right_path)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| left_path.cmp(right_path))
+    });
+    let mut selected = scored
+        .into_iter()
+        .map(|(_, path)| path.clone())
+        .take(4)
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        selected = match kind {
+            PlanWorkItemKind::Core => vec!["crates/vida/src/taskflow_plan_graph.rs".to_string()],
+            PlanWorkItemKind::State => vec![
+                "crates/vida/src/state_store_task_models.rs".to_string(),
+                "crates/vida/src/state_store_task_store.rs".to_string(),
+            ],
+            PlanWorkItemKind::Runtime => vec![
                 "crates/vida/src/taskflow_proxy.rs".to_string(),
+                "crates/vida/src/state_store_task_graph.rs".to_string(),
             ],
-            acceptance_targets: vec![
-                "vida taskflow plan generate emits deterministic PlanGraph JSON".to_string(),
-                "vida taskflow plan materialize writes through canonical task store APIs"
-                    .to_string(),
+            PlanWorkItemKind::Docs => vec![
+                "docs/product/spec/task-graph-adaptive-planner-design.md".to_string(),
+                "docs/product/spec/current-spec-map.md".to_string(),
             ],
-            proof_targets: vec![
-                "cargo test -p vida taskflow_plan_graph".to_string(),
-                "vida taskflow plan generate --json".to_string(),
-            ],
-            risk: "medium".to_string(),
-            estimate: "bounded implementation packet".to_string(),
-            lane_hint: "implementer".to_string(),
-        },
-        TaskPlanNodeDraft {
-            task_id: format!("{task_prefix}-plan-proof"),
-            title: format!("Prove {title} plan materialization"),
-            description: format!(
-                "Validate deterministic PlanGraph receipts and graph safety for: {summary}"
-            ),
-            issue_type: "delivery_task".to_string(),
-            status: "open".to_string(),
-            priority: 2,
-            parent_id,
-            labels: vec!["taskflow".to_string(), "proof".to_string()],
-            execution_semantics: TaskExecutionSemantics {
-                execution_mode: Some("sequential".to_string()),
-                order_bucket: Some("plan-graph-phase-1".to_string()),
-                parallel_group: None,
-                conflict_domain: Some("taskflow-plan-graph".to_string()),
-            },
-            owned_paths: vec!["crates/vida/tests".to_string()],
-            acceptance_targets: vec![
-                "materialization rejects invalid draft dependencies".to_string(),
-                "materialization receipt reports created/skipped tasks and dependency edges"
-                    .to_string(),
-            ],
-            proof_targets: vec![
-                "cargo test -p vida taskflow_plan_graph".to_string(),
-                "vida task validate-graph --json".to_string(),
-            ],
-            risk: "medium".to_string(),
-            estimate: "bounded verification packet".to_string(),
-            lane_hint: "verifier".to_string(),
-        },
-    ]
+            PlanWorkItemKind::Proof => vec!["crates/vida/tests".to_string()],
+        };
+    }
+    selected
+}
+
+fn keyword_tokens(value: &str) -> Vec<String> {
+    const STOPWORDS: &[&str] = &[
+        "and", "the", "for", "with", "from", "into", "that", "this", "task", "items", "item",
+        "work", "wave", "waves", "report", "final", "new", "real",
+    ];
+    value
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .map(|token| token.to_ascii_lowercase())
+        .filter(|token| token.len() >= 3)
+        .filter(|token| !STOPWORDS.iter().any(|stop| stop == token))
+        .collect::<Vec<_>>()
+}
+
+fn extract_repo_paths(value: &str) -> Vec<String> {
+    let mut paths = BTreeSet::new();
+    for token in value.split_whitespace() {
+        let trimmed = token.trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '`' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | '"' | '\''
+            )
+        });
+        if let Some(path) = canonicalize_repo_path_candidate(trimmed) {
+            paths.insert(path);
+        }
+    }
+    paths.into_iter().collect()
+}
+
+fn canonicalize_repo_path_candidate(value: &str) -> Option<String> {
+    let mut candidate = value
+        .trim()
+        .trim_end_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ':'))
+        .to_string();
+    if let Some((path, suffix)) = candidate.rsplit_once(':') {
+        if !path.is_empty()
+            && !suffix.is_empty()
+            && suffix.chars().all(|ch| ch.is_ascii_digit() || ch == '-')
+        {
+            candidate = path.to_string();
+        }
+    }
+    if !looks_like_repo_path(&candidate) {
+        return None;
+    }
+    if candidate.starts_with("./") {
+        candidate = candidate.trim_start_matches("./").to_string();
+    }
+    if candidate == "crates/vida/tests" {
+        return Some(candidate);
+    }
+    if path_exists_from_repo_context(&candidate) || candidate == "vida.config.yaml" {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+fn path_exists_from_repo_context(candidate: &str) -> bool {
+    if Path::new(candidate).exists() {
+        return true;
+    }
+    let Ok(current_dir) = std::env::current_dir() else {
+        return false;
+    };
+    current_dir
+        .ancestors()
+        .any(|ancestor| ancestor.join(candidate).exists())
+}
+
+fn looks_like_repo_path(value: &str) -> bool {
+    value.contains('/')
+        || matches!(
+            value,
+            "vida.config.yaml" | "Cargo.toml" | "Cargo.lock" | "AGENTS.md" | "AGENTS.sidecar.md"
+        )
+        || value.ends_with(".rs")
+        || value.ends_with(".md")
+        || value.ends_with(".yaml")
+        || value.ends_with(".yml")
+        || value.ends_with(".toml")
+        || value.ends_with(".json")
+        || value.ends_with(".jsonl")
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
 }
 
 async fn materialize_plan_graph_draft(
@@ -475,7 +1235,6 @@ async fn materialize_plan_graph_draft(
             skipped_existing_task_ids.push(node.task_id.clone());
             continue;
         }
-        let description = task_description_with_plan_metadata(node);
         let source_repo = std::env::current_dir()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|_| "vida-stack".to_string());
@@ -484,13 +1243,14 @@ async fn materialize_plan_graph_draft(
                 task_id: &node.task_id,
                 title: &node.title,
                 display_id: None,
-                description: &description,
+                description: &node.description,
                 issue_type: &node.issue_type,
                 status: &node.status,
                 priority: node.priority,
                 parent_id: node.parent_id.as_deref(),
                 labels: &node.labels,
                 execution_semantics: node.execution_semantics.clone(),
+                planner_metadata: planner_metadata_from_node(node),
                 created_by: "vida taskflow plan materialize",
                 source_repo: &source_repo,
             })
@@ -734,9 +1494,16 @@ fn existing_task_conflicts(existing: &TaskRecord, node: &TaskPlanNodeDraft) -> V
             node.parent_id.as_deref().unwrap_or("<none>")
         ));
     }
-    let expected_description = task_description_with_plan_metadata(node);
-    if existing.description != expected_description {
-        conflicts.push("planner metadata description differs".to_string());
+    let expected_metadata = planner_metadata_from_node(node);
+    let legacy_description = task_description_with_plan_metadata(node);
+    let metadata_matches = existing.planner_metadata == expected_metadata
+        || (existing.planner_metadata == TaskPlannerMetadata::default()
+            && existing.description == legacy_description);
+    if existing.description != node.description && existing.description != legacy_description {
+        conflicts.push("description differs".to_string());
+    }
+    if !metadata_matches {
+        conflicts.push("planner metadata differs".to_string());
     }
     conflicts
 }
@@ -843,7 +1610,7 @@ fn simulate_materialized_graph(
             id: node.task_id.clone(),
             display_id: None,
             title: node.title.clone(),
-            description: task_description_with_plan_metadata(node),
+            description: node.description.clone(),
             status: node.status.clone(),
             priority: node.priority,
             issue_type: node.issue_type.clone(),
@@ -858,6 +1625,7 @@ fn simulate_materialized_graph(
             notes: None,
             labels: node.labels.clone(),
             execution_semantics: node.execution_semantics.clone(),
+            planner_metadata: planner_metadata_from_node(node),
             dependencies,
         });
     }
@@ -894,6 +1662,17 @@ fn task_description_with_plan_metadata(node: &TaskPlanNodeDraft) -> String {
         node.estimate,
         node.lane_hint
     )
+}
+
+fn planner_metadata_from_node(node: &TaskPlanNodeDraft) -> TaskPlannerMetadata {
+    TaskPlannerMetadata {
+        owned_paths: node.owned_paths.clone(),
+        acceptance_targets: node.acceptance_targets.clone(),
+        proof_targets: node.proof_targets.clone(),
+        risk: Some(node.risk.clone()).filter(|value| !value.trim().is_empty()),
+        estimate: Some(node.estimate.clone()).filter(|value| !value.trim().is_empty()),
+        lane_hint: Some(node.lane_hint.clone()).filter(|value| !value.trim().is_empty()),
+    }
 }
 
 fn bullet_list(values: &[String]) -> String {
@@ -1017,8 +1796,14 @@ mod tests {
             json: true,
         })
         .expect("draft should generate");
+        let dependent_task_id = draft
+            .nodes
+            .last()
+            .expect("draft should contain at least one node")
+            .task_id
+            .clone();
         draft.edges.push(TaskPlanEdgeDraft {
-            task_id: "feature-planner-plan-proof".to_string(),
+            task_id: dependent_task_id,
             depends_on_id: "missing".to_string(),
             edge_type: "blocks".to_string(),
             reason: "test".to_string(),
@@ -1031,7 +1816,76 @@ mod tests {
     }
 
     #[test]
-    fn plan_generate_orders_implementation_before_proof() {
+    fn plan_generate_extracts_bounded_items_from_report_split() {
+        let draft = generate_plan_graph_draft(&PlanGenerateOptions {
+            source_file: None,
+            source_text: Some(
+                "Final gap report\n\nRecommended split for backlog:\n- real PlanGraph generation (`crates/vida/src/taskflow_plan_graph.rs:252-385`, `crates/vida/src/taskflow_proxy.rs:1215-1400`)\n- structured planner metadata (`crates/vida/src/state_store_task_models.rs:151-205`)\n- scheduler dispatch with `max_parallel_agents` (`crates/vida/src/taskflow_consume_bundle.rs:709-760`)\n".to_string(),
+            ),
+            task_prefix: Some("feature-planner".to_string()),
+            parent_id: None,
+            output: None,
+            json: true,
+        })
+        .expect("draft should generate");
+
+        assert_eq!(draft.validation.status, "valid");
+        assert_eq!(draft.nodes.len(), 3);
+        assert_eq!(draft.edges.len(), 2);
+        assert!(draft.nodes[0].task_id.starts_with("feature-planner-"));
+        assert!(draft.nodes.iter().any(|node| {
+            node.owned_paths
+                .contains(&"crates/vida/src/taskflow_plan_graph.rs".to_string())
+                && node
+                    .owned_paths
+                    .contains(&"crates/vida/src/taskflow_proxy.rs".to_string())
+        }));
+        assert_eq!(
+            draft.nodes[1].owned_paths,
+            vec!["crates/vida/src/state_store_task_models.rs".to_string()]
+        );
+        assert!(draft.nodes[2]
+            .owned_paths
+            .contains(&"crates/vida/src/taskflow_consume_bundle.rs".to_string()));
+        assert_eq!(draft.edges[0].task_id, draft.nodes[1].task_id);
+        assert_eq!(draft.edges[0].depends_on_id, draft.nodes[0].task_id);
+        assert_eq!(draft.edges[1].task_id, draft.nodes[2].task_id);
+        assert_eq!(draft.edges[1].depends_on_id, draft.nodes[1].task_id);
+    }
+
+    #[test]
+    fn plan_generate_falls_back_to_semantic_decomposition_without_split_block() {
+        let draft = generate_plan_graph_draft(&PlanGenerateOptions {
+            source_file: None,
+            source_text: Some(
+                "Implement adaptive scheduler dispatch with state metadata and proof coverage"
+                    .to_string(),
+            ),
+            task_prefix: Some("feature-planner".to_string()),
+            parent_id: None,
+            output: None,
+            json: true,
+        })
+        .expect("draft should generate");
+
+        assert_eq!(draft.validation.status, "valid");
+        assert!(draft.nodes.len() >= 4);
+        assert!(draft
+            .nodes
+            .iter()
+            .any(|node| node.title.contains("Wire task state and schema surfaces")));
+        assert!(draft.nodes.iter().any(|node| node
+            .title
+            .contains("Wire runtime and orchestration surfaces")));
+        assert!(draft
+            .nodes
+            .iter()
+            .any(|node| node.title.starts_with("Prove ")));
+        assert_eq!(draft.edges.len(), draft.nodes.len() - 1);
+    }
+
+    #[test]
+    fn plan_generate_orders_bounded_items_sequentially() {
         let draft = generate_plan_graph_draft(&PlanGenerateOptions {
             source_file: None,
             source_text: Some("Implement planner".to_string()),
@@ -1043,12 +1897,18 @@ mod tests {
         .expect("draft should generate");
 
         assert_eq!(draft.validation.status, "valid");
-        assert_eq!(draft.nodes[0].task_id, "feature-planner-plan-surfaces");
-        assert_eq!(draft.nodes[1].task_id, "feature-planner-plan-proof");
-        assert_eq!(draft.edges[0].task_id, "feature-planner-plan-proof");
+        assert_eq!(draft.edges.len(), draft.nodes.len() - 1);
+        for (edge, pair) in draft.edges.iter().zip(draft.nodes.windows(2)) {
+            assert_eq!(edge.task_id, pair[1].task_id);
+            assert_eq!(edge.depends_on_id, pair[0].task_id);
+        }
         assert_eq!(
-            draft.edges[0].depends_on_id,
-            "feature-planner-plan-surfaces"
+            draft
+                .nodes
+                .last()
+                .expect("draft should contain a proof node")
+                .lane_hint,
+            "verifier"
         );
     }
 
@@ -1082,8 +1942,8 @@ mod tests {
         })
         .expect("draft should generate");
         draft.edges.push(TaskPlanEdgeDraft {
-            task_id: "feature-planner-plan-surfaces".to_string(),
-            depends_on_id: "feature-planner-plan-proof".to_string(),
+            task_id: draft.nodes[0].task_id.clone(),
+            depends_on_id: draft.nodes[1].task_id.clone(),
             edge_type: "blocks".to_string(),
             reason: "test cycle".to_string(),
         });
@@ -1112,19 +1972,19 @@ mod tests {
         })
         .expect("draft should generate");
         let existing_node = &draft.nodes[0];
-        let existing_description = task_description_with_plan_metadata(existing_node);
         store
             .create_task(CreateTaskRequest {
                 task_id: &existing_node.task_id,
                 title: &existing_node.title,
                 display_id: None,
-                description: &existing_description,
+                description: &existing_node.description,
                 issue_type: &existing_node.issue_type,
                 status: &existing_node.status,
                 priority: existing_node.priority,
                 parent_id: None,
                 labels: &existing_node.labels,
                 execution_semantics: existing_node.execution_semantics.clone(),
+                planner_metadata: planner_metadata_from_node(existing_node),
                 created_by: "test",
                 source_repo: "vida-stack",
             })
@@ -1147,11 +2007,16 @@ mod tests {
         assert_eq!(receipt.status, "dry_run");
         assert_eq!(
             receipt.skipped_existing_task_ids,
-            vec!["feature-planner-plan-surfaces".to_string()]
+            vec![draft.nodes[0].task_id.clone()]
         );
         assert_eq!(
             receipt.created_task_ids,
-            vec!["feature-planner-plan-proof".to_string()]
+            draft
+                .nodes
+                .iter()
+                .skip(1)
+                .map(|node| node.task_id.clone())
+                .collect::<Vec<_>>()
         );
         assert!(receipt.graph_validation.is_empty());
         let _ = std::fs::remove_dir_all(state_dir);
@@ -1177,6 +2042,7 @@ mod tests {
                     parent_id: None,
                     labels: &empty_labels,
                     execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
                     created_by: "test",
                     source_repo: "vida-stack",
                 })
@@ -1193,19 +2059,19 @@ mod tests {
         })
         .expect("draft should generate");
         let existing_node = &draft.nodes[0];
-        let existing_description = task_description_with_plan_metadata(existing_node);
         store
             .create_task(CreateTaskRequest {
                 task_id: &existing_node.task_id,
                 title: &existing_node.title,
                 display_id: None,
-                description: &existing_description,
+                description: &existing_node.description,
                 issue_type: &existing_node.issue_type,
                 status: &existing_node.status,
                 priority: existing_node.priority,
                 parent_id: Some("parent-a"),
                 labels: &existing_node.labels,
                 execution_semantics: existing_node.execution_semantics.clone(),
+                planner_metadata: planner_metadata_from_node(existing_node),
                 created_by: "test",
                 source_repo: "vida-stack",
             })
@@ -1235,6 +2101,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dry_run_receipt_accepts_legacy_description_embedded_metadata_as_equivalent() {
+        let state_dir = test_state_dir("legacy-description-metadata-equivalence");
+        let store = StateStore::open(state_dir.clone())
+            .await
+            .expect("state store should open");
+        let draft = generate_plan_graph_draft(&PlanGenerateOptions {
+            source_file: None,
+            source_text: Some("Implement planner".to_string()),
+            task_prefix: Some("feature-planner".to_string()),
+            parent_id: None,
+            output: None,
+            json: true,
+        })
+        .expect("draft should generate");
+        let existing_node = &draft.nodes[0];
+        let legacy_description = task_description_with_plan_metadata(existing_node);
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: &existing_node.task_id,
+                title: &existing_node.title,
+                display_id: None,
+                description: &legacy_description,
+                issue_type: &existing_node.issue_type,
+                status: &existing_node.status,
+                priority: existing_node.priority,
+                parent_id: None,
+                labels: &existing_node.labels,
+                execution_semantics: existing_node.execution_semantics.clone(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "vida-stack",
+            })
+            .await
+            .expect("legacy-compatible task should create");
+        drop(store);
+
+        let receipt = materialize_plan_graph_draft(
+            &draft,
+            &PlanMaterializeOptions {
+                draft_path: PathBuf::from("unused.json"),
+                state_dir: state_dir.clone(),
+                dry_run: true,
+                json: true,
+            },
+        )
+        .await
+        .expect("legacy-compatible dry-run should succeed");
+
+        assert_eq!(receipt.status, "dry_run");
+        assert_eq!(
+            receipt.skipped_existing_task_ids,
+            vec![existing_node.task_id.clone()]
+        );
+        assert!(receipt.graph_validation.is_empty());
+        let _ = std::fs::remove_dir_all(state_dir);
+    }
+
+    #[tokio::test]
     async fn materialize_blocks_invalid_graph_before_writing() {
         let state_dir = test_state_dir("invalid-graph");
         let mut draft = generate_plan_graph_draft(&PlanGenerateOptions {
@@ -1247,8 +2172,8 @@ mod tests {
         })
         .expect("draft should generate");
         draft.edges.push(TaskPlanEdgeDraft {
-            task_id: "feature-planner-plan-surfaces".to_string(),
-            depends_on_id: "feature-planner-plan-proof".to_string(),
+            task_id: draft.nodes[0].task_id.clone(),
+            depends_on_id: draft.nodes[1].task_id.clone(),
             edge_type: "blocks".to_string(),
             reason: "test cycle".to_string(),
         });

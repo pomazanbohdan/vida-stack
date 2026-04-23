@@ -1207,9 +1207,10 @@ fn taskflow_proxy_help_is_runtime_specific() {
     assert!(stdout.contains("vida task ready --json"));
     assert!(stdout.contains("vida task next --json"));
     assert!(stdout.contains(
-        "vida taskflow help [task|next|graph-summary|status|consume|run-graph|recovery|doctor|protocol-binding|query]"
+        "vida taskflow help [task|parallelism|dependencies|queue|next|graph-summary|plan|replan|scheduler|status|consume|continuation|packet|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
     ));
     assert!(stdout.contains("vida taskflow status --summary --json"));
+    assert!(stdout.contains("vida taskflow scheduler dispatch --json"));
     assert!(stdout.contains("vida taskflow query \"what should I run next?\""));
     assert!(stdout.contains(
         "A green test, successful build, or commentary update is not a stop boundary when a next lawful continuation item is already known."
@@ -1486,6 +1487,33 @@ fn taskflow_graph_summary_reports_ready_blocked_and_critical_path() {
 }
 
 #[test]
+fn taskflow_scheduler_dispatch_reports_preview_plan() {
+    let state_dir = unique_state_dir();
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+
+    let output = vida()
+        .args(["taskflow", "scheduler", "dispatch", "--state-dir"])
+        .arg(&state_dir)
+        .args(["--json"])
+        .output()
+        .expect("taskflow scheduler dispatch should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("taskflow scheduler dispatch json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow scheduler dispatch");
+    assert!(parsed["status"].is_string());
+    assert!(parsed["blocker_codes"].is_array());
+    assert!(parsed["next_actions"].is_array());
+    assert!(parsed["max_parallel_agents"].is_number());
+    assert!(parsed["selected_parallel_tasks"].is_array());
+    assert!(parsed["selected_task_ids"].is_array());
+    assert!(parsed["rejected_candidates"].is_array());
+    assert!(parsed.get("scheduling").is_some());
+}
+
+#[test]
 fn taskflow_proxy_help_supports_graph_summary_topic() {
     let output = vida()
         .args(["taskflow", "help", "graph-summary"])
@@ -1499,6 +1527,22 @@ fn taskflow_proxy_help_supports_graph_summary_topic() {
     assert!(stdout.contains("ready_count, blocked_count, critical_path_length"));
     assert!(stdout.contains("waves"));
     assert!(stdout.contains("vida task validate-graph"));
+}
+
+#[test]
+fn taskflow_proxy_help_supports_scheduler_topic() {
+    let output = vida()
+        .args(["taskflow", "help", "scheduler"])
+        .output()
+        .expect("taskflow scheduler topic help should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow help: scheduler"));
+    assert!(stdout.contains("vida taskflow scheduler dispatch"));
+    assert!(stdout.contains("max_parallel_agents"));
+    assert!(stdout.contains("selected_primary_task"));
+    assert!(stdout.contains("selected_parallel_tasks"));
 }
 
 #[test]
@@ -8995,6 +9039,20 @@ fn taskflow_proxy_help_supports_command_help_form() {
     assert!(stdout.contains("seeded implementation or seeded scope-discussion dispatch"));
     assert!(stdout.contains("vida taskflow run-graph status <task_id>"));
     assert!(stdout.contains("vida taskflow run-graph latest [--json]"));
+}
+
+#[test]
+fn taskflow_proxy_help_supports_scheduler_command_help_form() {
+    let output = vida()
+        .args(["taskflow", "scheduler", "--help"])
+        .output()
+        .expect("taskflow scheduler help form should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow help: scheduler"));
+    assert!(stdout.contains("vida taskflow scheduler dispatch"));
+    assert!(stdout.contains("preview-first"));
 }
 
 #[test]

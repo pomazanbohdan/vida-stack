@@ -103,10 +103,12 @@ pub use state_store_task_models::{
     BlockedTaskRecord, CreateTaskRequest, TaskBulkReparentResult, TaskCriticalPath,
     TaskCriticalPathNode, TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge,
     TaskDependencyTreeNode, TaskExecutionSemantics, TaskGraphIssue, TaskImportSummary,
-    TaskProgressSummary, TaskRecord, TaskRelease1ContractStep, TaskSchedulingCandidate,
-    TaskSchedulingProjection, TaskStoreSummary, UpdateTaskRequest,
+    TaskPlannerMetadata, TaskProgressSummary, TaskRecord, TaskRelease1ContractStep,
+    TaskSchedulingCandidate, TaskSchedulingProjection, TaskStoreSummary, UpdateTaskRequest,
 };
-pub(crate) use state_store_task_models::{TaskContent, TaskJsonlRecord, TaskStorageRow};
+pub(crate) use state_store_task_models::{
+    TaskContent, TaskJsonlRecord, TaskStorageRow, TaskStorageRowStored,
+};
 #[cfg(test)]
 use state_store_taskflow_snapshot_codec::{
     canonical_issue_type_label, canonical_task_status_label, canonical_timestamp_label,
@@ -645,6 +647,7 @@ hierarchy: framework,contracts
                 parent_id: None,
                 labels: &labels,
                 execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
                 created_by: "tester",
                 source_repo: ".",
             })
@@ -662,6 +665,7 @@ hierarchy: framework,contracts
                 parent_id: Some("vida-root"),
                 labels: &labels,
                 execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
                 created_by: "tester",
                 source_repo: ".",
             })
@@ -717,6 +721,7 @@ hierarchy: framework,contracts
                 parent_id: None,
                 labels: &labels,
                 execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
                 created_by: "tester",
                 source_repo: ".",
             })
@@ -738,6 +743,7 @@ hierarchy: framework,contracts
                 order_bucket: None,
                 parallel_group: None,
                 conflict_domain: None,
+                planner_metadata: None,
             })
             .await
             .expect("apply set labels");
@@ -766,6 +772,7 @@ hierarchy: framework,contracts
                 order_bucket: None,
                 parallel_group: None,
                 conflict_domain: None,
+                planner_metadata: None,
             })
             .await
             .expect("apply delta labels");
@@ -811,6 +818,7 @@ hierarchy: framework,contracts
                     parent_id,
                     labels: &[],
                     execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
                     created_by: "tester",
                     source_repo: ".",
                 })
@@ -837,6 +845,7 @@ hierarchy: framework,contracts
                 order_bucket: None,
                 parallel_group: None,
                 conflict_domain: None,
+                planner_metadata: None,
             })
             .await
             .expect("reparent child task");
@@ -868,6 +877,7 @@ hierarchy: framework,contracts
                 order_bucket: None,
                 parallel_group: None,
                 conflict_domain: None,
+                planner_metadata: None,
             })
             .await
             .expect("clear parent");
@@ -916,6 +926,7 @@ hierarchy: framework,contracts
                     parent_id,
                     labels: &[],
                     execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
                     created_by: "tester",
                     source_repo: ".",
                 })
@@ -5116,6 +5127,7 @@ hierarchy: framework,contracts
                 notes: None,
                 labels: Vec::new(),
                 execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
                 dependencies: Vec::new(),
             })
             .await

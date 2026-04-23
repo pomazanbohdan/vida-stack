@@ -64,6 +64,32 @@ impl StateStore {
         Ok(())
     }
 
+    async fn sanitize_legacy_task_planner_metadata(&self) -> Result<(), StateStoreError> {
+        let _ = self
+            .db
+            .query("UPDATE task SET planner_metadata = {} WHERE planner_metadata = NONE;")
+            .await?;
+        let _ = self
+            .db
+            .query(
+                "UPDATE task SET planner_metadata.owned_paths = [] WHERE planner_metadata != NONE AND planner_metadata.owned_paths = NONE;",
+            )
+            .await?;
+        let _ = self
+            .db
+            .query(
+                "UPDATE task SET planner_metadata.acceptance_targets = [] WHERE planner_metadata != NONE AND planner_metadata.acceptance_targets = NONE;",
+            )
+            .await?;
+        let _ = self
+            .db
+            .query(
+                "UPDATE task SET planner_metadata.proof_targets = [] WHERE planner_metadata != NONE AND planner_metadata.proof_targets = NONE;",
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn open(root: PathBuf) -> Result<Self, StateStoreError> {
         fs::create_dir_all(&root)?;
         let _guard = AuthoritativeOpenGuard::acquire(&root).await?;
@@ -150,6 +176,7 @@ impl StateStore {
 
         let store = Self { db, root };
         store.sanitize_legacy_task_execution_semantics().await?;
+        store.sanitize_legacy_task_planner_metadata().await?;
         store.ensure_minimal_authoritative_state_spine().await?;
         Ok(store)
     }

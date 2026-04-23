@@ -324,6 +324,748 @@ fn parse_optional_label_value(value: Option<&str>) -> Option<Vec<String>> {
     })
 }
 
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskMutationPlannedTask {
+    task_id: String,
+    title: String,
+    description: String,
+    issue_type: String,
+    status: String,
+    priority: u32,
+    parent_id: Option<String>,
+    labels: Vec<String>,
+    execution_semantics: state_store::TaskExecutionSemantics,
+    planner_metadata: state_store::TaskPlannerMetadata,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskMutationPlannedDependency {
+    issue_id: String,
+    depends_on_id: String,
+    edge_type: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskMutationValidationSummary {
+    status: String,
+    issue_count: usize,
+    blocker_codes: Vec<String>,
+    issues: Vec<state_store::TaskGraphIssue>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskMutationResult {
+    status: String,
+    surface: String,
+    mutation_kind: String,
+    source_task_id: String,
+    dry_run: bool,
+    applied: bool,
+    reason: String,
+    planned_tasks: Vec<TaskMutationPlannedTask>,
+    planned_dependencies: Vec<TaskMutationPlannedDependency>,
+    created_task_ids: Vec<String>,
+    validation: TaskMutationValidationSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedSplitChildSpec {
+    task_id: String,
+    title: String,
+}
+
+fn task_mutation_validation_summary(
+    issues: Vec<state_store::TaskGraphIssue>,
+) -> TaskMutationValidationSummary {
+    let blocker_codes = if issues.is_empty() {
+        Vec::new()
+    } else {
+        vec!["invalid_task_graph".to_string()]
+    };
+    TaskMutationValidationSummary {
+        status: if issues.is_empty() {
+            task_json_success_status().to_string()
+        } else {
+            "blocked".to_string()
+        },
+        issue_count: issues.len(),
+        blocker_codes,
+        issues,
+    }
+}
+
+fn task_parent_id(task: &state_store::TaskRecord) -> Option<String> {
+    task.dependencies
+        .iter()
+        .find(|dependency| dependency.edge_type == "parent-child")
+        .map(|dependency| dependency.depends_on_id.clone())
+}
+
+fn open_child_ids_for_task(rows: &[state_store::TaskRecord], task_id: &str) -> Vec<String> {
+    let mut child_ids = rows
+        .iter()
+        .filter(|task| {
+            task.status != "closed"
+                && task.dependencies.iter().any(|dependency| {
+                    dependency.edge_type == "parent-child" && dependency.depends_on_id == task_id
+                })
+        })
+        .map(|task| task.id.clone())
+        .collect::<Vec<_>>();
+    child_ids.sort();
+    child_ids
+}
+
+fn inherited_split_execution_semantics(
+    task: &state_store::TaskRecord,
+) -> state_store::TaskExecutionSemantics {
+    state_store::TaskExecutionSemantics {
+        execution_mode: Some("sequential".to_string()),
+        order_bucket: task.execution_semantics.order_bucket.clone(),
+        parallel_group: None,
+        conflict_domain: task
+            .execution_semantics
+            .conflict_domain
+            .clone()
+            .or_else(|| Some(task.id.clone())),
+    }
+}
+
+fn blocker_execution_semantics(
+    task: &state_store::TaskRecord,
+) -> state_store::TaskExecutionSemantics {
+    state_store::TaskExecutionSemantics {
+        execution_mode: Some("sequential".to_string()),
+        order_bucket: task.execution_semantics.order_bucket.clone(),
+        parallel_group: None,
+        conflict_domain: task.execution_semantics.conflict_domain.clone(),
+    }
+}
+
+fn parse_split_child_specs(values: &[String]) -> Result<Vec<ParsedSplitChildSpec>, String> {
+    if values.len() < 2 {
+        return Err(
+            "Use at least two `--child <task-id>:<title>` entries for `vida task split`."
+                .to_string(),
+        );
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    let mut parsed = Vec::with_capacity(values.len());
+    for value in values {
+        let Some((task_id, title)) = value.split_once(':') else {
+            return Err(format!(
+                "Invalid `--child` value `{value}`. Expected `<task-id>:<title>`."
+            ));
+        };
+        let task_id = task_id.trim();
+        let title = title.trim();
+        if task_id.is_empty() || title.is_empty() {
+            return Err(format!(
+                "Invalid `--child` value `{value}`. Both task id and title are required."
+            ));
+        }
+        if !seen.insert(task_id.to_string()) {
+            return Err(format!("Duplicate split child task id `{task_id}`."));
+        }
+        parsed.push(ParsedSplitChildSpec {
+            task_id: task_id.to_string(),
+            title: title.to_string(),
+        });
+    }
+    Ok(parsed)
+}
+
+fn build_split_mutation_preview(
+    rows: &[state_store::TaskRecord],
+    source: &state_store::TaskRecord,
+    child_specs: &[ParsedSplitChildSpec],
+    reason: &str,
+    surface: &str,
+    dry_run: bool,
+) -> Result<(TaskMutationResult, Vec<state_store::TaskRecord>), String> {
+    if source.status == "closed" {
+        return Err(format!(
+            "Cannot split closed task `{}`; reopen it or choose another source task.",
+            source.id
+        ));
+    }
+    if source.issue_type == "epic" {
+        return Err(format!(
+            "Cannot split epic `{}` through `vida task split`; choose a bounded non-epic task.",
+            source.id
+        ));
+    }
+    let existing_children = open_child_ids_for_task(rows, &source.id);
+    if !existing_children.is_empty() {
+        return Err(format!(
+            "Cannot split task `{}` while open child tasks already exist: {}",
+            source.id,
+            existing_children.join(", ")
+        ));
+    }
+    if let Some(existing) = child_specs
+        .iter()
+        .find(|spec| rows.iter().any(|task| task.id == spec.task_id))
+    {
+        return Err(format!(
+            "Cannot split task `{}` because child task id `{}` already exists.",
+            source.id, existing.task_id
+        ));
+    }
+
+    let non_parent_dependencies = source
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.edge_type != "parent-child")
+        .cloned()
+        .collect::<Vec<_>>();
+    let parent_id = Some(source.id.clone());
+    let inherited_semantics = inherited_split_execution_semantics(source);
+    let mut planned_tasks = Vec::with_capacity(child_specs.len());
+    let mut planned_dependencies = Vec::new();
+    let mut simulated_rows = rows.to_vec();
+    let source_index = simulated_rows
+        .iter()
+        .position(|task| task.id == source.id)
+        .ok_or_else(|| {
+            format!(
+                "Source task `{}` is missing from current task rows.",
+                source.id
+            )
+        })?;
+
+    let mut previous_child_id = None::<String>;
+    for (index, spec) in child_specs.iter().enumerate() {
+        let description = if source.description.trim().is_empty() {
+            format!("Split from `{}`: {reason}", source.id)
+        } else {
+            source.description.clone()
+        };
+        let mut dependencies = vec![state_store::TaskDependencyRecord {
+            issue_id: spec.task_id.clone(),
+            depends_on_id: source.id.clone(),
+            edge_type: "parent-child".to_string(),
+            created_at: source.updated_at.clone(),
+            created_by: surface.to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }];
+
+        if index == 0 {
+            for dependency in &non_parent_dependencies {
+                dependencies.push(state_store::TaskDependencyRecord {
+                    issue_id: spec.task_id.clone(),
+                    depends_on_id: dependency.depends_on_id.clone(),
+                    edge_type: dependency.edge_type.clone(),
+                    created_at: source.updated_at.clone(),
+                    created_by: surface.to_string(),
+                    metadata: "{}".to_string(),
+                    thread_id: String::new(),
+                });
+                planned_dependencies.push(TaskMutationPlannedDependency {
+                    issue_id: spec.task_id.clone(),
+                    depends_on_id: dependency.depends_on_id.clone(),
+                    edge_type: dependency.edge_type.clone(),
+                    reason: "inherit_source_dependency".to_string(),
+                });
+            }
+        }
+
+        if let Some(previous_child_id) = previous_child_id.as_ref() {
+            dependencies.push(state_store::TaskDependencyRecord {
+                issue_id: spec.task_id.clone(),
+                depends_on_id: previous_child_id.clone(),
+                edge_type: "depends-on".to_string(),
+                created_at: source.updated_at.clone(),
+                created_by: surface.to_string(),
+                metadata: "{}".to_string(),
+                thread_id: String::new(),
+            });
+            planned_dependencies.push(TaskMutationPlannedDependency {
+                issue_id: spec.task_id.clone(),
+                depends_on_id: previous_child_id.clone(),
+                edge_type: "depends-on".to_string(),
+                reason: "sequential_split_chain".to_string(),
+            });
+        }
+
+        simulated_rows.push(state_store::TaskRecord {
+            id: spec.task_id.clone(),
+            display_id: None,
+            title: spec.title.clone(),
+            description: description.clone(),
+            status: "open".to_string(),
+            priority: source.priority,
+            issue_type: source.issue_type.clone(),
+            created_at: source.updated_at.clone(),
+            created_by: surface.to_string(),
+            updated_at: source.updated_at.clone(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: source.source_repo.clone(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: source.labels.clone(),
+            planner_metadata: source.planner_metadata.clone(),
+            execution_semantics: inherited_semantics.clone(),
+            dependencies,
+        });
+        planned_tasks.push(TaskMutationPlannedTask {
+            task_id: spec.task_id.clone(),
+            title: spec.title.clone(),
+            description,
+            issue_type: source.issue_type.clone(),
+            status: "open".to_string(),
+            priority: source.priority,
+            parent_id: parent_id.clone(),
+            labels: source.labels.clone(),
+            execution_semantics: inherited_semantics.clone(),
+            planner_metadata: source.planner_metadata.clone(),
+        });
+        previous_child_id = Some(spec.task_id.clone());
+    }
+
+    if let Some(last_child_id) = previous_child_id {
+        simulated_rows[source_index]
+            .dependencies
+            .push(state_store::TaskDependencyRecord {
+                issue_id: source.id.clone(),
+                depends_on_id: last_child_id.clone(),
+                edge_type: "depends-on".to_string(),
+                created_at: source.updated_at.clone(),
+                created_by: surface.to_string(),
+                metadata: "{}".to_string(),
+                thread_id: String::new(),
+            });
+        planned_dependencies.push(TaskMutationPlannedDependency {
+            issue_id: source.id.clone(),
+            depends_on_id: last_child_id,
+            edge_type: "depends-on".to_string(),
+            reason: "block_source_until_split_children_complete".to_string(),
+        });
+    }
+
+    let validation =
+        task_mutation_validation_summary(StateStore::validate_task_graph_rows(&simulated_rows));
+    let status = if validation.issue_count > 0 {
+        "blocked".to_string()
+    } else if dry_run {
+        "dry_run".to_string()
+    } else {
+        task_json_success_status().to_string()
+    };
+    let created_task_ids = if dry_run || validation.issue_count > 0 {
+        Vec::new()
+    } else {
+        planned_tasks
+            .iter()
+            .map(|task| task.task_id.clone())
+            .collect()
+    };
+    Ok((
+        TaskMutationResult {
+            status,
+            surface: surface.to_string(),
+            mutation_kind: "split_task".to_string(),
+            source_task_id: source.id.clone(),
+            dry_run,
+            applied: !dry_run && validation.issue_count == 0,
+            reason: reason.to_string(),
+            planned_tasks,
+            planned_dependencies,
+            created_task_ids,
+            validation,
+        },
+        simulated_rows,
+    ))
+}
+
+fn build_spawn_blocker_preview(
+    rows: &[state_store::TaskRecord],
+    source: &state_store::TaskRecord,
+    command: &TaskSpawnBlockerArgs,
+    surface: &str,
+) -> Result<(TaskMutationResult, Vec<state_store::TaskRecord>), String> {
+    if source.status == "closed" {
+        return Err(format!(
+            "Cannot spawn blocker for closed task `{}`.",
+            source.id
+        ));
+    }
+    if rows.iter().any(|task| task.id == command.blocker_task_id) {
+        return Err(format!(
+            "Cannot create blocker task `{}` because it already exists.",
+            command.blocker_task_id
+        ));
+    }
+
+    let mut blocker_labels = source.labels.clone();
+    blocker_labels.extend(parse_label_values(&command.labels));
+    blocker_labels.sort();
+    blocker_labels.dedup();
+
+    let blocker_priority = command.priority.unwrap_or(source.priority);
+    let blocker_description = command
+        .description
+        .clone()
+        .unwrap_or_else(|| format!("Blocker for `{}`: {}", source.id, command.reason));
+    let blocker_parent_id = task_parent_id(source);
+    let blocker_semantics = blocker_execution_semantics(source);
+
+    let mut simulated_rows = rows.to_vec();
+    let source_index = simulated_rows
+        .iter()
+        .position(|task| task.id == source.id)
+        .ok_or_else(|| {
+            format!(
+                "Source task `{}` is missing from current task rows.",
+                source.id
+            )
+        })?;
+    simulated_rows.push(state_store::TaskRecord {
+        id: command.blocker_task_id.clone(),
+        display_id: None,
+        title: command.title.clone(),
+        description: blocker_description.clone(),
+        status: command.status.clone(),
+        priority: blocker_priority,
+        issue_type: command.issue_type.clone(),
+        created_at: source.updated_at.clone(),
+        created_by: surface.to_string(),
+        updated_at: source.updated_at.clone(),
+        closed_at: None,
+        close_reason: None,
+        source_repo: source.source_repo.clone(),
+        compaction_level: 0,
+        original_size: 0,
+        notes: None,
+        labels: blocker_labels.clone(),
+        planner_metadata: source.planner_metadata.clone(),
+        execution_semantics: blocker_semantics.clone(),
+        dependencies: blocker_parent_id
+            .iter()
+            .map(|parent_id| state_store::TaskDependencyRecord {
+                issue_id: command.blocker_task_id.clone(),
+                depends_on_id: parent_id.clone(),
+                edge_type: "parent-child".to_string(),
+                created_at: source.updated_at.clone(),
+                created_by: surface.to_string(),
+                metadata: "{}".to_string(),
+                thread_id: String::new(),
+            })
+            .collect(),
+    });
+    simulated_rows[source_index]
+        .dependencies
+        .push(state_store::TaskDependencyRecord {
+            issue_id: source.id.clone(),
+            depends_on_id: command.blocker_task_id.clone(),
+            edge_type: "blocks".to_string(),
+            created_at: source.updated_at.clone(),
+            created_by: surface.to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        });
+
+    let validation =
+        task_mutation_validation_summary(StateStore::validate_task_graph_rows(&simulated_rows));
+    let dry_run = command.dry_run;
+    let status = if validation.issue_count > 0 {
+        "blocked".to_string()
+    } else if dry_run {
+        "dry_run".to_string()
+    } else {
+        task_json_success_status().to_string()
+    };
+    Ok((
+        TaskMutationResult {
+            status,
+            surface: surface.to_string(),
+            mutation_kind: "spawn_blocker_task".to_string(),
+            source_task_id: source.id.clone(),
+            dry_run,
+            applied: !dry_run && validation.issue_count == 0,
+            reason: command.reason.clone(),
+            planned_tasks: vec![TaskMutationPlannedTask {
+                task_id: command.blocker_task_id.clone(),
+                title: command.title.clone(),
+                description: blocker_description.clone(),
+                issue_type: command.issue_type.clone(),
+                status: command.status.clone(),
+                priority: blocker_priority,
+                parent_id: blocker_parent_id,
+                labels: blocker_labels,
+                execution_semantics: blocker_semantics,
+                planner_metadata: source.planner_metadata.clone(),
+            }],
+            planned_dependencies: vec![TaskMutationPlannedDependency {
+                issue_id: source.id.clone(),
+                depends_on_id: command.blocker_task_id.clone(),
+                edge_type: "blocks".to_string(),
+                reason: "spawn_blocker_dependency".to_string(),
+            }],
+            created_task_ids: if dry_run || validation.issue_count > 0 {
+                Vec::new()
+            } else {
+                vec![command.blocker_task_id.clone()]
+            },
+            validation,
+        },
+        simulated_rows,
+    ))
+}
+
+fn print_task_mutation_preview(render: RenderMode, result: &TaskMutationResult, as_json: bool) {
+    if as_json {
+        let payload =
+            serde_json::to_value(result).expect("task mutation preview should serialize to json");
+        crate::print_json_pretty(&payload);
+        return;
+    }
+    print_surface_header(render, &result.surface);
+    print_surface_line(render, "status", &result.status);
+    print_surface_line(render, "mutation_kind", &result.mutation_kind);
+    print_surface_line(render, "source_task_id", &result.source_task_id);
+    print_surface_line(
+        render,
+        "dry_run",
+        if result.dry_run { "true" } else { "false" },
+    );
+    print_surface_line(
+        render,
+        "applied",
+        if result.applied { "true" } else { "false" },
+    );
+    print_surface_line(
+        render,
+        "planned_task_count",
+        &result.planned_tasks.len().to_string(),
+    );
+    print_surface_line(
+        render,
+        "planned_dependency_count",
+        &result.planned_dependencies.len().to_string(),
+    );
+    if !result.created_task_ids.is_empty() {
+        print_surface_line(
+            render,
+            "created_task_ids",
+            &result.created_task_ids.join(", "),
+        );
+    }
+    if !result.validation.blocker_codes.is_empty() {
+        print_surface_line(
+            render,
+            "blocker_codes",
+            &result.validation.blocker_codes.join(", "),
+        );
+    }
+}
+
+async fn run_task_split_like(command: TaskSplitArgs, surface: &str) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    let child_specs = match parse_split_child_specs(&command.children) {
+        Ok(specs) => specs,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    let store = match open_task_store(state_dir).await {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let source = match store.show_task(&command.task_id).await {
+        Ok(task) => task,
+        Err(error) => {
+            eprintln!("Failed to load split source task: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let rows = match store.all_tasks().await {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("Failed to read current task graph before split: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let (result, _) = match build_split_mutation_preview(
+        &rows,
+        &source,
+        &child_specs,
+        &command.reason,
+        surface,
+        command.dry_run,
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
+    if result.validation.issue_count > 0 {
+        print_task_mutation_preview(command.render, &result, command.json);
+        return ExitCode::from(1);
+    }
+
+    if !command.dry_run {
+        let source_repo = source.source_repo.clone();
+        for task in &result.planned_tasks {
+            if let Err(error) = store
+                .create_task(state_store::CreateTaskRequest {
+                    task_id: &task.task_id,
+                    title: &task.title,
+                    display_id: None,
+                    description: &task.description,
+                    issue_type: &task.issue_type,
+                    status: &task.status,
+                    priority: task.priority,
+                    parent_id: task.parent_id.as_deref(),
+                    labels: &task.labels,
+                    execution_semantics: task.execution_semantics.clone(),
+                    planner_metadata: task.planner_metadata.clone(),
+                    created_by: surface,
+                    source_repo: &source_repo,
+                })
+                .await
+            {
+                eprintln!(
+                    "Failed to create split child task `{}`: {error}",
+                    task.task_id
+                );
+                return ExitCode::from(1);
+            }
+        }
+        for dependency in &result.planned_dependencies {
+            if let Err(error) = store
+                .add_task_dependency(
+                    &dependency.issue_id,
+                    &dependency.depends_on_id,
+                    &dependency.edge_type,
+                    surface,
+                )
+                .await
+            {
+                eprintln!(
+                    "Failed to add split dependency `{}` -> `{}`: {error}",
+                    dependency.issue_id, dependency.depends_on_id
+                );
+                return ExitCode::from(1);
+            }
+        }
+        if let Err(code) = refresh_task_snapshot_after_mutation(&store, surface).await {
+            return code;
+        }
+    }
+
+    print_task_mutation_preview(command.render, &result, command.json);
+    ExitCode::SUCCESS
+}
+
+async fn run_task_spawn_blocker_like(command: TaskSpawnBlockerArgs, surface: &str) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    let store = match open_task_store(state_dir).await {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let source = match store.show_task(&command.task_id).await {
+        Ok(task) => task,
+        Err(error) => {
+            eprintln!("Failed to load blocker source task: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let rows = match store.all_tasks().await {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("Failed to read current task graph before blocker mutation: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let (result, _) = match build_spawn_blocker_preview(&rows, &source, &command, surface) {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
+    if result.validation.issue_count > 0 {
+        print_task_mutation_preview(command.render, &result, command.json);
+        return ExitCode::from(1);
+    }
+
+    if !command.dry_run {
+        let planned_task = result
+            .planned_tasks
+            .first()
+            .expect("spawn blocker preview should include one planned task");
+        if let Err(error) = store
+            .create_task(state_store::CreateTaskRequest {
+                task_id: &planned_task.task_id,
+                title: &planned_task.title,
+                display_id: None,
+                description: &planned_task.description,
+                issue_type: &planned_task.issue_type,
+                status: &planned_task.status,
+                priority: planned_task.priority,
+                parent_id: planned_task.parent_id.as_deref(),
+                labels: &planned_task.labels,
+                execution_semantics: planned_task.execution_semantics.clone(),
+                planner_metadata: planned_task.planner_metadata.clone(),
+                created_by: surface,
+                source_repo: &source.source_repo,
+            })
+            .await
+        {
+            eprintln!(
+                "Failed to create blocker task `{}`: {error}",
+                planned_task.task_id
+            );
+            return ExitCode::from(1);
+        }
+        let dependency = result
+            .planned_dependencies
+            .first()
+            .expect("spawn blocker preview should include one dependency");
+        if let Err(error) = store
+            .add_task_dependency(
+                &dependency.issue_id,
+                &dependency.depends_on_id,
+                &dependency.edge_type,
+                surface,
+            )
+            .await
+        {
+            eprintln!(
+                "Failed to attach blocker task `{}` to source `{}`: {error}",
+                dependency.depends_on_id, dependency.issue_id
+            );
+            return ExitCode::from(1);
+        }
+        if let Err(code) = refresh_task_snapshot_after_mutation(&store, surface).await {
+            return code;
+        }
+    }
+
+    print_task_mutation_preview(command.render, &result, command.json);
+    ExitCode::SUCCESS
+}
+
 async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) -> ExitCode {
     let state_dir = command
         .state_dir
@@ -436,6 +1178,7 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                     parent_id: parent_id.as_deref(),
                     labels: &labels,
                     execution_semantics: task_execution_semantics_from_create_args(&command),
+                    planner_metadata: state_store::TaskPlannerMetadata::default(),
                     created_by: "vida task",
                     source_repo: &source_repo,
                 })
@@ -497,8 +1240,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             Some(
                 "ready" | "deps" | "reverse-deps" | "blocked" | "children" | "reparent-children"
                 | "move-children" | "tree" | "subtree" | "critical-path" | "next-display-id"
-                | "create" | "ensure" | "update" | "close" | "list" | "show" | "import-jsonl"
-                | "replace-jsonl" | "export-jsonl" | "validate-graph" | "dep",
+                | "create" | "ensure" | "update" | "close" | "split" | "spawn-blocker" | "list"
+                | "show" | "import-jsonl" | "replace-jsonl" | "export-jsonl" | "validate-graph"
+                | "dep",
             ) => {
                 print_taskflow_proxy_help(Some("task"));
                 ExitCode::SUCCESS
@@ -843,6 +1587,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         order_bucket,
                         parallel_group,
                         conflict_domain,
+                        planner_metadata: None,
                     })
                     .await
                 {
@@ -870,6 +1615,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     ExitCode::from(1)
                 }
             }
+        }
+        TaskCommand::Split(command) => run_task_split_like(command, "vida task split").await,
+        TaskCommand::SpawnBlocker(command) => {
+            run_task_spawn_blocker_like(command, "vida task spawn-blocker").await
         }
         TaskCommand::Close(command) => {
             let state_dir = command
@@ -1230,6 +1979,36 @@ mod tests {
     use crate::test_cli_support::cli;
     use crate::test_cli_support::guard_current_dir;
     use std::fs;
+    use std::process::ExitCode;
+
+    async fn create_task_for_test(
+        store: &crate::StateStore,
+        task_id: &str,
+        title: &str,
+        issue_type: &str,
+        status: &str,
+        priority: u32,
+        parent_id: Option<&str>,
+    ) {
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id,
+                title,
+                display_id: None,
+                description: "",
+                issue_type,
+                status,
+                priority,
+                parent_id,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("task should create");
+    }
 
     #[test]
     fn task_json_success_status_defaults_to_release_contract_vocabulary() {
@@ -1328,5 +2107,219 @@ mod tests {
                 ]))),
             std::process::ExitCode::SUCCESS
         );
+    }
+
+    #[test]
+    fn task_split_command_creates_children_and_blocks_source_task() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(&store, "dep-task", "Dependency", "task", "open", 1, None).await;
+            create_task_for_test(
+                &store,
+                "source-task",
+                "Source task",
+                "task",
+                "open",
+                2,
+                None,
+            )
+            .await;
+            store
+                .add_task_dependency("source-task", "dep-task", "depends-on", "test")
+                .await
+                .expect("dependency should create");
+        });
+
+        assert_eq!(
+            runtime.block_on(super::run_task(crate::TaskArgs {
+                command: crate::TaskCommand::Split(crate::TaskSplitArgs {
+                    task_id: "source-task".to_string(),
+                    children: vec![
+                        "source-task-a:First slice".to_string(),
+                        "source-task-b:Second slice".to_string(),
+                    ],
+                    reason: "oversized task".to_string(),
+                    dry_run: false,
+                    state_dir: Some(harness.path().to_path_buf()),
+                    render: crate::RenderMode::Plain,
+                    json: true,
+                }),
+            })),
+            ExitCode::SUCCESS
+        );
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open_existing(harness.path().to_path_buf())
+                .await
+                .expect("state store should reopen");
+            let source = store
+                .show_task("source-task")
+                .await
+                .expect("source task should load");
+            assert!(source.dependencies.iter().any(|dependency| {
+                dependency.issue_id == "source-task"
+                    && dependency.depends_on_id == "source-task-b"
+                    && dependency.edge_type == "depends-on"
+            }));
+
+            let first_child = store
+                .show_task("source-task-a")
+                .await
+                .expect("first split child should load");
+            assert_eq!(
+                first_child.description,
+                "Split from `source-task`: oversized task"
+            );
+            assert!(first_child.dependencies.iter().any(|dependency| {
+                dependency.depends_on_id == "source-task" && dependency.edge_type == "parent-child"
+            }));
+            assert!(first_child.dependencies.iter().any(|dependency| {
+                dependency.depends_on_id == "dep-task" && dependency.edge_type == "depends-on"
+            }));
+
+            let second_child = store
+                .show_task("source-task-b")
+                .await
+                .expect("second split child should load");
+            assert!(second_child.dependencies.iter().any(|dependency| {
+                dependency.depends_on_id == "source-task-a" && dependency.edge_type == "depends-on"
+            }));
+        });
+    }
+
+    #[test]
+    fn task_spawn_blocker_command_creates_blocker_and_links_source() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(&store, "epic-root", "Epic", "epic", "open", 1, None).await;
+            create_task_for_test(
+                &store,
+                "source-task",
+                "Source task",
+                "task",
+                "in_progress",
+                2,
+                Some("epic-root"),
+            )
+            .await;
+        });
+
+        assert_eq!(
+            runtime.block_on(super::run_task(crate::TaskArgs {
+                command: crate::TaskCommand::SpawnBlocker(crate::TaskSpawnBlockerArgs {
+                    task_id: "source-task".to_string(),
+                    blocker_task_id: "blocker-task".to_string(),
+                    title: "Blocker title".to_string(),
+                    reason: "new dependency discovered".to_string(),
+                    description: None,
+                    issue_type: "task".to_string(),
+                    status: "open".to_string(),
+                    priority: None,
+                    labels: Vec::new(),
+                    dry_run: false,
+                    state_dir: Some(harness.path().to_path_buf()),
+                    render: crate::RenderMode::Plain,
+                    json: true,
+                }),
+            })),
+            ExitCode::SUCCESS
+        );
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open_existing(harness.path().to_path_buf())
+                .await
+                .expect("state store should reopen");
+            let source = store
+                .show_task("source-task")
+                .await
+                .expect("source task should load");
+            assert!(source.dependencies.iter().any(|dependency| {
+                dependency.depends_on_id == "blocker-task" && dependency.edge_type == "blocks"
+            }));
+
+            let blocker = store
+                .show_task("blocker-task")
+                .await
+                .expect("blocker task should load");
+            assert_eq!(blocker.priority, 2);
+            assert_eq!(
+                blocker.description,
+                "Blocker for `source-task`: new dependency discovered"
+            );
+            assert!(blocker.dependencies.iter().any(|dependency| {
+                dependency.depends_on_id == "epic-root" && dependency.edge_type == "parent-child"
+            }));
+        });
+    }
+
+    #[test]
+    fn taskflow_replan_split_defaults_to_dry_run() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(
+                &store,
+                "source-task",
+                "Source task",
+                "task",
+                "open",
+                2,
+                None,
+            )
+            .await;
+        });
+
+        assert_eq!(
+            runtime.block_on(crate::taskflow_proxy::run_taskflow_proxy(
+                crate::ProxyArgs {
+                    args: vec![
+                        "replan".to_string(),
+                        "split".to_string(),
+                        "source-task".to_string(),
+                        "--child".to_string(),
+                        "source-task-a:First slice".to_string(),
+                        "--child".to_string(),
+                        "source-task-b:Second slice".to_string(),
+                        "--reason".to_string(),
+                        "oversized task".to_string(),
+                        "--state-dir".to_string(),
+                        harness.path().display().to_string(),
+                        "--json".to_string(),
+                    ],
+                }
+            )),
+            ExitCode::SUCCESS
+        );
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open_existing(harness.path().to_path_buf())
+                .await
+                .expect("state store should reopen");
+            assert!(matches!(
+                store.show_task("source-task-a").await,
+                Err(crate::state_store::StateStoreError::MissingTask { .. })
+            ));
+            assert!(matches!(
+                store.show_task("source-task-b").await,
+                Err(crate::state_store::StateStoreError::MissingTask { .. })
+            ));
+        });
     }
 }

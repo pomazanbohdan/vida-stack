@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
-use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
+use crate::{RuntimeConsumptionLaneSelection, StateStore, yaml_lookup};
 
 fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> &str {
     match dispatch_target {
@@ -73,7 +73,6 @@ fn default_activation_view(
     })
 }
 
-const DEFAULT_INTERNAL_HOST_DISPATCH_TIMEOUT_SECONDS: u64 = 240;
 const DEFAULT_DISPATCH_TIMEOUT_KILL_AFTER_GRACE_SECONDS: u64 = 1;
 const DEFAULT_ACTIVATION_VIEW_RENDER_TIMEOUT_SECONDS: u64 = 5;
 
@@ -124,18 +123,15 @@ fn configured_external_dispatch_wall_timeout_seconds(
 }
 
 fn configured_internal_host_dispatch_wall_timeout_seconds(
-    system_entry: Option<&serde_yaml::Value>,
+    project_root: &Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> u64 {
-    system_entry
-        .and_then(|entry| {
-            yaml_lookup(entry, &["dispatch", "no_output_timeout_seconds"])
-                .and_then(serde_yaml::Value::as_u64)
-                .or_else(|| {
-                    yaml_lookup(entry, &["max_runtime_seconds"]).and_then(serde_yaml::Value::as_u64)
-                })
-        })
-        .filter(|seconds| *seconds > 0)
-        .unwrap_or(DEFAULT_INTERNAL_HOST_DISPATCH_TIMEOUT_SECONDS)
+    crate::runtime_dispatch_state::internal_host_runtime_window_seconds(
+        project_root,
+        role_selection,
+        receipt,
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1219,7 +1215,9 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         &carrier,
     )?;
     let wall_timeout_seconds = Some(configured_internal_host_dispatch_wall_timeout_seconds(
-        selected_cli_entry.as_ref(),
+        project_root,
+        role_selection,
+        receipt,
     ));
     let wrapped_command =
         wrap_command_with_optional_timeout(command.clone(), args.clone(), wall_timeout_seconds);
@@ -1553,9 +1551,10 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             Some(&backend_id),
         );
     let readiness_verdict =
-        crate::status_surface_external_cli::external_cli_backend_readiness_verdict(
+        crate::status_surface_external_cli::external_cli_backend_readiness_verdict_for_profile(
             &backend_id,
             &backend_entry,
+            selected_model_profile_id.as_deref(),
         );
     if readiness_verdict["blocked"].as_bool().unwrap_or(false) {
         let readiness_status = readiness_verdict["status"]
@@ -1847,14 +1846,14 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_lane_dispatch_result, configured_internal_host_activation_parts,
-        configured_internal_host_runtime_env, dispatch_packet_prompt,
-        execute_external_agent_lane_dispatch, execute_wrapped_command,
+        CommandTimeoutWrapper, agent_lane_dispatch_result,
+        configured_internal_host_activation_parts, configured_internal_host_runtime_env,
+        dispatch_packet_prompt, execute_external_agent_lane_dispatch, execute_wrapped_command,
         external_provider_output_confirms_execution, internal_codex_output_confirms_execution,
         mark_dispatch_result_execution_evidence, parse_external_provider_output,
         parse_internal_codex_exec_output,
         should_render_store_backed_activation_view_for_internal_failure,
-        wrap_command_with_optional_timeout, CommandTimeoutWrapper,
+        wrap_command_with_optional_timeout,
     };
     use crate::RuntimeConsumptionLaneSelection;
     use std::path::Path;
@@ -2792,8 +2791,8 @@ agent_system:
     }
 
     #[test]
-    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing(
-    ) {
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing()
+     {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -3096,10 +3095,12 @@ agent_system:
             result["backend_dispatch"]["provider_error"],
             serde_json::Value::Null
         );
-        assert!(!result["blocker_reason"]
-            .as_str()
-            .expect("blocker reason should render")
-            .contains("SHOULD_NOT_LAUNCH"));
+        assert!(
+            !result["blocker_reason"]
+                .as_str()
+                .expect("blocker reason should render")
+                .contains("SHOULD_NOT_LAUNCH")
+        );
 
         let _ = std::fs::remove_dir_all(&project_root);
     }

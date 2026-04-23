@@ -449,6 +449,7 @@ mod tests {
             notes: None,
             labels: Vec::new(),
             execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+            planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
             dependencies: Vec::new(),
             display_id: None,
         };
@@ -483,6 +484,7 @@ mod tests {
             notes: None,
             labels: Vec::new(),
             execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+            planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
             dependencies: Vec::new(),
             display_id: None,
         };
