@@ -7,9 +7,6 @@ use crate::runtime_contract_vocab::{
 use crate::{json_string, json_string_list};
 
 const NON_BEHAVIORAL_ROUTE_FIELDS: &[&str] = &[
-    "analysis_executor_backend",
-    "analysis_fanout_executor_backends",
-    "analysis_merge_policy",
     "coach_executor_backend",
     "deterministic_first",
     "external_first_required",
@@ -323,6 +320,62 @@ pub(crate) fn backend_selection_source(
     }
 }
 
+fn selected_candidate_from_assignment<F>(assignment_field: &F) -> serde_json::Value
+where
+    F: Fn(&str) -> serde_json::Value,
+{
+    let carrier_id = assignment_field("selected_carrier_id");
+    if carrier_id.is_null() {
+        return serde_json::Value::Null;
+    }
+    serde_json::json!({
+        "status": "selected",
+        "carrier_id": carrier_id,
+        "carrier_tier": assignment_field("selected_carrier_tier"),
+        "model_profile_id": assignment_field("selected_model_profile_id"),
+        "model_ref": assignment_field("selected_model_ref"),
+        "model_provider": assignment_field("selected_model_provider"),
+        "reasoning_effort": assignment_field("selected_reasoning_effort"),
+        "reasoning_control_mode": assignment_field("selected_reasoning_control_mode"),
+        "quality_tier": assignment_field("selected_quality_tier"),
+        "speed_tier": assignment_field("selected_speed_tier"),
+        "readiness_status": assignment_field("selected_model_profile_readiness_status"),
+        "external_backend_readiness": assignment_field("selected_external_backend_readiness"),
+        "budget_policy": assignment_field("budget_policy"),
+        "budget_verdict": assignment_field("budget_verdict"),
+        "max_budget_units": assignment_field("max_budget_units"),
+        "selected_over_budget": assignment_field("selected_over_budget"),
+        "route_profile_mapping": assignment_field("selected_route_profile_mapping"),
+    })
+}
+
+fn candidate_pool_from_assignment(
+    selected_candidate: &serde_json::Value,
+    rejected_candidates: serde_json::Value,
+) -> serde_json::Value {
+    let mut candidates = Vec::new();
+    if !selected_candidate.is_null() {
+        candidates.push(selected_candidate.clone());
+    }
+    candidates.extend(
+        rejected_candidates
+            .as_array()
+            .into_iter()
+            .flatten()
+            .cloned()
+            .map(|mut candidate| {
+                if let Some(row) = candidate.as_object_mut() {
+                    row.insert(
+                        "status".to_string(),
+                        serde_json::Value::String("rejected".to_string()),
+                    );
+                }
+                candidate
+            }),
+    );
+    serde_json::Value::Array(candidates)
+}
+
 pub(crate) fn route_explain_payload(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
@@ -361,6 +414,10 @@ pub(crate) fn route_explain_payload(
         activation_agent_type.as_deref(),
         None,
     );
+    let selected_candidate = selected_candidate_from_assignment(&assignment_field);
+    let rejected_candidates = assignment_field("rejected_candidates");
+    let candidate_pool =
+        candidate_pool_from_assignment(&selected_candidate, rejected_candidates.clone());
 
     serde_json::json!({
         "dispatch_target": dispatch_target,
@@ -386,11 +443,26 @@ pub(crate) fn route_explain_payload(
         "selected_over_budget": assignment_field("selected_over_budget"),
         "route_profile_mapping_applied": assignment_field("route_profile_mapping_applied"),
         "selected_route_profile_mapping": assignment_field("selected_route_profile_mapping"),
-        "rejected_candidates": assignment_field("rejected_candidates"),
+        "selection_inputs": {
+            "selection_strategy": assignment_field("selection_strategy"),
+            "selection_rule": assignment_field("selection_rule"),
+            "model_selection_enabled": assignment_field("model_selection_enabled"),
+            "candidate_scope": assignment_field("candidate_scope"),
+            "budget_policy": assignment_field("budget_policy"),
+            "max_budget_units": assignment_field("max_budget_units"),
+            "route_profile_mapping_applied": assignment_field("route_profile_mapping_applied"),
+            "route_primary_backend": route_primary_backend,
+            "fallback_backend": fallback_backend,
+            "fanout_backends": fanout_backends,
+        },
+        "selected_candidate": selected_candidate,
+        "candidate_pool": candidate_pool,
+        "rejected_candidates": rejected_candidates,
         "runtime_assignment_backend": runtime_assignment_backend,
         "route_primary_backend": route_primary_backend,
         "fallback_backend": fallback_backend,
         "fanout_backends": fanout_backends,
+        "readiness_blockers": [],
         "activation_agent_type": activation_agent_type,
         "non_behavioral_route_fields": non_behavioral_route_fields,
     })
@@ -756,13 +828,29 @@ mod tests {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
                 "selected_tier": "senior",
+                "selected_carrier_tier": "senior",
                 "selected_carrier_id": "senior",
                 "selected_model_profile_id": "codex_spark_high_readonly",
+                "selected_model_ref": "gpt-5.3-codex-spark",
                 "selected_model_provider": "openai",
                 "selected_reasoning_effort": "high",
+                "selected_quality_tier": "high",
+                "selected_speed_tier": "medium",
+                "selected_model_profile_readiness_status": "ready",
                 "budget_verdict": "in_budget",
+                "budget_policy": "balanced",
+                "selection_strategy": "balanced_cost_quality",
+                "selection_rule": "role_task_then_readiness_then_score_then_cost_quality",
                 "model_selection_enabled": true,
                 "candidate_scope": "unified_carrier_model_profiles",
+                "rejected_candidates": [
+                    {
+                        "carrier_id": "junior",
+                        "model_profile_id": "codex_gpt54_low_write",
+                        "reason": "quality_floor_not_met",
+                        "reasons": ["quality_floor_not_met"]
+                    }
+                ],
             },
             "development_flow": {
                 "implementation": {
@@ -786,6 +874,31 @@ mod tests {
             Some("codex_spark_high_readonly")
         );
         assert_eq!(payload["budget_verdict"].as_str(), Some("in_budget"));
+        assert_eq!(
+            payload["selection_inputs"]["selection_rule"].as_str(),
+            Some("role_task_then_readiness_then_score_then_cost_quality")
+        );
+        assert_eq!(
+            payload["selected_candidate"]["model_profile_id"].as_str(),
+            Some("codex_spark_high_readonly")
+        );
+        assert_eq!(
+            payload["candidate_pool"]
+                .as_array()
+                .expect("candidate pool should render")
+                .len(),
+            2
+        );
+        assert!(
+            payload["candidate_pool"]
+                .as_array()
+                .expect("candidate pool should render")
+                .iter()
+                .any(|row| {
+                    row["status"].as_str() == Some("rejected")
+                        && row["carrier_id"].as_str() == Some("junior")
+                })
+        );
         assert_eq!(
             payload["selection_source"].as_str(),
             Some("runtime_assignment")
@@ -821,9 +934,11 @@ mod tests {
         let route = &execution_plan["development_flow"]["implementation"];
         let payload = route_explain_payload(&execution_plan, "implementation", Some(route));
         assert_eq!(route_explain_status(&payload, Some(false)), "blocked");
-        assert!(route_explain_blocker_codes(&payload, Some(false))
-            .iter()
-            .any(|code| code == "selected_backend_not_admissible_for_dispatch_target"));
+        assert!(
+            route_explain_blocker_codes(&payload, Some(false))
+                .iter()
+                .any(|code| code == "selected_backend_not_admissible_for_dispatch_target")
+        );
     }
 
     #[test]
@@ -839,6 +954,7 @@ mod tests {
                 "implementation": {
                     "executor_backend": "internal_subagents",
                     "analysis_executor_backend": "opencode_cli",
+                    "analysis_fanout_executor_backends": ["hermes_cli", "opencode_cli"],
                     "max_cli_subagent_calls": 3
                 }
             }
@@ -853,15 +969,19 @@ mod tests {
         assert_eq!(payload["runtime_assignment_enabled"].as_bool(), Some(false));
         assert_eq!(
             payload["non_behavioral_route_fields"],
-            serde_json::json!(["analysis_executor_backend", "max_cli_subagent_calls"])
+            serde_json::json!(["max_cli_subagent_calls"])
         );
         assert_eq!(route_explain_status(&payload, Some(true)), "blocked");
         let blockers = route_explain_blocker_codes(&payload, Some(true));
-        assert!(blockers
-            .iter()
-            .any(|code| code == "model_selection_disabled"));
-        assert!(blockers
-            .iter()
-            .any(|code| code == "route_fields_not_behavioral"));
+        assert!(
+            blockers
+                .iter()
+                .any(|code| code == "model_selection_disabled")
+        );
+        assert!(
+            blockers
+                .iter()
+                .any(|code| code == "route_fields_not_behavioral")
+        );
     }
 }

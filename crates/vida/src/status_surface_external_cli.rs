@@ -183,13 +183,15 @@ fn selected_external_cli_profile(
     current_model_ref: Option<&str>,
     preferred_profile_id: Option<&str>,
 ) -> serde_json::Value {
-    if let Some(selected_profile) =
-        crate::model_profile_contract::selected_model_profile_from_json_row(
-            profile_projection,
-            preferred_profile_id,
-        )
-    {
-        return selected_profile["profile_id"].clone();
+    if preferred_profile_id.is_some() {
+        if let Some(selected_profile) =
+            crate::model_profile_contract::selected_model_profile_from_json_row(
+                profile_projection,
+                preferred_profile_id,
+            )
+        {
+            return selected_profile["profile_id"].clone();
+        }
     }
     profile_id_matching_model_ref(profile_projection, current_model_ref)
         .map(serde_json::Value::String)

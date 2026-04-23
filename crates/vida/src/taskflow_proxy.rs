@@ -9,8 +9,8 @@ use crate::taskflow_run_graph::{
 use crate::taskflow_spec_bootstrap::run_taskflow_bootstrap_spec;
 use crate::taskflow_task_bridge::{enforce_execution_preparation_contract_gate, proxy_state_dir};
 use crate::{
-    print_surface_header, print_surface_line, surface_render, taskflow_consume,
-    taskflow_protocol_binding, Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs,
+    Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs, print_surface_header,
+    print_surface_line, surface_render, taskflow_consume, taskflow_protocol_binding,
 };
 use clap::Parser;
 use serde::Serialize;
@@ -1632,7 +1632,9 @@ fn parse_taskflow_route_diagnostic_args(
         }
         [head, ..] if head == "validate-routing" => (RouteDiagnosticMode::ValidateRouting, 1),
         _ => {
-            return Err("Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]");
+            return Err(
+                "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]",
+            );
         }
     };
 
@@ -1671,10 +1673,14 @@ fn parse_taskflow_route_diagnostic_args(
                 index += 2;
             }
             "--help" | "-h" => {
-                return Err("Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]");
+                return Err(
+                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]",
+                );
             }
             _ => {
-                return Err("Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]");
+                return Err(
+                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]",
+                );
             }
         }
     }
@@ -1684,7 +1690,9 @@ fn parse_taskflow_route_diagnostic_args(
     if parsed.mode == RouteDiagnosticMode::ValidateRouting
         && (parsed.dispatch_target.is_some() || parsed.runtime_role.is_some())
     {
-        return Err("vida taskflow validate-routing validates all routed lanes and does not accept --dispatch-target or --runtime-role.");
+        return Err(
+            "vida taskflow validate-routing validates all routed lanes and does not accept --dispatch-target or --runtime-role.",
+        );
     }
     Ok(parsed)
 }
@@ -1753,8 +1761,20 @@ fn route_payload_for_dispatch_target(
         if let Some(readiness) =
             selected_backend_readiness_payload(selected_backend, preferred_profile_id)
         {
+            let readiness_blockers = if readiness["blocked"].as_bool().unwrap_or(false) {
+                serde_json::json!([{
+                    "backend_id": readiness["backend_id"].clone(),
+                    "status": readiness["status"].clone(),
+                    "blocker_code": readiness["blocker_code"].clone(),
+                    "selected_model_profile": readiness["selected_model_profile"].clone(),
+                    "next_actions": readiness["next_actions"].clone(),
+                }])
+            } else {
+                serde_json::json!([])
+            };
             if let Some(object) = payload.as_object_mut() {
                 object.insert("selected_backend_readiness".to_string(), readiness);
+                object.insert("readiness_blockers".to_string(), readiness_blockers);
             }
         }
     }
@@ -1974,8 +1994,8 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
-        taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
+        GraphSummaryWaveBucket, build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
+        taskflow_task_subcommand_supported,
     };
     use crate::state_store::{
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
@@ -2230,10 +2250,11 @@ mod tests {
         let plan = build_taskflow_scheduler_dispatch_plan(projection, 1, None, None, false, true);
 
         assert_eq!(plan.status, "blocked");
-        assert!(plan
-            .blocker_codes
-            .iter()
-            .any(|code| code == "unsupported_blocker_code"));
+        assert!(
+            plan.blocker_codes
+                .iter()
+                .any(|code| code == "unsupported_blocker_code")
+        );
         assert!(!plan.execute_supported);
         assert!(!plan.dry_run);
     }
@@ -2298,9 +2319,11 @@ mod tests {
         assert_eq!(payload["selected_backend"].as_str(), Some("junior"));
         assert_eq!(payload["selected_backend_admissible"].as_bool(), Some(true));
         assert_eq!(payload["status"].as_str(), Some("pass"));
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| codes.is_empty()));
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| codes.is_empty())
+        );
     }
 
     #[test]
@@ -2420,12 +2443,16 @@ mod tests {
 
         let blocker_codes = super::authoritative_dispatch_blocker_codes(Some(&dispatch));
         assert_eq!(blocker_codes.len(), 2);
-        assert!(blocker_codes
-            .iter()
-            .any(|code| code == "timeout_without_takeover_authority"));
-        assert!(blocker_codes
-            .iter()
-            .any(|code| code == "pending_review_clean_evidence"));
+        assert!(
+            blocker_codes
+                .iter()
+                .any(|code| code == "timeout_without_takeover_authority")
+        );
+        assert!(
+            blocker_codes
+                .iter()
+                .any(|code| code == "pending_review_clean_evidence")
+        );
     }
 
     fn sample_task(task_id: &str) -> crate::state_store::TaskRecord {
@@ -2565,10 +2592,12 @@ mod tests {
                 .map(|value| value.command.as_str()),
             Some("vida task ready --scope epic-1 --json")
         );
-        assert!(decision
-            .blocker_codes
-            .iter()
-            .any(|code| code == "no_ready_tasks"));
+        assert!(
+            decision
+                .blocker_codes
+                .iter()
+                .any(|code| code == "no_ready_tasks")
+        );
     }
 
     #[test]

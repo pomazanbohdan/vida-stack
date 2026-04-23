@@ -339,6 +339,30 @@ fn profile_readiness_status(profile: &serde_json::Value) -> String {
     "ready".to_string()
 }
 
+fn external_cli_readiness_verdict_for_candidate(
+    compiled_bundle: &serde_json::Value,
+    role: &serde_json::Value,
+    profile: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    if role["backend_class"].as_str().map(str::trim) != Some("external_cli") {
+        return None;
+    }
+    let backend_id = role["role_id"].as_str()?.trim();
+    if backend_id.is_empty() {
+        return None;
+    }
+    let backend_entry = json_lookup(&compiled_bundle["agent_system"], &["subagents", backend_id])?;
+    let backend_entry = serde_yaml::to_value(backend_entry).ok()?;
+    let profile_id = profile["profile_id"].as_str().map(str::trim);
+    Some(
+        crate::status_surface_external_cli::external_cli_backend_readiness_verdict_for_profile(
+            backend_id,
+            &backend_entry,
+            profile_id,
+        ),
+    )
+}
+
 fn task_class_requires_write_scope(task_class: &str) -> bool {
     matches!(
         task_class,
@@ -377,6 +401,7 @@ struct ProfileCandidate {
     supports_runtime_role: bool,
     supports_task_class: bool,
     readiness_status: String,
+    external_backend_readiness: Option<serde_json::Value>,
 }
 
 impl ProfileCandidate {
@@ -639,7 +664,16 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
                         .as_str()
                         .or_else(|| role["quality_tier"].as_str())
                         .unwrap_or_default();
-                    let readiness_status = profile_readiness_status(&profile);
+                    let external_backend_readiness = external_cli_readiness_verdict_for_candidate(
+                        compiled_bundle,
+                        role,
+                        &profile,
+                    );
+                    let readiness_status = external_backend_readiness
+                        .as_ref()
+                        .and_then(|verdict| verdict["status"].as_str())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| profile_readiness_status(&profile));
                     ProfileCandidate {
                         supports_runtime_role: profile_supports_runtime_role(
                             role,
@@ -655,6 +689,7 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
                         quality_rank: quality_tier_rank(quality_tier),
                         reasoning_rank: reasoning_effort_rank(reasoning_effort),
                         readiness_status,
+                        external_backend_readiness,
                         role: role.clone(),
                         profile,
                     }
@@ -704,6 +739,14 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         if candidate.readiness_status == "blocked" {
             reasons.push("profile_not_ready".to_string());
         }
+        if candidate
+            .external_backend_readiness
+            .as_ref()
+            .and_then(|verdict| verdict["blocked"].as_bool())
+            .unwrap_or(false)
+        {
+            reasons.push("external_backend_not_ready".to_string());
+        }
         if let Some(mapped_profile_id) = mapped_profile_for_carrier(
             route_profiles,
             candidate.role["role_id"].as_str().unwrap_or_default(),
@@ -732,14 +775,20 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         if reasons.is_empty() {
             true
         } else {
-            rejected_candidates.push(serde_json::json!({
+            let mut rejected_candidate = serde_json::json!({
                 "carrier_id": candidate.role["role_id"],
                 "carrier_tier": candidate.role["tier"],
                 "model_profile_id": candidate.profile["profile_id"],
                 "model_ref": candidate.profile["model_ref"],
                 "reasons": reasons,
                 "reason": reasons.first().cloned().unwrap_or_default(),
-            }));
+            });
+            if let Some(readiness) = candidate.external_backend_readiness.clone() {
+                if let Some(row) = rejected_candidate.as_object_mut() {
+                    row.insert("external_backend_readiness".to_string(), readiness);
+                }
+            }
+            rejected_candidates.push(rejected_candidate);
             false
         }
     });
@@ -865,6 +914,7 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         "selected_quality_tier": selected_profile["quality_tier"],
         "selected_speed_tier": selected_profile["speed_tier"],
         "selected_model_profile_readiness_status": selected_candidate.readiness_status,
+        "selected_external_backend_readiness": selected_candidate.external_backend_readiness,
         "tier_default_runtime_role": selected_role["default_runtime_role"],
         "reasoning_band": selected_role["reasoning_band"],
         "model": selected_profile["model_ref"],
@@ -1495,6 +1545,235 @@ mod tests {
                             reason.as_str() == Some("write_scope_inadmissible_for_task_class")
                         })
             }));
+    }
+
+    #[test]
+    fn blocked_external_cli_readiness_is_rejected_before_selection() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "middle",
+                "tier": "middle",
+                "rate": 4,
+                "normalized_cost_units": 4,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "default_model_profile": "codex_gpt54_medium_review",
+                "model_profiles": {
+                    "codex_gpt54_medium_review": {
+                        "profile_id": "codex_gpt54_medium_review",
+                        "model_ref": "gpt-5.4",
+                        "provider": "openai",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 4,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "read_or_review",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "opencode_cli",
+                "tier": "external_free",
+                "rate": 0,
+                "normalized_cost_units": 0,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "default_model_profile": "opencode_free_review",
+                "backend_class": "external_cli",
+                "model_profiles": {
+                    "opencode_free_review": {
+                        "profile_id": "opencode_free_review",
+                        "model_ref": "opencode/free-review",
+                        "provider": "opencode",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 0,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "none",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "subagents": {
+                "opencode_cli": {
+                    "enabled": true,
+                    "subagent_backend_class": "external_cli",
+                    "default_model_profile": "opencode_free_review",
+                    "model_profiles": {
+                        "opencode_free_review": {
+                            "profile_id": "opencode_free_review",
+                            "model_ref": "opencode/free-review",
+                            "provider": "opencode",
+                            "reasoning_effort": "medium",
+                            "normalized_cost_units": 0,
+                            "speed_tier": "fast",
+                            "quality_tier": "medium",
+                            "write_scope": "none",
+                            "runtime_roles": ["coach"],
+                            "task_classes": ["review"],
+                            "readiness": { "required": true, "ready": true }
+                        }
+                    },
+                    "readiness": {
+                        "auth": {
+                            "mode": "env_present",
+                            "env_var": "VIDA_TEST_MISSING_EXTERNAL_AUTH"
+                        }
+                    }
+                }
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "coach",
+            "review",
+            "coach",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "middle");
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "opencode_cli"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("external_backend_not_ready"))
+                    && row["external_backend_readiness"]["status"] == "interactive_auth_required"
+            }));
+    }
+
+    #[test]
+    fn external_cli_readiness_override_remains_admissible() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "middle",
+                "tier": "middle",
+                "rate": 4,
+                "normalized_cost_units": 4,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "default_model_profile": "codex_gpt54_medium_review",
+                "model_profiles": {
+                    "codex_gpt54_medium_review": {
+                        "profile_id": "codex_gpt54_medium_review",
+                        "model_ref": "gpt-5.4",
+                        "provider": "openai",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 4,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "read_or_review",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "opencode_cli",
+                "tier": "external_free",
+                "rate": 0,
+                "normalized_cost_units": 0,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "default_model_profile": "opencode_free_review",
+                "backend_class": "external_cli",
+                "model_profiles": {
+                    "opencode_free_review": {
+                        "profile_id": "opencode_free_review",
+                        "model_ref": "opencode/free-review",
+                        "provider": "opencode",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 0,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "none",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "subagents": {
+                "opencode_cli": {
+                    "enabled": true,
+                    "subagent_backend_class": "external_cli",
+                    "dispatch": {
+                        "model_flag": "--model"
+                    },
+                    "default_model_profile": "opencode_free_review",
+                    "model_profiles": {
+                        "opencode_free_review": {
+                            "profile_id": "opencode_free_review",
+                            "model_ref": "opencode/free-review",
+                            "provider": "opencode",
+                            "reasoning_effort": "medium",
+                            "normalized_cost_units": 0,
+                            "speed_tier": "fast",
+                            "quality_tier": "medium",
+                            "write_scope": "none",
+                            "runtime_roles": ["coach"],
+                            "task_classes": ["review"],
+                            "readiness": { "required": true, "ready": true }
+                        }
+                    },
+                    "readiness": {
+                        "auth": {
+                            "mode": "none"
+                        },
+                        "model": {
+                            "mode": "none",
+                            "allow_dispatch_override": true
+                        }
+                    }
+                }
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "coach",
+            "review",
+            "coach",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "opencode_cli");
+        assert_eq!(
+            assignment["selected_model_profile_id"],
+            "opencode_free_review"
+        );
+        assert_eq!(
+            assignment["selected_model_profile_readiness_status"],
+            "carrier_ready_with_override"
+        );
+        assert_eq!(
+            assignment["selected_external_backend_readiness"]["status"],
+            "carrier_ready_with_override"
+        );
     }
 
     #[test]

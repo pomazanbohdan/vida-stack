@@ -575,7 +575,7 @@ agent_system:
         internal_review:
           provider: internal
           model_ref: internal_review
-          reasoning_effort: medium
+          reasoning_effort: high
           normalized_cost_units: 8
           speed_tier: medium
           quality_tier: high

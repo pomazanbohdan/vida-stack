@@ -386,6 +386,69 @@ fn resolved_development_flow_templates(
     legacy_development_flow_templates()
 }
 
+fn copy_non_empty_route_value(
+    target: &mut serde_json::Value,
+    target_key: &str,
+    source: &serde_json::Value,
+    source_key: &str,
+) {
+    let Some(value) = source.get(source_key) else {
+        return;
+    };
+    let configured = match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::String(raw) => !raw.trim().is_empty(),
+        serde_json::Value::Array(rows) => !rows.is_empty(),
+        serde_json::Value::Object(entries) => !entries.is_empty(),
+        _ => true,
+    };
+    if configured {
+        target[target_key] = value.clone();
+    }
+}
+
+fn apply_implementation_analysis_route_overrides(
+    analysis: &mut serde_json::Value,
+    implementation: &serde_json::Value,
+) {
+    copy_non_empty_route_value(
+        analysis,
+        "executor_backend",
+        implementation,
+        "analysis_executor_backend",
+    );
+    copy_non_empty_route_value(
+        analysis,
+        "external_first_required",
+        implementation,
+        "analysis_external_first_required",
+    );
+    copy_non_empty_route_value(
+        analysis,
+        "fanout_executor_backends",
+        implementation,
+        "analysis_fanout_executor_backends",
+    );
+    copy_non_empty_route_value(
+        analysis,
+        "fanout_min_results",
+        implementation,
+        "analysis_fanout_min_results",
+    );
+    copy_non_empty_route_value(
+        analysis,
+        "fanout_subagents",
+        implementation,
+        "analysis_fanout_subagents",
+    );
+    copy_non_empty_route_value(
+        analysis,
+        "merge_policy",
+        implementation,
+        "analysis_merge_policy",
+    );
+}
+
 fn lane_template_included(
     lane_template: &serde_json::Value,
     requires_design_gate: bool,
@@ -686,6 +749,16 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
         agent_system,
         "implementation",
     );
+    let analysis_route_id = implementation["analysis_route_task_class"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("analysis");
+    let mut analysis = crate::runtime_lane_summary::summarize_agent_route_from_snapshot(
+        compiled_bundle,
+        agent_system,
+        analysis_route_id,
+    );
+    apply_implementation_analysis_route_overrides(&mut analysis, &implementation);
     let coach_route_id = implementation["coach_route_task_class"]
         .as_str()
         .filter(|value| !value.is_empty())
@@ -867,6 +940,7 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
                 ]
             },
             "implementation": implementation,
+            "analysis": analysis,
             "coach": crate::runtime_lane_summary::summarize_agent_route_from_snapshot(compiled_bundle, agent_system, coach_route_id),
             "verification": crate::runtime_lane_summary::summarize_agent_route_from_snapshot(compiled_bundle, agent_system, verification_route_id),
         },
@@ -884,7 +958,8 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_design_first_tracked_flow_bootstrap, supported_autonomous_execution_settings,
+        apply_implementation_analysis_route_overrides, build_design_first_tracked_flow_bootstrap,
+        supported_autonomous_execution_settings,
     };
     use serde_json::json;
 
@@ -909,6 +984,35 @@ mod tests {
             ),
             "bootstrap command should not retain the bare moved-test proof target"
         );
+    }
+
+    #[test]
+    fn implementation_analysis_route_overrides_materialize_analysis_policy_knobs() {
+        let implementation = json!({
+            "analysis_executor_backend": "opencode_cli",
+            "analysis_external_first_required": "yes",
+            "analysis_fanout_executor_backends": ["hermes_cli", "opencode_cli"],
+            "analysis_fanout_min_results": 2,
+            "analysis_fanout_subagents": "hermes_cli,opencode_cli",
+            "analysis_merge_policy": "consensus_with_conflict_flag",
+        });
+        let mut analysis = json!({
+            "executor_backend": "internal_subagents",
+            "fanout_min_results": 1,
+            "merge_policy": "first_success",
+        });
+
+        apply_implementation_analysis_route_overrides(&mut analysis, &implementation);
+
+        assert_eq!(analysis["executor_backend"], "opencode_cli");
+        assert_eq!(analysis["external_first_required"], "yes");
+        assert_eq!(
+            analysis["fanout_executor_backends"],
+            json!(["hermes_cli", "opencode_cli"])
+        );
+        assert_eq!(analysis["fanout_min_results"], 2);
+        assert_eq!(analysis["fanout_subagents"], "hermes_cli,opencode_cli");
+        assert_eq!(analysis["merge_policy"], "consensus_with_conflict_flag");
     }
 
     #[test]

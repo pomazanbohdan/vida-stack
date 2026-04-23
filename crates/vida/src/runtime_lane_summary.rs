@@ -608,6 +608,9 @@ pub(crate) fn summarize_agent_route_from_snapshot(
         "implementation" | "small_patch" | "small_patch_write" | "ui_patch" => {
             ("worker", "implementation")
         }
+        "analysis" | "read_only_prep" | "research" | "research_fast" | "research_deep" => {
+            ("business_analyst", "analysis")
+        }
         "coach" => ("coach", "coach"),
         "verification" | "verification_ensemble" | "review_ensemble" => {
             ("verifier", "verification")
