@@ -1395,6 +1395,285 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     }
 }
 
+fn graph_explain_task_ref(task: &crate::state_store::TaskRecord) -> serde_json::Value {
+    serde_json::json!({
+        "id": task.id,
+        "display_id": task.display_id,
+        "title": task.title,
+        "status": task.status,
+        "priority": task.priority,
+        "issue_type": task.issue_type,
+        "execution_semantics": task.execution_semantics,
+    })
+}
+
+fn build_taskflow_graph_explain_payload(
+    projection: &crate::state_store::TaskSchedulingProjection,
+    scope_task_id: Option<&str>,
+    target_task_id: Option<&str>,
+) -> serde_json::Value {
+    let selected_target = target_task_id
+        .map(ToOwned::to_owned)
+        .or_else(|| projection.current_task_id.clone())
+        .or_else(|| {
+            projection
+                .ready
+                .first()
+                .map(|candidate| candidate.task.id.clone())
+        })
+        .or_else(|| {
+            projection
+                .blocked
+                .first()
+                .map(|candidate| candidate.task.id.clone())
+        });
+    let candidate = selected_target.as_deref().and_then(|task_id| {
+        projection
+            .ready
+            .iter()
+            .chain(projection.blocked.iter())
+            .find(|candidate| candidate.task.id == task_id)
+    });
+    let candidate_missing = selected_target.is_some() && candidate.is_none();
+
+    let ready_now = candidate
+        .map(|candidate| candidate.ready_now)
+        .unwrap_or(false);
+    let ready_parallel_safe = candidate
+        .map(|candidate| candidate.ready_parallel_safe)
+        .unwrap_or(false);
+    let blocked_by = candidate
+        .map(|candidate| serde_json::json!(candidate.blocked_by))
+        .unwrap_or_else(|| serde_json::json!([]));
+    let parallel_blockers = candidate
+        .map(|candidate| serde_json::json!(candidate.parallel_blockers))
+        .unwrap_or_else(|| serde_json::json!([]));
+    let active_critical_path = candidate
+        .map(|candidate| candidate.active_critical_path)
+        .unwrap_or(false);
+    let selected_as_current = candidate
+        .map(|candidate| Some(candidate.task.id.as_str()) == projection.current_task_id.as_deref())
+        .unwrap_or(false);
+    let selected_as_parallel_after_current = candidate
+        .map(|candidate| {
+            projection
+                .parallel_candidates_after_current
+                .iter()
+                .any(|task| task.id == candidate.task.id)
+        })
+        .unwrap_or(false);
+
+    let mut blocker_codes = Vec::<String>::new();
+    let mut blocked_reasons = Vec::<String>::new();
+    let mut ready_reasons = Vec::<String>::new();
+    if candidate_missing {
+        blocker_codes.push("task_not_in_graph_projection".to_string());
+        blocked_reasons
+            .push("target task is not present in the scoped scheduling projection".to_string());
+    } else if let Some(candidate) = candidate {
+        if candidate.ready_now {
+            ready_reasons.push("no open non-parent dependency blockers".to_string());
+        } else {
+            blocker_codes.push("graph_blocked".to_string());
+            blocked_reasons.extend(candidate.blocked_by.iter().map(|blocker| {
+                format!(
+                    "{} dependency `{}` is `{}`",
+                    blocker.edge_type, blocker.depends_on_id, blocker.dependency_status
+                )
+            }));
+        }
+        if candidate.ready_now && !candidate.ready_parallel_safe {
+            blocker_codes.extend(candidate.parallel_blockers.iter().cloned());
+        }
+    } else {
+        blocker_codes.push("task_graph_empty".to_string());
+        blocked_reasons
+            .push("no open tasks are present in the scoped scheduling projection".to_string());
+    }
+    blocker_codes.sort();
+    blocker_codes.dedup();
+
+    let next_lawful_action = if let Some(candidate) = candidate {
+        if candidate.ready_now {
+            serde_json::json!({
+                "surface": "vida taskflow scheduler dispatch",
+                "command": "vida taskflow scheduler dispatch --json",
+                "reason": "task is graph-ready; use scheduler dispatch to select the next bounded launch set"
+            })
+        } else {
+            serde_json::json!({
+                "surface": "vida task deps",
+                "command": format!("vida task deps {} --json", candidate.task.id),
+                "reason": "task is blocked by open graph dependencies"
+            })
+        }
+    } else {
+        serde_json::json!({
+            "surface": "vida task ready",
+            "command": "vida task ready --json",
+            "reason": "no explainable target was found in the scoped projection"
+        })
+    };
+
+    let status = if candidate_missing { "blocked" } else { "pass" };
+    serde_json::json!({
+        "surface": "vida taskflow graph explain",
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "next_actions": [next_lawful_action["reason"].clone()],
+        "scope_task_id": scope_task_id,
+        "task_id": selected_target,
+        "current_task_id": projection.current_task_id,
+        "task": candidate.map(|candidate| graph_explain_task_ref(&candidate.task)),
+        "ready_now": ready_now,
+        "ready_reasons": ready_reasons,
+        "blocked_by": blocked_by,
+        "blocked_reasons": blocked_reasons,
+        "ready_parallel_safe": ready_parallel_safe,
+        "parallel_blockers": parallel_blockers,
+        "active_critical_path": active_critical_path,
+        "selected_as_current": selected_as_current,
+        "selected_as_parallel_after_current": selected_as_parallel_after_current,
+        "parallel_candidates_after_current": projection
+            .parallel_candidates_after_current
+            .iter()
+            .map(graph_explain_task_ref)
+            .collect::<Vec<_>>(),
+        "next_lawful_action": next_lawful_action,
+        "projection_source": "StateStore::scheduling_projection_scoped",
+        "truth_source": "canonical_task_graph_scheduler_projection",
+    })
+}
+
+async fn run_taskflow_graph_surface(args: &[String]) -> ExitCode {
+    let usage = "Usage: vida taskflow graph explain [task-id] [--scope <task-id>] [--current-task-id <task-id>] [--json]";
+    if matches!(
+        args,
+        [head, flag] if head == "graph" && matches!(flag.as_str(), "--help" | "-h")
+    ) || matches!(
+        args,
+        [head, subcommand, flag]
+            if head == "graph"
+                && subcommand == "explain"
+                && matches!(flag.as_str(), "--help" | "-h")
+    ) {
+        print_taskflow_proxy_help(Some("graph"));
+        return ExitCode::SUCCESS;
+    }
+    if !matches!(args.first().map(String::as_str), Some("graph"))
+        || !matches!(args.get(1).map(String::as_str), Some("explain"))
+    {
+        eprintln!("{usage}");
+        return ExitCode::from(2);
+    }
+
+    let mut target_task_id = None::<String>;
+    let mut scope_task_id = None::<String>;
+    let mut current_task_id = None::<String>;
+    let mut as_json = false;
+    let mut index = 2usize;
+    while let Some(arg) = args.get(index) {
+        match arg.as_str() {
+            "--scope" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("{usage}");
+                    return ExitCode::from(2);
+                };
+                scope_task_id = Some(value.clone());
+                index += 2;
+            }
+            "--current-task-id" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("{usage}");
+                    return ExitCode::from(2);
+                };
+                current_task_id = Some(value.clone());
+                index += 2;
+            }
+            "--json" => {
+                as_json = true;
+                index += 1;
+            }
+            "--help" | "-h" => {
+                print_taskflow_proxy_help(Some("graph"));
+                return ExitCode::SUCCESS;
+            }
+            value if !value.starts_with('-') && target_task_id.is_none() => {
+                target_task_id = Some(value.to_string());
+                index += 1;
+            }
+            _ => {
+                eprintln!("{usage}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    let store = match crate::state_store::StateStore::open_existing(proxy_state_dir()).await {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let projection = match store
+        .scheduling_projection_scoped(scope_task_id.as_deref(), current_task_id.as_deref())
+        .await
+    {
+        Ok(projection) => projection,
+        Err(error) => {
+            eprintln!("Failed to compute graph explain projection: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let payload = build_taskflow_graph_explain_payload(
+        &projection,
+        scope_task_id.as_deref(),
+        target_task_id.as_deref(),
+    );
+
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else {
+        crate::print_surface_header(RenderMode::Plain, "vida taskflow graph explain");
+        crate::print_surface_line(
+            RenderMode::Plain,
+            "status",
+            payload["status"].as_str().unwrap_or("blocked"),
+        );
+        if let Some(task_id) = payload["task_id"].as_str() {
+            crate::print_surface_line(RenderMode::Plain, "task_id", task_id);
+        }
+        crate::print_surface_line(
+            RenderMode::Plain,
+            "ready_now",
+            if payload["ready_now"].as_bool().unwrap_or(false) {
+                "yes"
+            } else {
+                "no"
+            },
+        );
+        crate::print_surface_line(
+            RenderMode::Plain,
+            "ready_parallel_safe",
+            if payload["ready_parallel_safe"].as_bool().unwrap_or(false) {
+                "yes"
+            } else {
+                "no"
+            },
+        );
+        if let Some(action) = payload["next_lawful_action"]["command"].as_str() {
+            crate::print_surface_line(RenderMode::Plain, "next_lawful_action", action);
+        }
+    }
+
+    if payload["status"].as_str() == Some("pass") {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
     let usage = "Usage: vida taskflow scheduler dispatch [--scope <task-id>] [--current-task-id <task-id>] [--state-dir <path>] [--dry-run] [--execute] [--json]";
     if matches!(
@@ -2260,6 +2539,68 @@ mod tests {
     }
 
     #[test]
+    fn graph_explain_payload_reports_ready_blocked_and_parallel_truth() {
+        let mut current = task("current", "task", "open", 1, &[], Vec::new());
+        current.execution_semantics.execution_mode = Some("parallel_safe".to_string());
+        current.execution_semantics.order_bucket = Some("wave-a".to_string());
+        current.execution_semantics.parallel_group = Some("docs".to_string());
+        current.execution_semantics.conflict_domain = Some("current".to_string());
+
+        let mut sibling = task("sibling", "task", "open", 2, &[], Vec::new());
+        sibling.execution_semantics.execution_mode = Some("parallel_safe".to_string());
+        sibling.execution_semantics.order_bucket = Some("wave-a".to_string());
+        sibling.execution_semantics.parallel_group = Some("docs".to_string());
+        sibling.execution_semantics.conflict_domain = Some("sibling".to_string());
+
+        let blocker = TaskDependencyStatus {
+            issue_id: "blocked".to_string(),
+            depends_on_id: "current".to_string(),
+            edge_type: "blocks".to_string(),
+            dependency_status: "open".to_string(),
+            dependency_issue_type: Some("task".to_string()),
+        };
+        let blocked = task("blocked", "task", "open", 3, &[], Vec::new());
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("current".to_string()),
+            ready: vec![
+                scheduling_candidate(current, true, false, true, Vec::new(), vec![]),
+                scheduling_candidate(sibling.clone(), true, true, false, Vec::new(), vec![]),
+            ],
+            blocked: vec![scheduling_candidate(
+                blocked,
+                false,
+                false,
+                false,
+                vec![blocker],
+                vec!["graph_blocked"],
+            )],
+            parallel_candidates_after_current: vec![sibling],
+        };
+
+        let ready_payload =
+            super::build_taskflow_graph_explain_payload(&projection, None, Some("sibling"));
+        assert_eq!(ready_payload["surface"], "vida taskflow graph explain");
+        assert_eq!(ready_payload["status"], "pass");
+        assert_eq!(ready_payload["ready_now"], true);
+        assert_eq!(ready_payload["ready_parallel_safe"], true);
+        assert_eq!(ready_payload["selected_as_parallel_after_current"], true);
+        assert_eq!(
+            ready_payload["next_lawful_action"]["surface"],
+            "vida taskflow scheduler dispatch"
+        );
+
+        let blocked_payload =
+            super::build_taskflow_graph_explain_payload(&projection, None, Some("blocked"));
+        assert_eq!(blocked_payload["status"], "pass");
+        assert_eq!(blocked_payload["ready_now"], false);
+        assert_eq!(blocked_payload["blocked_by"][0]["depends_on_id"], "current");
+        assert_eq!(
+            blocked_payload["next_lawful_action"]["surface"],
+            "vida task deps"
+        );
+    }
+
+    #[test]
     fn taskflow_task_subcommand_supports_replace_jsonl() {
         assert!(taskflow_task_subcommand_supported("replace-jsonl"));
     }
@@ -2668,6 +3009,10 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
 
     if matches!(args.args.first().map(String::as_str), Some("graph-summary")) {
         return run_taskflow_graph_summary(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("graph")) {
+        return run_taskflow_graph_surface(&args.args).await;
     }
 
     if matches!(args.args.first().map(String::as_str), Some("plan")) {

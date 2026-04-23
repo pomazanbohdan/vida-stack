@@ -159,7 +159,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Canonical fields:");
             println!("  execution_mode");
-            println!("    sequential    default single-lane posture unless later semantics prove otherwise");
+            println!(
+                "    sequential    default single-lane posture unless later semantics prove otherwise"
+            );
             println!(
                 "    parallel_safe opt-in parallel admission; still requires matching order bucket and parallel group plus non-colliding conflict domains"
             );
@@ -279,6 +281,34 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             return;
         }
+        Some("graph") => {
+            println!("VIDA TaskFlow help: graph");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Explain one task's ready, blocked, parallel-safe, and critical-path posture from the canonical scheduling projection."
+            );
+            println!(
+                "  This reports graph truth; it does not recompute or override scheduler decisions."
+            );
+            println!();
+            println!("Canonical command:");
+            println!(
+                "  vida taskflow graph explain [task-id] [--scope <task-id>] [--current-task-id <task-id>] [--json]"
+            );
+            println!();
+            println!("Returned semantics:");
+            println!(
+                "  task_id, current_task_id, ready_now, ready_reasons, blocked_by, blocked_reasons, ready_parallel_safe, parallel_blockers, active_critical_path, next_lawful_action"
+            );
+            println!();
+            println!("Failure modes:");
+            println!("  Missing or unreadable authoritative state fails closed.");
+            println!(
+                "  A task outside the scoped scheduling projection returns a blocked explanation instead of guessing."
+            );
+            return;
+        }
         Some("plan") => {
             println!("VIDA TaskFlow help: plan");
             println!();
@@ -288,13 +318,21 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Canonical commands:");
-            println!("  vida taskflow plan generate --source-file <path> --task-prefix <prefix> [--parent-id <task-id>] [--output <draft.json>] [--json]");
-            println!("  vida taskflow plan generate --source-text <text> --task-prefix <prefix> [--parent-id <task-id>] [--output <draft.json>] [--json]");
-            println!("  vida taskflow plan materialize <draft.json> [--state-dir <path>] [--dry-run] [--json]");
+            println!(
+                "  vida taskflow plan generate --source-file <path> --task-prefix <prefix> [--parent-id <task-id>] [--output <draft.json>] [--json]"
+            );
+            println!(
+                "  vida taskflow plan generate --source-text <text> --task-prefix <prefix> [--parent-id <task-id>] [--output <draft.json>] [--json]"
+            );
+            println!(
+                "  vida taskflow plan materialize <draft.json> [--state-dir <path>] [--dry-run] [--json]"
+            );
             println!();
             println!("Failure modes:");
             println!("  Draft generation is read-only unless --output is supplied.");
-            println!("  Materialization fails closed when draft validation or task graph validation finds blockers.");
+            println!(
+                "  Materialization fails closed when draft validation or task graph validation finds blockers."
+            );
             println!(
                 "  Generated drafts are not task truth until materialized through this surface."
             );
@@ -376,7 +414,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida taskflow graph-summary --json");
             println!();
             println!("Failure modes:");
-            println!("  Graph inspection is backlog truth only and does not by itself authorize parallel execution.");
+            println!(
+                "  Graph inspection is backlog truth only and does not by itself authorize parallel execution."
+            );
             println!(
                 "  Invalid graphs must be repaired before scheduler-facing operator decisions."
             );
@@ -398,8 +438,12 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida taskflow status --summary --json");
             println!();
             println!("Failure modes:");
-            println!("  Queue visibility is read-only and must not be treated as a mutation or dispatch surface by itself.");
-            println!("  Backlog readiness and run-graph recovery remain separate authorities; inspect both when the next lawful step is ambiguous.");
+            println!(
+                "  Queue visibility is read-only and must not be treated as a mutation or dispatch surface by itself."
+            );
+            println!(
+                "  Backlog readiness and run-graph recovery remain separate authorities; inspect both when the next lawful step is ambiguous."
+            );
             return;
         }
         Some("consume") => {
@@ -520,9 +564,15 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Operator recipes:");
-            println!("  Inspect one routed packet by run id: vida taskflow packet render <run-id> --json");
-            println!("  Inspect the latest routed packet for one task id: vida taskflow packet task <task-id> --json");
-            println!("  Inspect the latest routed packet without resolving run id first: vida taskflow packet latest --json");
+            println!(
+                "  Inspect one routed packet by run id: vida taskflow packet render <run-id> --json"
+            );
+            println!(
+                "  Inspect the latest routed packet for one task id: vida taskflow packet task <task-id> --json"
+            );
+            println!(
+                "  Inspect the latest routed packet without resolving run id first: vida taskflow packet latest --json"
+            );
             return;
         }
         Some("dispatch") | Some("dispatch-diagnosis") => {
@@ -541,8 +591,12 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida taskflow status --summary --json");
             println!();
             println!("Failure modes:");
-            println!("  Run-graph and recovery surfaces are execution-state truth, not backlog readiness authority.");
-            println!("  Packet rendering fails closed when no persisted dispatch packet/result evidence exists for the selected run, and `packet latest` fails closed when no latest persisted dispatch receipt exists yet.");
+            println!(
+                "  Run-graph and recovery surfaces are execution-state truth, not backlog readiness authority."
+            );
+            println!(
+                "  Packet rendering fails closed when no persisted dispatch packet/result evidence exists for the selected run, and `packet latest` fails closed when no latest persisted dispatch receipt exists yet."
+            );
             return;
         }
         Some("run-graph") => {
@@ -724,7 +778,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Usage:");
     println!("  vida taskflow <args...>");
     println!(
-        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph-summary|plan|replan|scheduler|status|consume|continuation|packet|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
+        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|status|consume|continuation|packet|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
     );
     println!("  vida taskflow <command> --help");
     println!();
@@ -757,6 +811,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  dependencies  graph structure, subtree, and critical-path inspection");
     println!("  queue       ready/blocked/next-step queue posture");
     println!("  next        aggregate next lawful step across backlog and recovery state");
+    println!("  graph       explain one task's ready/blocked/parallel-safe posture");
     println!("  graph-summary  ready/blocked pressure plus critical-path summary");
     println!("  plan       deterministic PlanGraph draft generation and materialization");
     println!("  replan     preview-first adaptive split/spawn-blocker mutation planning");
@@ -779,6 +834,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida task tree <task-id> --json");
     println!("  vida task deps <task-id> --json");
     println!("  vida taskflow graph-summary --json");
+    println!("  vida taskflow graph explain <task-id> --json");
     println!(
         "  vida taskflow plan generate --source-text \"Implement feature X\" --task-prefix feature-x --json"
     );
@@ -811,7 +867,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Operator recipes:");
     println!("  Find the next lawful step: vida task next --json");
     println!("  Inspect ready vs blocked pressure: vida taskflow graph-summary --json");
-    println!("  Draft a bounded task graph: vida taskflow plan generate --source-text \"Implement feature X\" --task-prefix feature-x --json");
+    println!(
+        "  Draft a bounded task graph: vida taskflow plan generate --source-text \"Implement feature X\" --task-prefix feature-x --json"
+    );
     println!("  Inspect one backlog subtree before resequencing: vida task tree <task-id> --json");
     println!("  Inspect dependency ordering before resequencing: vida taskflow help dependencies");
     println!("  Inspect queue posture before dispatch: vida taskflow help queue");
@@ -821,13 +879,17 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  Inspect TaskFlow-wide operator posture: vida taskflow status --summary --json");
     println!("  Inspect dispatch/packet blocker truth: vida taskflow help dispatch");
     println!("  Inspect one active run state: vida taskflow run-graph status <run-id> --json");
-    println!("  Inspect recovery/blocker truth for one run: vida taskflow recovery status <run-id> --json");
+    println!(
+        "  Inspect recovery/blocker truth for one run: vida taskflow recovery status <run-id> --json"
+    );
     println!("  Inspect the canonical backlog contract: vida task --help");
     println!("  Ask which surface to use: vida taskflow query \"what should I run next?\"");
     println!("  Bind the current bounded unit explicitly: vida taskflow help continuation");
     println!("  Inspect persisted packet evidence: vida taskflow help packet");
     println!("  Inspect resumability state: vida taskflow help run-graph");
-    println!("  Bootstrap one design-first feature slice: vida taskflow bootstrap-spec \"feature request\" --json");
+    println!(
+        "  Bootstrap one design-first feature slice: vida taskflow bootstrap-spec \"feature request\" --json"
+    );
     println!("  Review runtime diagnostics: vida taskflow help doctor");
     println!();
     println!("Failure modes:");

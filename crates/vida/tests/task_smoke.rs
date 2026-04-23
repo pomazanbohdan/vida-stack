@@ -4,8 +4,8 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::Surreal;
+use surrealdb::engine::local::{Db, SurrealKv};
 use tokio::runtime::Runtime;
 
 fn vida() -> Command {
@@ -140,7 +140,7 @@ where
     for attempt in 0..STATE_LOCK_RETRY_LIMIT {
         match builder().output() {
             Ok(output) if output.status.success() || !is_state_lock_error(&output) => {
-                return output
+                return output;
             }
             Ok(output) => {
                 last = Some(output);
@@ -381,6 +381,27 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
     assert_eq!(critical_path["length"], 2);
     assert_eq!(critical_path["root_task_id"], "vida-a");
     assert_eq!(critical_path["terminal_task_id"], "vida-b");
+
+    let ready_explain: serde_json::Value = serde_json::from_str(&run_and_assert_success(
+        &["taskflow", "graph", "explain", "vida-a", "--json"],
+        &state_dir,
+    ))
+    .expect("graph explain ready json should parse");
+    assert_eq!(ready_explain["surface"], "vida taskflow graph explain");
+    assert_eq!(ready_explain["task_id"], "vida-a");
+    assert_eq!(ready_explain["ready_now"], true);
+    assert_eq!(ready_explain["active_critical_path"], true);
+
+    let blocked_explain: serde_json::Value = serde_json::from_str(&run_and_assert_success(
+        &["taskflow", "graph", "explain", "vida-b", "--json"],
+        &state_dir,
+    ))
+    .expect("graph explain blocked json should parse");
+    assert_eq!(blocked_explain["surface"], "vida taskflow graph explain");
+    assert_eq!(blocked_explain["task_id"], "vida-b");
+    assert_eq!(blocked_explain["ready_now"], false);
+    assert_eq!(blocked_explain["blocked_by"][0]["depends_on_id"], "vida-a");
+    assert_eq!(blocked_explain["active_critical_path"], true);
 
     let dep_add_stdout = run_and_assert_success(
         &[
@@ -1500,14 +1521,16 @@ fn status_json_blocks_external_cli_when_sandbox_active_and_network_unreachable()
         preflight["blocker_code"],
         "external_cli_network_access_unavailable_under_sandbox"
     );
-    assert!(preflight["next_actions"]
-        .as_array()
-        .expect("next actions should be array")
-        .iter()
-        .any(|row| row
-            .as_str()
-            .unwrap_or_default()
-            .contains("Allow network access")));
+    assert!(
+        preflight["next_actions"]
+            .as_array()
+            .expect("next actions should be array")
+            .iter()
+            .any(|row| row
+                .as_str()
+                .unwrap_or_default()
+                .contains("Allow network access"))
+    );
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
@@ -1913,11 +1936,13 @@ fn consume_final_blocks_when_execution_preparation_is_required_without_handoff_e
             "required execution_preparation lane must block without evidence/handoff packet"
         );
         assert_eq!(parsed["operator_contracts"]["status"], "blocked");
-        assert!(parsed["blocker_codes"]
-            .as_array()
-            .expect("blocker_codes should be an array")
-            .iter()
-            .any(|value| value.as_str() == Some("closure_admission_block")));
+        assert!(
+            parsed["blocker_codes"]
+                .as_array()
+                .expect("blocker_codes should be an array")
+                .iter()
+                .any(|value| value.as_str() == Some("closure_admission_block"))
+        );
         assert_eq!(
             parsed["payload"]["dispatch_receipt"]["blocker_code"],
             "pending_execution_preparation_evidence"
@@ -2361,8 +2386,7 @@ fn cross_surface_protocol_binding_parity() {
         "consume dispatch run_id",
     );
     let consume_artifact_run_id = require_json_string(
-        &consume_json["operator_contracts"]["artifact_refs"]
-            ["latest_run_graph_dispatch_receipt_id"],
+        &consume_json["operator_contracts"]["artifact_refs"]["latest_run_graph_dispatch_receipt_id"],
         "consume artifact refs latest run graph dispatch receipt id",
     );
 
