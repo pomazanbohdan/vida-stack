@@ -81,6 +81,7 @@ mod taskflow_consume_resume;
 mod taskflow_continuation;
 mod taskflow_layer4;
 mod taskflow_packet;
+mod taskflow_plan_graph;
 mod taskflow_protocol_binding;
 mod taskflow_proxy;
 mod taskflow_routing;

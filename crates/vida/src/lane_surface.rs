@@ -837,6 +837,31 @@ fn write_lane_packet(path: &str, packet: &serde_json::Value) -> Result<(), Strin
         .map_err(|error| format!("Failed to write persisted lane packet `{path}`: {error}"))
 }
 
+fn decode_lane_completion_packet_context(
+    packet: &serde_json::Value,
+) -> Result<Option<(crate::RuntimeConsumptionLaneSelection, serde_json::Value)>, String> {
+    let Some(role_selection_value) = packet
+        .get("role_selection_full")
+        .filter(|value| !value.is_null())
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let Some(run_graph_bootstrap) = packet
+        .get("run_graph_bootstrap")
+        .filter(|value| !value.is_null())
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let role_selection =
+        serde_json::from_value::<crate::RuntimeConsumptionLaneSelection>(role_selection_value)
+            .map_err(|error| {
+                format!("Failed to decode role_selection_full from persisted lane packet: {error}")
+            })?;
+    Ok(Some((role_selection, run_graph_bootstrap)))
+}
+
 pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
     if args.args.is_empty() || args.args.iter().all(|arg| arg.starts_with('-')) {
         return emit_blocked_lane_envelope(args.args.iter().any(|arg| arg == "--json"));
@@ -1011,31 +1036,17 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            packet["downstream_dispatch_ready"] = serde_json::json!(true);
-            packet["downstream_dispatch_blockers"] = serde_json::json!([]);
-            packet["downstream_dispatch_status"] = serde_json::json!("packet_ready");
-            packet["downstream_dispatch_result_path"] =
-                serde_json::json!(completion_result_path.clone());
-            packet["downstream_lane_status"] = serde_json::json!("packet_ready");
-            packet["downstream_dispatch_active_target"] = serde_json::json!(completed_target);
-            if let Err(error) = write_lane_packet(&packet_path, &packet) {
-                eprintln!("{error}");
-                return ExitCode::from(1);
-            }
-
             receipt.downstream_dispatch_ready = true;
             receipt.downstream_dispatch_blockers.clear();
             receipt.downstream_dispatch_status = Some("packet_ready".to_string());
-            receipt.downstream_dispatch_result_path = Some(completion_result_path);
+            receipt.downstream_dispatch_result_path = Some(completion_result_path.clone());
             receipt.downstream_dispatch_active_target = Some(completed_target.clone());
             receipt.downstream_dispatch_last_target = Some(completed_target);
             receipt.dispatch_status = "executed".to_string();
             receipt.blocker_code = None;
             receipt.exception_path_receipt_id = None;
             receipt.supersedes_receipt_id = None;
-            if receipt.dispatch_result_path.is_none() {
-                receipt.dispatch_result_path = receipt.downstream_dispatch_result_path.clone();
-            }
+            receipt.dispatch_result_path = Some(completion_result_path);
             receipt.lane_status = if receipt.dispatch_target == "closure" {
                 crate::LaneStatus::LaneCompleted.as_str().to_string()
             } else {
@@ -1043,6 +1054,48 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     .as_str()
                     .to_string()
             };
+            match decode_lane_completion_packet_context(&packet) {
+                Ok(Some((role_selection, run_graph_bootstrap))) => {
+                    if let Err(error) =
+                        crate::runtime_dispatch_state::refresh_downstream_dispatch_preview(
+                            &store,
+                            &role_selection,
+                            &run_graph_bootstrap,
+                            &mut receipt,
+                        )
+                        .await
+                    {
+                        eprintln!(
+                            "Failed to refresh downstream dispatch preview after lane completion: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
+            }
+            let downstream_dispatch_status = receipt
+                .downstream_dispatch_status
+                .clone()
+                .unwrap_or_else(|| "packet_ready".to_string());
+            packet["downstream_dispatch_ready"] =
+                serde_json::json!(receipt.downstream_dispatch_ready);
+            packet["downstream_dispatch_blockers"] =
+                serde_json::json!(receipt.downstream_dispatch_blockers.clone());
+            packet["downstream_dispatch_status"] =
+                serde_json::json!(downstream_dispatch_status.clone());
+            packet["downstream_dispatch_result_path"] =
+                serde_json::json!(receipt.downstream_dispatch_result_path.clone());
+            packet["downstream_lane_status"] = serde_json::json!(downstream_dispatch_status);
+            packet["downstream_dispatch_active_target"] =
+                serde_json::json!(receipt.downstream_dispatch_active_target.clone());
+            if let Err(error) = write_lane_packet(&packet_path, &packet) {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
             if receipt.dispatch_status == "executed" {
                 if let Some(current_status) = status.as_ref() {
                     let executed_status = crate::runtime_dispatch_state::apply_first_handoff_execution_to_run_graph_status(
@@ -1214,6 +1267,54 @@ mod tests {
     fn lane_surface_test_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn lane_complete_role_selection(dev_task_id: &str) -> crate::RuntimeConsumptionLaneSelection {
+        crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "tracked_flow_bootstrap": {
+                    "dev_task": {
+                        "task_id": dev_task_id,
+                        "ensure_command": "vida task ensure feature-x-dev \"Dev pack\" --type task --status open --json"
+                    }
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["implementer", "coach", "verification"],
+                        "implementer_activation": {
+                            "completion_blocker": "pending_implementation_evidence",
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        },
+                        "coach_activation": {
+                            "completion_blocker": "pending_review_clean_evidence",
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "coach"
+                        },
+                        "verifier_activation": {
+                            "completion_blocker": "pending_verification_evidence",
+                            "activation_agent_type": "senior",
+                            "activation_runtime_role": "verifier"
+                        }
+                    }
+                },
+                "orchestration_contract": {}
+            }),
+            reason: "test".to_string(),
+        }
     }
 
     fn wait_for_state_unlock(state_dir: &std::path::Path) {
@@ -2033,6 +2134,10 @@ mod tests {
             serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "implementer",
+                "role_selection_full": lane_complete_role_selection(run_id),
+                "run_graph_bootstrap": {
+                    "run_id": run_id
+                },
                 "downstream_dispatch_active_target": "implementer",
                 "downstream_dispatch_ready": false,
                 "downstream_dispatch_blockers": ["pending_implementation_evidence"],
@@ -2042,6 +2147,29 @@ mod tests {
             .to_string(),
         )
         .expect("write root dispatch packet");
+        let activation_result_path = root.join(
+            "runtime-consumption/dispatch-results/run-lane-complete-exception-activation.json",
+        );
+        std::fs::create_dir_all(
+            activation_result_path
+                .parent()
+                .expect("activation result path should have parent"),
+        )
+        .expect("create activation result dir");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "execution_state": "blocked",
+                "blocker_code": "internal_dispatch_timeout_without_receipt",
+                "activation_semantics": {
+                    "view_only": true,
+                    "activation_kind": "activation_view"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation-view result");
 
         let mut receipt = sample_receipt("blocked");
         receipt.run_id = run_id.to_string();
@@ -2050,6 +2178,7 @@ mod tests {
         receipt.dispatch_surface = Some("vida agent-init".to_string());
         receipt.dispatch_command = Some("vida agent-init".to_string());
         receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
         receipt.downstream_dispatch_target = Some("coach".to_string());
         receipt.downstream_dispatch_command = Some("vida agent-init".to_string());
         receipt.downstream_dispatch_note =
@@ -2120,9 +2249,14 @@ mod tests {
             after.downstream_dispatch_status.as_deref(),
             Some("packet_ready")
         );
+        assert_eq!(after.dispatch_status, "executed");
+        assert_eq!(after.downstream_dispatch_target.as_deref(), Some("coach"));
         assert!(
-            after.downstream_dispatch_packet_path.is_none(),
-            "active exception takeover completion should not invent a downstream packet path"
+            after
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()),
+            "active exception takeover completion should materialize the next downstream packet when packet context is available"
         );
         let result_path = after
             .downstream_dispatch_result_path
@@ -2142,6 +2276,10 @@ mod tests {
         assert_eq!(
             result_json["source_dispatch_packet_path"],
             packet_path.display().to_string()
+        );
+        assert_eq!(
+            after.dispatch_result_path.as_deref(),
+            Some(result_path.as_str())
         );
 
         let packet = std::fs::read_to_string(&packet_path).expect("read updated packet");

@@ -7,7 +7,7 @@ const DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS: [&str; 3] = [
     "docs/product/spec",
     "docs/process",
 ];
-const CONSUME_RESUME_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const CONSUME_RESUME_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn fail_fast_state_store_open(
     state_root: std::path::PathBuf,

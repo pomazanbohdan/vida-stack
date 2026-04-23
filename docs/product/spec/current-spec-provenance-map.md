@@ -211,6 +211,8 @@ Companion rule:
    Sources: user handoff report `model/reasoning profile behind carriers` on 2026-04-22; current carrier/product law in `docs/product/spec/{agent-role-skill-profile-flow-model,release-1-carrier-neutral-runtime-and-host-materialization-design,external-cli-carrier-hardening-design,compiled-runtime-bundle-contract}.md`; current project process guidance in `docs/process/codex-agent-configuration-guide.md`; current config in `vida.config.yaml`; and current runtime/materialization/status code in `crates/vida/src/{host_runtime_materialization,runtime_assignment_builder,runtime_assignment_policy,carrier_runtime_metadata,runtime_dispatch_execution,runtime_dispatch_state,status_surface_host_agents,status_surface_external_cli,taskflow_consume_bundle}.rs`
 38. [unified-hybrid-runtime-selection-policy-design.md](unified-hybrid-runtime-selection-policy-design.md)
    Sources: user-provided external static audit on 2026-04-23; validated code-path evidence in `crates/vida/src/{carrier_runtime_projection,runtime_assignment_builder,runtime_assignment_policy,runtime_lane_summary,taskflow_routing,development_flow_orchestration,runtime_dispatch_state,runtime_dispatch_execution,status_surface_external_cli,status_surface_host_agents,taskflow_consume_bundle,init_surfaces}.rs`; current config in `vida.config.yaml`; and adjacent active design docs `carrier-model-profile-selection-runtime-design.md`, `implementation-backend-admissibility-and-selection-truth-design.md`, `external-cli-carrier-hardening-design.md`, and `reconcile-qwen-cli-carrier-drift-design.md`
+39. [task-graph-adaptive-planner-design.md](task-graph-adaptive-planner-design.md)
+   Sources: user-provided external static audit on task planning, replanning, task creation, dependencies, parallelism, and adaptive execution on 2026-04-23; current graph/scheduler law in `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`; execution preparation law in `docs/product/spec/execution-preparation-and-developer-handoff-model.md`; operating-loop law in `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`; kernel scope in `docs/product/spec/partial-development-kernel-model.md`; and current owner code in `crates/vida/src/{state_store_task_graph,state_store_task_store,state_store_task_models,task_surface,taskflow_proxy,taskflow_layer4}.rs`
 
 ## Routing Pointers
 
@@ -261,5 +263,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-provenance-map.md
 created_at: '2026-03-16T09:05:00+02:00'
-updated_at: 2026-04-23T06:56:05.323542262Z
+updated_at: 2026-04-23T11:29:17.904904415Z
 changelog_ref: current-spec-provenance-map.changelog.jsonl

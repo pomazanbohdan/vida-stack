@@ -5,7 +5,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::display_lane_label;
 use crate::BlockerCode;
 
-const CONSUME_FINAL_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const CONSUME_FINAL_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn fail_fast_state_store_open_with_timeout(
     state_root: std::path::PathBuf,

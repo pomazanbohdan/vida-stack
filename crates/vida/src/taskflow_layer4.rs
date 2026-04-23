@@ -273,6 +273,27 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             return;
         }
+        Some("plan") => {
+            println!("VIDA TaskFlow help: plan");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Generate deterministic PlanGraph drafts and explicitly materialize them into the authoritative task store."
+            );
+            println!();
+            println!("Canonical commands:");
+            println!("  vida taskflow plan generate --source-file <path> --task-prefix <prefix> [--parent-id <task-id>] [--output <draft.json>] [--json]");
+            println!("  vida taskflow plan generate --source-text <text> --task-prefix <prefix> [--parent-id <task-id>] [--output <draft.json>] [--json]");
+            println!("  vida taskflow plan materialize <draft.json> [--state-dir <path>] [--dry-run] [--json]");
+            println!();
+            println!("Failure modes:");
+            println!("  Draft generation is read-only unless --output is supplied.");
+            println!("  Materialization fails closed when draft validation or task graph validation finds blockers.");
+            println!(
+                "  Generated drafts are not task truth until materialized through this surface."
+            );
+            return;
+        }
         Some("dependencies") => {
             println!("VIDA TaskFlow help: dependencies");
             println!();
@@ -638,7 +659,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Usage:");
     println!("  vida taskflow <args...>");
     println!(
-        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph-summary|status|consume|continuation|packet|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
+        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph-summary|plan|status|consume|continuation|packet|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
     );
     println!("  vida taskflow <command> --help");
     println!();
@@ -672,6 +693,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  queue       ready/blocked/next-step queue posture");
     println!("  next        aggregate next lawful step across backlog and recovery state");
     println!("  graph-summary  ready/blocked pressure plus critical-path summary");
+    println!("  plan       deterministic PlanGraph draft generation and materialization");
     println!("  parallelism explicit sequencing and parallel-safe scheduling contract");
     println!("  status      family-scoped alias to the root operator status surface");
     println!("  continuation explicit bounded-unit binding");
@@ -690,6 +712,10 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida task tree <task-id> --json");
     println!("  vida task deps <task-id> --json");
     println!("  vida taskflow graph-summary --json");
+    println!(
+        "  vida taskflow plan generate --source-text \"Implement feature X\" --task-prefix feature-x --json"
+    );
+    println!("  vida taskflow plan materialize draft.json --dry-run --json");
     println!("  vida taskflow help dependencies");
     println!("  vida taskflow help queue");
     println!("  vida taskflow help dispatch");
@@ -711,6 +737,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Operator recipes:");
     println!("  Find the next lawful step: vida task next --json");
     println!("  Inspect ready vs blocked pressure: vida taskflow graph-summary --json");
+    println!("  Draft a bounded task graph: vida taskflow plan generate --source-text \"Implement feature X\" --task-prefix feature-x --json");
     println!("  Inspect one backlog subtree before resequencing: vida task tree <task-id> --json");
     println!("  Inspect dependency ordering before resequencing: vida taskflow help dependencies");
     println!("  Inspect queue posture before dispatch: vida taskflow help queue");

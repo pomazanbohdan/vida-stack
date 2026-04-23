@@ -3,7 +3,7 @@ use std::future::Future;
 use std::process::ExitCode;
 use std::time::Duration;
 
-const CONSUME_BUNDLE_CHECK_LOCK_TIMEOUT: Duration = Duration::from_secs(3);
+const CONSUME_BUNDLE_CHECK_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) async fn run_taskflow_consume_bundle(args: &[String]) -> Option<ExitCode> {
     match args {

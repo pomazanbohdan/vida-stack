@@ -1964,6 +1964,10 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
         return run_taskflow_graph_summary(&args.args).await;
     }
 
+    if matches!(args.args.first().map(String::as_str), Some("plan")) {
+        return crate::taskflow_plan_graph::run_taskflow_plan(&args.args).await;
+    }
+
     if matches!(
         args.args.first().map(String::as_str),
         Some("route" | "validate-routing")

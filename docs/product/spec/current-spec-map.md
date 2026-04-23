@@ -298,6 +298,9 @@ Companion rule:
 49. [unified-hybrid-runtime-selection-policy-design.md](unified-hybrid-runtime-selection-policy-design.md)
    Config families: bounded follow-up wave after the carrier/model-profile contract rollout, including dynamic-versus-route selection truth, budget and route policy enforcement, internal-subagent candidate pooling, external reasoning/readiness enforcement, operator diagnostics, and residual qwen drift closure
    Registered path: `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
+50. [task-graph-adaptive-planner-design.md](task-graph-adaptive-planner-design.md)
+   Config families: bounded TaskFlow PlanGraph generation and materialization, adaptive task split/spawn/replan mutations, graph explain diagnostics, scheduler dispatch preview, and task-linked execution-preparation artifact shape
+   Registered path: `docs/product/spec/task-graph-adaptive-planner-design.md`
 
 ### Support
 
@@ -353,5 +356,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-23T06:56:05.323250297Z
+updated_at: 2026-04-23T11:29:17.899512263Z
 changelog_ref: current-spec-map.changelog.jsonl
