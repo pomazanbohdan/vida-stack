@@ -159,26 +159,21 @@ pub(crate) fn normalize_profile_projection_from_yaml(
     let fallback_reasoning_effort =
         crate::yaml_string(crate::yaml_lookup(owner, &["model_reasoning_effort"]))
             .or_else(|| crate::yaml_string(crate::yaml_lookup(owner, &["reasoning_effort"])));
-    let fallback_plan_mode_reasoning_effort = crate::yaml_string(crate::yaml_lookup(
-        owner,
-        &["plan_mode_reasoning_effort"],
-    ));
-    let fallback_sandbox_mode =
-        crate::yaml_string(crate::yaml_lookup(owner, &["sandbox_mode"]));
-    let fallback_normalized_cost_units = yaml_u64(crate::yaml_lookup(owner, &["normalized_cost_units"]))
-        .or_else(|| yaml_u64(crate::yaml_lookup(owner, &["budget_cost_units"])))
-        .or(fallback_rate)
-        .or_else(|| yaml_u64(crate::yaml_lookup(owner, &["rate"])));
-    let fallback_speed_tier =
-        crate::yaml_string(crate::yaml_lookup(owner, &["speed_tier"]));
-    let fallback_quality_tier =
-        crate::yaml_string(crate::yaml_lookup(owner, &["quality_tier"]));
-    let fallback_write_scope =
-        crate::yaml_string(crate::yaml_lookup(owner, &["write_scope"]));
+    let fallback_plan_mode_reasoning_effort =
+        crate::yaml_string(crate::yaml_lookup(owner, &["plan_mode_reasoning_effort"]));
+    let fallback_sandbox_mode = crate::yaml_string(crate::yaml_lookup(owner, &["sandbox_mode"]));
+    let fallback_normalized_cost_units =
+        yaml_u64(crate::yaml_lookup(owner, &["normalized_cost_units"]))
+            .or_else(|| yaml_u64(crate::yaml_lookup(owner, &["budget_cost_units"])))
+            .or(fallback_rate)
+            .or_else(|| yaml_u64(crate::yaml_lookup(owner, &["rate"])));
+    let fallback_speed_tier = crate::yaml_string(crate::yaml_lookup(owner, &["speed_tier"]));
+    let fallback_quality_tier = crate::yaml_string(crate::yaml_lookup(owner, &["quality_tier"]));
+    let fallback_write_scope = crate::yaml_string(crate::yaml_lookup(owner, &["write_scope"]));
     let mut profiles = Vec::new();
 
-    if let Some(entries) = crate::yaml_lookup(owner, &["model_profiles"])
-        .and_then(serde_yaml::Value::as_mapping)
+    if let Some(entries) =
+        crate::yaml_lookup(owner, &["model_profiles"]).and_then(serde_yaml::Value::as_mapping)
     {
         for (profile_id, profile_value) in entries {
             let Some(profile_id) = profile_id
@@ -212,10 +207,17 @@ pub(crate) fn normalize_profile_projection_from_yaml(
                     .or_else(|| crate::yaml_string(crate::yaml_lookup(profile_value, &["model"])))
                     .or_else(|| fallback_model_ref.clone()),
                 crate::yaml_string(crate::yaml_lookup(profile_value, &["provider"]))
-                    .or_else(|| crate::yaml_string(crate::yaml_lookup(profile_value, &["model_provider"])))
+                    .or_else(|| {
+                        crate::yaml_string(crate::yaml_lookup(profile_value, &["model_provider"]))
+                    })
                     .or_else(|| fallback_provider.clone()),
                 crate::yaml_string(crate::yaml_lookup(profile_value, &["reasoning_effort"]))
-                    .or_else(|| crate::yaml_string(crate::yaml_lookup(profile_value, &["model_reasoning_effort"])))
+                    .or_else(|| {
+                        crate::yaml_string(crate::yaml_lookup(
+                            profile_value,
+                            &["model_reasoning_effort"],
+                        ))
+                    })
                     .or_else(|| fallback_reasoning_effort.clone()),
                 crate::yaml_string(crate::yaml_lookup(
                     profile_value,
@@ -224,10 +226,13 @@ pub(crate) fn normalize_profile_projection_from_yaml(
                 .or_else(|| fallback_plan_mode_reasoning_effort.clone()),
                 crate::yaml_string(crate::yaml_lookup(profile_value, &["sandbox_mode"]))
                     .or_else(|| fallback_sandbox_mode.clone()),
-                yaml_u64(crate::yaml_lookup(profile_value, &["normalized_cost_units"]))
-                    .or_else(|| yaml_u64(crate::yaml_lookup(profile_value, &["budget_cost_units"])))
-                    .or_else(|| yaml_u64(crate::yaml_lookup(profile_value, &["rate"])))
-                    .or(fallback_normalized_cost_units),
+                yaml_u64(crate::yaml_lookup(
+                    profile_value,
+                    &["normalized_cost_units"],
+                ))
+                .or_else(|| yaml_u64(crate::yaml_lookup(profile_value, &["budget_cost_units"])))
+                .or_else(|| yaml_u64(crate::yaml_lookup(profile_value, &["rate"])))
+                .or(fallback_normalized_cost_units),
                 crate::yaml_string(crate::yaml_lookup(profile_value, &["speed_tier"]))
                     .or_else(|| fallback_speed_tier.clone()),
                 crate::yaml_string(crate::yaml_lookup(profile_value, &["quality_tier"]))
@@ -236,10 +241,12 @@ pub(crate) fn normalize_profile_projection_from_yaml(
                     .or_else(|| fallback_write_scope.clone()),
                 runtime_roles,
                 task_classes,
-                crate::yaml_lookup(profile_value, &["readiness"])
-                    .map(|value| serde_json::to_value(value.clone()).unwrap_or(serde_json::Value::Null)),
-                crate::yaml_lookup(profile_value, &["reasoning_control"])
-                    .map(|value| serde_json::to_value(value.clone()).unwrap_or(serde_json::Value::Null)),
+                crate::yaml_lookup(profile_value, &["readiness"]).map(|value| {
+                    serde_json::to_value(value.clone()).unwrap_or(serde_json::Value::Null)
+                }),
+                crate::yaml_lookup(profile_value, &["reasoning_control"]).map(|value| {
+                    serde_json::to_value(value.clone()).unwrap_or(serde_json::Value::Null)
+                }),
             ));
         }
     }
@@ -260,10 +267,12 @@ pub(crate) fn normalize_profile_projection_from_yaml(
             fallback_write_scope,
             fallback_runtime_roles.to_vec(),
             fallback_task_classes.to_vec(),
-            crate::yaml_lookup(owner, &["readiness"])
-                .map(|value| serde_json::to_value(value.clone()).unwrap_or(serde_json::Value::Null)),
-            crate::yaml_lookup(owner, &["reasoning_control"])
-                .map(|value| serde_json::to_value(value.clone()).unwrap_or(serde_json::Value::Null)),
+            crate::yaml_lookup(owner, &["readiness"]).map(|value| {
+                serde_json::to_value(value.clone()).unwrap_or(serde_json::Value::Null)
+            }),
+            crate::yaml_lookup(owner, &["reasoning_control"]).map(|value| {
+                serde_json::to_value(value.clone()).unwrap_or(serde_json::Value::Null)
+            }),
         ));
     }
 
@@ -355,14 +364,19 @@ pub(crate) fn model_profiles_from_json_row(row: &serde_json::Value) -> Vec<serde
                 .trim()
                 .to_string();
             profiles.push(profile_with_defaults(
-                &synthetic_profile_id(row["role_id"].as_str().unwrap_or_default(), model_ref, &reasoning_effort),
+                &synthetic_profile_id(
+                    row["role_id"].as_str().unwrap_or_default(),
+                    model_ref,
+                    &reasoning_effort,
+                ),
                 Some(model_ref.to_string()),
                 row["model_provider"].as_str().map(str::to_string),
                 Some(reasoning_effort),
-                row["plan_mode_reasoning_effort"].as_str().map(str::to_string),
+                row["plan_mode_reasoning_effort"]
+                    .as_str()
+                    .map(str::to_string),
                 row["sandbox_mode"].as_str().map(str::to_string),
-                json_u64(row.get("normalized_cost_units"))
-                    .or_else(|| json_u64(row.get("rate"))),
+                json_u64(row.get("normalized_cost_units")).or_else(|| json_u64(row.get("rate"))),
                 row["speed_tier"].as_str().map(str::to_string),
                 row["quality_tier"].as_str().map(str::to_string),
                 row["write_scope"].as_str().map(str::to_string),
@@ -549,10 +563,8 @@ task_classes: [implementation]
             }
         });
 
-        let patched = super::apply_selected_model_profile_to_row(
-            &row,
-            Some("codex_spark_xhigh_arch"),
-        );
+        let patched =
+            super::apply_selected_model_profile_to_row(&row, Some("codex_spark_xhigh_arch"));
 
         assert_eq!(
             patched["selected_model_profile_id"],

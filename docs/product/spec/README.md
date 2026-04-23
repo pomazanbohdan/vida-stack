@@ -53,6 +53,7 @@ Active design docs:
 - `docs/product/spec/fix-bug-implementer-delivery-packet-can-design.md`
 - `docs/product/spec/fix-bug-specification-lane-can-mutate-design.md`
 - `docs/product/spec/continue-post-main-carveout-with-next-design.md`
+- `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
 
 Current promoted runtime-control specs:
 
@@ -71,5 +72,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-22T15:34:20.331474658Z
+updated_at: 2026-04-23T06:56:05.323762661Z
 changelog_ref: README.changelog.jsonl

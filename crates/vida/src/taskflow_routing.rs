@@ -136,6 +136,10 @@ fn carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<Str
         .filter(|value| !value.is_empty())
 }
 
+pub(crate) fn activation_backend_from_route(route: &serde_json::Value) -> Option<String> {
+    carrier_backend_from_assignment(dispatch_contract_lane_activation(route))
+}
+
 fn route_backend_value(route: &serde_json::Value, key: &str) -> Option<String> {
     json_string(route.get(key))
         .filter(|value| !value.trim().is_empty())
@@ -150,17 +154,14 @@ pub(crate) fn runtime_assignment_from_route<'a>(
     route: &'a serde_json::Value,
 ) -> &'a serde_json::Value {
     route
-        .get("activation")
-        .or_else(|| route.get("carrier_runtime_assignment"))
+        .get("carrier_runtime_assignment")
         .or_else(|| route.get("runtime_assignment"))
         .unwrap_or(&serde_json::Value::Null)
 }
 
 #[allow(dead_code)]
 pub(crate) fn runtime_assignment_source_from_route(route: &serde_json::Value) -> &'static str {
-    if route.get("activation").is_some() {
-        "activation"
-    } else if route.get("carrier_runtime_assignment").is_some() {
+    if route.get("carrier_runtime_assignment").is_some() {
         "carrier_runtime_assignment"
     } else if route.get("runtime_assignment").is_some() {
         "runtime_assignment"
@@ -198,6 +199,22 @@ fn carrier_backend_from_route(route: &serde_json::Value) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+pub(crate) fn route_primary_backend_hint_from_route(route: &serde_json::Value) -> Option<String> {
+    explicit_executor_backend_from_route(route)
+        .or_else(|| activation_backend_from_route(route))
+        .or_else(|| route_backend_value(route, "carrier_backend_hint"))
+        .or_else(|| route_backend_value(route, "subagents"))
+}
+
+pub(crate) fn runtime_assignment_backend_for_route(
+    execution_plan: &serde_json::Value,
+    route: &serde_json::Value,
+) -> Option<String> {
+    carrier_backend_from_assignment(runtime_assignment_from_route(route)).or_else(|| {
+        carrier_backend_from_assignment(runtime_assignment_from_execution_plan(execution_plan))
+    })
+}
+
 pub(crate) fn explicit_executor_backend_from_route(route: &serde_json::Value) -> Option<String> {
     route_backend_value(route, "executor_backend")
 }
@@ -227,23 +244,129 @@ pub(crate) fn selected_backend_from_execution_plan_route(
     execution_plan: &serde_json::Value,
     route: &serde_json::Value,
 ) -> Option<String> {
-    explicit_executor_backend_from_route(route)
+    runtime_assignment_backend_for_route(execution_plan, route)
+        .or_else(|| activation_backend_from_route(route))
+        .or_else(|| explicit_executor_backend_from_route(route))
         .or_else(|| route_backend_value(route, "fallback_executor_backend"))
         .or_else(|| route_backend_value(route, "fanout_executor_backends"))
-        .or_else(|| carrier_backend_from_assignment(dispatch_contract_lane_activation(route)))
-        .or_else(|| carrier_backend_from_assignment(runtime_assignment_from_route(route)))
-        .or_else(|| {
-            carrier_backend_from_assignment(runtime_assignment_from_execution_plan(execution_plan))
-        })
         .or_else(|| legacy_route_backend_hint(route))
         .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn backend_selection_source(
+    effective_selected_backend: Option<&str>,
+    inherited_selected_backend: Option<&str>,
+    runtime_assignment_backend: Option<&str>,
+    route_primary_backend: Option<&str>,
+    route_fallback_backend: Option<&str>,
+    route_fanout_backends: &[String],
+    activation_agent_type: Option<&str>,
+    explicit_selected_backend_override: Option<&str>,
+) -> &'static str {
+    match effective_selected_backend {
+        Some(backend_id) if explicit_selected_backend_override == Some(backend_id) => {
+            "explicit_retry_override"
+        }
+        Some(backend_id) if inherited_selected_backend == Some(backend_id) => {
+            "dynamic_runtime_selection"
+        }
+        Some(backend_id) if runtime_assignment_backend == Some(backend_id) => "runtime_assignment",
+        Some(backend_id) if route_primary_backend == Some(backend_id) => "route_primary_hint",
+        Some(backend_id) if route_fallback_backend == Some(backend_id) => "route_fallback_hint",
+        Some(backend_id)
+            if route_fanout_backends
+                .iter()
+                .any(|candidate| candidate == backend_id) =>
+        {
+            "route_fanout_hint"
+        }
+        Some(backend_id) if activation_agent_type == Some(backend_id) => "activation_agent_type",
+        Some(_) => "derived_selection",
+        None => "unknown",
+    }
+}
+
+pub(crate) fn route_explain_payload(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+    route: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let route_primary_backend = route.and_then(route_primary_backend_hint_from_route);
+    let runtime_assignment_backend =
+        route.and_then(|route| runtime_assignment_backend_for_route(execution_plan, route));
+    let fallback_backend = route.and_then(fallback_executor_backend_from_route);
+    let fanout_backends = route
+        .map(fanout_executor_backends_from_route)
+        .unwrap_or_default();
+    let activation_agent_type = route.and_then(activation_backend_from_route);
+    let selected_backend =
+        route.and_then(|route| selected_backend_from_execution_plan_route(execution_plan, route));
+    let selection_source = backend_selection_source(
+        selected_backend.as_deref(),
+        None,
+        runtime_assignment_backend.as_deref(),
+        route_primary_backend.as_deref(),
+        fallback_backend.as_deref(),
+        &fanout_backends,
+        activation_agent_type.as_deref(),
+        None,
+    );
+
+    serde_json::json!({
+        "dispatch_target": dispatch_target,
+        "route_present": route.is_some(),
+        "selected_backend": selected_backend,
+        "selection_source": selection_source,
+        "runtime_assignment_source": route
+            .map(runtime_assignment_source_from_route)
+            .unwrap_or("missing"),
+        "runtime_assignment_backend": runtime_assignment_backend,
+        "route_primary_backend": route_primary_backend,
+        "fallback_backend": fallback_backend,
+        "fanout_backends": fanout_backends,
+        "activation_agent_type": activation_agent_type,
+    })
+}
+
+pub(crate) fn route_explain_status(
+    payload: &serde_json::Value,
+    admissible: Option<bool>,
+) -> String {
+    if payload["route_present"].as_bool() != Some(true) {
+        return "blocked".to_string();
+    }
+    if payload["selected_backend"].as_str().is_none() {
+        return "blocked".to_string();
+    }
+    if admissible == Some(false) {
+        return "blocked".to_string();
+    }
+    "pass".to_string()
+}
+
+pub(crate) fn route_explain_blocker_codes(
+    payload: &serde_json::Value,
+    admissible: Option<bool>,
+) -> Vec<String> {
+    let mut blockers = Vec::new();
+    if payload["route_present"].as_bool() != Some(true) {
+        blockers.push("route_missing".to_string());
+    }
+    if payload["selected_backend"].as_str().is_none() {
+        blockers.push("selected_backend_missing".to_string());
+    }
+    if admissible == Some(false) {
+        blockers.push("selected_backend_not_admissible_for_dispatch_target".to_string());
+    }
+    blockers
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         explicit_executor_backend_from_route, fallback_executor_backend_from_route,
-        fanout_executor_backends_from_route, selected_backend_from_execution_plan_route,
+        fanout_executor_backends_from_route, route_explain_blocker_codes, route_explain_payload,
+        route_explain_status, selected_backend_from_execution_plan_route,
     };
 
     #[test]
@@ -277,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_backend_prefers_explicit_executor_backend_over_runtime_assignment() {
+    fn selected_backend_prefers_runtime_assignment_over_explicit_executor_backend() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
                 "selected_tier": "middle",
@@ -301,7 +424,7 @@ mod tests {
         let route = &execution_plan["development_flow"]["implementation"];
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
-            Some("internal_subagents")
+            Some("junior")
         );
     }
 
@@ -397,7 +520,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_executor_backend_wins_over_carrier_tier_and_legacy_hints() {
+    fn runtime_assignment_wins_over_route_hints_and_legacy_hints() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
                 "selected_tier": "middle",
@@ -425,7 +548,7 @@ mod tests {
 
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
-            Some("internal_subagents")
+            Some("middle")
         );
     }
 
@@ -492,7 +615,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_backend_preserves_explicit_priority_over_activation_hint() {
+    fn selected_backend_prefers_runtime_assignment_over_route_fallback_hint() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
                 "selected_tier": "senior",
@@ -507,7 +630,69 @@ mod tests {
 
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, &route).as_deref(),
-            Some("hermes_cli")
+            Some("senior")
         );
+    }
+
+    #[test]
+    fn route_explain_payload_surfaces_hybrid_selection_sources() {
+        let execution_plan = serde_json::json!({
+            "runtime_assignment": {
+                "selected_tier": "senior",
+            },
+            "development_flow": {
+                "implementation": {
+                    "executor_backend": "internal_subagents",
+                    "fallback_executor_backend": "hermes_cli",
+                    "fanout_executor_backends": ["middle", "senior"],
+                    "activation": {
+                        "activation_agent_type": "junior"
+                    }
+                }
+            }
+        });
+        let route = &execution_plan["development_flow"]["implementation"];
+        let payload = route_explain_payload(&execution_plan, "implementation", Some(route));
+
+        assert_eq!(payload["route_present"].as_bool(), Some(true));
+        assert_eq!(payload["selected_backend"].as_str(), Some("senior"));
+        assert_eq!(
+            payload["selection_source"].as_str(),
+            Some("runtime_assignment")
+        );
+        assert_eq!(
+            payload["route_primary_backend"].as_str(),
+            Some("internal_subagents")
+        );
+        assert_eq!(payload["fallback_backend"].as_str(), Some("hermes_cli"));
+        assert_eq!(route_explain_status(&payload, Some(true)), "pass");
+        assert!(route_explain_blocker_codes(&payload, Some(true)).is_empty());
+    }
+
+    #[test]
+    fn route_explain_status_blocks_missing_route_or_inadmissible_backend() {
+        let payload = route_explain_payload(&serde_json::json!({}), "implementation", None);
+        assert_eq!(route_explain_status(&payload, None), "blocked");
+        assert_eq!(
+            route_explain_blocker_codes(&payload, None),
+            vec![
+                "route_missing".to_string(),
+                "selected_backend_missing".to_string()
+            ]
+        );
+
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "implementation": {
+                    "executor_backend": "external_cli"
+                }
+            }
+        });
+        let route = &execution_plan["development_flow"]["implementation"];
+        let payload = route_explain_payload(&execution_plan, "implementation", Some(route));
+        assert_eq!(route_explain_status(&payload, Some(false)), "blocked");
+        assert!(route_explain_blocker_codes(&payload, Some(false))
+            .iter()
+            .any(|code| code == "selected_backend_not_admissible_for_dispatch_target"));
     }
 }

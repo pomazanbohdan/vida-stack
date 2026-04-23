@@ -1,7 +1,7 @@
 use crate::{
     carrier_runtime_section, infer_execution_runtime_role, infer_runtime_task_class, json_lookup,
-    json_u64, role_supports_task_class, runtime_role_for_task_class,
-    task_complexity_multiplier, RuntimeConsumptionLaneSelection,
+    json_u64, role_supports_task_class, runtime_role_for_task_class, task_complexity_multiplier,
+    RuntimeConsumptionLaneSelection,
 };
 
 fn selection_strategy(carrier_runtime: &serde_json::Value) -> String {
@@ -42,6 +42,166 @@ fn reasoning_floor_for_task_class(
         .map(str::to_string)
 }
 
+fn model_selection_policy_value<'a>(
+    compiled_bundle: &'a serde_json::Value,
+    carrier_runtime: &'a serde_json::Value,
+    path: &[&str],
+) -> Option<&'a serde_json::Value> {
+    json_lookup(&carrier_runtime["model_selection"], path)
+        .or_else(|| json_lookup(&compiled_bundle["agent_system"]["model_selection"], path))
+}
+
+fn budget_policy_enforces_max_budget_units(
+    compiled_bundle: &serde_json::Value,
+    carrier_runtime: &serde_json::Value,
+) -> bool {
+    model_selection_policy_value(
+        compiled_bundle,
+        carrier_runtime,
+        &["budget_policy", "enforce_max_budget_units"],
+    )
+    .and_then(serde_json::Value::as_bool)
+    .unwrap_or(false)
+}
+
+fn budget_policy_allows_over_budget_escalation(
+    compiled_bundle: &serde_json::Value,
+    carrier_runtime: &serde_json::Value,
+) -> bool {
+    model_selection_policy_value(
+        compiled_bundle,
+        carrier_runtime,
+        &["budget_policy", "allow_escalation_over_budget_with_blocker"],
+    )
+    .and_then(serde_json::Value::as_bool)
+    .unwrap_or(false)
+}
+
+fn route_budget_policy(
+    compiled_bundle: &serde_json::Value,
+    route_key: &str,
+    conversation_role: &str,
+) -> Option<String> {
+    json_lookup(
+        &compiled_bundle["agent_system"]["routing"][route_key],
+        &["budget_policy"],
+    )
+    .or_else(|| {
+        json_lookup(
+            &compiled_bundle["agent_system"]["routing"][conversation_role],
+            &["budget_policy"],
+        )
+    })
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(|value| value.to_ascii_lowercase())
+}
+
+fn assignment_budget_policy(
+    compiled_bundle: &serde_json::Value,
+    carrier_runtime: &serde_json::Value,
+    route_key: &str,
+    conversation_role: &str,
+) -> String {
+    route_budget_policy(compiled_bundle, route_key, conversation_role)
+        .or_else(|| {
+            model_selection_policy_value(compiled_bundle, carrier_runtime, &["budget_policy"])
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_ascii_lowercase())
+        })
+        .unwrap_or_else(|| {
+            if budget_policy_enforces_max_budget_units(compiled_bundle, carrier_runtime) {
+                "strict".to_string()
+            } else {
+                "informational".to_string()
+            }
+        })
+}
+
+fn assignment_max_budget_units(
+    compiled_bundle: &serde_json::Value,
+    carrier_runtime: &serde_json::Value,
+    route_key: &str,
+    conversation_role: &str,
+) -> Option<u64> {
+    json_u64(json_lookup(
+        &compiled_bundle["agent_system"]["routing"][route_key],
+        &["max_budget_units"],
+    ))
+    .or_else(|| {
+        json_u64(json_lookup(
+            &compiled_bundle["agent_system"]["routing"][conversation_role],
+            &["max_budget_units"],
+        ))
+    })
+    .or_else(|| {
+        json_u64(json_lookup(
+            &compiled_bundle["agent_system"]["routing"]["default"],
+            &["max_budget_units"],
+        ))
+    })
+    .or_else(|| {
+        json_u64(json_lookup(
+            &compiled_bundle["agent_system"]["routing"][conversation_role],
+            &["budget_policy", "max_budget_units"],
+        ))
+    })
+    .or_else(|| {
+        json_u64(model_selection_policy_value(
+            compiled_bundle,
+            carrier_runtime,
+            &["budget_policy", "max_budget_units"],
+        ))
+    })
+    .or_else(|| {
+        json_u64(model_selection_policy_value(
+            compiled_bundle,
+            carrier_runtime,
+            &["max_budget_units"],
+        ))
+    })
+}
+
+fn route_profile_mapping<'a>(
+    compiled_bundle: &'a serde_json::Value,
+    route_key: &str,
+    conversation_role: &str,
+) -> Option<&'a serde_json::Value> {
+    json_lookup(
+        &compiled_bundle["agent_system"]["routing"][route_key],
+        &["profiles"],
+    )
+    .or_else(|| {
+        json_lookup(
+            &compiled_bundle["agent_system"]["routing"][conversation_role],
+            &["profiles"],
+        )
+    })
+}
+
+fn mapped_profile_for_carrier(
+    route_profiles: Option<&serde_json::Value>,
+    carrier_id: &str,
+) -> Option<String> {
+    let route_profiles = route_profiles?;
+    route_profiles
+        .get(carrier_id)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            route_profiles
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+}
+
 fn selection_rule_for_runtime(carrier_runtime: &serde_json::Value) -> String {
     carrier_runtime["model_selection"]["selection_rule"]
         .as_str()
@@ -74,10 +234,7 @@ fn reasoning_effort_rank(raw: &str) -> u8 {
     }
 }
 
-fn profile_runtime_roles(
-    role: &serde_json::Value,
-    profile: &serde_json::Value,
-) -> Vec<String> {
+fn profile_runtime_roles(role: &serde_json::Value, profile: &serde_json::Value) -> Vec<String> {
     let profile_roles = profile["runtime_roles"]
         .as_array()
         .into_iter()
@@ -98,10 +255,7 @@ fn profile_runtime_roles(
     }
 }
 
-fn profile_task_classes(
-    role: &serde_json::Value,
-    profile: &serde_json::Value,
-) -> Vec<String> {
+fn profile_task_classes(role: &serde_json::Value, profile: &serde_json::Value) -> Vec<String> {
     let profile_tasks = profile["task_classes"]
         .as_array()
         .into_iter()
@@ -185,6 +339,14 @@ struct ProfileCandidate {
     supports_runtime_role: bool,
     supports_task_class: bool,
     readiness_status: String,
+}
+
+impl ProfileCandidate {
+    fn over_budget(&self, max_budget_units: Option<u64>) -> bool {
+        max_budget_units
+            .map(|max_budget_units| self.rate > max_budget_units)
+            .unwrap_or(false)
+    }
 }
 
 pub(crate) fn dispatch_alias_row<'a>(
@@ -349,6 +511,28 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
     let free_profiles_allowed = free_profiles_allowed(carrier_runtime);
     let quality_floor = quality_floor_for_runtime_role(carrier_runtime, execution_runtime_role);
     let reasoning_floor = reasoning_floor_for_task_class(carrier_runtime, task_class);
+    let budget_policy = assignment_budget_policy(
+        compiled_bundle,
+        carrier_runtime,
+        task_class,
+        conversation_role,
+    );
+    let allow_over_budget_escalation =
+        budget_policy_allows_over_budget_escalation(compiled_bundle, carrier_runtime);
+    let route_profiles = route_profile_mapping(compiled_bundle, task_class, conversation_role);
+    let enforce_max_budget_units =
+        budget_policy_enforces_max_budget_units(compiled_bundle, carrier_runtime)
+            || matches!(budget_policy.as_str(), "strict" | "balanced");
+    let max_budget_units = enforce_max_budget_units
+        .then(|| {
+            assignment_max_budget_units(
+                compiled_bundle,
+                carrier_runtime,
+                task_class,
+                conversation_role,
+            )
+        })
+        .flatten();
     let mut rejected_candidates = Vec::new();
     let mut candidates = roles
         .iter()
@@ -384,7 +568,9 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
                             &profile,
                             execution_runtime_role,
                         ),
-                        supports_task_class: profile_supports_task_class(role, &profile, task_class),
+                        supports_task_class: profile_supports_task_class(
+                            role, &profile, task_class,
+                        ),
                         rate,
                         effective_score,
                         lifecycle_state: lifecycle_state.clone(),
@@ -427,8 +613,22 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         if candidate.rate == 0 && !free_profiles_allowed {
             reasons.push("zero_cost_profiles_disabled".to_string());
         }
+        if budget_policy == "strict"
+            && candidate.over_budget(max_budget_units)
+            && !allow_over_budget_escalation
+        {
+            reasons.push("over_budget".to_string());
+        }
         if candidate.readiness_status == "blocked" {
             reasons.push("profile_not_ready".to_string());
+        }
+        if let Some(mapped_profile_id) = mapped_profile_for_carrier(
+            route_profiles,
+            candidate.role["role_id"].as_str().unwrap_or_default(),
+        ) {
+            if candidate.profile["profile_id"].as_str() != Some(mapped_profile_id.as_str()) {
+                reasons.push("route_profile_mapping_mismatch".to_string());
+            }
         }
         let write_scope = candidate.profile["write_scope"]
             .as_str()
@@ -462,26 +662,43 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         }
     });
 
+    let prefer_in_budget_first = max_budget_units.is_some()
+        && (budget_policy == "balanced"
+            || (budget_policy == "strict" && allow_over_budget_escalation));
     if selection_strategy == "quality_first" || selection_strategy == "risk_aware" {
         candidates.sort_by(|left, right| {
-            right
-                .quality_rank
-                .cmp(&left.quality_rank)
+            prefer_in_budget_first
+                .then(|| {
+                    left.over_budget(max_budget_units)
+                        .cmp(&right.over_budget(max_budget_units))
+                })
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| right.quality_rank.cmp(&left.quality_rank))
                 .then_with(|| right.reasoning_rank.cmp(&left.reasoning_rank))
                 .then_with(|| left.rate.cmp(&right.rate))
                 .then_with(|| right.effective_score.cmp(&left.effective_score))
         });
     } else if selection_strategy == "free_first_with_quality_floor" {
         candidates.sort_by(|left, right| {
-            (left.rate != 0)
-                .cmp(&(right.rate != 0))
+            prefer_in_budget_first
+                .then(|| {
+                    left.over_budget(max_budget_units)
+                        .cmp(&right.over_budget(max_budget_units))
+                })
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| (left.rate != 0).cmp(&(right.rate != 0)))
                 .then_with(|| left.rate.cmp(&right.rate))
                 .then_with(|| right.effective_score.cmp(&left.effective_score))
         });
     } else {
         candidates.sort_by(|left, right| {
-            left.rate
-                .cmp(&right.rate)
+            prefer_in_budget_first
+                .then(|| {
+                    left.over_budget(max_budget_units)
+                        .cmp(&right.over_budget(max_budget_units))
+                })
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.rate.cmp(&right.rate))
                 .then_with(|| right.quality_rank.cmp(&left.quality_rank))
                 .then_with(|| right.effective_score.cmp(&left.effective_score))
                 .then_with(|| right.reasoning_rank.cmp(&left.reasoning_rank))
@@ -502,8 +719,25 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
 
     let selected_role = &selected_candidate.role;
     let selected_profile = &selected_candidate.profile;
+    let selected_route_profile_mapping = mapped_profile_for_carrier(
+        route_profiles,
+        selected_role["role_id"].as_str().unwrap_or_default(),
+    );
+    let route_profile_mapping_applied = selected_route_profile_mapping.is_some();
     let tier = selected_role["tier"].as_str().unwrap_or_default();
     let rate = selected_candidate.rate;
+    let selected_over_budget = selected_candidate.over_budget(max_budget_units);
+    let budget_verdict = if !enforce_max_budget_units || max_budget_units.is_none() {
+        "not_enforced"
+    } else if selected_over_budget && budget_policy == "strict" && allow_over_budget_escalation {
+        "strict_over_budget_escalation"
+    } else if selected_over_budget && budget_policy == "balanced" {
+        "balanced_over_budget_escalation"
+    } else if selected_over_budget {
+        "over_budget"
+    } else {
+        "in_budget"
+    };
     let complexity_multiplier = task_complexity_multiplier(task_class);
     let effective_score = selected_candidate.effective_score;
     let lifecycle_state = selected_candidate.lifecycle_state.as_str();
@@ -520,9 +754,11 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         format!("effective_score={effective_score}"),
         format!("lifecycle_state={lifecycle_state}"),
         format!("selection_rule={selection_rule}"),
+        format!("budget_policy={budget_policy}"),
+        format!("budget_verdict={budget_verdict}"),
     ];
 
-    serde_json::json!({
+    let mut assignment = serde_json::json!({
         "enabled": true,
         "task_class": task_class,
         "runtime_role": execution_runtime_role,
@@ -563,7 +799,42 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         "selection_rule": selection_rule,
         "rejected_candidates": rejected_candidates,
         "rationale": rationale
-    })
+    });
+    if let Some(map) = assignment.as_object_mut() {
+        map.insert(
+            "budget_policy".to_string(),
+            serde_json::Value::String(budget_policy),
+        );
+        map.insert(
+            "over_budget_escalation_allowed".to_string(),
+            serde_json::Value::Bool(allow_over_budget_escalation),
+        );
+        map.insert(
+            "max_budget_units".to_string(),
+            max_budget_units
+                .map(serde_json::Value::from)
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "budget_verdict".to_string(),
+            serde_json::Value::String(budget_verdict.to_string()),
+        );
+        map.insert(
+            "selected_over_budget".to_string(),
+            serde_json::Value::Bool(selected_over_budget),
+        );
+        map.insert(
+            "selected_route_profile_mapping".to_string(),
+            selected_route_profile_mapping
+                .map(serde_json::Value::from)
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "route_profile_mapping_applied".to_string(),
+            serde_json::Value::Bool(route_profile_mapping_applied),
+        );
+    }
+    assignment
 }
 
 pub(crate) fn build_runtime_assignment(
@@ -719,6 +990,311 @@ mod tests {
     }
 
     #[test]
+    fn enforced_budget_rejects_over_budget_candidates() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "junior",
+                "tier": "junior",
+                "rate": 1,
+                "normalized_cost_units": 1,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "low",
+                "default_model_profile": "codex_gpt54_low_write",
+                "model_profiles": {
+                    "codex_gpt54_low_write": {
+                        "profile_id": "codex_gpt54_low_write",
+                        "model_ref": "gpt-5.4",
+                        "provider": "openai",
+                        "reasoning_effort": "low",
+                        "plan_mode_reasoning_effort": "medium",
+                        "sandbox_mode": "workspace-write",
+                        "normalized_cost_units": 1,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "workspace-write",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "senior",
+                "tier": "senior",
+                "rate": 16,
+                "normalized_cost_units": 16,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "high",
+                "default_model_profile": "codex_gpt54_high_write",
+                "model_profiles": {
+                    "codex_gpt54_high_write": {
+                        "profile_id": "codex_gpt54_high_write",
+                        "model_ref": "gpt-5.4",
+                        "provider": "openai",
+                        "reasoning_effort": "high",
+                        "plan_mode_reasoning_effort": "high",
+                        "sandbox_mode": "workspace-write",
+                        "normalized_cost_units": 16,
+                        "speed_tier": "fast",
+                        "quality_tier": "high",
+                        "write_scope": "workspace-write",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        compiled_bundle["carrier_runtime"]["model_selection"]["default_strategy"] =
+            serde_json::json!("quality_first");
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "model_selection": {
+                "budget_policy": {
+                    "enforce_max_budget_units": true
+                }
+            },
+            "routing": {
+                "worker": {
+                    "max_budget_units": 1
+                }
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "junior");
+        assert_eq!(
+            assignment["selected_model_profile_id"],
+            "codex_gpt54_low_write"
+        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "senior"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("over_budget"))
+            }));
+    }
+
+    #[test]
+    fn strict_budget_can_escalate_to_only_admissible_verifier_when_configured() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "opencode_cli",
+                "tier": "external_free",
+                "rate": 0,
+                "normalized_cost_units": 0,
+                "default_runtime_role": "verifier",
+                "runtime_roles": ["verifier"],
+                "task_classes": ["verification"],
+                "reasoning_band": "medium",
+                "default_model_profile": "opencode_codex_mini_review",
+                "model_profiles": {
+                    "opencode_codex_mini_review": {
+                        "profile_id": "opencode_codex_mini_review",
+                        "model_ref": "opencode/gpt-5.1-codex-mini",
+                        "provider": "opencode",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 0,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "none",
+                        "runtime_roles": ["verifier"],
+                        "task_classes": ["verification"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "senior",
+                "tier": "senior",
+                "rate": 16,
+                "normalized_cost_units": 16,
+                "default_runtime_role": "verifier",
+                "runtime_roles": ["verifier"],
+                "task_classes": ["verification"],
+                "reasoning_band": "high",
+                "default_model_profile": "codex_spark_high_readonly",
+                "model_profiles": {
+                    "codex_spark_high_readonly": {
+                        "profile_id": "codex_spark_high_readonly",
+                        "model_ref": "gpt-5.3-codex-spark",
+                        "provider": "openai",
+                        "reasoning_effort": "high",
+                        "plan_mode_reasoning_effort": "high",
+                        "sandbox_mode": "read-only",
+                        "normalized_cost_units": 16,
+                        "speed_tier": "medium",
+                        "quality_tier": "high",
+                        "write_scope": "read-only",
+                        "runtime_roles": ["verifier"],
+                        "task_classes": ["verification"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        compiled_bundle["carrier_runtime"]["model_selection"]["reasoning_floor_by_task_class"]
+            ["verification"] = serde_json::json!("high");
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "model_selection": {
+                "budget_policy": {
+                    "enforce_max_budget_units": true,
+                    "allow_escalation_over_budget_with_blocker": true
+                }
+            },
+            "routing": {
+                "verification": {
+                    "max_budget_units": 4
+                }
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "verification",
+            "verification",
+            "verifier",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "senior");
+        assert_eq!(assignment["selected_over_budget"], true);
+        assert_eq!(
+            assignment["budget_verdict"],
+            "strict_over_budget_escalation"
+        );
+        assert_eq!(assignment["over_budget_escalation_allowed"], true);
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "opencode_cli"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("reasoning_floor_not_met"))
+            }));
+    }
+
+    #[test]
+    fn route_level_budget_cap_applies_when_conversation_role_is_worker() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "junior",
+                "tier": "junior",
+                "rate": 1,
+                "normalized_cost_units": 1,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "low",
+                "default_model_profile": "codex_gpt54_low_write",
+                "model_profiles": {
+                    "codex_gpt54_low_write": {
+                        "profile_id": "codex_gpt54_low_write",
+                        "model_ref": "gpt-5.4",
+                        "provider": "openai",
+                        "reasoning_effort": "low",
+                        "plan_mode_reasoning_effort": "medium",
+                        "sandbox_mode": "workspace-write",
+                        "normalized_cost_units": 1,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "workspace-write",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "senior",
+                "tier": "senior",
+                "rate": 16,
+                "normalized_cost_units": 16,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "high",
+                "default_model_profile": "codex_gpt54_high_write",
+                "model_profiles": {
+                    "codex_gpt54_high_write": {
+                        "profile_id": "codex_gpt54_high_write",
+                        "model_ref": "gpt-5.4",
+                        "provider": "openai",
+                        "reasoning_effort": "high",
+                        "plan_mode_reasoning_effort": "high",
+                        "sandbox_mode": "workspace-write",
+                        "normalized_cost_units": 16,
+                        "speed_tier": "fast",
+                        "quality_tier": "high",
+                        "write_scope": "workspace-write",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        compiled_bundle["carrier_runtime"]["model_selection"]["default_strategy"] =
+            serde_json::json!("quality_first");
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "model_selection": {
+                "budget_policy": {
+                    "enforce_max_budget_units": true
+                }
+            },
+            "routing": {
+                "implementation": {
+                    "max_budget_units": 1
+                }
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "junior");
+        assert_eq!(assignment["max_budget_units"], 1);
+        assert_eq!(assignment["budget_verdict"], "in_budget");
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "senior"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("over_budget"))
+            }));
+    }
+
+    #[test]
     fn write_scope_none_external_profile_is_rejected_for_implementation() {
         let compiled_bundle = compiled_bundle_with_roles(vec![
             serde_json::json!({
@@ -790,22 +1366,100 @@ mod tests {
             assignment["selected_model_profile_id"],
             "codex_gpt54_low_write"
         );
-        assert!(
-            assignment["rejected_candidates"]
-                .as_array()
-                .expect("rejected candidates should render")
-                .iter()
-                .any(|row| {
-                    row["carrier_id"] == "opencode_cli"
-                        && row["reasons"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|reason| {
-                                reason.as_str()
-                                    == Some("write_scope_inadmissible_for_task_class")
-                            })
-                })
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "opencode_cli"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| {
+                            reason.as_str() == Some("write_scope_inadmissible_for_task_class")
+                        })
+            }));
+    }
+
+    #[test]
+    fn route_level_profile_mapping_constrains_selected_carrier_profile() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "internal_subagents",
+            "tier": "senior_internal",
+            "rate": 10,
+            "normalized_cost_units": 10,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker", "verifier"],
+            "task_classes": ["implementation", "verification"],
+            "reasoning_band": "high",
+            "default_model_profile": "internal_review",
+            "model_profiles": {
+                "internal_fast": {
+                    "profile_id": "internal_fast",
+                    "model_ref": "internal_fast",
+                    "provider": "internal",
+                    "reasoning_effort": "low",
+                    "normalized_cost_units": 6,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "orchestrator_native",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": { "required": true, "ready": true }
+                },
+                "internal_review": {
+                    "profile_id": "internal_review",
+                    "model_ref": "internal_review",
+                    "provider": "internal",
+                    "reasoning_effort": "high",
+                    "normalized_cost_units": 8,
+                    "speed_tier": "medium",
+                    "quality_tier": "high",
+                    "write_scope": "read_only",
+                    "runtime_roles": ["verifier"],
+                    "task_classes": ["verification"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "routing": {
+                "implementation": {
+                    "profiles": {
+                        "internal_subagents": "internal_fast"
+                    }
+                }
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "implementation",
+            "implementation",
+            "worker",
         );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "internal_subagents");
+        assert_eq!(assignment["selected_model_profile_id"], "internal_fast");
+        assert_eq!(
+            assignment["selected_route_profile_mapping"],
+            "internal_fast"
+        );
+        assert_eq!(assignment["route_profile_mapping_applied"], true);
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "internal_subagents"
+                    && row["model_profile_id"] == "internal_review"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("route_profile_mapping_mismatch"))
+            }));
     }
 }

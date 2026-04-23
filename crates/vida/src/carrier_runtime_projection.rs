@@ -38,7 +38,7 @@ fn selected_runtime_root(
     root.join(".host-runtime")
 }
 
-fn external_cli_runtime_candidate_rows(config: &serde_yaml::Value) -> Vec<serde_json::Value> {
+fn subagent_runtime_candidate_rows(config: &serde_yaml::Value) -> Vec<serde_json::Value> {
     let Some(entries) = crate::yaml_lookup(config, &["agent_system", "subagents"])
         .and_then(serde_yaml::Value::as_mapping)
     else {
@@ -54,11 +54,18 @@ fn external_cli_runtime_candidate_rows(config: &serde_yaml::Value) -> Vec<serde_
             {
                 return None;
             }
-            if crate::yaml_string(crate::yaml_lookup(entry, &["subagent_backend_class"])).as_deref()
-                != Some("external_cli")
-            {
-                return None;
-            }
+            let backend_class = crate::yaml_string(crate::yaml_lookup(
+                entry,
+                &["subagent_backend_class"],
+            ))
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                if backend_id == "internal_subagents" {
+                    "internal".to_string()
+                } else {
+                    "external_cli".to_string()
+                }
+            });
 
             let fallback_rate = crate::yaml_string(
                 crate::yaml_lookup(entry, &["budget_cost_units"]),
@@ -163,7 +170,7 @@ fn external_cli_runtime_candidate_rows(config: &serde_yaml::Value) -> Vec<serde_
             Some(serde_json::json!({
                 "role_id": backend_id,
                 "description": crate::yaml_string(crate::yaml_lookup(entry, &["description"]))
-                    .unwrap_or_else(|| format!("External CLI backend `{backend_id}`")),
+                    .unwrap_or_else(|| format!("{} backend `{backend_id}`", backend_class)),
                 "config_file": "",
                 "model": profile_projection["model"].clone(),
                 "model_provider": profile_projection["model_provider"].clone(),
@@ -188,8 +195,8 @@ fn external_cli_runtime_candidate_rows(config: &serde_yaml::Value) -> Vec<serde_
                 "default_runtime_role": default_runtime_role,
                 "runtime_roles": runtime_roles,
                 "task_classes": task_classes,
-                "backend_class": "external_cli",
-                "carrier_kind": "external_cli_backend",
+                "backend_class": backend_class,
+                "carrier_kind": format!("{backend_class}_backend"),
                 "write_scope": crate::yaml_string(crate::yaml_lookup(entry, &["write_scope"])).unwrap_or_default(),
                 "speed_tier": profile_projection["model_profiles"]
                     .as_object()
@@ -234,7 +241,7 @@ pub(crate) fn build_carrier_runtime_projection(
     let runtime_config = read_simple_toml_sections(&runtime_root.join("config.toml"));
     let mut carrier_roles =
         crate::carrier_runtime_catalog::resolved_carrier_roles(config, &runtime_root);
-    carrier_roles.extend(external_cli_runtime_candidate_rows(config));
+    carrier_roles.extend(subagent_runtime_candidate_rows(config));
     let dispatch_alias_rows = registry_rows_by_key(
         dispatch_aliases_registry,
         "dispatch_aliases",
@@ -319,8 +326,8 @@ pub(crate) fn build_carrier_runtime_projection(
 
 #[cfg(test)]
 mod tests {
-    use super::external_cli_runtime_candidate_rows;
     use super::selected_runtime_root;
+    use super::subagent_runtime_candidate_rows;
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::Path;
@@ -379,7 +386,7 @@ host_environment:
     }
 
     #[test]
-    fn external_cli_runtime_candidate_rows_preserve_profile_only_backend_projection() {
+    fn subagent_runtime_candidate_rows_preserve_profile_only_backend_projection() {
         let config = serde_yaml::from_str::<serde_yaml::Value>(
             r#"
 agent_system:
@@ -411,7 +418,7 @@ agent_system:
         )
         .expect("config should parse");
 
-        let rows = external_cli_runtime_candidate_rows(&config);
+        let rows = subagent_runtime_candidate_rows(&config);
 
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
@@ -429,6 +436,71 @@ agent_system:
         assert_eq!(
             row["model_profiles"]["opencode_minimax_free_review"]["normalized_cost_units"],
             0
+        );
+    }
+
+    #[test]
+    fn subagent_runtime_candidate_rows_include_internal_model_profiles() {
+        let config = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+      default_model_profile: internal_fast
+      budget_cost_units: 10
+      runtime_roles:
+        - worker
+        - verifier
+      task_classes:
+        - implementation
+        - verification
+      model_profiles:
+        internal_fast:
+          provider: internal
+          model_ref: internal_fast
+          reasoning_effort: low
+          normalized_cost_units: 6
+          speed_tier: fast
+          quality_tier: medium_high
+          write_scope: orchestrator_native
+          runtime_roles:
+            - worker
+          task_classes:
+            - implementation
+        internal_review:
+          provider: internal
+          model_ref: internal_review
+          reasoning_effort: high
+          normalized_cost_units: 8
+          speed_tier: medium
+          quality_tier: high
+          write_scope: read_only
+          runtime_roles:
+            - verifier
+          task_classes:
+            - verification
+"#,
+        )
+        .expect("config should parse");
+
+        let rows = subagent_runtime_candidate_rows(&config);
+
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row["role_id"], "internal_subagents");
+        assert_eq!(row["backend_class"], "internal");
+        assert_eq!(row["carrier_kind"], "internal_backend");
+        assert_eq!(row["default_model_profile"], "internal_fast");
+        assert_eq!(row["model"], "internal_fast");
+        assert_eq!(
+            row["model_profiles"]["internal_fast"]["model_ref"],
+            "internal_fast"
+        );
+        assert_eq!(
+            row["model_profiles"]["internal_review"]["model_ref"],
+            "internal_review"
         );
     }
 }

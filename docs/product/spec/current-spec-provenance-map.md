@@ -209,6 +209,8 @@ Companion rule:
    Sources: fresh 2026-04-21 live run evidence where `feature-fix-bug-analysis-lane-can-close-implementation-without-write-evidence` seeded into `implementation_dispatch_ready` but `dispatch-init` failed with `delivery_task_packet is missing required packet fields: owned_paths`; seed payload showing `reason=auto_explicit_implementation_request_override` and synthetic placeholder `tracked_flow_bootstrap` instead of the real registered design doc; design-backed seed owner code in `crates/vida/src/taskflow_run_graph.rs`; implementer owned-path derivation in `crates/vida/src/runtime_dispatch_packets.rs`; packet shaping/validation entrypoints in `crates/vida/src/runtime_dispatch_state.rs`; and adjacent design-backed reseed canon in `docs/product/spec/{analysis-lane-can-close-implementation-without-write-evidence-design,repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design,reconcile-qwen-cli-carrier-drift-design}.md`
 37. [carrier-model-profile-selection-runtime-design.md](carrier-model-profile-selection-runtime-design.md)
    Sources: user handoff report `model/reasoning profile behind carriers` on 2026-04-22; current carrier/product law in `docs/product/spec/{agent-role-skill-profile-flow-model,release-1-carrier-neutral-runtime-and-host-materialization-design,external-cli-carrier-hardening-design,compiled-runtime-bundle-contract}.md`; current project process guidance in `docs/process/codex-agent-configuration-guide.md`; current config in `vida.config.yaml`; and current runtime/materialization/status code in `crates/vida/src/{host_runtime_materialization,runtime_assignment_builder,runtime_assignment_policy,carrier_runtime_metadata,runtime_dispatch_execution,runtime_dispatch_state,status_surface_host_agents,status_surface_external_cli,taskflow_consume_bundle}.rs`
+38. [unified-hybrid-runtime-selection-policy-design.md](unified-hybrid-runtime-selection-policy-design.md)
+   Sources: user-provided external static audit on 2026-04-23; validated code-path evidence in `crates/vida/src/{carrier_runtime_projection,runtime_assignment_builder,runtime_assignment_policy,runtime_lane_summary,taskflow_routing,development_flow_orchestration,runtime_dispatch_state,runtime_dispatch_execution,status_surface_external_cli,status_surface_host_agents,taskflow_consume_bundle,init_surfaces}.rs`; current config in `vida.config.yaml`; and adjacent active design docs `carrier-model-profile-selection-runtime-design.md`, `implementation-backend-admissibility-and-selection-truth-design.md`, `external-cli-carrier-hardening-design.md`, and `reconcile-qwen-cli-carrier-drift-design.md`
 
 ## Routing Pointers
 
@@ -259,5 +261,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-provenance-map.md
 created_at: '2026-03-16T09:05:00+02:00'
-updated_at: 2026-04-22T10:13:29.70984913Z
+updated_at: 2026-04-23T06:56:05.323542262Z
 changelog_ref: current-spec-provenance-map.changelog.jsonl

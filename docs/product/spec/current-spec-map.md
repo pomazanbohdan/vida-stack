@@ -295,6 +295,9 @@ Companion rule:
 48. [carrier-model-profile-selection-runtime-design.md](carrier-model-profile-selection-runtime-design.md)
    Config families: bounded carrier plus model-profile contract normalization across Codex/internal/external execution surfaces, profile-aware runtime assignment truth, dispatch/status profile projection, and parity-safe materialization from legacy and new-style config
    Registered path: `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
+49. [unified-hybrid-runtime-selection-policy-design.md](unified-hybrid-runtime-selection-policy-design.md)
+   Config families: bounded follow-up wave after the carrier/model-profile contract rollout, including dynamic-versus-route selection truth, budget and route policy enforcement, internal-subagent candidate pooling, external reasoning/readiness enforcement, operator diagnostics, and residual qwen drift closure
+   Registered path: `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
 
 ### Support
 
@@ -350,5 +353,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-22T10:13:29.709595354Z
+updated_at: 2026-04-23T06:56:05.323250297Z
 changelog_ref: current-spec-map.changelog.jsonl

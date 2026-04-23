@@ -2,8 +2,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 use time::format_description::well_known::Rfc3339;
 
-use crate::BlockerCode;
 use crate::display_lane_label;
+use crate::BlockerCode;
 
 const CONSUME_FINAL_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -1498,11 +1498,11 @@ fn canonical_dispatch_target_from_latest_status(
 #[cfg(test)]
 mod tests {
     use super::{
-        ApprovalDelegationEvidenceGate, ConsumeFinalMode, ExecutionPreparationEvidenceGate,
-        RetrievalPolicyDecisionGate, build_approval_delegation_evidence_gate,
-        build_execution_preparation_evidence_gate, build_retrieval_policy_decision_gate,
-        build_runtime_consumption_dispatch_receipt, fail_fast_state_store_open_with_timeout,
-        normalize_runtime_consumption_statuses, parse_taskflow_consume_final_args,
+        build_approval_delegation_evidence_gate, build_execution_preparation_evidence_gate,
+        build_retrieval_policy_decision_gate, build_runtime_consumption_dispatch_receipt,
+        fail_fast_state_store_open_with_timeout, normalize_runtime_consumption_statuses,
+        parse_taskflow_consume_final_args, ApprovalDelegationEvidenceGate, ConsumeFinalMode,
+        ExecutionPreparationEvidenceGate, RetrievalPolicyDecisionGate,
     };
     use std::time::Duration;
 
@@ -1590,8 +1590,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_consumption_dispatch_receipt_canonicalizes_specification_target_from_business_analyst_alias()
-     {
+    fn runtime_consumption_dispatch_receipt_canonicalizes_specification_target_from_business_analyst_alias(
+    ) {
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -1698,8 +1698,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_consumption_dispatch_receipt_canonicalizes_real_bootstrap_shape_with_spec_pack_route_task_class()
-     {
+    fn runtime_consumption_dispatch_receipt_canonicalizes_real_bootstrap_shape_with_spec_pack_route_task_class(
+    ) {
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -2105,8 +2105,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn approval_delegation_gate_passes_when_latest_status_is_absent_for_fresh_consume_final_bootstrap()
-     {
+    async fn approval_delegation_gate_passes_when_latest_status_is_absent_for_fresh_consume_final_bootstrap(
+    ) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -2337,23 +2337,19 @@ mod tests {
         let mut docflow_verdict = crate::RuntimeConsumptionDocflowVerdict {
             status: "blocked".to_string(),
             ready: false,
-            blockers: vec![
-                crate::release1_contracts::blocker_code_value(
-                    crate::release1_contracts::BlockerCode::MissingProofVerdict,
-                )
-                .expect("missing proof verdict blocker should be canonical"),
-            ],
+            blockers: vec![crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::MissingProofVerdict,
+            )
+            .expect("missing proof verdict blocker should be canonical")],
             proof_surfaces: vec![],
         };
         let mut closure_admission = crate::RuntimeConsumptionClosureAdmission {
             status: "blocked".to_string(),
             admitted: false,
-            blockers: vec![
-                crate::release1_contracts::blocker_code_value(
-                    crate::release1_contracts::BlockerCode::MissingClosureProof,
-                )
-                .expect("missing closure proof blocker should be canonical"),
-            ],
+            blockers: vec![crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::MissingClosureProof,
+            )
+            .expect("missing closure proof blocker should be canonical")],
             proof_surfaces: vec![],
         };
 

@@ -213,38 +213,39 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
         .and_then(serde_yaml::Value::as_mapping)
     {
         for (key, entry) in entries {
-            let Some(backend_id) = key.as_str().map(str::trim).filter(|value| !value.is_empty())
+            let Some(backend_id) = key
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
             else {
                 continue;
             };
             if !crate::yaml_bool(crate::yaml_lookup(entry, &["enabled"]), false) {
                 continue;
             }
-            let fallback_rate = crate::yaml_string(
-                crate::yaml_lookup(entry, &["budget_cost_units"]),
-            )
-            .and_then(|raw| raw.parse::<u64>().ok())
-            .or_else(|| {
-                crate::yaml_string(crate::yaml_lookup(entry, &["normalized_cost_units"]))
+            let fallback_rate =
+                crate::yaml_string(crate::yaml_lookup(entry, &["budget_cost_units"]))
                     .and_then(|raw| raw.parse::<u64>().ok())
-            })
-            .or_else(|| {
-                crate::yaml_string(crate::yaml_lookup(entry, &["rate"]))
-                    .and_then(|raw| raw.parse::<u64>().ok())
-            })
-            .unwrap_or(0);
+                    .or_else(|| {
+                        crate::yaml_string(crate::yaml_lookup(entry, &["normalized_cost_units"]))
+                            .and_then(|raw| raw.parse::<u64>().ok())
+                    })
+                    .or_else(|| {
+                        crate::yaml_string(crate::yaml_lookup(entry, &["rate"]))
+                            .and_then(|raw| raw.parse::<u64>().ok())
+                    })
+                    .unwrap_or(0);
             let fallback_runtime_roles =
                 crate::yaml_string_list(crate::yaml_lookup(entry, &["runtime_roles"]));
             let fallback_task_classes =
                 crate::yaml_string_list(crate::yaml_lookup(entry, &["task_classes"]));
-            let projection =
-                crate::model_profile_contract::normalize_profile_projection_from_yaml(
-                    backend_id,
-                    entry,
-                    Some(fallback_rate),
-                    &fallback_runtime_roles,
-                    &fallback_task_classes,
-                );
+            let projection = crate::model_profile_contract::normalize_profile_projection_from_yaml(
+                backend_id,
+                entry,
+                Some(fallback_rate),
+                &fallback_runtime_roles,
+                &fallback_task_classes,
+            );
             subagent_backends.insert(
                 backend_id.to_string(),
                 serde_json::json!({
@@ -312,11 +313,9 @@ mod tests {
         assert_eq!(summary["effective_execution_posture"], "mixed");
         assert_eq!(summary["mixed_posture"], true);
         assert_eq!(summary["model_selection"]["enabled"], true);
-        assert!(
-            summary["agents"]["junior"]["default_model_profile"]
-                .as_str()
-                .is_some()
-        );
+        assert!(summary["agents"]["junior"]["default_model_profile"]
+            .as_str()
+            .is_some());
         assert_eq!(summary["agents"]["senior"]["model"], "gpt-5.3-codex-spark");
         assert_eq!(
             summary["subagent_backends"]["internal_subagents"]["default_model_profile"],
@@ -380,12 +379,7 @@ mod tests {
                 .collect::<Vec<_>>();
         assert_eq!(
             enabled_external_backends,
-            vec![
-                "hermes_cli",
-                "opencode_cli",
-                "kilo_cli",
-                "vibe_cli"
-            ]
+            vec!["hermes_cli", "opencode_cli", "kilo_cli", "vibe_cli"]
         );
     }
 }

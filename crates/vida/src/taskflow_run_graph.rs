@@ -2357,6 +2357,31 @@ pub(crate) fn merge_run_graph_meta(
     status
 }
 
+async fn record_run_graph_status_with_continuation_sync(
+    store: &StateStore,
+    status: &RunGraphStatus,
+    binding_source: &str,
+) -> Result<(), String> {
+    store
+        .record_run_graph_status(status)
+        .await
+        .map_err(|error| format!("Failed to update run-graph state: {error}"))?;
+    let reconciled = store
+        .run_graph_status(&status.run_id)
+        .await
+        .map_err(|error| {
+            format!("Failed to read reconciled run-graph state after update: {error}")
+        })?;
+    crate::taskflow_continuation::sync_run_graph_continuation_binding(
+        store,
+        &reconciled,
+        binding_source,
+    )
+    .await
+    .map_err(|error| format!("Failed to synchronize continuation binding: {error}"))?;
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 enum DispatchTargetFormat {
     Lane,
@@ -2672,7 +2697,9 @@ async fn try_existing_design_backed_implementation_override(
         && selection.tracked_flow_entry.as_deref() == Some("work-pool-pack");
     let already_explicit_implementation = selection.conversational_mode.is_none()
         && selection.selected_role == "worker"
-        && selection.reason.starts_with("auto_explicit_implementation_request");
+        && selection
+            .reason
+            .starts_with("auto_explicit_implementation_request");
 
     let normalized_request = request_text.to_lowercase();
     let implementation_terms =
@@ -3863,7 +3890,13 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 resume_target: existing.resume_target,
                 recovery_ready: existing.recovery_ready,
             };
-            match store.record_run_graph_status(&merged).await {
+            match record_run_graph_status_with_continuation_sync(
+                &store,
+                &merged,
+                "run_graph_update",
+            )
+            .await
+            {
                 Ok(()) => {
                     println!(
                         "{}",
@@ -3876,7 +3909,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
-                    eprintln!("Failed to update run-graph state: {error}");
+                    eprintln!("{error}");
                     ExitCode::from(1)
                 }
             }
@@ -3912,7 +3945,13 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 resume_target: existing.resume_target,
                 recovery_ready: existing.recovery_ready,
             };
-            match store.record_run_graph_status(&merged).await {
+            match record_run_graph_status_with_continuation_sync(
+                &store,
+                &merged,
+                "run_graph_update",
+            )
+            .await
+            {
                 Ok(()) => {
                     println!(
                         "{}",
@@ -3925,7 +3964,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
-                    eprintln!("Failed to update run-graph state: {error}");
+                    eprintln!("{error}");
                     ExitCode::from(1)
                 }
             }
@@ -3971,7 +4010,13 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 },
                 &meta,
             );
-            match store.record_run_graph_status(&merged).await {
+            match record_run_graph_status_with_continuation_sync(
+                &store,
+                &merged,
+                "run_graph_update",
+            )
+            .await
+            {
                 Ok(()) => {
                     println!(
                         "{}",
@@ -3984,7 +4029,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
-                    eprintln!("Failed to update run-graph state: {error}");
+                    eprintln!("{error}");
                     ExitCode::from(1)
                 }
             }
@@ -5051,9 +5096,9 @@ mod tests {
             .await
             .expect("create direct explicit implementation task");
 
-        let design_doc_path = harness.path().join(
-            "docs/product/spec/direct-explicit-implementation-seed-design.md",
-        );
+        let design_doc_path = harness
+            .path()
+            .join("docs/product/spec/direct-explicit-implementation-seed-design.md");
         std::fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
             .expect("create design doc directory");
         std::fs::write(
@@ -5471,7 +5516,8 @@ mod tests {
             .expect("activation snapshot should be written");
 
         let requested_run_id = "feature-reconcile-autonomous-execution-flag-runtime-drift";
-        let bound_task_id = "feature-repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen";
+        let bound_task_id =
+            "feature-repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen";
         let request_text = "Bounded audit-remediation blocker. After fixing explicit continuation-bind preservation, `vida taskflow run-graph dispatch-init feature-reconcile-autonomous-execution-flag-runtime-drift --json` now lawfully reseeds the explicit qwen task into a fresh run `feature-reconcile-qwen-cli-carrier-drift-across-config-code`. But that fresh run is shaped as `task_class=pbi_discussion`, `next_node=pm`, `tracked_flow_entry=work-pool-pack`, while the rendered dispatch packet canonicalizes to `dispatch_target=specification`, `handoff_runtime_role=pm`, `activation_agent_type=null`, `selected_backend=null`; `vida agent-init --dispatch-packet ... --execute-dispatch --json` then fails closed with `Dispatch target `specification` is routed to an agent lane but no lawful backend could be resolved from the execution route`.";
 
         let mut stale_status = default_run_graph_status(requested_run_id, "closure", "delivery");
@@ -5581,11 +5627,13 @@ mod tests {
         let dispatch_packet_path = payload["dispatch_packet_path"]
             .as_str()
             .expect("dispatch packet path should be present");
-        let dispatch_packet = crate::read_json_file_if_present(std::path::Path::new(
-            dispatch_packet_path,
-        ))
-        .expect("dispatch packet should load");
-        assert_eq!(dispatch_packet["dispatch_target"].as_str(), Some("implementer"));
+        let dispatch_packet =
+            crate::read_json_file_if_present(std::path::Path::new(dispatch_packet_path))
+                .expect("dispatch packet should load");
+        assert_eq!(
+            dispatch_packet["dispatch_target"].as_str(),
+            Some("implementer")
+        );
         assert_eq!(
             dispatch_packet["delivery_task_packet"]["handoff_runtime_role"].as_str(),
             Some("worker")
@@ -5598,7 +5646,10 @@ mod tests {
             dispatch_packet["selected_backend"].as_str(),
             Some("internal_subagents")
         );
-        assert_ne!(dispatch_packet["dispatch_target"].as_str(), Some("specification"));
+        assert_ne!(
+            dispatch_packet["dispatch_target"].as_str(),
+            Some("specification")
+        );
         assert_eq!(
             dispatch_packet["delivery_task_packet"]["owned_paths"],
             serde_json::json!([
@@ -5833,6 +5884,97 @@ mod tests {
         assert_eq!(merged.handoff_state, "none");
         assert_eq!(merged.resume_target, "none");
         assert!(!merged.recovery_ready);
+    }
+
+    #[tokio::test]
+    async fn run_graph_terminal_update_sync_clears_stale_continuation_binding() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("state store should open");
+
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: "run-terminal-update".to_string(),
+                    task_id: "run-terminal-update".to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "run_graph_task",
+                        "task_id": "run-terminal-update",
+                        "run_id": "run-terminal-update",
+                        "active_node": "analysis"
+                    }),
+                    binding_source: "consume_after_downstream_chain".to_string(),
+                    why_this_unit: "stale generated proof run binding".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only".to_string(),
+                    request_text: Some("proof run".to_string()),
+                    recorded_at: "2026-04-23T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist stale continuation binding");
+
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-terminal-update".to_string(),
+                dispatch_target: "analysis".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_exception_takeover".to_string(),
+                supersedes_receipt_id: Some("sup-terminal-update".to_string()),
+                exception_path_receipt_id: Some("exc-terminal-update".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/analysis-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/analysis-result.json".to_string()),
+                blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+                downstream_dispatch_target: Some("closure".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: Some("stale terminal blocker".to_string()),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["pending_terminal_write_evidence".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("blocked".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("analysis".to_string()),
+                downstream_dispatch_last_target: Some("analysis".to_string()),
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("verifier".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-23T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist stale blocked receipt with explicit takeover");
+
+        let mut status =
+            default_run_graph_status("run-terminal-update", "implementation", "implementation");
+        status.active_node = "closure".to_string();
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.context_state = "sealed".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+
+        record_run_graph_status_with_continuation_sync(&store, &status, "run_graph_update")
+            .await
+            .expect("terminal update should sync continuation binding");
+
+        let reconciled = store
+            .run_graph_status("run-terminal-update")
+            .await
+            .expect("reconciled status should load");
+        assert_eq!(reconciled.status, "completed");
+        assert_eq!(reconciled.lifecycle_stage, "closure_complete");
+        assert!(store
+            .run_graph_continuation_binding("run-terminal-update")
+            .await
+            .expect("continuation binding lookup should succeed")
+            .is_none());
     }
 
     #[test]

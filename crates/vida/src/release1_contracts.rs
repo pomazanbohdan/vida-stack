@@ -861,6 +861,12 @@ pub(crate) enum BlockerCode {
     RunGraphLatestDispatchReceiptCheckpointLeakage,
     ProjectActivationUnknown,
     DependencyGraphIssues,
+    DispatchPacketContractInvalid,
+    ExecutionModeNotParallelSafe,
+    CurrentExecutionModeNotParallelSafe,
+    OrderBucketMismatchOrMissing,
+    ConflictDomainCollision,
+    MissingConflictDomain,
     BootCompatibilityUnsupportedBoundary,
     MigrationPreflightUnsupportedBoundary,
     MissingRetrievalTrustSourceOperatorEvidence,
@@ -1001,6 +1007,12 @@ impl BlockerCode {
             }
             Self::ProjectActivationUnknown => "project_activation_unknown",
             Self::DependencyGraphIssues => "dependency_graph_issues",
+            Self::DispatchPacketContractInvalid => "dispatch_packet_contract_invalid",
+            Self::ExecutionModeNotParallelSafe => "execution_mode_not_parallel_safe",
+            Self::CurrentExecutionModeNotParallelSafe => "current_execution_mode_not_parallel_safe",
+            Self::OrderBucketMismatchOrMissing => "order_bucket_mismatch_or_missing",
+            Self::ConflictDomainCollision => "conflict_domain_collision",
+            Self::MissingConflictDomain => "missing_conflict_domain",
             Self::BootCompatibilityUnsupportedBoundary => "boot_compatibility_unsupported_boundary",
             Self::MigrationPreflightUnsupportedBoundary => {
                 "migration_preflight_unsupported_boundary"
@@ -1169,6 +1181,14 @@ impl BlockerCode {
             }
             "project_activation_unknown" => Some(Self::ProjectActivationUnknown),
             "dependency_graph_issues" => Some(Self::DependencyGraphIssues),
+            "dispatch_packet_contract_invalid" => Some(Self::DispatchPacketContractInvalid),
+            "execution_mode_not_parallel_safe" => Some(Self::ExecutionModeNotParallelSafe),
+            "current_execution_mode_not_parallel_safe" => {
+                Some(Self::CurrentExecutionModeNotParallelSafe)
+            }
+            "order_bucket_mismatch_or_missing" => Some(Self::OrderBucketMismatchOrMissing),
+            "conflict_domain_collision" => Some(Self::ConflictDomainCollision),
+            "missing_conflict_domain" => Some(Self::MissingConflictDomain),
             "boot_compatibility_unsupported_boundary" => {
                 Some(Self::BootCompatibilityUnsupportedBoundary)
             }

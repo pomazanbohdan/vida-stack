@@ -1131,6 +1131,329 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RouteDiagnosticMode {
+    Explain,
+    ValidateRouting,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskflowRouteDiagnosticArgs {
+    mode: RouteDiagnosticMode,
+    run_id: Option<String>,
+    dispatch_target: Option<String>,
+    runtime_role: Option<String>,
+    as_json: bool,
+}
+
+fn parse_taskflow_route_diagnostic_args(
+    args: &[String],
+) -> Result<TaskflowRouteDiagnosticArgs, &'static str> {
+    let (mode, mut index) = match args {
+        [head, subcommand, ..] if head == "route" && subcommand == "explain" => {
+            (RouteDiagnosticMode::Explain, 2)
+        }
+        [head, ..] if head == "validate-routing" => (RouteDiagnosticMode::ValidateRouting, 1),
+        _ => {
+            return Err("Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]");
+        }
+    };
+
+    let mut parsed = TaskflowRouteDiagnosticArgs {
+        mode,
+        run_id: None,
+        dispatch_target: None,
+        runtime_role: None,
+        as_json: false,
+    };
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => {
+                parsed.as_json = true;
+                index += 1;
+            }
+            "--run-id" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("Missing value for --run-id");
+                };
+                parsed.run_id = Some(value.clone());
+                index += 2;
+            }
+            "--dispatch-target" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("Missing value for --dispatch-target");
+                };
+                parsed.dispatch_target = Some(value.clone());
+                index += 2;
+            }
+            "--runtime-role" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("Missing value for --runtime-role");
+                };
+                parsed.runtime_role = Some(value.clone());
+                index += 2;
+            }
+            "--help" | "-h" => {
+                return Err("Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]");
+            }
+            _ => {
+                return Err("Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]");
+            }
+        }
+    }
+    if parsed.dispatch_target.is_some() && parsed.runtime_role.is_some() {
+        return Err("Use either --dispatch-target or --runtime-role, not both.");
+    }
+    if parsed.mode == RouteDiagnosticMode::ValidateRouting
+        && (parsed.dispatch_target.is_some() || parsed.runtime_role.is_some())
+    {
+        return Err("vida taskflow validate-routing validates all routed lanes and does not accept --dispatch-target or --runtime-role.");
+    }
+    Ok(parsed)
+}
+
+async fn latest_or_requested_dispatch_context(
+    store: &crate::state_store::StateStore,
+    run_id: Option<&str>,
+) -> Result<Option<crate::state_store::RunGraphDispatchContext>, crate::state_store::StateStoreError>
+{
+    let run_id = match run_id {
+        Some(run_id) => Some(run_id.to_string()),
+        None => store.latest_run_graph_run_id().await?,
+    };
+    let Some(run_id) = run_id else {
+        return Ok(None);
+    };
+    store.run_graph_dispatch_context(&run_id).await
+}
+
+fn execution_plan_from_dispatch_context(
+    context: &crate::state_store::RunGraphDispatchContext,
+) -> Option<&serde_json::Value> {
+    context
+        .role_selection
+        .get("execution_plan")
+        .filter(|value| value.is_object())
+}
+
+fn route_payload_for_dispatch_target(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> serde_json::Value {
+    let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
+        execution_plan,
+        dispatch_target,
+    );
+    let mut payload =
+        crate::taskflow_routing::route_explain_payload(execution_plan, dispatch_target, route);
+    let selected_backend = payload["selected_backend"].as_str();
+    let admissible = selected_backend.map(|backend| {
+        crate::runtime_dispatch_state::backend_is_admissible_or_runtime_selected_carrier_for_dispatch_target(
+            execution_plan,
+            backend,
+            dispatch_target,
+        )
+    });
+    let status = crate::taskflow_routing::route_explain_status(&payload, admissible);
+    let blocker_codes = crate::taskflow_routing::route_explain_blocker_codes(&payload, admissible);
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("status".to_string(), serde_json::Value::String(status));
+        object.insert(
+            "blocker_codes".to_string(),
+            serde_json::to_value(blocker_codes)
+                .expect("route explain blocker codes should serialize"),
+        );
+        object.insert(
+            "selected_backend_admissible".to_string(),
+            admissible.map_or(serde_json::Value::Null, serde_json::Value::Bool),
+        );
+    }
+    payload
+}
+
+fn route_validate_targets(execution_plan: &serde_json::Value) -> Vec<String> {
+    let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
+    let mut targets =
+        crate::taskflow_routing::dispatch_contract_execution_lane_sequence(dispatch_contract);
+    if targets.is_empty() {
+        targets.extend(
+            ["implementation", "coach", "verification"]
+                .into_iter()
+                .map(str::to_string),
+        );
+    }
+    let mut unique = BTreeSet::new();
+    targets
+        .into_iter()
+        .filter(|target| !target.trim().is_empty())
+        .filter(|target| unique.insert(target.clone()))
+        .collect()
+}
+
+async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
+    let parsed = match parse_taskflow_route_diagnostic_args(args) {
+        Ok(parsed) => parsed,
+        Err(usage) => {
+            eprintln!("{usage}");
+            return ExitCode::from(2);
+        }
+    };
+    let store = match crate::state_store::StateStore::open_existing(proxy_state_dir()).await {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let context = match latest_or_requested_dispatch_context(&store, parsed.run_id.as_deref()).await
+    {
+        Ok(Some(context)) => context,
+        Ok(None) => {
+            let payload = serde_json::json!({
+                "surface": match parsed.mode {
+                    RouteDiagnosticMode::Explain => "vida taskflow route explain",
+                    RouteDiagnosticMode::ValidateRouting => "vida taskflow validate-routing",
+                },
+                "status": "blocked",
+                "blocker_codes": ["run_graph_dispatch_context_missing"],
+                "run_id": parsed.run_id,
+            });
+            crate::print_json_pretty(&payload);
+            return ExitCode::from(1);
+        }
+        Err(error) => {
+            eprintln!("Failed to read run-graph dispatch context: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let Some(execution_plan) = execution_plan_from_dispatch_context(&context) else {
+        eprintln!(
+            "Run `{}` has no object role_selection.execution_plan in dispatch context.",
+            context.run_id
+        );
+        return ExitCode::from(1);
+    };
+
+    let payload = match parsed.mode {
+        RouteDiagnosticMode::Explain => {
+            let dispatch_target = match parsed.dispatch_target {
+                Some(target) => target,
+                None => match parsed.runtime_role.as_deref() {
+                    Some(role) => match crate::taskflow_routing::dispatch_target_for_runtime_role(
+                        execution_plan,
+                        role,
+                    ) {
+                        Some(target) => target,
+                        None => {
+                            eprintln!(
+                                "Unable to resolve dispatch target for runtime role `{role}`."
+                            );
+                            return ExitCode::from(1);
+                        }
+                    },
+                    None => "implementation".to_string(),
+                },
+            };
+            let explain = route_payload_for_dispatch_target(execution_plan, &dispatch_target);
+            serde_json::json!({
+                "surface": "vida taskflow route explain",
+                "status": explain["status"],
+                "blocker_codes": explain["blocker_codes"],
+                "run_id": context.run_id,
+                "task_id": context.task_id,
+                "dispatch_target": dispatch_target,
+                "route": explain,
+            })
+        }
+        RouteDiagnosticMode::ValidateRouting => {
+            let routes = route_validate_targets(execution_plan)
+                .into_iter()
+                .map(|target| route_payload_for_dispatch_target(execution_plan, &target))
+                .collect::<Vec<_>>();
+            let blocker_codes = routes
+                .iter()
+                .flat_map(|route| {
+                    route["blocker_codes"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let status = if blocker_codes.is_empty() {
+                "pass"
+            } else {
+                "blocked"
+            };
+            serde_json::json!({
+                "surface": "vida taskflow validate-routing",
+                "status": status,
+                "blocker_codes": blocker_codes,
+                "run_id": context.run_id,
+                "task_id": context.task_id,
+                "route_count": routes.len(),
+                "routes": routes,
+            })
+        }
+    };
+
+    if parsed.as_json {
+        crate::print_json_pretty(&payload);
+    } else {
+        let surface = payload["surface"].as_str().unwrap_or("vida taskflow route");
+        print_surface_header(RenderMode::Plain, surface);
+        print_surface_line(
+            RenderMode::Plain,
+            "status",
+            payload["status"].as_str().unwrap_or("unknown"),
+        );
+        if let Some(run_id) = payload["run_id"].as_str() {
+            print_surface_line(RenderMode::Plain, "run_id", run_id);
+        }
+        if let Some(target) = payload["dispatch_target"].as_str() {
+            print_surface_line(RenderMode::Plain, "dispatch_target", target);
+        }
+        if let Some(backend) = payload
+            .get("route")
+            .and_then(|route| route.get("selected_backend"))
+            .and_then(serde_json::Value::as_str)
+        {
+            print_surface_line(RenderMode::Plain, "selected_backend", backend);
+        }
+        if let Some(source) = payload
+            .get("route")
+            .and_then(|route| route.get("selection_source"))
+            .and_then(serde_json::Value::as_str)
+        {
+            print_surface_line(RenderMode::Plain, "selection_source", source);
+        }
+        if let Some(count) = payload["route_count"].as_u64() {
+            print_surface_line(RenderMode::Plain, "route_count", &count.to_string());
+        }
+        if let Some(blockers) = payload["blocker_codes"]
+            .as_array()
+            .filter(|items| !items.is_empty())
+        {
+            let joined = blockers
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            print_surface_line(RenderMode::Plain, "blocker_codes", &joined);
+        }
+    }
+
+    if payload["status"].as_str() == Some("pass") {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1256,6 +1579,72 @@ mod tests {
     #[test]
     fn taskflow_task_subcommand_supports_replace_jsonl() {
         assert!(taskflow_task_subcommand_supported("replace-jsonl"));
+    }
+
+    #[test]
+    fn route_diagnostic_parser_accepts_route_explain_json() {
+        let args = vec![
+            "route".to_string(),
+            "explain".to_string(),
+            "--dispatch-target".to_string(),
+            "implementation".to_string(),
+            "--json".to_string(),
+        ];
+        let parsed = super::parse_taskflow_route_diagnostic_args(&args).unwrap();
+        assert_eq!(parsed.mode, super::RouteDiagnosticMode::Explain);
+        assert_eq!(parsed.dispatch_target.as_deref(), Some("implementation"));
+        assert!(parsed.as_json);
+    }
+
+    #[test]
+    fn route_payload_accepts_runtime_selected_internal_host_carrier_without_matrix_row() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true
+                    }
+                },
+                {
+                    "backend_id": "opencode_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "implementation": false
+                    }
+                }
+            ],
+            "development_flow": {
+                "implementation": {
+                    "executor_backend": "opencode_cli",
+                    "fallback_executor_backend": "internal_subagents",
+                    "carrier_runtime_assignment": {
+                        "selected_backend_id": "junior",
+                        "selected_carrier_id": "junior",
+                        "selected_agent_id": "junior",
+                        "selected_tier": "junior",
+                        "selected_model_provider": "openai",
+                        "selected_model_profile_id": "codex_gpt54_low_write"
+                    }
+                }
+            }
+        });
+
+        let payload = super::route_payload_for_dispatch_target(&execution_plan, "implementer");
+
+        assert_eq!(payload["selected_backend"].as_str(), Some("junior"));
+        assert_eq!(payload["selected_backend_admissible"].as_bool(), Some(true));
+        assert_eq!(payload["status"].as_str(), Some("pass"));
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.is_empty()));
+    }
+
+    #[test]
+    fn validate_routing_targets_fall_back_when_contract_is_missing() {
+        let targets = super::route_validate_targets(&serde_json::json!({}));
+        assert_eq!(targets, vec!["implementation", "coach", "verification"]);
     }
 
     #[test]
@@ -1573,6 +1962,13 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
 
     if matches!(args.args.first().map(String::as_str), Some("graph-summary")) {
         return run_taskflow_graph_summary(&args.args).await;
+    }
+
+    if matches!(
+        args.args.first().map(String::as_str),
+        Some("route" | "validate-routing")
+    ) {
+        return run_taskflow_route_diagnostic(&args.args).await;
     }
 
     if matches!(args.args.first().map(String::as_str), Some("doctor")) {

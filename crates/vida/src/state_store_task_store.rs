@@ -84,12 +84,16 @@ impl StateStore {
     pub(crate) fn run_graph_status_allows_task_close_closure_binding(
         status: &RunGraphStatus,
     ) -> bool {
-        status.status == "completed"
-            && matches!(
-                status.lifecycle_stage.as_str(),
-                "implementation_complete" | "closure_complete"
-            )
-            && status.next_node.is_none()
+        matches!(
+            status.status.as_str(),
+            "ready" | "in_progress" | "completed"
+        ) && !matches!(
+            status.lifecycle_stage.as_str(),
+            "analysis_blocked"
+                | "implementation_blocked"
+                | "verification_blocked"
+                | "closure_blocked"
+        ) && status.next_node.is_none()
             && status.handoff_state == "none"
             && status.resume_target == "none"
     }
@@ -108,8 +112,10 @@ impl StateStore {
             return Ok(false);
         }
 
-        let receipt: Option<RunGraphDispatchReceiptStored> =
-            self.db.select(("run_graph_dispatch_receipt", run_id)).await?;
+        let receipt: Option<RunGraphDispatchReceiptStored> = self
+            .db
+            .select(("run_graph_dispatch_receipt", run_id))
+            .await?;
         let Some(receipt) = receipt.map(
             crate::state_store::state_store_run_graph_summary::normalize_legacy_downstream_preview_drift,
         ) else {
@@ -117,16 +123,14 @@ impl StateStore {
         };
         let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
         let receipt: RunGraphDispatchReceipt = receipt.into();
-        Ok(
-            receipt.run_id == run_id
-                && receipt.blocker_code.is_none()
-                && receipt
-                    .dispatch_packet_path
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|value| !value.is_empty())
-                && crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(&receipt),
-        )
+        Ok(receipt.run_id == run_id
+            && receipt.blocker_code.is_none()
+            && receipt
+                .dispatch_packet_path
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+            && crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(&receipt))
     }
 
     fn normalize_execution_semantics_value(value: Option<&str>) -> Option<String> {

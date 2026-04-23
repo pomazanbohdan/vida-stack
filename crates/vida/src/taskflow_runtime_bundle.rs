@@ -5,8 +5,8 @@ use time::format_description::well_known::Rfc3339;
 use crate::taskflow_protocol_binding::TASKFLOW_PROTOCOL_BINDING_AUTHORITY;
 use crate::{
     build_project_activator_view, doctor_launcher_summary_for_root,
-    latest_final_runtime_consumption_snapshot_path,
-    merge_project_activation_into_init_view, read_or_sync_launcher_activation_snapshot,
+    latest_final_runtime_consumption_snapshot_path, merge_project_activation_into_init_view,
+    read_or_sync_launcher_activation_snapshot,
     runtime_consumption_state::latest_admissible_retrieval_trust_signal,
     surface_render::operator_command_map, DoctorLauncherSummary, StateStore,
     TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
@@ -2536,8 +2536,7 @@ mod tests {
             final_snapshots: 2,
             latest_kind: Some("bundle-check".to_string()),
             latest_snapshot_path: Some(
-                "/tmp/project/.vida/data/state/runtime-consumption/bundle-check-9.json"
-                    .to_string(),
+                "/tmp/project/.vida/data/state/runtime-consumption/bundle-check-9.json".to_string(),
             ),
         };
 

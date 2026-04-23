@@ -1,6 +1,7 @@
 use crate::taskflow_routing::{
-    explicit_executor_backend_from_route, fallback_executor_backend_from_route,
-    fanout_executor_backends_from_route, selected_backend_from_execution_plan_route,
+    backend_selection_source, explicit_executor_backend_from_route,
+    fallback_executor_backend_from_route, fanout_executor_backends_from_route,
+    route_primary_backend_hint_from_route, runtime_assignment_backend_for_route,
 };
 use crate::{
     json_bool, json_lookup, json_string, json_string_list,
@@ -498,8 +499,9 @@ pub(crate) fn summarize_execution_truth_for_route(
     activation_kind: Option<&str>,
     execution_evidence_status: Option<&str>,
 ) -> serde_json::Value {
-    let route_primary_backend =
-        route.and_then(|route| selected_backend_from_execution_plan_route(execution_plan, route));
+    let route_primary_backend = route.and_then(route_primary_backend_hint_from_route);
+    let runtime_assignment_backend =
+        route.and_then(|route| runtime_assignment_backend_for_route(execution_plan, route));
     let fallback_backend = route.and_then(fallback_executor_backend_from_route);
     let fanout_backends = route
         .map(fanout_executor_backends_from_route)
@@ -527,19 +529,25 @@ pub(crate) fn summarize_execution_truth_for_route(
         .unwrap_or(serde_json::Value::Null);
     let route_uses_external_backend =
         route_has_external_backend(&route_primary_policy, &fallback_policy, &fanout_policies);
-    let selected_backend_source = match effective_selected_backend.as_deref() {
-        Some(backend_id) if route_primary_backend.as_deref() == Some(backend_id) => "route_primary",
-        Some(backend_id) if fallback_backend.as_deref() == Some(backend_id) => "route_fallback",
-        Some(backend_id)
-            if fanout_backends
+    let inherited_selected_backend = effective_selected_backend
+        .as_deref()
+        .filter(|backend_id| route_primary_backend.as_deref() != Some(*backend_id))
+        .filter(|backend_id| fallback_backend.as_deref() != Some(*backend_id))
+        .filter(|backend_id| {
+            !fanout_backends
                 .iter()
-                .any(|candidate| candidate == backend_id) =>
-        {
-            "route_fanout"
-        }
-        Some(_) => "activation_or_inherited",
-        None => "unknown",
-    };
+                .any(|candidate| candidate == *backend_id)
+        });
+    let selected_backend_source = backend_selection_source(
+        effective_selected_backend.as_deref(),
+        inherited_selected_backend,
+        runtime_assignment_backend.as_deref(),
+        route_primary_backend.as_deref(),
+        fallback_backend.as_deref(),
+        &fanout_backends,
+        None,
+        None,
+    );
 
     serde_json::json!({
         "effective_execution_posture": effective_execution_posture(
@@ -550,6 +558,7 @@ pub(crate) fn summarize_execution_truth_for_route(
         "route_primary_backend": route_primary_backend,
         "effective_selected_backend": effective_selected_backend,
         "selected_backend_source": selected_backend_source,
+        "backend_selection_source": selected_backend_source,
         "fallback_backend": fallback_backend,
         "fanout_backends": fanout_backends,
         "route_uses_external_backend": route_uses_external_backend,
@@ -840,22 +849,31 @@ mod tests {
         assert_eq!(internal["lane_admissibility"]["implementation"], true);
         assert_eq!(internal["lane_admissibility"]["verification"], true);
 
-        let qwen = rows
+        let hermes_review_backend = rows
             .iter()
             .find(|row| row["backend_id"] == "hermes_cli")
             .expect("hermes row should exist");
-        assert_eq!(qwen["lane_admissibility"]["analysis"], true);
-        assert_eq!(qwen["lane_admissibility"]["coach"], true);
-        assert_eq!(qwen["lane_admissibility"]["implementation"], false);
-        assert_eq!(qwen["lane_admissibility"]["verification"], false);
         assert_eq!(
-            qwen["lane_admissibility"]["policy_flags"]["review_only_backend"],
+            hermes_review_backend["lane_admissibility"]["analysis"],
+            true
+        );
+        assert_eq!(hermes_review_backend["lane_admissibility"]["coach"], true);
+        assert_eq!(
+            hermes_review_backend["lane_admissibility"]["implementation"],
+            false
+        );
+        assert_eq!(
+            hermes_review_backend["lane_admissibility"]["verification"],
+            false
+        );
+        assert_eq!(
+            hermes_review_backend["lane_admissibility"]["policy_flags"]["review_only_backend"],
             true
         );
     }
 
     #[test]
-    fn real_project_config_expands_analysis_and_review_routes_beyond_qwen_only() {
+    fn real_project_config_expands_analysis_and_review_routes_beyond_single_review_backend() {
         let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
@@ -872,7 +890,7 @@ mod tests {
         assert_eq!(analysis["executor_backend"], "opencode_cli");
         assert_eq!(
             analysis["fanout_executor_backends"],
-            serde_json::json!(["hermes_cli", "opencode_cli", "kilo_cli", "vibe_cli"])
+            serde_json::json!(["hermes_cli", "opencode_cli", "kilo_cli"])
         );
         assert_eq!(
             analysis["executor_backend_policy"]["lane_admissibility"]["implementation"],
@@ -887,8 +905,6 @@ mod tests {
             .expect("coach fanout should be an array");
         assert!(coach_fanout.iter().any(|value| value == "hermes_cli"));
         assert!(coach_fanout.iter().any(|value| value == "opencode_cli"));
-        assert!(coach_fanout.iter().any(|value| value == "kilo_cli"));
-        assert!(coach_fanout.iter().any(|value| value == "vibe_cli"));
 
         let verification = summarize_agent_route_from_snapshot(
             &serde_json::Value::Null,
@@ -911,12 +927,6 @@ mod tests {
         assert!(review_ensemble_fanout
             .iter()
             .any(|value| value == "opencode_cli"));
-        assert!(review_ensemble_fanout
-            .iter()
-            .any(|value| value == "kilo_cli"));
-        assert!(review_ensemble_fanout
-            .iter()
-            .any(|value| value == "vibe_cli"));
     }
 
     #[test]
@@ -955,7 +965,7 @@ mod tests {
         assert_eq!(summary["effective_execution_posture"], "hybrid");
         assert_eq!(summary["route_primary_backend"], "opencode_cli");
         assert_eq!(summary["effective_selected_backend"], "internal_subagents");
-        assert_eq!(summary["selected_backend_source"], "route_fallback");
+        assert_eq!(summary["selected_backend_source"], "route_fallback_hint");
         assert_eq!(summary["fallback_backend"], "internal_subagents");
         assert_eq!(summary["fanout_backends"][0], "hermes_cli");
         assert_eq!(

@@ -99,12 +99,24 @@ fn format_run_graph_dispatch_compact_summary(
         summary.downstream_dispatch_preview.selected_backend,
         summary.downstream_dispatch_preview.activation_agent_type,
         summary.downstream_dispatch_preview.activation_runtime_role,
-        summary.downstream_dispatch_preview.downstream_dispatch_target,
-        summary.downstream_dispatch_preview.downstream_dispatch_status,
-        summary.downstream_dispatch_preview.downstream_dispatch_ready,
-        summary.downstream_dispatch_preview.downstream_dispatch_executed_count,
-        summary.downstream_dispatch_preview.downstream_dispatch_active_target,
-        summary.downstream_dispatch_preview.downstream_dispatch_last_target,
+        summary
+            .downstream_dispatch_preview
+            .downstream_dispatch_target,
+        summary
+            .downstream_dispatch_preview
+            .downstream_dispatch_status,
+        summary
+            .downstream_dispatch_preview
+            .downstream_dispatch_ready,
+        summary
+            .downstream_dispatch_preview
+            .downstream_dispatch_executed_count,
+        summary
+            .downstream_dispatch_preview
+            .downstream_dispatch_active_target,
+        summary
+            .downstream_dispatch_preview
+            .downstream_dispatch_last_target,
         format_dispatch_blockers(&summary.blocker_codes),
     );
     let next_action = summary.recommended_command.as_ref().map(|command| {
@@ -554,14 +566,14 @@ mod tests {
     fn mixed_posture_display_includes_selected_backend_and_fanout() {
         let mixed_posture = serde_json::json!({
             "effective_posture_kind": "hybrid_external_cli",
-            "selected_backend": "qwen",
-            "fallback_backend": "vibe",
-            "fanout_backends": ["qwen", "vibe"],
+            "selected_backend": "opencode_cli",
+            "fallback_backend": "internal_subagents",
+            "fanout_backends": ["opencode_cli", "hermes_cli", "kilo_cli"],
         });
 
         assert_eq!(
             format_run_graph_mixed_posture(&mixed_posture),
-            "hybrid_external_cli backend=qwen fallback=vibe fanout=qwen, vibe"
+            "hybrid_external_cli backend=opencode_cli fallback=internal_subagents fanout=opencode_cli, hermes_cli, kilo_cli"
         );
     }
 

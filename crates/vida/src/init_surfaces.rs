@@ -6,9 +6,9 @@ use crate::state_store::StateStore;
 use crate::surface_render::print_compact_command_families;
 
 use super::{
-    AgentInitArgs, BootArgs, InitArgs, RenderMode, build_runtime_lane_selection_with_store,
-    ensure_launcher_bootstrap, normalize_root_arg, print_surface_header, print_surface_line,
-    role_exists_in_lane_bundle, state_store, sync_launcher_activation_snapshot,
+    build_runtime_lane_selection_with_store, ensure_launcher_bootstrap, normalize_root_arg,
+    print_surface_header, print_surface_line, role_exists_in_lane_bundle, state_store,
+    sync_launcher_activation_snapshot, AgentInitArgs, BootArgs, InitArgs, RenderMode,
 };
 use crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload;
 
@@ -205,7 +205,7 @@ mod tests {
     use super::*;
     use crate::run;
     use crate::runtime_dispatch_state::{
-        RuntimeDispatchPacketContext, write_runtime_dispatch_packet,
+        write_runtime_dispatch_packet, RuntimeDispatchPacketContext,
     };
     use crate::state_store::{RunGraphDispatchReceipt, RunGraphStatus, StateStore};
     use crate::temp_state::TempStateHarness;
@@ -697,12 +697,10 @@ mod tests {
             parsed["blocker_code"],
             "internal_dispatch_timeout_without_receipt"
         );
-        assert!(
-            parsed["provider_error"]
-                .as_str()
-                .expect("provider error should render")
-                .contains("timed out after 1s")
-        );
+        assert!(parsed["provider_error"]
+            .as_str()
+            .expect("provider error should render")
+            .contains("timed out after 1s"));
 
         if let Some(original_path) = original_path {
             std::env::set_var("PATH", original_path);
@@ -2191,6 +2189,21 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 {
                     print_surface_line(RenderMode::Plain, "backend source", source);
                 }
+                if let Some(carrier_id) =
+                    surface_payload["backend_truth"]["selected_carrier_id"].as_str()
+                {
+                    print_surface_line(RenderMode::Plain, "selected carrier", carrier_id);
+                }
+                if let Some(profile_id) =
+                    surface_payload["backend_truth"]["selected_model_profile_id"].as_str()
+                {
+                    print_surface_line(RenderMode::Plain, "selected model profile", profile_id);
+                }
+                if let Some(backend) =
+                    surface_payload["backend_truth"]["route_primary_backend"].as_str()
+                {
+                    print_surface_line(RenderMode::Plain, "route primary backend", backend);
+                }
                 if let Some(backend) =
                     surface_payload["backend_truth"]["route_fallback_backend"].as_str()
                 {
@@ -2379,6 +2392,19 @@ fn agent_init_backend_truth(
     let Some(execution_truth) = execution_truth.as_object() else {
         return serde_json::Value::Null;
     };
+    let role_selection = selection
+        .get("packet")
+        .and_then(|packet| packet.get("role_selection_full"))
+        .cloned()
+        .and_then(|value| {
+            serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
+        });
+    let runtime_assignment = role_selection
+        .as_ref()
+        .map(|role_selection| {
+            super::runtime_assignment_from_execution_plan(&role_selection.execution_plan).clone()
+        })
+        .unwrap_or(serde_json::Value::Null);
     let selected_backend = execution_truth
         .get("effective_selected_backend")
         .or_else(|| execution_truth.get("selected_backend"))
@@ -2404,24 +2430,44 @@ fn agent_init_backend_truth(
         .get("selected_backend_class")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    let selected_carrier_id = runtime_assignment
+        .get("selected_carrier_id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let selected_model_profile_id = runtime_assignment
+        .get("selected_model_profile_id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
 
     let selected_backend_str = selected_backend.as_str().filter(|value| !value.is_empty());
     let route_primary_backend_str = route_primary_backend
+        .as_str()
+        .filter(|value| !value.is_empty());
+    let selected_carrier_str = selected_carrier_id
         .as_str()
         .filter(|value| !value.is_empty());
     let override_active = matches!(
         (selected_backend_str, route_primary_backend_str),
         (Some(selected), Some(primary)) if selected != primary
     );
+    let dynamic_carrier_matches_effective_backend =
+        match (selected_carrier_str, selected_backend_str) {
+            (Some(selected_carrier), Some(effective_backend)) => {
+                serde_json::Value::Bool(selected_carrier == effective_backend)
+            }
+            _ => serde_json::Value::Null,
+        };
+    let dynamic_carrier_matches_route_primary_backend =
+        match (selected_carrier_str, route_primary_backend_str) {
+            (Some(selected_carrier), Some(route_primary_backend)) => {
+                serde_json::Value::Bool(selected_carrier == route_primary_backend)
+            }
+            _ => serde_json::Value::Null,
+        };
 
     let lawful_override = if override_active {
-        selection
-            .get("packet")
-            .and_then(|packet| packet.get("role_selection_full"))
-            .cloned()
-            .and_then(|value| {
-                serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
-            })
+        role_selection
+            .as_ref()
             .and_then(|role_selection| {
                 let dispatch_target = selection
                     .get("dispatch_target")
@@ -2453,7 +2499,12 @@ fn agent_init_backend_truth(
     serde_json::json!({
         "selected_backend": selected_backend,
         "selected_backend_source": selected_backend_source,
+        "backend_selection_source": selected_backend_source,
         "selected_backend_class": selected_backend_class,
+        "selected_carrier_id": selected_carrier_id,
+        "selected_model_profile_id": selected_model_profile_id,
+        "dynamic_carrier_matches_effective_backend": dynamic_carrier_matches_effective_backend,
+        "dynamic_carrier_matches_route_primary_backend": dynamic_carrier_matches_route_primary_backend,
         "route_primary_backend": route_primary_backend,
         "route_fallback_backend": route_fallback_backend,
         "effective_execution_posture": effective_execution_posture,
@@ -2534,10 +2585,10 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
 #[cfg(test)]
 mod agent_init_surface_tests {
     use super::*;
-    use crate::RuntimeConsumptionLaneSelection;
     use crate::run;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
+    use crate::RuntimeConsumptionLaneSelection;
     use std::path::Path;
     use std::process::ExitCode;
     use std::time::{Duration, Instant};
@@ -2577,6 +2628,14 @@ mod agent_init_surface_tests {
                         "executor_backend": "hermes_cli",
                         "fallback_executor_backend": "internal_subagents"
                     }
+                },
+                "runtime_assignment": {
+                    "selected_carrier_id": "junior",
+                    "selected_backend_id": "junior",
+                    "selected_model_profile_id": "codex_gpt54_mini_impl",
+                    "selected_tier": "junior",
+                    "activation_agent_type": "junior",
+                    "activation_runtime_role": "worker"
                 },
                 "backend_admissibility_matrix": [
                     {
@@ -2631,6 +2690,23 @@ mod agent_init_surface_tests {
             payload["backend_truth"]["selected_backend"],
             "internal_subagents"
         );
+        assert_eq!(payload["backend_truth"]["selected_carrier_id"], "junior");
+        assert_eq!(
+            payload["backend_truth"]["selected_model_profile_id"],
+            "codex_gpt54_mini_impl"
+        );
+        assert_eq!(
+            payload["backend_truth"]["backend_selection_source"],
+            "dynamic_runtime_selection"
+        );
+        assert_eq!(
+            payload["backend_truth"]["dynamic_carrier_matches_effective_backend"],
+            false
+        );
+        assert_eq!(
+            payload["backend_truth"]["dynamic_carrier_matches_route_primary_backend"],
+            false
+        );
         assert_eq!(
             payload["backend_truth"]["route_primary_backend"],
             "hermes_cli"
@@ -2675,7 +2751,7 @@ mod agent_init_surface_tests {
             payload["execution_truth"]["route_fallback_backend"],
             "internal_subagents"
         );
-        assert_eq!(payload["backend_truth"]["override_status"], "not_needed");
+        assert_eq!(payload["backend_truth"]["override_status"], "lawful");
     }
 
     #[test]

@@ -12,6 +12,27 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         return Ok(status);
     };
     let receipt = StateStore::validate_run_graph_dispatch_receipt_contract(receipt.clone())?;
+    if terminal_closure_status_has_explicit_receipt_override(&status, &receipt) {
+        if let Some(selected_backend) = receipt
+            .selected_backend
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            status.selected_backend = selected_backend.to_string();
+        }
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.recovery_ready = false;
+        return Ok(status);
+    }
     let blocked_receipt = matches!(receipt.dispatch_status.as_str(), "blocked" | "failed")
         || matches!(
             receipt.lane_status.as_deref(),
@@ -125,6 +146,35 @@ fn has_receipt_evidence_id(value: Option<&str>) -> bool {
     value.map(str::trim).is_some_and(|value| !value.is_empty())
 }
 
+fn terminal_closure_status(status: &RunGraphStatus) -> bool {
+    status.status == "completed"
+        && status.lifecycle_stage == "closure_complete"
+        && status
+            .next_node
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+}
+
+fn terminal_closure_status_has_explicit_receipt_override(
+    status: &RunGraphStatus,
+    receipt: &RunGraphDispatchReceiptStored,
+) -> bool {
+    if !terminal_closure_status(status) {
+        return false;
+    }
+    let has_supersession = has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref());
+    if !has_supersession {
+        return false;
+    }
+    has_receipt_evidence_id(receipt.exception_path_receipt_id.as_deref())
+        || matches!(
+            receipt.lane_status.as_deref(),
+            Some("lane_exception_takeover") | Some("lane_superseded")
+        )
+}
+
 pub(crate) fn normalize_legacy_downstream_preview_drift(
     mut receipt: RunGraphDispatchReceiptStored,
 ) -> RunGraphDispatchReceiptStored {
@@ -155,7 +205,7 @@ pub(crate) fn normalize_legacy_downstream_preview_drift(
 }
 
 fn reconcile_run_graph_status_with_closed_task(
-    status: RunGraphStatus,
+    mut status: RunGraphStatus,
     task: Option<&TaskRecord>,
 ) -> RunGraphStatus {
     let Some(task) = task else {
@@ -167,6 +217,17 @@ fn reconcile_run_graph_status_with_closed_task(
         return status;
     }
 
+    status.status = "completed".to_string();
+    if status.lifecycle_stage != "closure_complete" {
+        status.lifecycle_stage = "implementation_complete".to_string();
+    }
+    status.next_node = None;
+    status.policy_gate = "not_required".to_string();
+    status.handoff_state = "none".to_string();
+    status.context_state = "sealed".to_string();
+    status.checkpoint_kind = "none".to_string();
+    status.resume_target = "none".to_string();
+    status.recovery_ready = false;
     status
 }
 
@@ -2105,8 +2166,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -2264,6 +2325,90 @@ mod tests {
         assert_eq!(reconciled.resume_target, "none");
         assert_eq!(reconciled.selected_backend, "senior");
         assert!(!reconciled.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn terminal_closure_status_survives_blocked_receipt_after_explicit_takeover() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-terminal-closure-over-takeover-receipt-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-terminal-closure",
+            "implementation",
+            "implementation",
+        );
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "awaiting_closure".to_string();
+        status.context_state = "open".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.closure".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist terminal closure status");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-terminal-closure".to_string(),
+                dispatch_target: "analysis".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_exception_takeover".to_string(),
+                supersedes_receipt_id: Some("sup-terminal-closure".to_string()),
+                exception_path_receipt_id: Some("exc-terminal-closure".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/analysis-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/analysis-result.json".to_string()),
+                blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+                downstream_dispatch_target: Some("closure".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: Some("stale terminal blocker".to_string()),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["pending_terminal_write_evidence".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("blocked".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("analysis".to_string()),
+                downstream_dispatch_last_target: Some("analysis".to_string()),
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("verifier".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-23T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist superseded blocked dispatch receipt");
+
+        let reconciled = store
+            .run_graph_status("run-terminal-closure")
+            .await
+            .expect("load reconciled terminal closure status");
+        assert_eq!(reconciled.status, "completed");
+        assert_eq!(reconciled.active_node, "closure");
+        assert_eq!(reconciled.lifecycle_stage, "closure_complete");
+        assert_eq!(reconciled.policy_gate, "not_required");
+        assert_eq!(reconciled.handoff_state, "none");
+        assert_eq!(reconciled.resume_target, "none");
+        assert_eq!(reconciled.checkpoint_kind, "none");
+        assert!(!reconciled.recovery_ready);
+        assert_eq!(reconciled.selected_backend, "internal_subagents");
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -2434,8 +2579,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active()
-     {
+    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -3280,8 +3425,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open()
-     {
+    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -3779,8 +3924,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none()
-     {
+    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())

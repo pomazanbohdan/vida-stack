@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
-use crate::{RuntimeConsumptionLaneSelection, StateStore, yaml_lookup};
+use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 
 fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> &str {
     match dispatch_target {
@@ -611,11 +611,131 @@ fn dispatch_packet_prompt(dispatch_packet_path: &str) -> String {
         })
 }
 
+fn configured_subagent_backend_entry<'a>(
+    overlay: &'a serde_yaml::Value,
+    backend_id: &str,
+) -> Option<&'a serde_yaml::Value> {
+    yaml_lookup(overlay, &["agent_system", "subagents"])
+        .and_then(serde_yaml::Value::as_mapping)
+        .and_then(|entries| {
+            entries.iter().find_map(|(key, value)| {
+                (key.as_str()?.trim() == backend_id
+                    && crate::yaml_bool(yaml_lookup(value, &["enabled"]), false))
+                .then_some(value)
+            })
+        })
+}
+
+fn exact_model_profile_from_backend_entry(
+    backend_id: &str,
+    backend_entry: &serde_yaml::Value,
+    profile_id: &str,
+) -> Option<serde_json::Value> {
+    let profile_id = profile_id.trim();
+    if profile_id.is_empty() {
+        return None;
+    }
+    let fallback_rate = crate::yaml_string(yaml_lookup(backend_entry, &["budget_cost_units"]))
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .or_else(|| {
+            crate::yaml_string(yaml_lookup(backend_entry, &["normalized_cost_units"]))
+                .and_then(|raw| raw.parse::<u64>().ok())
+        })
+        .or_else(|| {
+            crate::yaml_string(yaml_lookup(backend_entry, &["rate"]))
+                .and_then(|raw| raw.parse::<u64>().ok())
+        });
+    let fallback_runtime_roles =
+        crate::yaml_string_list(crate::yaml_lookup(backend_entry, &["runtime_roles"]));
+    let fallback_task_classes =
+        crate::yaml_string_list(crate::yaml_lookup(backend_entry, &["task_classes"]));
+    let projection = crate::model_profile_contract::normalize_profile_projection_from_yaml(
+        backend_id,
+        backend_entry,
+        fallback_rate,
+        &fallback_runtime_roles,
+        &fallback_task_classes,
+    );
+    projection["model_profiles"]
+        .get(profile_id)
+        .cloned()
+        .filter(|profile| !profile.is_null())
+}
+
+fn apply_internal_subagent_profile_overlay(
+    carrier: &serde_json::Value,
+    backend_id: &str,
+    backend_entry: Option<&serde_yaml::Value>,
+    profile_id: Option<&str>,
+) -> serde_json::Value {
+    let Some(profile_id) = profile_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return carrier.clone();
+    };
+    let Some(profile) = backend_entry
+        .and_then(|entry| exact_model_profile_from_backend_entry(backend_id, entry, profile_id))
+    else {
+        return carrier.clone();
+    };
+    let mut patched = carrier.clone();
+    let object = patched
+        .as_object_mut()
+        .expect("internal carrier row should serialize to an object");
+    object.insert(
+        "selected_model_profile_id".to_string(),
+        serde_json::json!(profile_id),
+    );
+    object.insert(
+        "internal_subagent_backend_id".to_string(),
+        serde_json::json!(backend_id),
+    );
+    object.insert(
+        "internal_subagent_model_profile_id".to_string(),
+        serde_json::json!(profile_id),
+    );
+    for (target_key, profile_key) in [
+        ("selected_model_ref", "model_ref"),
+        ("selected_model_provider", "provider"),
+        ("selected_reasoning_effort", "reasoning_effort"),
+        (
+            "selected_plan_mode_reasoning_effort",
+            "plan_mode_reasoning_effort",
+        ),
+        ("selected_sandbox_mode", "sandbox_mode"),
+        ("normalized_cost_units", "normalized_cost_units"),
+        ("speed_tier", "speed_tier"),
+        ("quality_tier", "quality_tier"),
+        ("write_scope", "write_scope"),
+    ] {
+        if !profile[profile_key].is_null() {
+            object.insert(target_key.to_string(), profile[profile_key].clone());
+        }
+    }
+    if let Some(reasoning) = profile["reasoning_effort"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert(
+            "model_reasoning_effort".to_string(),
+            serde_json::json!(reasoning),
+        );
+    }
+    if let Some(sandbox) = profile["sandbox_mode"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert("sandbox_mode".to_string(), serde_json::json!(sandbox));
+    }
+    patched
+}
+
 fn selected_internal_host_carrier(
     selected_cli_entry: Option<&serde_yaml::Value>,
     preferred_backend: Option<&str>,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     role_selection: &RuntimeConsumptionLaneSelection,
+    overlay: Option<&serde_yaml::Value>,
 ) -> Option<serde_json::Value> {
     let carriers =
         crate::host_runtime_materialization::host_runtime_entry_carrier_catalog(selected_cli_entry);
@@ -625,11 +745,13 @@ fn selected_internal_host_carrier(
             .find(|row| row["role_id"].as_str() == Some(candidate_id))
             .cloned()
     };
-    let preferred_profile_id = role_selection
-        .execution_plan
-        .get("runtime_assignment")
-        .and_then(|value| value.get("selected_model_profile_id"))
-        .and_then(serde_json::Value::as_str);
+    let effective_backend = preferred_backend.or(receipt.selected_backend.as_deref());
+    let preferred_profile_id =
+        crate::runtime_dispatch_state::preferred_selected_model_profile_for_dispatch_target(
+            role_selection,
+            &receipt.dispatch_target,
+            effective_backend,
+        );
 
     let direct_ids = [preferred_backend, receipt.selected_backend.as_deref()];
     for candidate_id in direct_ids.into_iter().flatten() {
@@ -637,7 +759,7 @@ fn selected_internal_host_carrier(
             return Some(
                 crate::model_profile_contract::apply_selected_model_profile_to_row(
                     &carrier,
-                    preferred_profile_id,
+                    preferred_profile_id.as_deref(),
                 ),
             );
         }
@@ -665,14 +787,24 @@ fn selected_internal_host_carrier(
             .and_then(serde_json::Value::as_str),
         Some(role_selection.selected_role.as_str()),
     ];
+    let selected_backend_entry = effective_backend.and_then(|backend_id| {
+        overlay.and_then(|overlay| configured_subagent_backend_entry(overlay, backend_id))
+    });
     internal_bridge_ids
         .into_iter()
         .flatten()
         .find_map(find_carrier)
         .map(|carrier| {
-            crate::model_profile_contract::apply_selected_model_profile_to_row(
-                &carrier,
-                preferred_profile_id,
+            let host_profile_carrier =
+                crate::model_profile_contract::apply_selected_model_profile_to_row(
+                    &carrier,
+                    preferred_profile_id.as_deref(),
+                );
+            apply_internal_subagent_profile_overlay(
+                &host_profile_carrier,
+                "internal_subagents",
+                selected_backend_entry,
+                preferred_profile_id.as_deref(),
             )
         })
 }
@@ -828,11 +960,12 @@ pub(crate) fn agent_lane_dispatch_result(
         &project_root,
         dispatch_packet_path,
         preferred_backend,
-        role_selection
-            .execution_plan
-            .get("runtime_assignment")
-            .and_then(|value| value.get("selected_model_profile_id"))
-            .and_then(serde_json::Value::as_str),
+        crate::runtime_dispatch_state::preferred_selected_model_profile_for_dispatch_target(
+            role_selection,
+            &receipt.dispatch_target,
+            preferred_backend,
+        )
+        .as_deref(),
     );
     let effective_execution_posture =
         crate::runtime_dispatch_state::effective_execution_posture_summary(
@@ -907,7 +1040,8 @@ pub(crate) fn agent_lane_dispatch_result(
             "selected_reasoning_effort",
             "selected_sandbox_mode",
         ] {
-            if !runtime_assignment[key].is_null() {
+            let dispatch_has_value = dispatch.get(key).is_some_and(|value| !value.is_null());
+            if !dispatch_has_value && !runtime_assignment[key].is_null() {
                 dispatch.insert(key.to_string(), runtime_assignment[key].clone());
             }
         }
@@ -1070,6 +1204,7 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         preferred_backend,
         receipt,
         role_selection,
+        Some(&overlay),
     ) else {
         return Ok(None);
     };
@@ -1193,6 +1328,19 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
             "sandbox_mode".to_string(),
             serde_json::json!(carrier["sandbox_mode"].clone()),
         );
+        for key in [
+            "selected_model_profile_id",
+            "selected_model_ref",
+            "selected_model_provider",
+            "selected_reasoning_effort",
+            "selected_sandbox_mode",
+            "internal_subagent_backend_id",
+            "internal_subagent_model_profile_id",
+        ] {
+            if !carrier[key].is_null() {
+                dispatch.insert(key.to_string(), carrier[key].clone());
+            }
+        }
     }
 
     body.insert(
@@ -1398,17 +1546,85 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         return Ok(result);
     }
 
-    let selected_model_profile_id = role_selection
-        .execution_plan
-        .get("runtime_assignment")
-        .and_then(|value| value.get("selected_model_profile_id"))
-        .and_then(serde_json::Value::as_str);
+    let selected_model_profile_id =
+        crate::runtime_dispatch_state::preferred_selected_model_profile_for_dispatch_target(
+            role_selection,
+            &receipt.dispatch_target,
+            Some(&backend_id),
+        );
+    let readiness_verdict =
+        crate::status_surface_external_cli::external_cli_backend_readiness_verdict(
+            &backend_id,
+            &backend_entry,
+        );
+    if readiness_verdict["blocked"].as_bool().unwrap_or(false) {
+        let readiness_status = readiness_verdict["status"]
+            .as_str()
+            .unwrap_or("external_backend_blocked");
+        let selected_model_profile = selected_model_profile_id
+            .as_deref()
+            .or_else(|| readiness_verdict["selected_model_profile"].as_str())
+            .unwrap_or("unknown");
+        let next_action = readiness_verdict["next_actions"]
+            .as_array()
+            .and_then(|actions| actions.iter().filter_map(serde_json::Value::as_str).next())
+            .unwrap_or("Repair the external backend readiness blocker before dispatch.");
+        let blocker_code = readiness_verdict
+            .get("blocker_code")
+            .cloned()
+            .filter(|value| !value.is_null())
+            .unwrap_or_else(|| serde_json::json!("external_backend_not_ready"));
+        let activation_view = bounded_activation_view(
+            state_root,
+            project_root,
+            dispatch_packet_path,
+            receipt,
+            role_selection,
+        )
+        .await;
+        let mut result = agent_lane_dispatch_result(
+            activation_view,
+            dispatch_packet_path,
+            Some(&backend_id),
+            role_selection,
+            receipt,
+            host_runtime,
+        );
+        let body = result
+            .as_object_mut()
+            .expect("agent lane dispatch result should serialize to an object");
+        body.insert("blocker_code".to_string(), blocker_code);
+        body.insert(
+            "blocker_reason".to_string(),
+            serde_json::json!(format!(
+                "External backend `{backend_id}` is not dispatch-ready before launch: {readiness_status}; selected_model_profile={selected_model_profile}. {next_action}"
+            )),
+        );
+        body.insert("status".to_string(), serde_json::json!("blocked"));
+        body.insert("execution_state".to_string(), serde_json::json!("blocked"));
+        body.insert(
+            "external_backend_readiness".to_string(),
+            readiness_verdict.clone(),
+        );
+        if let Some(dispatch) = body
+            .get_mut("backend_dispatch")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            dispatch.insert(
+                "backend_class".to_string(),
+                serde_json::json!(backend_class.clone()),
+            );
+            dispatch.insert("external_backend_readiness".to_string(), readiness_verdict);
+        }
+        refresh_execution_truth(body, role_selection, receipt, Some(&backend_id), "missing");
+        return Ok(result);
+    }
     let (command, args) = crate::runtime_dispatch_state::configured_external_activation_parts(
         &backend_id,
         &backend_entry,
         project_root,
         dispatch_packet_path,
-        selected_model_profile_id,
+        selected_model_profile_id.as_deref(),
     )?;
     let wall_timeout_seconds = configured_external_dispatch_wall_timeout_seconds(&backend_entry);
     let wrapped_command =
@@ -1435,7 +1651,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     process.env("VIDA_DISPATCH_PACKET_PATH", dispatch_packet_path);
     process.env("VIDA_DISPATCH_TARGET", &receipt.dispatch_target);
     process.env("VIDA_SELECTED_CLI_SYSTEM", &selected_cli_system);
-    if let Some(profile_id) = selected_model_profile_id {
+    if let Some(profile_id) = selected_model_profile_id.as_deref() {
         process.env("VIDA_SELECTED_MODEL_PROFILE", profile_id);
     }
     if let Some(runtime_role) = receipt.activation_runtime_role.as_deref() {
@@ -1631,14 +1847,14 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandTimeoutWrapper, agent_lane_dispatch_result,
-        configured_internal_host_activation_parts, configured_internal_host_runtime_env,
-        dispatch_packet_prompt, execute_external_agent_lane_dispatch, execute_wrapped_command,
+        agent_lane_dispatch_result, configured_internal_host_activation_parts,
+        configured_internal_host_runtime_env, dispatch_packet_prompt,
+        execute_external_agent_lane_dispatch, execute_wrapped_command,
         external_provider_output_confirms_execution, internal_codex_output_confirms_execution,
         mark_dispatch_result_execution_evidence, parse_external_provider_output,
         parse_internal_codex_exec_output,
         should_render_store_backed_activation_view_for_internal_failure,
-        wrap_command_with_optional_timeout,
+        wrap_command_with_optional_timeout, CommandTimeoutWrapper,
     };
     use crate::RuntimeConsumptionLaneSelection;
     use std::path::Path;
@@ -2063,7 +2279,7 @@ dispatch:
         );
         assert_eq!(
             result["execution_truth"]["selected_backend_source"],
-            "route_fallback"
+            "route_fallback_hint"
         );
         assert_eq!(
             result["execution_truth"]["activation_evidence"]["execution_evidence_status"],
@@ -2145,6 +2361,7 @@ carriers:
             Some("internal_subagents"),
             &receipt,
             &role_selection,
+            None,
         )
         .expect("internal backend alias should bridge to activation tier");
 
@@ -2238,6 +2455,7 @@ carriers:
             Some("internal_subagents"),
             &receipt,
             &role_selection,
+            None,
         )
         .expect("internal backend alias should bridge to activation tier");
 
@@ -2249,6 +2467,138 @@ carriers:
         assert_eq!(carrier["model"].as_str(), Some("gpt-5.3-codex-spark"));
         assert_eq!(carrier["model_reasoning_effort"].as_str(), Some("high"));
         assert_eq!(carrier["sandbox_mode"].as_str(), Some("read-only"));
+    }
+
+    #[test]
+    fn selected_internal_host_carrier_applies_internal_subagent_route_profile_overlay() {
+        let system_entry = serde_yaml::from_str(
+            r#"
+carriers:
+  middle:
+    model: gpt-5.4
+    model_reasoning_effort: high
+    sandbox_mode: workspace-write
+"#,
+        )
+        .expect("system entry should parse");
+        let overlay = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+      default_model_profile: internal_fast
+      model_profiles:
+        internal_fast:
+          provider: internal
+          model_ref: internal_fast
+          reasoning_effort: low
+          normalized_cost_units: 6
+          speed_tier: fast
+          quality_tier: medium_high
+          write_scope: orchestrator_native
+          runtime_roles: [worker]
+          task_classes: [implementation]
+        internal_review:
+          provider: internal
+          model_ref: internal_review
+          reasoning_effort: medium
+          normalized_cost_units: 8
+          speed_tier: medium
+          quality_tier: high
+          write_scope: read_or_review
+          runtime_roles: [coach]
+          task_classes: [review]
+"#,
+        )
+        .expect("overlay should parse");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Continue development".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "internal_subagents",
+                        "profiles": {
+                            "internal_subagents": "internal_review"
+                        }
+                    }
+                },
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "selected_tier": "middle",
+                    "selected_model_profile_id": "codex_gpt54_medium"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-internal-route-profile-bridge".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-22T00:00:00Z".to_string(),
+        };
+
+        let carrier = super::selected_internal_host_carrier(
+            Some(&system_entry),
+            Some("internal_subagents"),
+            &receipt,
+            &role_selection,
+            Some(&overlay),
+        )
+        .expect("internal route profile should bridge through host carrier");
+
+        assert_eq!(carrier["role_id"].as_str(), Some("middle"));
+        assert_eq!(carrier["model"].as_str(), Some("gpt-5.4"));
+        assert_eq!(
+            carrier["selected_model_profile_id"].as_str(),
+            Some("internal_review")
+        );
+        assert_eq!(
+            carrier["internal_subagent_model_profile_id"].as_str(),
+            Some("internal_review")
+        );
+        assert_eq!(
+            carrier["selected_model_ref"].as_str(),
+            Some("internal_review")
+        );
+        assert_eq!(carrier["model_reasoning_effort"].as_str(), Some("medium"));
     }
 
     #[test]
@@ -2442,8 +2792,8 @@ carriers:
     }
 
     #[test]
-    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing()
-     {
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing(
+    ) {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -2594,6 +2944,162 @@ agent_system:
             result["backend_dispatch"]["provider_error"],
             serde_json::Value::Null
         );
+
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn execute_external_agent_lane_dispatch_blocks_known_readiness_failure_before_launch() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-external-dispatch-readiness-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        let missing_auth = project_root.join("missing-provider-auth.json");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            format!(
+                r#"
+host_environment:
+  cli_system: opencode
+  systems:
+    opencode:
+      enabled: true
+      execution_class: external
+      external_backend_id: opencode_cli
+agent_system:
+  subagents:
+    opencode_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      dispatch:
+        command: sh
+        static_args: ["-c", "echo SHOULD_NOT_LAUNCH >&2; exit 99"]
+        prompt_mode: positional
+      readiness:
+        auth:
+          mode: file_present
+          path: "{}"
+"#,
+                missing_auth.display()
+            ),
+        )
+        .expect("write overlay");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Implement the task".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "opencode_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "analysis": true,
+                            "coach": true,
+                            "implementation": true
+                        }
+                    }
+                ],
+                "development_flow": {
+                    "implementation": {
+                        "executor_backend": "opencode_cli"
+                    }
+                },
+                "runtime_assignment": {
+                    "selected_backend_id": "opencode_cli",
+                    "selected_model_profile_id": "opencode_minimax_free_review"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-1".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("worker".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("opencode_cli".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let result = runtime
+            .block_on(async {
+                execute_external_agent_lane_dispatch(
+                    project_root.join("missing-state").as_path(),
+                    &project_root,
+                    "/tmp/dispatch-packet.json",
+                    Some("opencode_cli"),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "external"
+                    }),
+                )
+                .await
+            })
+            .expect("dispatch should return blocked result");
+
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["blocker_code"], "interactive_auth_required");
+        assert_eq!(result["backend_dispatch"]["backend_id"], "opencode_cli");
+        assert_eq!(
+            result["external_backend_readiness"]["status"],
+            "interactive_auth_required"
+        );
+        assert_eq!(
+            result["backend_dispatch"]["external_backend_readiness"]["blocked"],
+            true
+        );
+        assert_eq!(
+            result["backend_dispatch"]["provider_error"],
+            serde_json::Value::Null
+        );
+        assert!(!result["blocker_reason"]
+            .as_str()
+            .expect("blocker reason should render")
+            .contains("SHOULD_NOT_LAUNCH"));
 
         let _ = std::fs::remove_dir_all(&project_root);
     }

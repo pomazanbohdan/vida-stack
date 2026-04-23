@@ -1050,15 +1050,18 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         &receipt,
                     );
                     if let Err(error) = store.record_run_graph_status(&executed_status).await {
-                        eprintln!("Failed to persist run-graph status after lane completion: {error}");
+                        eprintln!(
+                            "Failed to persist run-graph status after lane completion: {error}"
+                        );
                         return ExitCode::from(1);
                     }
-                    if let Err(error) = crate::taskflow_continuation::sync_run_graph_continuation_binding(
-                        &store,
-                        &executed_status,
-                        "lane_complete",
-                    )
-                    .await
+                    if let Err(error) =
+                        crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                            &store,
+                            &executed_status,
+                            "lane_complete",
+                        )
+                        .await
                     {
                         eprintln!(
                             "Failed to synchronize continuation binding after lane completion: {error}"

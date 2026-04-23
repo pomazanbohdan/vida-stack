@@ -175,14 +175,14 @@ mod tests {
 
     #[test]
     fn source_of_truth_uses_selected_system_for_overlay_dispatch_alias_owner() {
-        let source = carrier_runtime_source_of_truth(Some("qwen"), true, None);
+        let source = carrier_runtime_source_of_truth(Some("codex"), true, None);
         assert_eq!(
             source["dispatch_alias_owner"],
-            "vida.config.yaml -> host_environment.systems.qwen.dispatch_aliases overlay"
+            "vida.config.yaml -> host_environment.systems.codex.dispatch_aliases overlay"
         );
         assert_eq!(
             source["carrier_catalog_owner"],
-            "vida.config.yaml -> host_environment.systems.qwen.carriers"
+            "vida.config.yaml -> host_environment.systems.codex.carriers"
         );
     }
 

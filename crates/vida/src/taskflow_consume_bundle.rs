@@ -703,7 +703,9 @@ fn build_taskflow_agent_system_snapshot(
         .as_str()
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| crate::carrier_runtime_metadata::snapshot_selection_rule(carrier_runtime));
+        .unwrap_or_else(|| {
+            crate::carrier_runtime_metadata::snapshot_selection_rule(carrier_runtime)
+        });
     let max_parallel_agents =
         normalize_agent_system_max_parallel_agents(&activation_bundle["agent_system"]);
     let materialization_mode =
@@ -728,7 +730,9 @@ fn build_taskflow_agent_system_snapshot(
             "runtime_role_identity": runtime_role_identity,
             "selection_rule": selection_rule,
             "model_selection": carrier_runtime["model_selection"],
-            "model_selection_enabled": !carrier_runtime["model_selection"].is_null(),
+            "model_selection_enabled": carrier_runtime["model_selection"]["enabled"]
+                .as_bool()
+                .unwrap_or(false),
         },
         "agent_system": {
             "mode": activation_bundle["agent_system"]["mode"],
@@ -1116,6 +1120,41 @@ mod tests {
     }
 
     #[test]
+    fn agent_system_snapshot_model_selection_enabled_follows_enabled_flag() {
+        let activation_bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 1
+            },
+            "autonomous_execution": {
+                "enabled": true
+            },
+            "carrier_runtime": {
+                "roles": [],
+                "model_selection": {
+                    "enabled": false,
+                    "selection_rule": "role_task_then_readiness_then_score_then_cost_quality"
+                },
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
+                    },
+                    "agents": {},
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": []
+            }
+        });
+
+        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+
+        assert_eq!(snapshot["agent_model"]["model_selection_enabled"], false);
+        assert!(snapshot["agent_model"]["model_selection"].is_object());
+    }
+
+    #[test]
     fn agent_system_snapshot_prefers_runtime_owned_metadata_when_present() {
         let activation_bundle = serde_json::json!({
             "agent_system": {
@@ -1126,12 +1165,12 @@ mod tests {
             "autonomous_execution": {
                 "enabled": true
             },
-            "carrier_runtime": {
-                "materialization_mode": "copy_tree_only",
-                "source_of_truth": {
-                    "carrier_catalog_owner": "vida.config.yaml -> host_environment.systems.qwen.carriers",
+                "carrier_runtime": {
+                    "materialization_mode": "copy_tree_only",
+                    "source_of_truth": {
+                    "carrier_catalog_owner": "vida.config.yaml -> host_environment.systems.codex.carriers",
                     "dispatch_alias_owner": "vida.config.yaml -> agent_extensions.registries.dispatch_aliases (.vida/project/agent-extensions/dispatch-aliases.yaml)"
-                },
+                    },
                 "agent_model": {
                     "agent_identity": "configured_carrier",
                     "runtime_role_identity": "configured_runtime_role"
@@ -1153,7 +1192,7 @@ mod tests {
         assert_eq!(snapshot["materialization_mode"], "copy_tree_only");
         assert_eq!(
             snapshot["source_of_truth"]["carrier_catalog_owner"],
-            "vida.config.yaml -> host_environment.systems.qwen.carriers"
+            "vida.config.yaml -> host_environment.systems.codex.carriers"
         );
         assert_eq!(
             snapshot["source_of_truth"]["dispatch_alias_owner"],

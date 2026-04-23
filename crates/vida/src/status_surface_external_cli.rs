@@ -139,20 +139,21 @@ fn external_backend_profile_projection(
     backend_id: &str,
     backend_entry: &serde_yaml::Value,
 ) -> serde_json::Value {
-    let fallback_rate = crate::yaml_string(crate::yaml_lookup(
-        backend_entry,
-        &["budget_cost_units"],
-    ))
-    .and_then(|raw| raw.parse::<u64>().ok())
-    .or_else(|| {
-        crate::yaml_string(crate::yaml_lookup(backend_entry, &["normalized_cost_units"]))
+    let fallback_rate =
+        crate::yaml_string(crate::yaml_lookup(backend_entry, &["budget_cost_units"]))
             .and_then(|raw| raw.parse::<u64>().ok())
-    })
-    .or_else(|| {
-        crate::yaml_string(crate::yaml_lookup(backend_entry, &["rate"]))
-            .and_then(|raw| raw.parse::<u64>().ok())
-    })
-    .unwrap_or(0);
+            .or_else(|| {
+                crate::yaml_string(crate::yaml_lookup(
+                    backend_entry,
+                    &["normalized_cost_units"],
+                ))
+                .and_then(|raw| raw.parse::<u64>().ok())
+            })
+            .or_else(|| {
+                crate::yaml_string(crate::yaml_lookup(backend_entry, &["rate"]))
+                    .and_then(|raw| raw.parse::<u64>().ok())
+            })
+            .unwrap_or(0);
     let fallback_runtime_roles =
         crate::yaml_string_list(crate::yaml_lookup(backend_entry, &["runtime_roles"]));
     let fallback_task_classes =
@@ -170,9 +171,7 @@ fn profile_id_matching_model_ref(
     profile_projection: &serde_json::Value,
     model_ref: Option<&str>,
 ) -> Option<String> {
-    let model_ref = model_ref
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
+    let model_ref = model_ref.map(str::trim).filter(|value| !value.is_empty())?;
     crate::model_profile_contract::model_profiles_from_json_row(profile_projection)
         .into_iter()
         .find(|profile| profile["model_ref"].as_str().map(str::trim) == Some(model_ref))
@@ -304,10 +303,8 @@ fn external_cli_carrier_readiness(
         }
         _ => None,
     };
-    let selected_model_profile = selected_external_cli_profile(
-        &profile_projection,
-        current_model_ref.as_deref(),
-    );
+    let selected_model_profile =
+        selected_external_cli_profile(&profile_projection, current_model_ref.as_deref());
 
     if let Some(expected_model_ref) = expected_model_ref.clone() {
         if current_model_ref.as_deref() != Some(expected_model_ref.as_str()) {
@@ -438,6 +435,13 @@ fn external_cli_carrier_readiness(
     })
 }
 
+pub(crate) fn external_cli_backend_readiness_verdict(
+    backend_id: &str,
+    backend_entry: &serde_yaml::Value,
+) -> serde_json::Value {
+    external_cli_carrier_readiness(backend_id, backend_entry)
+}
+
 fn external_cli_readiness_summaries(overlay: &serde_yaml::Value) -> serde_json::Value {
     let carrier_rows = crate::yaml_lookup(overlay, &["agent_system", "subagents"])
         .and_then(serde_yaml::Value::as_mapping)
@@ -457,7 +461,7 @@ fn external_cli_readiness_summaries(overlay: &serde_yaml::Value) -> serde_json::
                     if !enabled || backend_class != "external_cli" {
                         return None;
                     }
-                    Some(external_cli_carrier_readiness(&backend_id, entry))
+                    Some(external_cli_backend_readiness_verdict(&backend_id, entry))
                 })
                 .collect::<Vec<_>>()
         })
@@ -668,12 +672,10 @@ pub(crate) fn external_cli_preflight_summary(
     let primary_blocker_next_actions = if blocked_primary_backends.is_empty() {
         serde_json::json!([])
     } else {
-        serde_json::json!([
-            format!(
-                "One or more route-primary external backends are currently blocked: {}. Reroute, wait for recovery, or switch those routes to another carrier before relying on them.",
-                blocked_primary_backends.join(", ")
-            )
-        ])
+        serde_json::json!([format!(
+            "One or more route-primary external backends are currently blocked: {}. Reroute, wait for recovery, or switch those routes to another carrier before relying on them.",
+            blocked_primary_backends.join(", ")
+        )])
     };
 
     if tool_contract_blocked {
@@ -1198,7 +1200,7 @@ agent_system:
           status: provider_failure_detected
           blocker_code: tool_execution_failed
           next_actions:
-            - Wait for provider quota reset or switch qwen to API-key auth.
+            - Wait for provider quota reset or refresh the configured backend credentials.
 "#,
             log_dir.display()
         ))
@@ -1214,7 +1216,7 @@ agent_system:
         );
         assert_eq!(
             summary["carrier_readiness"]["carriers"][0]["next_actions"][0],
-            "Wait for provider quota reset or switch qwen to API-key auth."
+            "Wait for provider quota reset or refresh the configured backend credentials."
         );
     }
 
