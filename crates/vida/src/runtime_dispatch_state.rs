@@ -451,6 +451,10 @@ pub(crate) fn build_taskflow_handoff_plan(
         })
         .collect::<serde_json::Map<_, _>>();
     if execution_plan["status"] == "design_first" {
+        let execution_preparation_artifacts = taskflow_execution_preparation_artifacts(
+            false,
+            "blocked_pending_developer_handoff_packet",
+        );
         return serde_json::json!({
             "status": "spec_first_handoff_required",
             "orchestration_contract": execution_plan["orchestration_contract"],
@@ -460,21 +464,16 @@ pub(crate) fn build_taskflow_handoff_plan(
             "post_design_activation_chain": activation_chain,
             "post_design_lane_contract": lane_catalog,
             "handoff_ready": true,
-            "execution_preparation_artifacts": {
-                "handoff_ready": false,
-                "developer_handoff_packet": {
-                    "ready": false,
-                    "status": "blocked_pending_developer_handoff_packet",
-                    "path": serde_json::Value::Null,
-                },
-                "execution_preparation_evidence": {
-                    "ready": false,
-                    "status": "blocked_pending_execution_preparation_evidence",
-                }
-            },
+            "execution_preparation_artifacts": execution_preparation_artifacts,
         });
     }
 
+    let developer_handoff_status = execution_plan["pre_execution_design_gate"]
+        ["developer_handoff_packet_status"]
+        .as_str()
+        .unwrap_or("blocked_pending_developer_handoff_packet");
+    let execution_preparation_artifacts =
+        taskflow_execution_preparation_artifacts(true, developer_handoff_status);
     serde_json::json!({
         "status": "execution_handoff_ready",
         "orchestration_contract": execution_plan["orchestration_contract"],
@@ -484,18 +483,73 @@ pub(crate) fn build_taskflow_handoff_plan(
         "runtime_assignment_source": runtime_assignment_source_from_execution_plan(execution_plan),
         "lane_sequence": development_flow["lane_sequence"],
         "handoff_ready": true,
-        "execution_preparation_artifacts": {
-            "handoff_ready": true,
-            "developer_handoff_packet": {
-                "ready": false,
-                "status": execution_plan["pre_execution_design_gate"]["developer_handoff_packet_status"].clone(),
-                "path": serde_json::Value::Null,
+        "execution_preparation_artifacts": execution_preparation_artifacts,
+    })
+}
+
+fn taskflow_execution_preparation_artifact(
+    ready: bool,
+    status: &str,
+    path: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "ready": ready,
+        "status": status,
+        "path": path,
+    })
+}
+
+fn taskflow_execution_preparation_artifacts(
+    handoff_ready: bool,
+    developer_handoff_status: &str,
+) -> serde_json::Value {
+    let blocked_prefix = if handoff_ready {
+        "pending"
+    } else {
+        "blocked_pending"
+    };
+    serde_json::json!({
+        "handoff_ready": handoff_ready,
+        "required_artifacts": [
+            "architecture_preparation_report",
+            "developer_handoff_packet",
+            "change_boundary",
+            "dependency_impact_summary",
+            "spec_alignment_summary",
+        ],
+        "architecture_preparation_report": taskflow_execution_preparation_artifact(
+            false,
+            &format!("{blocked_prefix}_architecture_preparation_report"),
+            None,
+        ),
+        "developer_handoff_packet": taskflow_execution_preparation_artifact(
+            false,
+            developer_handoff_status,
+            None,
+        ),
+        "change_boundary": taskflow_execution_preparation_artifact(
+            false,
+            &format!("{blocked_prefix}_change_boundary"),
+            None,
+        ),
+        "dependency_impact_summary": taskflow_execution_preparation_artifact(
+            false,
+            &format!("{blocked_prefix}_dependency_impact_summary"),
+            None,
+        ),
+        "spec_alignment_summary": taskflow_execution_preparation_artifact(
+            false,
+            &format!("{blocked_prefix}_spec_alignment_summary"),
+            None,
+        ),
+        "execution_preparation_evidence": {
+            "ready": false,
+            "status": if handoff_ready {
+                "pending_execution_preparation_evidence"
+            } else {
+                "blocked_pending_execution_preparation_evidence"
             },
-            "execution_preparation_evidence": {
-                "ready": false,
-                "status": "pending_execution_preparation_evidence",
-            }
-        },
+        }
     })
 }
 
@@ -4591,6 +4645,11 @@ fn build_runtime_dispatch_packet_body(
         "role_selection_full": ctx.role_selection,
         "taskflow_handoff_plan": ctx.taskflow_handoff_plan,
         "run_graph_bootstrap": ctx.run_graph_bootstrap,
+        "execution_preparation_artifacts": ctx.run_graph_bootstrap
+            .get("execution_preparation_artifacts")
+            .or_else(|| ctx.taskflow_handoff_plan.get("execution_preparation_artifacts"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
         "orchestration_contract": ctx.role_selection.execution_plan["orchestration_contract"],
     }))
 }
@@ -5280,6 +5339,32 @@ mod tests {
         assert_eq!(
             plan["execution_preparation_artifacts"]["developer_handoff_packet"]["status"],
             "blocked_pending_developer_handoff_packet"
+        );
+        assert_eq!(
+            plan["execution_preparation_artifacts"]["required_artifacts"],
+            serde_json::json!([
+                "architecture_preparation_report",
+                "developer_handoff_packet",
+                "change_boundary",
+                "dependency_impact_summary",
+                "spec_alignment_summary",
+            ])
+        );
+        assert_eq!(
+            plan["execution_preparation_artifacts"]["architecture_preparation_report"]["status"],
+            "pending_architecture_preparation_report"
+        );
+        assert_eq!(
+            plan["execution_preparation_artifacts"]["change_boundary"]["status"],
+            "pending_change_boundary"
+        );
+        assert_eq!(
+            plan["execution_preparation_artifacts"]["dependency_impact_summary"]["status"],
+            "pending_dependency_impact_summary"
+        );
+        assert_eq!(
+            plan["execution_preparation_artifacts"]["spec_alignment_summary"]["status"],
+            "pending_spec_alignment_summary"
         );
         assert_eq!(
             plan["execution_preparation_artifacts"]["execution_preparation_evidence"]["status"],

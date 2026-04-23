@@ -1064,10 +1064,22 @@ struct ExecutionPreparationEvidenceArtifact {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ExecutionPreparationArtifact {
+    ready: bool,
+    status: Option<String>,
+    path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ExecutionPreparationArtifacts {
     handoff_ready: bool,
     developer_handoff_packet: DeveloperHandoffPacketArtifact,
+    architecture_preparation_report: ExecutionPreparationArtifact,
+    change_boundary: ExecutionPreparationArtifact,
+    dependency_impact_summary: ExecutionPreparationArtifact,
+    spec_alignment_summary: ExecutionPreparationArtifact,
     execution_preparation_evidence: ExecutionPreparationEvidenceArtifact,
+    structured_artifacts_present: bool,
 }
 
 fn nonempty_json_string(value: Option<&serde_json::Value>) -> Option<String> {
@@ -1087,11 +1099,15 @@ fn decode_execution_preparation_artifacts(
     taskflow_handoff_plan: &serde_json::Value,
     run_graph_bootstrap: &serde_json::Value,
 ) -> ExecutionPreparationArtifacts {
-    let artifact_json = run_graph_bootstrap
+    let run_graph_artifact_json = run_graph_bootstrap
         .get("execution_preparation_artifacts")
+        .filter(|value| value.is_object());
+    let artifact_json = run_graph_artifact_json
+        .or_else(|| taskflow_handoff_plan.get("execution_preparation_artifacts"))
         .filter(|value| value.is_object());
     let packet_json = artifact_json.and_then(|value| value.get("developer_handoff_packet"));
     let evidence_json = artifact_json.and_then(|value| value.get("execution_preparation_evidence"));
+    let structured_artifacts_present = run_graph_artifact_json.is_some();
 
     let handoff_ready = super::json_bool(taskflow_handoff_plan.get("handoff_ready"), false)
         && (artifact_json
@@ -1140,7 +1156,35 @@ fn decode_execution_preparation_artifacts(
     ExecutionPreparationArtifacts {
         handoff_ready,
         developer_handoff_packet,
+        architecture_preparation_report: decode_execution_preparation_artifact(
+            artifact_json,
+            "architecture_preparation_report",
+        ),
+        change_boundary: decode_execution_preparation_artifact(artifact_json, "change_boundary"),
+        dependency_impact_summary: decode_execution_preparation_artifact(
+            artifact_json,
+            "dependency_impact_summary",
+        ),
+        spec_alignment_summary: decode_execution_preparation_artifact(
+            artifact_json,
+            "spec_alignment_summary",
+        ),
         execution_preparation_evidence,
+        structured_artifacts_present,
+    }
+}
+
+fn decode_execution_preparation_artifact(
+    artifact_json: Option<&serde_json::Value>,
+    key: &str,
+) -> ExecutionPreparationArtifact {
+    let value = artifact_json.and_then(|value| value.get(key));
+    ExecutionPreparationArtifact {
+        ready: value
+            .map(|value| super::json_bool(value.get("ready"), false))
+            .unwrap_or(false),
+        status: nonempty_json_string(value.and_then(|value| value.get("status"))),
+        path: nonempty_json_string(value.and_then(|value| value.get("path"))),
     }
 }
 
@@ -1178,11 +1222,17 @@ fn build_execution_preparation_evidence_gate(
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty());
     let evidence_ready = artifacts.execution_preparation_evidence.ready;
+    let required_artifacts_ready = !artifacts.structured_artifacts_present
+        || (artifacts.architecture_preparation_report.ready
+            && artifacts.change_boundary.ready
+            && artifacts.dependency_impact_summary.ready
+            && artifacts.spec_alignment_summary.ready);
 
     ExecutionPreparationEvidenceGate {
         missing_evidence_or_handoff_packet: !(artifacts.handoff_ready
             && packet_ready
-            && evidence_ready),
+            && evidence_ready
+            && required_artifacts_ready),
     }
 }
 
@@ -1662,6 +1712,22 @@ mod tests {
             matched_terms: vec!["implementation".to_string()],
             compiled_bundle: serde_json::Value::Null,
             execution_plan: serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "hermes_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    },
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ],
                 "development_flow": {
                     "implementation": {
                         "executor_backend": "hermes_cli",
@@ -1949,10 +2015,30 @@ mod tests {
             "handoff_ready": true,
             "execution_preparation_artifacts": {
                 "handoff_ready": true,
+                "architecture_preparation_report": {
+                    "ready": true,
+                    "status": "ready",
+                    "path": "/tmp/architecture-preparation-report.json"
+                },
                 "developer_handoff_packet": {
                     "ready": true,
                     "status": "ready",
                     "path": "/tmp/packet.json"
+                },
+                "change_boundary": {
+                    "ready": true,
+                    "status": "ready",
+                    "path": "/tmp/change-boundary.json"
+                },
+                "dependency_impact_summary": {
+                    "ready": true,
+                    "status": "ready",
+                    "path": "/tmp/dependency-impact-summary.json"
+                },
+                "spec_alignment_summary": {
+                    "ready": true,
+                    "status": "ready",
+                    "path": "/tmp/spec-alignment-summary.json"
                 },
                 "execution_preparation_evidence": {
                     "ready": true,
@@ -1978,6 +2064,85 @@ mod tests {
             ExecutionPreparationEvidenceGate {
                 missing_evidence_or_handoff_packet: false
             }
+        );
+    }
+
+    #[test]
+    fn execution_preparation_gate_blocks_when_structured_artifact_is_missing() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "architecture refactor implementation".to_string(),
+            selected_role: "orchestrator".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_preparation_required": true,
+                        "lane_sequence": ["execution_preparation", "implementer"],
+                        "lane_catalog": {
+                            "execution_preparation": {
+                                "completion_blocker": "pending_execution_preparation_evidence"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+
+        let taskflow_handoff_plan = serde_json::json!({
+            "handoff_ready": true,
+        });
+        let run_graph_bootstrap = serde_json::json!({
+            "handoff_ready": true,
+            "execution_preparation_artifacts": {
+                "handoff_ready": true,
+                "architecture_preparation_report": {
+                    "ready": true,
+                    "status": "ready"
+                },
+                "developer_handoff_packet": {
+                    "ready": true,
+                    "status": "ready",
+                    "path": "/tmp/packet.json"
+                },
+                "change_boundary": {
+                    "ready": false,
+                    "status": "pending_change_boundary"
+                },
+                "dependency_impact_summary": {
+                    "ready": true,
+                    "status": "ready"
+                },
+                "spec_alignment_summary": {
+                    "ready": true,
+                    "status": "ready"
+                },
+                "execution_preparation_evidence": {
+                    "ready": true,
+                    "status": "ready"
+                }
+            }
+        });
+
+        let gate = build_execution_preparation_evidence_gate(
+            &role_selection,
+            &taskflow_handoff_plan,
+            &run_graph_bootstrap,
+        );
+
+        assert_eq!(
+            gate.blocker_code(),
+            Some("pending_execution_preparation_evidence")
         );
     }
 

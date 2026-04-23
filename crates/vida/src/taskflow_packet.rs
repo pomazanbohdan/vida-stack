@@ -105,6 +105,9 @@ fn build_taskflow_packet_render_payload(
             "path": dispatch_packet_path,
             "body": dispatch_packet_body,
         },
+        "execution_preparation_artifacts": execution_preparation_artifacts_from_packet_body(
+            &dispatch_packet_body
+        ),
         "downstream_dispatch_packet": downstream_packet,
         "lawful_resume_inputs": {
             "run_id": run_id,
@@ -113,6 +116,25 @@ fn build_taskflow_packet_render_payload(
             "continue_command": format!("vida taskflow consume continue --run-id {} --json", receipt.run_id),
         }
     })
+}
+
+fn execution_preparation_artifacts_from_packet_body(
+    dispatch_packet_body: &serde_json::Value,
+) -> serde_json::Value {
+    dispatch_packet_body
+        .get("execution_preparation_artifacts")
+        .or_else(|| {
+            dispatch_packet_body
+                .get("run_graph_bootstrap")
+                .and_then(|value| value.get("execution_preparation_artifacts"))
+        })
+        .or_else(|| {
+            dispatch_packet_body
+                .get("taskflow_handoff_plan")
+                .and_then(|value| value.get("execution_preparation_artifacts"))
+        })
+        .cloned()
+        .unwrap_or(serde_json::Value::Null)
 }
 
 fn preview_value<'a>(body: &'a serde_json::Value, section: &str, key: &str) -> &'a str {
@@ -418,6 +440,72 @@ mod tests {
         assert_eq!(
             payload["dispatch_packet"]["body"]["selected_backend"],
             "opencode_cli"
+        );
+    }
+
+    #[test]
+    fn packet_render_payload_surfaces_execution_preparation_artifacts() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-prep".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-14T00:00:00Z".to_string(),
+        };
+
+        let payload = build_taskflow_packet_render_payload(
+            "run-prep",
+            "run-prep",
+            &receipt,
+            "/tmp/dispatch-packet.json",
+            serde_json::json!({
+                "run_graph_bootstrap": {
+                    "execution_preparation_artifacts": {
+                        "handoff_ready": true,
+                        "developer_handoff_packet": {
+                            "ready": true,
+                            "path": "/tmp/handoff.json"
+                        },
+                        "architecture_preparation_report": {
+                            "ready": true,
+                            "path": "/tmp/architecture.json"
+                        }
+                    }
+                }
+            }),
+            None,
+        );
+
+        assert_eq!(
+            payload["execution_preparation_artifacts"]["developer_handoff_packet"]["path"],
+            "/tmp/handoff.json"
+        );
+        assert_eq!(
+            payload["execution_preparation_artifacts"]["architecture_preparation_report"]["ready"],
+            true
         );
     }
 
