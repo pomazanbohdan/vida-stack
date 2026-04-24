@@ -476,7 +476,37 @@ fn scheduler_execute_agent_init_command(
     Ok((stdout, activation_kind))
 }
 
-fn persist_scheduler_execute_receipt(
+fn scheduler_reservation_acquire_requests(
+    plan: &TaskflowSchedulerDispatchPlan,
+    receipt_id: &str,
+    receipt_path: &str,
+) -> Vec<crate::state_store::AcquireSchedulerDispatchReservationRequest> {
+    plan.reservations
+        .iter()
+        .map(
+            |reservation| crate::state_store::AcquireSchedulerDispatchReservationRequest {
+                reservation_id: reservation.reservation_id.clone(),
+                task_id: reservation.task_id.clone(),
+                launch_role: reservation.launch_role.clone(),
+                launch_index: reservation.launch_index as u64,
+                conflict_domain: reservation.conflict_domain.clone(),
+                scope_task_id: plan.scope_task_id.clone(),
+                requested_current_task_id: plan.requested_current_task_id.clone(),
+                selection_source: plan.selection_source.clone(),
+                max_parallel_agents: plan.max_parallel_agents,
+                command: reservation.command.clone(),
+                state_dir: reservation.state_dir.clone(),
+                lease_owner: "vida taskflow scheduler dispatch".to_string(),
+                lease_token: receipt_id.to_string(),
+                lease_seconds: 900,
+                dispatch_receipt_id: Some(receipt_id.to_string()),
+                receipt_path: Some(receipt_path.to_string()),
+            },
+        )
+        .collect()
+}
+
+async fn persist_scheduler_execute_receipt(
     plan: &mut TaskflowSchedulerDispatchPlan,
     state_dir: &Path,
 ) -> Result<(), String> {
@@ -496,6 +526,17 @@ fn persist_scheduler_execute_receipt(
     let receipt_path_string = receipt_path.display().to_string();
     let mut launch_results = Vec::new();
     let mut launch_blockers = Vec::new();
+    let acquire_requests =
+        scheduler_reservation_acquire_requests(plan, &receipt_id, &receipt_path_string);
+    {
+        let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
+            .await
+            .map_err(|error| format!("failed to open scheduler reservation store: {error}"))?;
+        store
+            .acquire_scheduler_dispatch_reservations(&acquire_requests)
+            .await
+            .map_err(|error| format!("failed to acquire scheduler reservations: {error}"))?;
+    }
 
     for reservation in &mut plan.reservations {
         reservation.reservation_persisted = true;
@@ -504,6 +545,26 @@ fn persist_scheduler_execute_receipt(
         reservation.reservation_status = "reservation_persisted".to_string();
         reservation.receipt_id = Some(receipt_id.clone());
         reservation.receipt_path = Some(receipt_path_string.clone());
+        {
+            let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
+                .await
+                .map_err(|error| {
+                    format!("failed to open scheduler reservation store before launch: {error}")
+                })?;
+            store
+                .mark_scheduler_dispatch_reservation_executing(
+                    &reservation.reservation_id,
+                    None,
+                    "agent_init_launching",
+                )
+                .await
+                .map_err(|error| {
+                    format!(
+                        "failed to mark scheduler reservation `{}` executing: {error}",
+                        reservation.reservation_id
+                    )
+                })?;
+        }
         match scheduler_execute_agent_init_command(&reservation.task_id, state_dir) {
             Ok((stdout, activation_kind)) => {
                 let execute_status = match activation_kind.as_deref() {
@@ -526,6 +587,23 @@ fn persist_scheduler_execute_receipt(
                 if execute_status == "activation_view_only" {
                     launch_blockers.push("scheduler_agent_init_activation_view_only".to_string());
                 }
+                let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
+                    .await
+                    .map_err(|error| {
+                        format!("failed to open scheduler reservation store after launch: {error}")
+                    })?;
+                store
+                    .release_scheduler_dispatch_reservation(
+                        &reservation.reservation_id,
+                        execute_status,
+                    )
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "failed to release scheduler reservation `{}`: {error}",
+                            reservation.reservation_id
+                        )
+                    })?;
             }
             Err(error) => {
                 reservation.execute_status = "agent_init_failed".to_string();
@@ -537,6 +615,23 @@ fn persist_scheduler_execute_receipt(
                     "status": "agent_init_failed",
                     "error": error,
                 }));
+                let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
+                    .await
+                    .map_err(|error| {
+                        format!("failed to open scheduler reservation store after launch failure: {error}")
+                    })?;
+                store
+                    .release_scheduler_dispatch_reservation(
+                        &reservation.reservation_id,
+                        "agent_init_failed",
+                    )
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "failed to release scheduler reservation `{}` after launch failure: {error}",
+                            reservation.reservation_id
+                        )
+                    })?;
             }
         }
     }
@@ -2238,7 +2333,7 @@ async fn run_taskflow_graph_surface(args: &[String]) -> ExitCode {
 }
 
 async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
-    let usage = "Usage: vida taskflow scheduler dispatch [--scope <task-id>] [--current-task-id <task-id>] [--state-dir <path>] [--limit <n>] [--dry-run] [--execute] [--json]";
+    let usage = "Usage: vida taskflow scheduler dispatch [--scope <task-id>] [--current-task-id <task-id>] [--state-dir <path>] [--limit <n>] [--dry-run] [--execute] [--json]\n       vida taskflow scheduler reservations [--state-dir <path>] [--json]\n       vida taskflow scheduler reservation <reservation-id> [--state-dir <path>] [--json]";
     if matches!(
         args,
         [head, flag] if head == "scheduler" && matches!(flag.as_str(), "--help" | "-h")
@@ -2255,6 +2350,12 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
     ) {
         print_taskflow_proxy_help(Some("scheduler"));
         return ExitCode::SUCCESS;
+    }
+    if matches!(args.get(1).map(String::as_str), Some("reservations")) {
+        return run_taskflow_scheduler_reservations_surface(args).await;
+    }
+    if matches!(args.get(1).map(String::as_str), Some("reservation")) {
+        return run_taskflow_scheduler_reservation_surface(args).await;
     }
     if !matches!(args.first().map(String::as_str), Some("scheduler"))
         || !matches!(args.get(1).map(String::as_str), Some("dispatch"))
@@ -2444,13 +2545,31 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
 
     drop(store);
     if execute_requested && !dry_run && runtime_gate_blockers.blocker_codes.is_empty() {
-        if let Err(error) = persist_scheduler_execute_receipt(&mut plan, &state_dir) {
+        if let Err(error) = persist_scheduler_execute_receipt(&mut plan, &state_dir).await {
             plan.status = "blocked".to_string();
-            plan.execution_status = "scheduler_execute_receipt_persistence_failed".to_string();
+            let reservation_collision = error.contains("scheduler_task_already_reserved")
+                || error.contains("scheduler_conflict_domain_reserved");
+            plan.execution_status = if reservation_collision {
+                "execution_preparation_gate_blocked".to_string()
+            } else {
+                "scheduler_execute_receipt_persistence_failed".to_string()
+            };
             plan.execute_supported = true;
             plan.execution_attempted = false;
-            plan.blocker_codes
-                .push("scheduler_execute_receipt_persistence_failed".to_string());
+            if reservation_collision {
+                plan.blocker_codes
+                    .push("execution_preparation_gate_blocked".to_string());
+                plan.dispatch_receipt
+                    .execution_blocker_codes
+                    .push("execution_preparation_gate_blocked".to_string());
+                plan.next_actions.push(
+                    "An active scheduler reservation already owns the selected task or conflict domain; inspect `vida taskflow scheduler reservations --json` before retrying."
+                        .to_string(),
+                );
+            } else {
+                plan.blocker_codes
+                    .push("scheduler_execute_receipt_persistence_failed".to_string());
+            }
             plan.next_actions.push(error);
         }
     } else if execute_requested && !dry_run {
@@ -2507,6 +2626,164 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
     }
 
     if plan.status == "pass" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+async fn run_taskflow_scheduler_reservations_surface(args: &[String]) -> ExitCode {
+    let usage = "Usage: vida taskflow scheduler reservations [--state-dir <path>] [--json]";
+    let mut state_dir = None::<PathBuf>;
+    let mut as_json = false;
+    let mut index = 2usize;
+    while let Some(arg) = args.get(index) {
+        match arg.as_str() {
+            "--state-dir" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("{usage}");
+                    return ExitCode::from(2);
+                };
+                state_dir = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--json" => {
+                as_json = true;
+                index += 1;
+            }
+            _ => {
+                eprintln!("{usage}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let state_dir = match resolve_taskflow_proxy_state_dir(state_dir) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
+    let store = match crate::task_surface::open_read_only_task_store(state_dir).await {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let reservations = match store.active_scheduler_dispatch_reservations().await {
+        Ok(reservations) => reservations,
+        Err(error) => {
+            eprintln!("Failed to read scheduler reservations: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    if as_json {
+        crate::print_json_pretty(&serde_json::json!({
+            "status": "pass",
+            "surface": "vida taskflow scheduler reservations",
+            "reservation_count": reservations.len(),
+            "reservations": reservations,
+            "blocker_codes": [],
+            "next_actions": [],
+        }));
+    } else {
+        print_surface_header(RenderMode::Plain, "vida taskflow scheduler reservations");
+        print_surface_line(
+            RenderMode::Plain,
+            "reservation_count",
+            &reservations.len().to_string(),
+        );
+        for reservation in reservations {
+            print_surface_line(
+                RenderMode::Plain,
+                "reservation",
+                &format!(
+                    "{} task={} status={}",
+                    reservation.reservation_id, reservation.task_id, reservation.lease_status
+                ),
+            );
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+async fn run_taskflow_scheduler_reservation_surface(args: &[String]) -> ExitCode {
+    let usage =
+        "Usage: vida taskflow scheduler reservation <reservation-id> [--state-dir <path>] [--json]";
+    let Some(reservation_id) = args.get(2).cloned() else {
+        eprintln!("{usage}");
+        return ExitCode::from(2);
+    };
+    let mut state_dir = None::<PathBuf>;
+    let mut as_json = false;
+    let mut index = 3usize;
+    while let Some(arg) = args.get(index) {
+        match arg.as_str() {
+            "--state-dir" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("{usage}");
+                    return ExitCode::from(2);
+                };
+                state_dir = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--json" => {
+                as_json = true;
+                index += 1;
+            }
+            _ => {
+                eprintln!("{usage}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let state_dir = match resolve_taskflow_proxy_state_dir(state_dir) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
+    let store = match crate::task_surface::open_read_only_task_store(state_dir).await {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let reservation = match store.scheduler_dispatch_reservation(&reservation_id).await {
+        Ok(reservation) => reservation,
+        Err(error) => {
+            eprintln!("Failed to read scheduler reservation: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let status = if reservation.is_some() {
+        "pass"
+    } else {
+        "blocked"
+    };
+    let blocker_codes = if reservation.is_some() {
+        Vec::<String>::new()
+    } else {
+        vec!["scheduler_reservation_not_found".to_string()]
+    };
+    if as_json {
+        crate::print_json_pretty(&serde_json::json!({
+            "status": status,
+            "surface": "vida taskflow scheduler reservation",
+            "reservation_id": reservation_id,
+            "reservation": reservation,
+            "blocker_codes": blocker_codes,
+            "next_actions": [],
+        }));
+    } else {
+        print_surface_header(RenderMode::Plain, "vida taskflow scheduler reservation");
+        print_surface_line(RenderMode::Plain, "status", status);
+        print_surface_line(RenderMode::Plain, "reservation_id", &reservation_id);
+    }
+    if status == "pass" {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)

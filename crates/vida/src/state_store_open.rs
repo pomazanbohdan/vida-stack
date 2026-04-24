@@ -189,6 +189,7 @@ impl StateStore {
         let store = Self { db, root };
         store.sanitize_legacy_task_execution_semantics().await?;
         store.sanitize_legacy_task_planner_metadata().await?;
+        store.expire_stale_scheduler_dispatch_reservations().await?;
         store.ensure_minimal_authoritative_state_spine().await?;
         Ok(store)
     }

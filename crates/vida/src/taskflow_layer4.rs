@@ -372,7 +372,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
                 "  Preview canonical scheduler selection for one critical-path task plus compatible parallel-safe siblings under the configured max_parallel_agents ceiling."
             );
             println!(
-                "  `--execute` performs bounded scheduler selection and reservation/dispatch receipt projection, but does not attempt external lane execution until an execution backend is available."
+                "  `--execute` performs bounded scheduler selection, persists scheduler receipts, and attempts the lawful `vida agent-init` activation surface for selected lanes without claiming worker completion."
             );
             println!();
             println!("Canonical commands:");
@@ -382,16 +382,18 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!(
                 "  vida taskflow scheduler dispatch --execute [--scope <task-id>] [--current-task-id <task-id>] [--limit <n>] [--json]"
             );
+            println!("  vida taskflow scheduler reservations [--json]");
+            println!("  vida taskflow scheduler reservation <reservation-id> [--json]");
             println!();
             println!("Returned semantics:");
             println!(
-                "  status, blocker_codes, next_actions, max_parallel_agents, selection_source, selected_primary_task, selected_parallel_tasks, selected_task_ids, rejected_candidates, scheduling"
+                "  status, blocker_codes, next_actions, max_parallel_agents, selection_source, selected_primary_task, selected_parallel_tasks, selected_task_ids, rejected_candidates, scheduling, reservations"
             );
             println!();
             println!("Failure modes:");
             println!("  Missing or unreadable authoritative state fails closed.");
             println!(
-                "  If external execution is unavailable, `--execute` returns `execution_attempted=false` with `scheduler_execute_external_execution_unavailable`."
+                "  If selected lane activation is view-only or blocked, `--execute` returns persisted receipt evidence with blocker_codes and next_actions instead of overclaiming completion."
             );
             println!(
                 "  Missing readiness or explicit parallel-safe semantics never widen execution; incompatible candidates stay in rejected_candidates with reasons."

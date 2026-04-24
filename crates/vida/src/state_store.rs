@@ -23,6 +23,8 @@ mod state_store_protocol_binding;
 mod state_store_run_graph_state;
 #[path = "state_store_run_graph_summary.rs"]
 mod state_store_run_graph_summary;
+#[path = "state_store_scheduler_reservation.rs"]
+mod state_store_scheduler_reservation;
 #[path = "state_store_source_scan.rs"]
 mod state_store_source_scan;
 #[path = "state_store_task_graph.rs"]
@@ -93,6 +95,11 @@ pub(crate) use state_store_run_graph_summary::{
     requires_memory_governance_enforcement, RunGraphApprovalDelegationReceipt,
     RunGraphCheckpointSummary, RunGraphDelegationGateSummary, RunGraphDispatchReceiptSummary,
     RunGraphGateSummary, RunGraphRecoverySummary,
+};
+#[allow(unused_imports)]
+pub(crate) use state_store_scheduler_reservation::{
+    AcquireSchedulerDispatchReservationRequest, SchedulerDispatchReservation,
+    SchedulerDispatchReservationStatus,
 };
 use state_store_source_scan::{
     artifact_id_from_path, collect_markdown_files, hierarchy_from_path, infer_artifact_kind,
@@ -167,6 +174,7 @@ DEFINE TABLE run_graph_continuation_binding SCHEMALESS;
 DEFINE TABLE run_graph_dispatch_context SCHEMALESS;
 DEFINE TABLE run_graph_projection_checkpoint_record SCHEMALESS;
 DEFINE TABLE run_graph_replay_lineage_receipt SCHEMALESS;
+DEFINE TABLE scheduler_dispatch_reservation SCHEMALESS;
 "#;
 
 fn state_store_recovery_hint_for_message(message: &str) -> Option<&'static str> {

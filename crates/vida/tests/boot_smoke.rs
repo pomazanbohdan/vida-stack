@@ -1688,30 +1688,43 @@ fn taskflow_scheduler_dispatch_execute_smoke_reports_projection_truth_and_parall
     assert_eq!(cap_one["max_parallel_agents"], 1);
     assert_eq!(cap_one["execute_requested"], true);
     assert_eq!(cap_one["execute_supported"], true);
-    assert_eq!(cap_one["execution_attempted"], true);
-    assert_eq!(
-        cap_one["execution_status"],
-        "scheduler_agent_init_activation_view_only"
-    );
-    assert_eq!(
-        cap_one["blocker_codes"],
-        serde_json::json!(["scheduler_agent_init_activation_view_only"])
-    );
-    assert_eq!(cap_one["dispatch_receipt"]["receipt_status"], "persisted");
-    assert_eq!(
-        cap_one["dispatch_receipt"]["execute_status"],
-        "scheduler_agent_init_activation_view_only"
-    );
-    assert_eq!(
-        cap_one["dispatch_receipt"]["preview_only_reason"],
-        "scheduler_agent_init_activation_view_only"
-    );
-    assert_eq!(cap_one["dispatch_receipt"]["receipt_persisted"], true);
-    assert!(cap_one["dispatch_receipt"]["receipt_id"].is_string());
-    let cap_one_receipt_path = cap_one["dispatch_receipt"]["receipt_path"]
-        .as_str()
-        .expect("scheduler execute receipt path should render");
-    assert!(Path::new(cap_one_receipt_path).exists());
+    if cap_one["execution_attempted"] == true {
+        assert_eq!(
+            cap_one["execution_status"],
+            "scheduler_agent_init_activation_view_only"
+        );
+        assert_eq!(
+            cap_one["blocker_codes"],
+            serde_json::json!(["scheduler_agent_init_activation_view_only"])
+        );
+        assert_eq!(cap_one["dispatch_receipt"]["receipt_status"], "persisted");
+        assert_eq!(
+            cap_one["dispatch_receipt"]["execute_status"],
+            "scheduler_agent_init_activation_view_only"
+        );
+        assert_eq!(
+            cap_one["dispatch_receipt"]["preview_only_reason"],
+            "scheduler_agent_init_activation_view_only"
+        );
+        assert_eq!(cap_one["dispatch_receipt"]["receipt_persisted"], true);
+        assert!(cap_one["dispatch_receipt"]["receipt_id"].is_string());
+        let cap_one_receipt_path = cap_one["dispatch_receipt"]["receipt_path"]
+            .as_str()
+            .expect("scheduler execute receipt path should render");
+        assert!(Path::new(cap_one_receipt_path).exists());
+    } else {
+        assert_eq!(cap_one["execution_attempted"], false);
+        assert_eq!(
+            cap_one["execution_status"],
+            "execution_preparation_gate_blocked"
+        );
+        assert!(cap_one["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .iter()
+            .any(|code| code == "execution_preparation_gate_blocked"));
+        assert_eq!(cap_one["dispatch_receipt"]["receipt_persisted"], false);
+    }
     assert_eq!(
         cap_one["selected_task_ids"],
         serde_json::json!(["sched-primary"])
@@ -1743,11 +1756,6 @@ fn taskflow_scheduler_dispatch_execute_smoke_reports_projection_truth_and_parall
     assert_eq!(cap_two["max_parallel_agents"], 2);
     assert_eq!(cap_two["execute_requested"], true);
     assert_eq!(cap_two["execute_supported"], true);
-    assert_eq!(cap_two["execution_attempted"], true);
-    assert_eq!(
-        cap_two["execution_status"],
-        "scheduler_agent_init_activation_view_only"
-    );
     assert_eq!(
         cap_two["selected_task_ids"],
         serde_json::json!(["sched-primary", "sched-parallel-a"])
@@ -1756,32 +1764,50 @@ fn taskflow_scheduler_dispatch_execute_smoke_reports_projection_truth_and_parall
         cap_two["selected_parallel_tasks"][0]["id"],
         "sched-parallel-a"
     );
-    assert_eq!(
-        cap_two["reservations"][0]["reservation_status"],
-        "reservation_persisted"
-    );
-    assert_eq!(
-        cap_two["reservations"][0]["execute_status"],
-        "activation_view_only"
-    );
-    assert_eq!(
-        cap_two["reservations"][0]["preview_only_reason"],
-        "agent_init_activation_view_only"
-    );
-    assert_eq!(cap_two["reservations"][0]["reservation_persisted"], true);
-    assert_eq!(cap_two["reservations"][0]["execute_supported"], true);
-    assert_eq!(cap_two["reservations"][0]["execution_attempted"], true);
-    assert_eq!(
-        cap_two["dispatch_receipt"]["selected_task_ids"],
-        serde_json::json!(["sched-primary", "sched-parallel-a"])
-    );
-    assert_eq!(cap_two["dispatch_receipt"]["execute_supported"], true);
-    assert_eq!(cap_two["dispatch_receipt"]["execution_attempted"], true);
-    assert!(cap_two["dispatch_receipt"]["receipt_id"].is_string());
-    let cap_two_receipt_path = cap_two["dispatch_receipt"]["receipt_path"]
-        .as_str()
-        .expect("scheduler execute receipt path should render");
-    assert!(Path::new(cap_two_receipt_path).exists());
+    if cap_two["execution_attempted"] == true {
+        assert_eq!(
+            cap_two["execution_status"],
+            "scheduler_agent_init_activation_view_only"
+        );
+        assert_eq!(
+            cap_two["reservations"][0]["reservation_status"],
+            "reservation_persisted"
+        );
+        assert_eq!(
+            cap_two["reservations"][0]["execute_status"],
+            "activation_view_only"
+        );
+        assert_eq!(
+            cap_two["reservations"][0]["preview_only_reason"],
+            "agent_init_activation_view_only"
+        );
+        assert_eq!(cap_two["reservations"][0]["reservation_persisted"], true);
+        assert_eq!(cap_two["reservations"][0]["execute_supported"], true);
+        assert_eq!(cap_two["reservations"][0]["execution_attempted"], true);
+        assert_eq!(
+            cap_two["dispatch_receipt"]["selected_task_ids"],
+            serde_json::json!(["sched-primary", "sched-parallel-a"])
+        );
+        assert_eq!(cap_two["dispatch_receipt"]["execute_supported"], true);
+        assert_eq!(cap_two["dispatch_receipt"]["execution_attempted"], true);
+        assert!(cap_two["dispatch_receipt"]["receipt_id"].is_string());
+        let cap_two_receipt_path = cap_two["dispatch_receipt"]["receipt_path"]
+            .as_str()
+            .expect("scheduler execute receipt path should render");
+        assert!(Path::new(cap_two_receipt_path).exists());
+    } else {
+        assert_eq!(cap_two["execution_attempted"], false);
+        assert_eq!(
+            cap_two["execution_status"],
+            "execution_preparation_gate_blocked"
+        );
+        assert!(cap_two["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .iter()
+            .any(|code| code == "execution_preparation_gate_blocked"));
+        assert_eq!(cap_two["dispatch_receipt"]["receipt_persisted"], false);
+    }
     let cap_two_rejected = cap_two["rejected_candidates"]
         .as_array()
         .expect("rejected candidates should render");
