@@ -2565,6 +2565,13 @@ fn task_status_for_binding<'a>(
         .map(|task| task.status.as_str())
 }
 
+fn task_exists_for_binding(
+    tasks: &[state_store::TaskRecord],
+    binding: &state_store::RunGraphContinuationBinding,
+) -> bool {
+    tasks.iter().any(|task| task.id == binding.task_id)
+}
+
 fn continuation_bindings_same_unit(
     left: &state_store::RunGraphContinuationBinding,
     right: &state_store::RunGraphContinuationBinding,
@@ -2574,6 +2581,13 @@ fn continuation_bindings_same_unit(
         && left.active_bounded_unit == right.active_bounded_unit
 }
 
+fn continuation_binding_is_historical_task_close_reconcile(
+    explicit: &state_store::RunGraphContinuationBinding,
+    current: &state_store::RunGraphContinuationBinding,
+) -> bool {
+    explicit.binding_source == "task_close_reconcile" && explicit.run_id != current.run_id
+}
+
 fn select_task_next_lawful_binding<'a>(
     tasks: &[state_store::TaskRecord],
     explicit_binding: Option<&'a state_store::RunGraphContinuationBinding>,
@@ -2581,6 +2595,9 @@ fn select_task_next_lawful_binding<'a>(
 ) -> Result<Option<&'a state_store::RunGraphContinuationBinding>, TaskNextLawfulReceipt> {
     match (explicit_binding, current_binding) {
         (Some(explicit), Some(current)) if !continuation_bindings_same_unit(explicit, current) => {
+            if continuation_binding_is_historical_task_close_reconcile(explicit, current) {
+                return Ok(Some(current));
+            }
             let explicit_status = task_status_for_binding(tasks, explicit);
             if continuation_binding_requires_open_task(explicit)
                 && matches!(explicit_status, Some("closed"))
@@ -3304,10 +3321,19 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
+                    let runtime_binding_task_missing_in_explicit_scope = command.scope.is_some()
+                        && runtime_binding
+                            .map(|binding| !task_exists_for_binding(&tasks, binding))
+                            .unwrap_or(false);
+                    let scoped_runtime_binding = if runtime_binding_task_missing_in_explicit_scope {
+                        None
+                    } else {
+                        runtime_binding
+                    };
                     let projection = match store
                         .scheduling_projection_scoped(
                             command.scope.as_deref(),
-                            runtime_binding.map(|binding| binding.task_id.as_str()),
+                            scoped_runtime_binding.map(|binding| binding.task_id.as_str()),
                         )
                         .await
                     {
@@ -3317,7 +3343,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
-                    let ready_task_candidates = projection
+                    let mut ready_task_candidates = projection
                         .ready
                         .iter()
                         .map(|candidate| {
@@ -3327,8 +3353,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             )
                         })
                         .collect::<Vec<_>>();
+                    if runtime_binding_task_missing_in_explicit_scope {
+                        if let Some(current_task_id) = projection.current_task_id.as_deref() {
+                            ready_task_candidates
+                                .retain(|candidate| candidate.task_id == current_task_id);
+                        }
+                    }
                     let receipt =
-                        task_next_lawful_receipt(&tasks, ready_task_candidates, runtime_binding);
+                        task_next_lawful_receipt(&tasks, ready_task_candidates, scoped_runtime_binding);
                     if command.json {
                         crate::print_json_pretty(
                             &serde_json::to_value(&receipt)
@@ -4478,6 +4510,45 @@ mod tests {
             Some(&current),
         )
         .expect("stale closed explicit binding should yield to current binding")
+        .expect("current binding should select");
+
+        assert_eq!(selected.task_id, "current-task");
+        assert_eq!(
+            selected.binding_source,
+            "consume_continue_after_downstream_chain"
+        );
+    }
+
+    #[test]
+    fn task_next_lawful_prefers_current_binding_over_historical_task_close_reconcile() {
+        let mut closed_task = owned_task_record("closed-task", vec![]);
+        closed_task.status = "closed".to_string();
+        let current_task = owned_task_record("current-task", vec![]);
+        let mut explicit = test_continuation_binding(
+            "old-run",
+            "closed-task",
+            "task_close_reconcile",
+            "downstream_dispatch_target",
+        );
+        explicit.active_bounded_unit = serde_json::json!({
+            "kind": "downstream_dispatch_target",
+            "task_id": "closed-task",
+            "run_id": "old-run",
+            "dispatch_target": "closure",
+        });
+        let current = test_continuation_binding(
+            "current-run",
+            "current-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+
+        let selected = select_task_next_lawful_binding(
+            &[closed_task, current_task],
+            Some(&explicit),
+            Some(&current),
+        )
+        .expect("historical task-close reconcile should yield to current latest-run binding")
         .expect("current binding should select");
 
         assert_eq!(selected.task_id, "current-task");
