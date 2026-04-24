@@ -1495,14 +1495,10 @@ fn existing_task_conflicts(existing: &TaskRecord, node: &TaskPlanNodeDraft) -> V
         ));
     }
     let expected_metadata = planner_metadata_from_node(node);
-    let legacy_description = task_description_with_plan_metadata(node);
-    let metadata_matches = existing.planner_metadata == expected_metadata
-        || (existing.planner_metadata == TaskPlannerMetadata::default()
-            && existing.description == legacy_description);
-    if existing.description != node.description && existing.description != legacy_description {
+    if existing.description != node.description {
         conflicts.push("description differs".to_string());
     }
-    if !metadata_matches {
+    if existing.planner_metadata != expected_metadata {
         conflicts.push("planner metadata differs".to_string());
     }
     conflicts
@@ -1651,6 +1647,7 @@ fn simulate_materialized_graph(
     StateStore::validate_task_graph_rows(&rows)
 }
 
+#[cfg(test)]
 fn task_description_with_plan_metadata(node: &TaskPlanNodeDraft) -> String {
     format!(
         "{}\n\nPlanGraph metadata:\nowned_paths:\n{}\nacceptance_targets:\n{}\nproof_targets:\n{}\nrisk: {}\nestimate: {}\nlane_hint: {}",
@@ -1675,6 +1672,7 @@ fn planner_metadata_from_node(node: &TaskPlanNodeDraft) -> TaskPlannerMetadata {
     }
 }
 
+#[cfg(test)]
 fn bullet_list(values: &[String]) -> String {
     values
         .iter()
@@ -1810,9 +1808,11 @@ mod tests {
         });
         let validation = validate_draft(&draft, &[]);
         assert_eq!(validation.status, "blocked");
-        assert!(validation
-            .blocker_codes
-            .contains(&"missing_dependency".to_string()));
+        assert!(
+            validation
+                .blocker_codes
+                .contains(&"missing_dependency".to_string())
+        );
     }
 
     #[test]
@@ -1844,9 +1844,11 @@ mod tests {
             draft.nodes[1].owned_paths,
             vec!["crates/vida/src/state_store_task_models.rs".to_string()]
         );
-        assert!(draft.nodes[2]
-            .owned_paths
-            .contains(&"crates/vida/src/taskflow_consume_bundle.rs".to_string()));
+        assert!(
+            draft.nodes[2]
+                .owned_paths
+                .contains(&"crates/vida/src/taskflow_consume_bundle.rs".to_string())
+        );
         assert_eq!(draft.edges[0].task_id, draft.nodes[1].task_id);
         assert_eq!(draft.edges[0].depends_on_id, draft.nodes[0].task_id);
         assert_eq!(draft.edges[1].task_id, draft.nodes[2].task_id);
@@ -1870,17 +1872,22 @@ mod tests {
 
         assert_eq!(draft.validation.status, "valid");
         assert!(draft.nodes.len() >= 4);
-        assert!(draft
-            .nodes
-            .iter()
-            .any(|node| node.title.contains("Wire task state and schema surfaces")));
-        assert!(draft.nodes.iter().any(|node| node
-            .title
-            .contains("Wire runtime and orchestration surfaces")));
-        assert!(draft
-            .nodes
-            .iter()
-            .any(|node| node.title.starts_with("Prove ")));
+        assert!(
+            draft
+                .nodes
+                .iter()
+                .any(|node| node.title.contains("Wire task state and schema surfaces"))
+        );
+        assert!(draft.nodes.iter().any(|node| {
+            node.title
+                .contains("Wire runtime and orchestration surfaces")
+        }));
+        assert!(
+            draft
+                .nodes
+                .iter()
+                .any(|node| node.title.starts_with("Prove "))
+        );
         assert_eq!(draft.edges.len(), draft.nodes.len() - 1);
     }
 
@@ -1951,9 +1958,11 @@ mod tests {
         let validation = validate_draft(&draft, &[]);
 
         assert_eq!(validation.status, "blocked");
-        assert!(validation
-            .blocker_codes
-            .contains(&"cyclic_dependency".to_string()));
+        assert!(
+            validation
+                .blocker_codes
+                .contains(&"cyclic_dependency".to_string())
+        );
     }
 
     #[tokio::test]
@@ -2093,16 +2102,19 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert!(receipt.created_task_ids.is_empty());
-        assert!(receipt
-            .validation
-            .blocker_codes
-            .contains(&"existing_task_conflict".to_string()));
+        assert!(
+            receipt
+                .validation
+                .blocker_codes
+                .contains(&"existing_task_conflict".to_string())
+        );
         let _ = std::fs::remove_dir_all(state_dir);
     }
 
     #[tokio::test]
-    async fn dry_run_receipt_accepts_legacy_description_embedded_metadata_as_equivalent() {
-        let state_dir = test_state_dir("legacy-description-metadata-equivalence");
+    async fn dry_run_receipt_blocks_legacy_description_embedded_metadata_without_structured_metadata()
+     {
+        let state_dir = test_state_dir("legacy-description-metadata-blocked");
         let store = StateStore::open(state_dir.clone())
             .await
             .expect("state store should open");
@@ -2135,7 +2147,7 @@ mod tests {
                 source_repo: "vida-stack",
             })
             .await
-            .expect("legacy-compatible task should create");
+            .expect("legacy description-only task should create");
         drop(store);
 
         let receipt = materialize_plan_graph_draft(
@@ -2148,13 +2160,27 @@ mod tests {
             },
         )
         .await
-        .expect("legacy-compatible dry-run should succeed");
+        .expect("legacy description-only dry-run should return blocked receipt");
 
-        assert_eq!(receipt.status, "dry_run");
-        assert_eq!(
-            receipt.skipped_existing_task_ids,
-            vec![existing_node.task_id.clone()]
+        assert_eq!(receipt.status, "blocked");
+        assert!(receipt.created_task_ids.is_empty());
+        assert!(receipt.skipped_existing_task_ids.is_empty());
+        assert!(
+            receipt
+                .validation
+                .blocker_codes
+                .contains(&"existing_task_conflict".to_string())
         );
+        assert!(
+            receipt
+                .validation
+                .issues
+                .iter()
+                .any(|issue| issue.contains("conflicts with PlanGraph draft: description differs"))
+        );
+        assert!(receipt.validation.issues.iter().any(|issue| {
+            issue.contains("conflicts with PlanGraph draft: planner metadata differs")
+        }));
         assert!(receipt.graph_validation.is_empty());
         let _ = std::fs::remove_dir_all(state_dir);
     }
@@ -2192,18 +2218,22 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert!(receipt.created_task_ids.is_empty());
-        assert!(receipt
-            .validation
-            .blocker_codes
-            .contains(&"cyclic_dependency".to_string()));
+        assert!(
+            receipt
+                .validation
+                .blocker_codes
+                .contains(&"cyclic_dependency".to_string())
+        );
         let store = StateStore::open_existing(state_dir.clone())
             .await
             .expect("state store should open");
-        assert!(store
-            .list_tasks(None, true)
-            .await
-            .expect("tasks should list")
-            .is_empty());
+        assert!(
+            store
+                .list_tasks(None, true)
+                .await
+                .expect("tasks should list")
+                .is_empty()
+        );
         let _ = std::fs::remove_dir_all(state_dir);
     }
 
