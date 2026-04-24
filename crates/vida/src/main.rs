@@ -75,6 +75,7 @@ mod status_surface_write_guard;
 mod surface_render;
 mod task_cli_render;
 mod task_surface;
+mod taskflow_artifacts;
 mod taskflow_consume;
 mod taskflow_consume_bundle;
 mod taskflow_consume_resume;

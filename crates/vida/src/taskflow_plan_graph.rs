@@ -38,6 +38,8 @@ pub(crate) struct TaskPlanNodeDraft {
     pub owned_paths: Vec<String>,
     pub acceptance_targets: Vec<String>,
     pub proof_targets: Vec<String>,
+    pub evidence_confidence: String,
+    pub operator_truth: Vec<String>,
     pub risk: String,
     pub estimate: String,
     pub lane_hint: String,
@@ -112,10 +114,18 @@ struct PlanWorkItem {
     owned_paths: Vec<String>,
     acceptance_targets: Vec<String>,
     proof_targets: Vec<String>,
+    evidence_confidence: String,
+    operator_truth: Vec<String>,
     risk: String,
     estimate: String,
     lane_hint: String,
     execution_semantics: TaskExecutionSemantics,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OwnedPathSuggestion {
+    paths: Vec<String>,
+    source: &'static str,
 }
 
 pub(crate) async fn run_taskflow_plan(args: &[String]) -> ExitCode {
@@ -382,6 +392,8 @@ fn build_nodes(
                 owned_paths: item.owned_paths.clone(),
                 acceptance_targets: item.acceptance_targets.clone(),
                 proof_targets: item.proof_targets.clone(),
+                evidence_confidence: item.evidence_confidence.clone(),
+                operator_truth: item.operator_truth.clone(),
                 risk: item.risk.clone(),
                 estimate: item.estimate.clone(),
                 lane_hint: item.lane_hint.clone(),
@@ -444,7 +456,8 @@ fn build_explicit_work_item(
     let cleaned = clean_work_item_text(item_text);
     let kind = classify_work_item(&cleaned);
     let local_paths = extract_repo_paths(item_text);
-    let owned_paths = suggest_owned_paths(&cleaned, &local_paths, repo_paths, &kind);
+    let owned_path_suggestion = suggest_owned_paths(&cleaned, &local_paths, repo_paths, &kind);
+    let owned_paths = owned_path_suggestion.paths;
     let labels = labels_for_kind(&kind);
     let lane_hint = lane_hint_for_kind(&kind).to_string();
     let title = title_for_explicit_item(&cleaned, &kind);
@@ -454,6 +467,8 @@ fn build_explicit_work_item(
     );
     let acceptance_targets = acceptance_targets_for_item(&cleaned, &kind, &owned_paths);
     let proof_targets = proof_targets_for_item(&kind, &owned_paths);
+    let (evidence_confidence, operator_truth) =
+        planner_confidence_markers(owned_path_suggestion.source, true);
     let risk = risk_for_kind(&kind).to_string();
     let estimate = estimate_for_kind(&kind).to_string();
     let execution_semantics = execution_semantics_for_item(&kind, &cleaned);
@@ -466,6 +481,8 @@ fn build_explicit_work_item(
         owned_paths,
         acceptance_targets,
         proof_targets,
+        evidence_confidence,
+        operator_truth,
         risk,
         estimate,
         lane_hint,
@@ -569,12 +586,17 @@ fn build_semantic_work_item(
     kind: PlanWorkItemKind,
     repo_paths: &[String],
 ) -> PlanWorkItem {
-    let owned_paths = suggest_owned_paths(&title, &[], repo_paths, &kind);
+    let owned_path_suggestion = suggest_owned_paths(&title, &[], repo_paths, &kind);
+    let owned_paths = owned_path_suggestion.paths;
+    let (evidence_confidence, operator_truth) =
+        planner_confidence_markers(owned_path_suggestion.source, true);
     PlanWorkItem {
         slug_hint: title.clone(),
         labels: labels_for_kind(&kind),
         acceptance_targets: acceptance_targets_for_item(&title, &kind, &owned_paths),
         proof_targets: proof_targets_for_item(&kind, &owned_paths),
+        evidence_confidence,
+        operator_truth,
         risk: risk_for_kind(&kind).to_string(),
         estimate: estimate_for_kind(&kind).to_string(),
         lane_hint: lane_hint_for_kind(&kind).to_string(),
@@ -938,14 +960,45 @@ fn proof_targets_for_item(kind: &PlanWorkItemKind, owned_paths: &[String]) -> Ve
     targets
 }
 
+fn planner_confidence_markers(
+    owned_paths_source: &str,
+    proof_targets_template_generated: bool,
+) -> (String, Vec<String>) {
+    let mut markers = vec![format!("owned_paths_source={owned_paths_source}")];
+    if owned_paths_source == "template_fallback" {
+        markers.push(
+            "low_confidence_owned_paths_template_fallback_requires_operator_confirmation"
+                .to_string(),
+        );
+    }
+    if proof_targets_template_generated {
+        markers.push(
+            "low_confidence_proof_targets_template_guess_requires_operator_confirmation"
+                .to_string(),
+        );
+    }
+    let confidence = if markers
+        .iter()
+        .any(|marker| marker.starts_with("low_confidence_"))
+    {
+        "low"
+    } else {
+        "source_derived"
+    };
+    (confidence.to_string(), markers)
+}
+
 fn suggest_owned_paths(
     item_text: &str,
     local_paths: &[String],
     repo_paths: &[String],
     kind: &PlanWorkItemKind,
-) -> Vec<String> {
+) -> OwnedPathSuggestion {
     if !local_paths.is_empty() {
-        return local_paths.to_vec();
+        return OwnedPathSuggestion {
+            paths: local_paths.to_vec(),
+            source: "explicit_item_paths",
+        };
     }
     let item_tokens = keyword_tokens(item_text);
     let mut scored = repo_paths
@@ -1034,6 +1087,7 @@ fn suggest_owned_paths(
         .map(|(_, path)| path.clone())
         .take(4)
         .collect::<Vec<_>>();
+    let mut source = "source_repo_paths";
     if selected.is_empty() {
         selected = match kind {
             PlanWorkItemKind::Core => vec!["crates/vida/src/taskflow_plan_graph.rs".to_string()],
@@ -1051,8 +1105,12 @@ fn suggest_owned_paths(
             ],
             PlanWorkItemKind::Proof => vec!["crates/vida/tests".to_string()],
         };
+        source = "template_fallback";
     }
-    selected
+    OwnedPathSuggestion {
+        paths: selected,
+        source,
+    }
 }
 
 fn keyword_tokens(value: &str) -> Vec<String> {
@@ -1853,6 +1911,23 @@ mod tests {
         assert_eq!(draft.edges[0].depends_on_id, draft.nodes[0].task_id);
         assert_eq!(draft.edges[1].task_id, draft.nodes[2].task_id);
         assert_eq!(draft.edges[1].depends_on_id, draft.nodes[1].task_id);
+        assert!(draft.nodes.iter().all(|node| {
+            node.operator_truth
+                .iter()
+                .any(|marker| marker == "owned_paths_source=explicit_item_paths")
+        }));
+        assert!(draft.nodes.iter().all(|node| {
+            !node.operator_truth.iter().any(|marker| {
+                marker
+                    == "low_confidence_owned_paths_template_fallback_requires_operator_confirmation"
+            })
+        }));
+        assert!(draft.nodes.iter().all(|node| {
+            node.operator_truth.iter().any(|marker| {
+                marker
+                    == "low_confidence_proof_targets_template_guess_requires_operator_confirmation"
+            })
+        }));
     }
 
     #[test]
@@ -1889,6 +1964,44 @@ mod tests {
                 .any(|node| node.title.starts_with("Prove "))
         );
         assert_eq!(draft.edges.len(), draft.nodes.len() - 1);
+    }
+
+    #[test]
+    fn plan_generate_marks_template_fallback_paths_and_proofs_low_confidence() {
+        let draft = generate_plan_graph_draft(&PlanGenerateOptions {
+            source_file: None,
+            source_text: Some("Implement planner".to_string()),
+            task_prefix: Some("feature-planner".to_string()),
+            parent_id: None,
+            output: None,
+            json: true,
+        })
+        .expect("draft should generate");
+
+        assert_eq!(draft.validation.status, "valid");
+        assert!(
+            draft
+                .nodes
+                .iter()
+                .all(|node| node.evidence_confidence == "low")
+        );
+        assert!(draft.nodes.iter().all(|node| {
+            node.operator_truth
+                .iter()
+                .any(|marker| marker == "owned_paths_source=template_fallback")
+        }));
+        assert!(draft.nodes.iter().all(|node| {
+            node.operator_truth.iter().any(|marker| {
+                marker
+                    == "low_confidence_owned_paths_template_fallback_requires_operator_confirmation"
+            })
+        }));
+        assert!(draft.nodes.iter().all(|node| {
+            node.operator_truth.iter().any(|marker| {
+                marker
+                    == "low_confidence_proof_targets_template_guess_requires_operator_confirmation"
+            })
+        }));
     }
 
     #[test]

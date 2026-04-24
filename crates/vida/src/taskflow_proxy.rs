@@ -9,8 +9,8 @@ use crate::taskflow_run_graph::{
 use crate::taskflow_spec_bootstrap::run_taskflow_bootstrap_spec;
 use crate::taskflow_task_bridge::{enforce_execution_preparation_contract_gate, proxy_state_dir};
 use crate::{
-    Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs, print_surface_header,
-    print_surface_line, surface_render, taskflow_consume, taskflow_protocol_binding,
+    print_surface_header, print_surface_line, surface_render, taskflow_consume,
+    taskflow_protocol_binding, Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs,
 };
 use clap::Parser;
 use serde::Serialize;
@@ -1998,6 +1998,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
 enum RouteDiagnosticMode {
     Explain,
     ValidateRouting,
+    ConfigActuationCensus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2017,9 +2018,12 @@ fn parse_taskflow_route_diagnostic_args(
             (RouteDiagnosticMode::Explain, 2)
         }
         [head, ..] if head == "validate-routing" => (RouteDiagnosticMode::ValidateRouting, 1),
+        [head, subcommand, ..] if head == "config-actuation" && subcommand == "census" => {
+            (RouteDiagnosticMode::ConfigActuationCensus, 2)
+        }
         _ => {
             return Err(
-                "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]",
+                "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
             );
         }
     };
@@ -2060,12 +2064,12 @@ fn parse_taskflow_route_diagnostic_args(
             }
             "--help" | "-h" => {
                 return Err(
-                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]",
+                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
                 );
             }
             _ => {
                 return Err(
-                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]",
+                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
                 );
             }
         }
@@ -2073,11 +2077,13 @@ fn parse_taskflow_route_diagnostic_args(
     if parsed.dispatch_target.is_some() && parsed.runtime_role.is_some() {
         return Err("Use either --dispatch-target or --runtime-role, not both.");
     }
-    if parsed.mode == RouteDiagnosticMode::ValidateRouting
-        && (parsed.dispatch_target.is_some() || parsed.runtime_role.is_some())
+    if matches!(
+        parsed.mode,
+        RouteDiagnosticMode::ValidateRouting | RouteDiagnosticMode::ConfigActuationCensus
+    ) && (parsed.dispatch_target.is_some() || parsed.runtime_role.is_some())
     {
         return Err(
-            "vida taskflow validate-routing validates all routed lanes and does not accept --dispatch-target or --runtime-role.",
+            "vida taskflow validate-routing and config-actuation census inspect all routed lanes and do not accept --dispatch-target or --runtime-role.",
         );
     }
     Ok(parsed)
@@ -2213,6 +2219,198 @@ fn route_validate_targets(execution_plan: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+fn value_configured(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) => true,
+        serde_json::Value::String(value) => !value.trim().is_empty(),
+        serde_json::Value::Array(values) => !values.is_empty(),
+        serde_json::Value::Object(values) => !values.is_empty(),
+    }
+}
+
+fn config_actuation_proof_status(
+    route: &serde_json::Value,
+    field: &str,
+    configured: bool,
+) -> &'static str {
+    if !configured {
+        return "not_configured";
+    }
+    if field.ends_with("model_selection_enabled")
+        && route["model_selection_enabled"].as_bool() == Some(false)
+    {
+        return "validated_blocking";
+    }
+    if field.ends_with("candidate_scope")
+        && !matches!(
+            route["candidate_scope"].as_str(),
+            Some("unified_carrier_model_profiles") | None
+        )
+    {
+        return "validated_blocking";
+    }
+    if route["runtime_assignment_enabled"].as_bool() == Some(false)
+        && field.starts_with("carrier_runtime_assignment.")
+    {
+        return "validated_blocking";
+    }
+    "actuated_or_validated"
+}
+
+fn config_actuation_census_row(
+    route: &serde_json::Value,
+    config_key: &str,
+    value_key: &str,
+    validator: &str,
+    runtime_consumer: &str,
+) -> serde_json::Value {
+    let value = route
+        .get(value_key)
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let configured = value_configured(&value);
+    serde_json::json!({
+        "config_key": config_key,
+        "value": value,
+        "configured": configured,
+        "validator": validator,
+        "runtime_consumer": runtime_consumer,
+        "operator_surface": "vida taskflow route explain / vida taskflow validate-routing",
+        "proof_status": config_actuation_proof_status(route, config_key, configured),
+    })
+}
+
+fn config_actuation_census_rows_for_route(route: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut rows = vec![
+        config_actuation_census_row(
+            route,
+            "executor_backend",
+            "route_primary_backend",
+            "selected_backend_from_execution_plan_route",
+            "explicit_executor_backend_from_route",
+        ),
+        config_actuation_census_row(
+            route,
+            "fallback_executor_backend",
+            "fallback_backend",
+            "selected_backend_from_execution_plan_route",
+            "fallback_executor_backend_from_route",
+        ),
+        config_actuation_census_row(
+            route,
+            "fanout_executor_backends",
+            "fanout_backends",
+            "selected_backend_from_execution_plan_route",
+            "fanout_executor_backends_from_route",
+        ),
+        config_actuation_census_row(
+            route,
+            "carrier_runtime_assignment.selected_backend_id",
+            "runtime_assignment_backend",
+            "route_explain_status / route_explain_blocker_codes",
+            "runtime_assignment_backend_for_route",
+        ),
+        config_actuation_census_row(
+            route,
+            "carrier_runtime_assignment.model_selection_enabled",
+            "model_selection_enabled",
+            "route_explain_status / route_explain_blocker_codes",
+            "route_explain_status",
+        ),
+        config_actuation_census_row(
+            route,
+            "carrier_runtime_assignment.candidate_scope",
+            "candidate_scope",
+            "route_explain_status / route_explain_blocker_codes",
+            "route_explain_status",
+        ),
+        config_actuation_census_row(
+            route,
+            "carrier_runtime_assignment.selected_model_profile_id",
+            "selected_model_profile_id",
+            "route_explain_payload",
+            "selected_backend_readiness_payload",
+        ),
+        config_actuation_census_row(
+            route,
+            "carrier_runtime_assignment.selected_reasoning_effort",
+            "selected_reasoning_effort",
+            "route_explain_payload",
+            "selected_candidate_from_assignment",
+        ),
+        config_actuation_census_row(
+            route,
+            "carrier_runtime_assignment.budget_policy",
+            "budget_policy",
+            "route_explain_payload",
+            "selected_candidate_from_assignment",
+        ),
+        config_actuation_census_row(
+            route,
+            "carrier_runtime_assignment.max_budget_units",
+            "max_budget_units",
+            "route_explain_payload",
+            "selected_candidate_from_assignment",
+        ),
+    ];
+    rows.extend(
+        route["route_field_truth"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|truth| {
+                let field = truth["field"].as_str()?;
+                Some(serde_json::json!({
+                    "config_key": field,
+                    "value": serde_json::Value::Null,
+                    "configured": true,
+                    "validator": "route_field_truth",
+                    "runtime_consumer": serde_json::Value::Null,
+                    "operator_surface": "vida taskflow validate-routing",
+                    "proof_status": truth["truth"],
+                    "effect": truth["effect"],
+                }))
+            }),
+    );
+    rows
+}
+
+fn build_config_actuation_census_payload(
+    context: &crate::state_store::RunGraphDispatchContext,
+    execution_plan: &serde_json::Value,
+) -> serde_json::Value {
+    let routes = route_validate_targets(execution_plan)
+        .into_iter()
+        .map(|target| {
+            let route = route_payload_for_dispatch_target(execution_plan, &target);
+            let rows = config_actuation_census_rows_for_route(&route);
+            serde_json::json!({
+                "dispatch_target": target,
+                "status": route["status"],
+                "selected_backend": route["selected_backend"],
+                "selection_source": route["selection_source"],
+                "rows": rows,
+            })
+        })
+        .collect::<Vec<_>>();
+    let row_count = routes
+        .iter()
+        .filter_map(|route| route["rows"].as_array().map(Vec::len))
+        .sum::<usize>();
+    serde_json::json!({
+        "surface": "vida taskflow config-actuation census",
+        "status": "pass",
+        "blocker_codes": [],
+        "run_id": context.run_id,
+        "task_id": context.task_id,
+        "scope": "routing_model_selection_keys",
+        "route_count": routes.len(),
+        "row_count": row_count,
+        "routes": routes,
+    })
+}
+
 async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
     let parsed = match parse_taskflow_route_diagnostic_args(args) {
         Ok(parsed) => parsed,
@@ -2236,6 +2434,9 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                 "surface": match parsed.mode {
                     RouteDiagnosticMode::Explain => "vida taskflow route explain",
                     RouteDiagnosticMode::ValidateRouting => "vida taskflow validate-routing",
+                    RouteDiagnosticMode::ConfigActuationCensus => {
+                        "vida taskflow config-actuation census"
+                    }
                 },
                 "status": "blocked",
                 "blocker_codes": ["run_graph_dispatch_context_missing"],
@@ -2322,6 +2523,9 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                 "routes": routes,
             })
         }
+        RouteDiagnosticMode::ConfigActuationCensus => {
+            build_config_actuation_census_payload(&context, execution_plan)
+        }
     };
 
     if parsed.as_json {
@@ -2380,8 +2584,8 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        GraphSummaryWaveBucket, build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
-        taskflow_task_subcommand_supported,
+        build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
+        taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
     };
     use crate::state_store::{
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
@@ -2606,14 +2810,20 @@ mod tests {
             plan.reservations[0].reservation_id,
             "scheduler-preview-primary-0-critical-ready"
         );
-        assert_eq!(plan.reservations[0].reservation_status, "preview_unpersisted");
+        assert_eq!(
+            plan.reservations[0].reservation_status,
+            "preview_unpersisted"
+        );
         assert!(!plan.reservations[0].reservation_persisted);
         assert!(!plan.reservations[0].execution_attempted);
         assert_eq!(plan.reservations[1].task_id, "parallel-a");
         assert_eq!(plan.reservations[1].launch_role, "parallel");
         assert_eq!(plan.reservations[1].launch_index, 1);
         assert_eq!(plan.dispatch_receipt.receipt_id, None);
-        assert_eq!(plan.dispatch_receipt.receipt_status, "preview_not_persisted");
+        assert_eq!(
+            plan.dispatch_receipt.receipt_status,
+            "preview_not_persisted"
+        );
         assert!(!plan.dispatch_receipt.receipt_persisted);
         assert_eq!(plan.dispatch_receipt.dispatch_status, "pass");
         assert_eq!(
@@ -2670,11 +2880,10 @@ mod tests {
         let plan = build_taskflow_scheduler_dispatch_plan(projection, 1, None, None, false, true);
 
         assert_eq!(plan.status, "blocked");
-        assert!(
-            plan.blocker_codes
-                .iter()
-                .any(|code| code == "unsupported_blocker_code")
-        );
+        assert!(plan
+            .blocker_codes
+            .iter()
+            .any(|code| code == "unsupported_blocker_code"));
         assert_eq!(plan.max_parallel_agents, 1);
         assert!(plan.execute_requested);
         assert!(!plan.execute_supported);
@@ -2683,7 +2892,10 @@ mod tests {
         assert!(!plan.dry_run);
         assert_eq!(plan.selected_task_ids, vec!["critical-ready"]);
         assert_eq!(plan.reservations.len(), 1);
-        assert_eq!(plan.reservations[0].reservation_status, "preview_unpersisted");
+        assert_eq!(
+            plan.reservations[0].reservation_status,
+            "preview_unpersisted"
+        );
         assert!(!plan.reservations[0].reservation_persisted);
         assert_eq!(
             plan.dispatch_receipt.receipt_status,
@@ -2694,12 +2906,11 @@ mod tests {
         assert!(!plan.dispatch_receipt.execute_supported);
         assert!(!plan.dispatch_receipt.execution_attempted);
         assert!(!plan.dispatch_receipt.receipt_persisted);
-        assert!(
-            plan.dispatch_receipt
-                .blocker_codes
-                .iter()
-                .any(|code| code == "unsupported_blocker_code")
-        );
+        assert!(plan
+            .dispatch_receipt
+            .blocker_codes
+            .iter()
+            .any(|code| code == "unsupported_blocker_code"));
         assert!(plan.next_actions.iter().any(|action| {
             action.contains("preview-first")
                 && action.contains("without `--execute`")
@@ -2733,7 +2944,10 @@ mod tests {
             "scheduler-preview-parallel-1-parallel-ready"
         );
         assert_eq!(payload["reservations"][0]["reservation_persisted"], false);
-        assert_eq!(payload["dispatch_receipt"]["receipt_id"], serde_json::Value::Null);
+        assert_eq!(
+            payload["dispatch_receipt"]["receipt_id"],
+            serde_json::Value::Null
+        );
         assert_eq!(
             payload["dispatch_receipt"]["receipt_status"],
             "preview_not_persisted"
@@ -2878,6 +3092,21 @@ mod tests {
     }
 
     #[test]
+    fn route_diagnostic_parser_accepts_config_actuation_census() {
+        let args = vec![
+            "config-actuation".to_string(),
+            "census".to_string(),
+            "--json".to_string(),
+        ];
+        let parsed = super::parse_taskflow_route_diagnostic_args(&args).unwrap();
+        assert_eq!(
+            parsed.mode,
+            super::RouteDiagnosticMode::ConfigActuationCensus
+        );
+        assert!(parsed.as_json);
+    }
+
+    #[test]
     fn route_payload_accepts_runtime_selected_internal_host_carrier_without_matrix_row() {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
@@ -2917,11 +3146,101 @@ mod tests {
         assert_eq!(payload["selected_backend"].as_str(), Some("junior"));
         assert_eq!(payload["selected_backend_admissible"].as_bool(), Some(true));
         assert_eq!(payload["status"].as_str(), Some("pass"));
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| codes.is_empty())
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.is_empty()));
+    }
+
+    #[test]
+    fn config_actuation_census_reports_bounded_route_model_selection_rows() {
+        let context = crate::state_store::RunGraphDispatchContext {
+            run_id: "run-config-census".to_string(),
+            task_id: "task-config-census".to_string(),
+            request_text: "inspect config actuation".to_string(),
+            role_selection: serde_json::json!({}),
+            recorded_at: "0".to_string(),
+        };
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "execution_lane_sequence": ["implementation"],
+                    "lane_catalog": {
+                        "implementation": {
+                            "executor_backend": "opencode_cli",
+                            "fallback_executor_backend": "internal_subagents",
+                            "fanout_executor_backends": ["middle", "senior"],
+                            "carrier_runtime_assignment": {
+                                "enabled": true,
+                                "selected_backend_id": "junior",
+                                "selected_carrier_id": "junior",
+                                "selected_model_profile_id": "codex_gpt54_low_write",
+                                "selected_reasoning_effort": "low",
+                                "model_selection_enabled": true,
+                                "candidate_scope": "unified_carrier_model_profiles",
+                                "budget_policy": "tier_budget_guard",
+                                "max_budget_units": 4
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let payload = super::build_config_actuation_census_payload(&context, &execution_plan);
+
+        assert_eq!(payload["surface"], "vida taskflow config-actuation census");
+        assert_eq!(payload["scope"], "routing_model_selection_keys");
+        assert_eq!(payload["route_count"], 1);
+        assert!(payload["row_count"].as_u64().is_some_and(|count| count >= 10));
+        let rows = payload["routes"][0]["rows"]
+            .as_array()
+            .expect("config actuation rows should render");
+        assert!(rows.iter().any(|row| {
+            row["config_key"] == "carrier_runtime_assignment.selected_model_profile_id"
+                && row["runtime_consumer"] == "selected_backend_readiness_payload"
+                && row["proof_status"] == "actuated_or_validated"
+        }));
+        assert!(rows.iter().any(|row| {
+            row["config_key"] == "executor_backend"
+                && row["runtime_consumer"] == "explicit_executor_backend_from_route"
+        }));
+        assert!(rows.iter().any(|row| {
+            row["config_key"] == "carrier_runtime_assignment.candidate_scope"
+                && row["validator"] == "route_explain_status / route_explain_blocker_codes"
+                && row["proof_status"] == "actuated_or_validated"
+        }));
+    }
+
+    #[test]
+    fn config_actuation_census_marks_blocking_and_non_behavioral_route_fields() {
+        let route = serde_json::json!({
+            "runtime_assignment_enabled": true,
+            "model_selection_enabled": false,
+            "candidate_scope": "legacy_backend_pool",
+            "route_field_truth": [
+                {
+                    "field": "external_first_required",
+                    "truth": "rejected_no_runtime_consumer",
+                    "effect": "validate-routing blocks the route until the field is removed or wired to a concrete consumer"
+                }
+            ]
+        });
+
+        let rows = super::config_actuation_census_rows_for_route(&route);
+
+        assert!(rows.iter().any(|row| {
+            row["config_key"] == "carrier_runtime_assignment.model_selection_enabled"
+                && row["proof_status"] == "validated_blocking"
+        }));
+        assert!(rows.iter().any(|row| {
+            row["config_key"] == "carrier_runtime_assignment.candidate_scope"
+                && row["proof_status"] == "validated_blocking"
+        }));
+        assert!(rows.iter().any(|row| {
+            row["config_key"] == "external_first_required"
+                && row["proof_status"] == "rejected_no_runtime_consumer"
+                && row["operator_surface"] == "vida taskflow validate-routing"
+        }));
     }
 
     #[test]
@@ -3041,16 +3360,12 @@ mod tests {
 
         let blocker_codes = super::authoritative_dispatch_blocker_codes(Some(&dispatch));
         assert_eq!(blocker_codes.len(), 2);
-        assert!(
-            blocker_codes
-                .iter()
-                .any(|code| code == "timeout_without_takeover_authority")
-        );
-        assert!(
-            blocker_codes
-                .iter()
-                .any(|code| code == "pending_review_clean_evidence")
-        );
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code == "timeout_without_takeover_authority"));
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code == "pending_review_clean_evidence"));
     }
 
     fn sample_task(task_id: &str) -> crate::state_store::TaskRecord {
@@ -3190,12 +3505,10 @@ mod tests {
                 .map(|value| value.command.as_str()),
             Some("vida task ready --scope epic-1 --json")
         );
-        assert!(
-            decision
-                .blocker_codes
-                .iter()
-                .any(|code| code == "no_ready_tasks")
-        );
+        assert!(decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "no_ready_tasks"));
     }
 
     #[test]
@@ -3286,7 +3599,7 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
 
     if matches!(
         args.args.first().map(String::as_str),
-        Some("route" | "validate-routing")
+        Some("route" | "validate-routing" | "config-actuation")
     ) {
         return run_taskflow_route_diagnostic(&args.args).await;
     }
@@ -3319,6 +3632,13 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
 
     if matches!(args.args.first().map(String::as_str), Some("packet")) {
         return crate::taskflow_packet::run_taskflow_packet(&args.args).await;
+    }
+
+    if matches!(
+        args.args.first().map(String::as_str),
+        Some("artifact" | "artifacts")
+    ) {
+        return crate::taskflow_artifacts::run_taskflow_artifacts(&args.args).await;
     }
 
     if matches!(args.args.first().map(String::as_str), Some("consume")) {

@@ -398,6 +398,28 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             return;
         }
+        Some("config-actuation") => {
+            println!("VIDA TaskFlow help: config-actuation");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Report bounded config actuation truth for routing and model-selection keys that are already covered by route validation."
+            );
+            println!();
+            println!("Canonical command:");
+            println!("  vida taskflow config-actuation census [--run-id <run-id>] [--json]");
+            println!();
+            println!("Returned semantics:");
+            println!(
+                "  status, blocker_codes, route_count, row_count, routes[*].rows[*].config_key, validator, runtime_consumer, operator_surface, proof_status"
+            );
+            println!();
+            println!("Failure modes:");
+            println!(
+                "  Missing dispatch context fails closed; this surface does not claim coverage for every project config key."
+            );
+            return;
+        }
         Some("dependencies") => {
             println!("VIDA TaskFlow help: dependencies");
             println!();
@@ -573,6 +595,29 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!(
                 "  Inspect the latest routed packet without resolving run id first: vida taskflow packet latest --json"
+            );
+            return;
+        }
+        Some("artifacts" | "artifact") => {
+            println!("VIDA TaskFlow help: artifacts");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Query missing/materialized execution-preparation artifact truth from the latest final runtime-consumption snapshot."
+            );
+            println!();
+            println!("Canonical commands:");
+            println!("  vida taskflow artifacts list --json");
+            println!("  vida taskflow artifacts show developer_handoff_packet --json");
+            println!();
+            println!("Returned semantics:");
+            println!(
+                "  required artifacts, ready/materialized posture, source snapshot pointer, operator contracts, shared fields, and artifact refs"
+            );
+            println!();
+            println!("Failure modes:");
+            println!(
+                "  The surface stays read-only and reports blocked JSON when no final snapshot or execution_preparation_artifacts payload is available."
             );
             return;
         }
@@ -779,7 +824,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Usage:");
     println!("  vida taskflow <args...>");
     println!(
-        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|status|consume|continuation|packet|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
+        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|config-actuation|status|consume|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
     );
     println!("  vida taskflow <command> --help");
     println!();
@@ -821,6 +866,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  status      family-scoped alias to the root operator status surface");
     println!("  continuation explicit bounded-unit binding");
     println!("  packet      persisted runtime packet inspection");
+    println!("  artifacts   execution-preparation artifact readiness/materialization");
     println!("  run-graph   resumability and node-state inspection");
     println!("  consume     explicit TaskFlow -> final closure handoff");
     println!("  query       launcher-owned command-discovery helper");
@@ -860,6 +906,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida taskflow packet render <run-id> --json");
     println!("  vida taskflow packet task <task-id> --json");
     println!("  vida taskflow packet latest --json");
+    println!("  vida taskflow artifacts list --json");
     println!("  vida taskflow consume final \"proof path\" --json");
     println!("  vida taskflow consume continue --json");
     println!("  vida taskflow consume advance --max-rounds 4 --json");
@@ -887,6 +934,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  Ask which surface to use: vida taskflow query \"what should I run next?\"");
     println!("  Bind the current bounded unit explicitly: vida taskflow help continuation");
     println!("  Inspect persisted packet evidence: vida taskflow help packet");
+    println!("  Inspect execution-preparation artifact truth: vida taskflow artifacts list --json");
     println!("  Inspect resumability state: vida taskflow help run-graph");
     println!(
         "  Bootstrap one design-first feature slice: vida taskflow bootstrap-spec \"feature request\" --json"
