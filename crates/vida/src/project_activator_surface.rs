@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use super::activation_status::canonical_activation_status;
@@ -32,6 +32,7 @@ pub(crate) struct ProjectActivationStatusTruth {
 
 pub(crate) const HOST_CLI_PLACEHOLDER: &str = "__HOST_CLI_SYSTEM__";
 pub(crate) const HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE: &str = "codex_toml_catalog_render";
+const PROJECT_ACTIVATOR_ACTIVATION_OPEN_TIMEOUT_SECONDS: u64 = 30;
 
 fn yaml_scalar(value: &str) -> String {
     if value
@@ -950,6 +951,97 @@ fn db_first_activation_truth_read_back_error(
     None
 }
 
+async fn open_project_activation_store(state_dir: PathBuf) -> Result<super::StateStore, String> {
+    let store = match tokio::time::timeout(
+        std::time::Duration::from_secs(PROJECT_ACTIVATOR_ACTIVATION_OPEN_TIMEOUT_SECONDS),
+        super::StateStore::open(state_dir.clone()),
+    )
+    .await
+    {
+        Ok(Ok(store)) => store,
+        Ok(Err(error)) => {
+            return Err(format!(
+                "unable to initialize authoritative state store at {}: {error}",
+                state_dir.display()
+            ));
+        }
+        Err(_) => {
+            return Err(format!(
+                "timed out opening authoritative state store for project activation mutation at {} after {}s",
+                state_dir.display(),
+                PROJECT_ACTIVATOR_ACTIVATION_OPEN_TIMEOUT_SECONDS
+            ));
+        }
+    };
+    let instruction_source_root =
+        PathBuf::from(super::state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT);
+    let framework_memory_source_root =
+        PathBuf::from(super::state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
+    super::ensure_launcher_bootstrap(
+        &store,
+        &instruction_source_root,
+        &framework_memory_source_root,
+    )
+    .await
+    .map_err(|error| {
+        format!(
+            "unable to complete boot-safe launcher bootstrap for authoritative state store at {}: {error}",
+            state_dir.display()
+        )
+    })?;
+    Ok(store)
+}
+
+fn normalize_lexical_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    normalized.pop();
+                } else if !path.is_absolute() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+            Component::RootDir | Component::Prefix(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
+}
+
+fn resolve_project_activator_state_dir(project_root: &Path, state_dir: &Path) -> PathBuf {
+    let resolved = if state_dir.is_absolute() {
+        state_dir.to_path_buf()
+    } else {
+        project_root.join(state_dir)
+    };
+    normalize_lexical_path(&resolved)
+}
+
+fn validate_project_activator_mutation_state_dir(
+    project_root: &Path,
+    state_dir: &Path,
+) -> Result<PathBuf, String> {
+    let resolved_state_dir = resolve_project_activator_state_dir(project_root, state_dir);
+    let expected_state_dir =
+        normalize_lexical_path(&project_root.join(super::state_store::default_state_dir()));
+    if resolved_state_dir != expected_state_dir {
+        return Err(format!(
+            "project activation mutations require the current project's default authoritative state dir `{}`; rejected non-project state dir `{}`",
+            expected_state_dir.display(),
+            resolved_state_dir.display()
+        ));
+    }
+    Ok(resolved_state_dir)
+}
+
 pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> ExitCode {
     let project_root = match std::env::current_dir() {
         Ok(path) => path,
@@ -976,27 +1068,20 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
             .state_dir
             .clone()
             .unwrap_or_else(super::state_store::default_state_dir);
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            super::StateStore::open(state_dir.clone()),
-        )
-        .await
-        {
-            Ok(Ok(store)) => {
+        let state_dir =
+            match validate_project_activator_mutation_state_dir(&project_root, &state_dir) {
+                Ok(path) => path,
+                Err(error) => {
+                    eprintln!("Project activation failed closed before mutation: {error}");
+                    return ExitCode::from(1);
+                }
+            };
+        match open_project_activation_store(state_dir.clone()).await {
+            Ok(store) => {
                 activation_store = Some(store);
             }
-            Ok(Err(error)) => {
-                eprintln!(
-                    "Project activation failed closed before mutation: unable to initialize authoritative state store at {}: {error}",
-                    state_dir.display()
-                );
-                return ExitCode::from(1);
-            }
-            Err(_) => {
-                eprintln!(
-                    "Project activation failed closed before mutation: timed out initializing authoritative state store at {} after 10s",
-                    state_dir.display()
-                );
+            Err(error) => {
+                eprintln!("Project activation failed closed before mutation: {error}");
                 return ExitCode::from(1);
             }
         }

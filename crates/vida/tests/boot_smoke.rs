@@ -6026,6 +6026,115 @@ fn project_activator_fails_closed_when_authoritative_state_store_cannot_open() {
 }
 
 #[test]
+fn project_activator_after_init_without_boot() {
+    let project_root = unique_state_dir();
+    fs::create_dir_all(&project_root).expect("project root should exist");
+
+    let init = vida()
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env_remove("VIDA_STATE_DIR")
+        .output()
+        .expect("init should run");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let activator = vida()
+        .args([
+            "project-activator",
+            "--project-id",
+            "test-project",
+            "--language",
+            "english",
+            "--host-cli-system",
+            "codex",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env_remove("VIDA_STATE_DIR")
+        .output()
+        .expect("project activator should run");
+    assert!(
+        activator.status.success(),
+        "stderr:\n{}\nstdout:\n{}",
+        String::from_utf8_lossy(&activator.stderr),
+        String::from_utf8_lossy(&activator.stdout)
+    );
+
+    let payload: serde_json::Value =
+        serde_json::from_slice(&activator.stdout).expect("activator stdout should be json");
+    assert_eq!(payload["surface"], "vida project-activator");
+    assert_eq!(
+        payload["activation_log"]["db_first_activation_truth"]["read_back_verified"],
+        true
+    );
+    assert!(Path::new(&project_root).join(".vida/data/state").is_dir());
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn project_activator_rejects_foreign_env_state_dir_for_mutation() {
+    let project_root = unique_state_dir();
+    fs::create_dir_all(&project_root).expect("project root should exist");
+
+    let init = vida()
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env_remove("VIDA_STATE_DIR")
+        .output()
+        .expect("init should run");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let foreign_project_root = unique_state_dir();
+    let foreign_state_dir = format!("{foreign_project_root}/.vida/data/state");
+    fs::create_dir_all(&foreign_state_dir).expect("foreign state dir should exist");
+
+    let activator = vida()
+        .args([
+            "project-activator",
+            "--project-id",
+            "test-project",
+            "--language",
+            "english",
+            "--host-cli-system",
+            "codex",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &foreign_state_dir)
+        .output()
+        .expect("project activator should run");
+    assert!(!activator.status.success());
+
+    let stderr = String::from_utf8_lossy(&activator.stderr);
+    assert!(stderr.contains("failed closed before mutation"));
+    assert!(
+        stderr.contains("non-project state dir")
+            || stderr.contains("default authoritative state dir")
+    );
+    assert!(!stderr.contains("DB-first activation truth"));
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+    fs::remove_dir_all(foreign_project_root).expect("foreign temp root should be removed");
+}
+
+#[test]
 fn status_json_exposes_host_agent_summary() {
     let project_root = unique_state_dir();
     fs::create_dir_all(&project_root).expect("project root should exist");

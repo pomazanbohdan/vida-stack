@@ -1991,13 +1991,15 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 }
             };
 
-            let project_activation_view = match std::env::current_dir() {
-                Ok(path) => super::project_activator_surface::build_project_activator_view(&path),
+            let project_root = match std::env::current_dir() {
+                Ok(path) => path,
                 Err(error) => {
                     eprintln!("Failed to resolve current directory: {error}");
                     return ExitCode::from(1);
                 }
             };
+            let project_activation_view =
+                super::project_activator_surface::build_project_activator_view(&project_root);
             let init_view =
                 super::project_activator_surface::merge_project_activation_into_init_view(
                     bundle.agent_init_view,
@@ -2009,6 +2011,8 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
             );
             let activation_semantics = agent_init_activation_semantics(&selection);
             let surface_payload = build_agent_init_surface_payload(
+                &project_root,
+                &bundle.config_path,
                 init_view.clone(),
                 selection.clone(),
                 activation_semantics.clone(),
@@ -2019,8 +2023,25 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     "state_dir": store.root().display().to_string(),
                     "launcher_runtime_paths": bundle.launcher_runtime_paths,
                 }),
+                &bundle.activation_bundle,
                 dev_team_readiness,
             );
+
+            if surface_payload["backend_truth"]["assignment_blocker"]["authoritative"]
+                .as_bool()
+                .unwrap_or(false)
+            {
+                let blocker_code = surface_payload["backend_truth"]["assignment_blocker"]
+                    ["blocker_code"]
+                    .as_str()
+                    .unwrap_or("runtime_assignment_truth_required");
+                eprintln!(
+                    "Agent init requires runtime assignment truth for `{}` mode: {}.",
+                    selection["mode"].as_str().unwrap_or("unknown"),
+                    blocker_code
+                );
+                return ExitCode::from(1);
+            }
 
             if args.execute_dispatch {
                 if packet_arg_count == 0 {
@@ -2388,49 +2409,329 @@ fn agent_init_execution_truth(selection: &serde_json::Value) -> serde_json::Valu
         .unwrap_or(serde_json::Value::Null)
 }
 
-fn agent_init_backend_truth(
+fn agent_init_role_selection(
     selection: &serde_json::Value,
-    execution_truth: &serde_json::Value,
-) -> serde_json::Value {
-    let Some(execution_truth) = execution_truth.as_object() else {
-        return serde_json::Value::Null;
-    };
-    let role_selection = selection
+) -> Option<super::RuntimeConsumptionLaneSelection> {
+    selection
         .get("packet")
         .and_then(|packet| packet.get("role_selection_full"))
         .cloned()
+        .or_else(|| {
+            selection
+                .get("execution_plan")
+                .map(|_| selection.clone())
+                .filter(|value| value.get("selected_role").is_some())
+        })
         .and_then(|value| {
             serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
-        });
-    let runtime_assignment = role_selection
-        .as_ref()
-        .map(|role_selection| {
-            super::runtime_assignment_from_execution_plan(&role_selection.execution_plan).clone()
         })
-        .unwrap_or(serde_json::Value::Null);
+}
+
+fn task_class_for_runtime_role(runtime_role: &str) -> &'static str {
+    match runtime_role {
+        "solution_architect" => "architecture",
+        "verifier" | "prover" => "verification",
+        "coach" => "coach",
+        "business_analyst" => "specification",
+        _ => "implementation",
+    }
+}
+
+fn explicit_mode_runtime_assignment(
+    selection: &serde_json::Value,
+    activation_bundle: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(selected_role) = selection
+        .get("selected_role")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+    else {
+        return serde_json::Value::Null;
+    };
+    crate::build_runtime_assignment_from_resolved_constraints(
+        activation_bundle,
+        "orchestrator",
+        task_class_for_runtime_role(selected_role),
+        selected_role,
+    )
+}
+
+fn activation_bundle_has_carrier_runtime_roles(activation_bundle: &serde_json::Value) -> bool {
+    crate::carrier_runtime_section(activation_bundle)["roles"]
+        .as_array()
+        .is_some_and(|roles| !roles.is_empty())
+}
+
+fn agent_init_effective_activation_bundle(
+    project_root: &Path,
+    config_path: &str,
+    activation_bundle: &serde_json::Value,
+) -> serde_json::Value {
+    if activation_bundle_has_carrier_runtime_roles(activation_bundle) {
+        return activation_bundle.clone();
+    }
+    let Ok(config) =
+        crate::project_activator_surface::read_yaml_file_checked(Path::new(config_path))
+    else {
+        return activation_bundle.clone();
+    };
+    match crate::build_compiled_agent_extension_bundle_for_root(&config, project_root) {
+        Ok(projected_bundle) if activation_bundle_has_carrier_runtime_roles(&projected_bundle) => {
+            projected_bundle
+        }
+        _ => {
+            let registry = crate::project_activator_surface::host_cli_system_registry_with_fallback(
+                Some(&config),
+            );
+            let selected_host_cli_system = crate::yaml_string(crate::yaml_lookup(
+                &config,
+                &["host_environment", "cli_system"],
+            ))
+            .and_then(|system| {
+                registry
+                    .get(&system)
+                    .map(|entry| (system, entry))
+                    .or_else(|| None)
+            })
+            .or_else(|| {
+                let mut enabled_entries = registry
+                    .iter()
+                    .filter(|(_, entry)| {
+                        crate::project_activator_surface::host_cli_system_enabled(entry)
+                    })
+                    .collect::<Vec<_>>();
+                enabled_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                enabled_entries
+                    .into_iter()
+                    .next()
+                    .map(|(system, entry)| (system.clone(), entry))
+            })
+            .or_else(|| {
+                let mut entries = registry.iter().collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                entries
+                    .into_iter()
+                    .next()
+                    .map(|(system, entry)| (system.clone(), entry))
+            });
+            let Some((_, selected_entry)) = selected_host_cli_system else {
+                return activation_bundle.clone();
+            };
+            let carrier_roles = crate::project_activator_surface::host_cli_entry_carrier_catalog(
+                Some(selected_entry),
+            );
+            if carrier_roles.is_empty() {
+                return activation_bundle.clone();
+            }
+            let mut effective_bundle = activation_bundle.clone();
+            effective_bundle["carrier_runtime"]["roles"] = serde_json::Value::Array(carrier_roles);
+            effective_bundle
+        }
+    }
+}
+
+fn task_class_for_dispatch_target(dispatch_target: &str, selected_role: &str) -> &'static str {
+    match dispatch_target {
+        "specification" | "analysis" => "specification",
+        "coach" => "coach",
+        "verification" => "verification",
+        "execution_preparation" => "architecture",
+        "implementer" | "" => task_class_for_runtime_role(selected_role),
+        _ => task_class_for_runtime_role(selected_role),
+    }
+}
+
+fn rebuilt_embedded_runtime_assignment(
+    selection: &serde_json::Value,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    activation_bundle: &serde_json::Value,
+) -> serde_json::Value {
+    let selected_role = selection
+        .get("selected_role")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(role_selection.selected_role.as_str());
+    let dispatch_target = selection
+        .get("dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let task_class = task_class_for_dispatch_target(dispatch_target, selected_role);
+    crate::build_runtime_assignment_from_resolved_constraints(
+        activation_bundle,
+        &role_selection.selected_role,
+        task_class,
+        selected_role,
+    )
+}
+
+fn agent_init_runtime_assignment_resolution(
+    selection: &serde_json::Value,
+    activation_bundle: &serde_json::Value,
+) -> (serde_json::Value, &'static str) {
+    if let Some(role_selection) = agent_init_role_selection(selection) {
+        let runtime_assignment =
+            super::runtime_assignment_from_execution_plan(&role_selection.execution_plan).clone();
+        if !runtime_assignment.is_null() {
+            return (runtime_assignment, "embedded_runtime_assignment");
+        }
+        if matches!(
+            selection.get("mode").and_then(serde_json::Value::as_str),
+            Some(
+                "dispatch_packet"
+                    | "downstream_packet"
+                    | "runtime"
+                    | "fixed"
+                    | "auto"
+                    | "compiled"
+                    | "test"
+            )
+        ) {
+            return (
+                rebuilt_embedded_runtime_assignment(selection, &role_selection, activation_bundle),
+                "rebuilt_legacy_embedded_selection",
+            );
+        }
+    }
+
+    match selection.get("mode").and_then(serde_json::Value::as_str) {
+        Some("explicit_role") => (
+            explicit_mode_runtime_assignment(selection, activation_bundle),
+            "provisional_explicit_role",
+        ),
+        _ => (serde_json::Value::Null, "none"),
+    }
+}
+
+fn agent_init_missing_assignment_blocker(
+    selection: &serde_json::Value,
+    activation_bundle: &serde_json::Value,
+    runtime_assignment: &serde_json::Value,
+) -> serde_json::Value {
+    let mode = selection
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    if !matches!(
+        mode,
+        "explicit_role"
+            | "runtime"
+            | "fixed"
+            | "auto"
+            | "compiled"
+            | "test"
+            | "dispatch_packet"
+            | "downstream_packet"
+    ) {
+        return serde_json::Value::Null;
+    }
+
+    let carrier_runtime = crate::carrier_runtime_section(activation_bundle);
+    let model_selection_enabled = carrier_runtime["model_selection"]["enabled"]
+        .as_bool()
+        .unwrap_or(false);
+    let has_carrier_roles = carrier_runtime["roles"]
+        .as_array()
+        .is_some_and(|roles| !roles.is_empty());
+    let runtime_assignment_expected = model_selection_enabled && has_carrier_roles;
+    let has_embedded_selection = agent_init_role_selection(selection).is_some();
+    let authoritative = match mode {
+        "dispatch_packet" | "downstream_packet" => has_embedded_selection,
+        "explicit_role" => false,
+        _ => true,
+    };
+    if matches!(mode, "dispatch_packet" | "downstream_packet") && !has_embedded_selection {
+        return serde_json::Value::Null;
+    }
+
+    if !runtime_assignment_expected && !authoritative {
+        return serde_json::Value::Null;
+    }
+
+    let has_carrier = runtime_assignment
+        .get("selected_carrier_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .is_some();
+    let has_model_profile = runtime_assignment
+        .get("selected_model_profile_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .is_some();
+    if has_carrier && has_model_profile {
+        return serde_json::Value::Null;
+    }
+
+    let blocker_code = if runtime_assignment["enabled"].as_bool() == Some(false) {
+        "runtime_assignment_unavailable"
+    } else {
+        "runtime_assignment_truth_required"
+    };
+    let reason = if runtime_assignment["enabled"].as_bool() == Some(false) {
+        runtime_assignment
+            .get("reason")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null)
+    } else if !has_carrier {
+        serde_json::Value::String("selected_carrier_id_missing".to_string())
+    } else {
+        serde_json::Value::String("selected_model_profile_id_missing".to_string())
+    };
+
+    serde_json::json!({
+        "status": if authoritative { "blocked" } else { "advisory" },
+        "authoritative": authoritative,
+        "warning": !authoritative,
+        "blocker_code": blocker_code,
+        "reason": reason,
+        "mode": mode,
+    })
+}
+
+fn agent_init_backend_truth(
+    selection: &serde_json::Value,
+    execution_truth: &serde_json::Value,
+    activation_bundle: &serde_json::Value,
+) -> serde_json::Value {
+    let execution_truth = execution_truth.as_object();
+    let role_selection = agent_init_role_selection(selection);
+    let (runtime_assignment, assignment_source) =
+        agent_init_runtime_assignment_resolution(selection, activation_bundle);
+    let assignment_blocker =
+        agent_init_missing_assignment_blocker(selection, activation_bundle, &runtime_assignment);
     let selected_backend = execution_truth
-        .get("effective_selected_backend")
-        .or_else(|| execution_truth.get("selected_backend"))
+        .as_ref()
+        .and_then(|truth| {
+            truth
+                .get("effective_selected_backend")
+                .or_else(|| truth.get("selected_backend"))
+        })
         .cloned()
+        .or_else(|| runtime_assignment.get("selected_backend_id").cloned())
         .unwrap_or(serde_json::Value::Null);
     let route_primary_backend = execution_truth
-        .get("route_primary_backend")
+        .as_ref()
+        .and_then(|truth| truth.get("route_primary_backend"))
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     let route_fallback_backend = execution_truth
-        .get("route_fallback_backend")
+        .as_ref()
+        .and_then(|truth| truth.get("route_fallback_backend"))
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     let selected_backend_source = execution_truth
-        .get("selected_backend_source")
+        .as_ref()
+        .and_then(|truth| truth.get("selected_backend_source"))
         .cloned()
+        .or_else(|| runtime_assignment.get("selection_rule").cloned())
         .unwrap_or(serde_json::Value::Null);
     let effective_execution_posture = execution_truth
-        .get("effective_execution_posture")
+        .as_ref()
+        .and_then(|truth| truth.get("effective_execution_posture"))
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     let selected_backend_class = execution_truth
-        .get("selected_backend_class")
+        .as_ref()
+        .and_then(|truth| truth.get("selected_backend_class"))
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     let selected_carrier_id = runtime_assignment
@@ -2514,18 +2815,27 @@ fn agent_init_backend_truth(
         "override_active": override_active,
         "lawful_override": lawful_override,
         "override_status": override_status,
+        "assignment_source": assignment_source,
+        "runtime_assignment": runtime_assignment,
+        "assignment_blocker": assignment_blocker,
     })
 }
 
 fn build_agent_init_surface_payload(
+    project_root: &Path,
+    config_path: &str,
     init_view: serde_json::Value,
     selection: serde_json::Value,
     activation_semantics: serde_json::Value,
     runtime_bundle_summary: serde_json::Value,
+    activation_bundle: &serde_json::Value,
     dev_team_readiness: serde_json::Value,
 ) -> serde_json::Value {
+    let effective_activation_bundle =
+        agent_init_effective_activation_bundle(project_root, config_path, activation_bundle);
     let execution_truth = agent_init_execution_truth(&selection);
-    let backend_truth = agent_init_backend_truth(&selection, &execution_truth);
+    let backend_truth =
+        agent_init_backend_truth(&selection, &execution_truth, &effective_activation_bundle);
     let packet_activation_evidence = selection
         .get("packet")
         .and_then(|packet| packet.get("activation_evidence"))
@@ -2632,6 +2942,8 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
     let activation_semantics = agent_init_activation_semantics(&selection);
 
     Ok(build_agent_init_surface_payload(
+        project_root,
+        &bundle.config_path,
         init_view,
         selection,
         activation_semantics,
@@ -2642,6 +2954,7 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
             "state_dir": store.root().display().to_string(),
             "launcher_runtime_paths": bundle.launcher_runtime_paths,
         }),
+        &bundle.activation_bundle,
         super::taskflow_consume_bundle::build_dev_team_readiness(
             &bundle.config_path,
             &bundle.activation_bundle,
@@ -2656,6 +2969,7 @@ mod agent_init_surface_tests {
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
     use crate::RuntimeConsumptionLaneSelection;
+    use std::fs;
     use std::path::Path;
     use std::process::ExitCode;
     use std::time::{Duration, Instant};
@@ -2725,6 +3039,59 @@ mod agent_init_surface_tests {
         }
     }
 
+    fn test_activation_bundle() -> serde_json::Value {
+        serde_json::json!({
+            "carrier_runtime": {
+                "selection_rule": "role_task_then_readiness_then_score_then_cost_quality",
+                "model_selection": {
+                    "enabled": true,
+                    "default_strategy": "balanced_cost_quality",
+                    "candidate_scope": "unified_carrier_model_profiles"
+                },
+                "roles": [
+                    {
+                        "role_id": "junior",
+                        "tier": "junior",
+                        "enabled": true,
+                        "rate": 1,
+                        "normalized_cost_units": 1,
+                        "default_runtime_role": "worker",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "reasoning_band": "medium",
+                        "default_model_profile": "codex_gpt54_mini_impl",
+                        "model_profiles": {
+                            "codex_gpt54_mini_impl": {
+                                "profile_id": "codex_gpt54_mini_impl",
+                                "model_ref": "gpt-5.4-mini",
+                                "reasoning_effort": "medium",
+                                "provider": "openai",
+                                "normalized_cost_units": 1,
+                                "speed_tier": "fast",
+                                "quality_tier": "medium",
+                                "write_scope": "workspace-write",
+                                "runtime_roles": ["worker"],
+                                "task_classes": ["implementation"],
+                                "readiness": { "required": true, "ready": true },
+                                "budget": {
+                                    "max_task_price_units": 10
+                                }
+                            }
+                        }
+                    }
+                ]
+            }
+        })
+    }
+
+    fn test_project_root() -> &'static Path {
+        Path::new("/tmp")
+    }
+
+    fn test_config_path() -> &'static str {
+        "/tmp/vida.test.config.yaml"
+    }
+
     #[test]
     fn agent_init_surface_payload_exposes_execution_truth_selected_backend() {
         let role_selection = test_role_selection();
@@ -2743,10 +3110,13 @@ mod agent_init_surface_tests {
         )
         .expect("packet selection should build");
         let payload = build_agent_init_surface_payload(
+            test_project_root(),
+            test_config_path(),
             serde_json::json!({ "status": "ready" }),
             selection,
             serde_json::json!({ "activation_kind": "activation_view" }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
+            &test_activation_bundle(),
             serde_json::json!({
                 "status": "ready",
                 "roles": [
@@ -2832,10 +3202,13 @@ mod agent_init_surface_tests {
         )
         .expect("downstream packet selection should build");
         let payload = build_agent_init_surface_payload(
+            test_project_root(),
+            test_config_path(),
             serde_json::json!({ "status": "ready" }),
             selection,
             serde_json::json!({ "activation_kind": "activation_view" }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
+            &test_activation_bundle(),
             serde_json::json!({ "status": "ready", "roles": [] }),
         );
 
@@ -2852,8 +3225,10 @@ mod agent_init_surface_tests {
     }
 
     #[test]
-    fn agent_init_surface_payload_keeps_backend_truth_null_without_packet_mode() {
+    fn agent_init_surface_payload_exposes_explicit_role_cost_policy_truth() {
         let payload = build_agent_init_surface_payload(
+            test_project_root(),
+            test_config_path(),
             serde_json::json!({ "status": "ready" }),
             serde_json::json!({
                 "mode": "explicit_role",
@@ -2862,11 +3237,405 @@ mod agent_init_surface_tests {
             }),
             serde_json::json!({ "activation_kind": "activation_view" }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
-            serde_json::json!({ "status": "ready", "roles": [] }),
+            &test_activation_bundle(),
+            serde_json::json!({
+                "status": "ready",
+                "roles": [
+                    {
+                        "role_id": "developer",
+                        "runtime_role": "worker",
+                        "default_model": "gpt-5.4-mini",
+                        "cost_policy": {
+                            "budget_units": 1
+                        }
+                    }
+                ]
+            }),
         );
 
         assert!(payload["execution_truth"].is_null());
-        assert!(payload["backend_truth"].is_null());
+        assert_eq!(payload["backend_truth"]["selected_carrier_id"], "junior");
+        assert_eq!(
+            payload["backend_truth"]["selected_model_profile_id"],
+            "codex_gpt54_mini_impl"
+        );
+        assert_eq!(payload["backend_truth"]["selected_backend"], "junior");
+        assert_eq!(
+            payload["backend_truth"]["assignment_source"],
+            "provisional_explicit_role"
+        );
+        assert!(payload["backend_truth"]["assignment_blocker"].is_null());
+        assert_eq!(
+            payload["dev_team_readiness"]["active_selection"]["selected_cost_units"],
+            1
+        );
+    }
+
+    #[test]
+    fn agent_init_surface_payload_keeps_packet_mode_compatible_without_runtime_assignment() {
+        let selection = agent_init_packet_selection(
+            "/tmp/dispatch.json",
+            serde_json::json!({
+                "activation_runtime_role": "worker",
+                "request_text": "repair",
+                "dispatch_target": "implementer",
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet"
+            }),
+            false,
+        )
+        .expect("packet selection should build");
+        let payload = build_agent_init_surface_payload(
+            test_project_root(),
+            test_config_path(),
+            serde_json::json!({ "status": "ready" }),
+            selection,
+            serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({ "bundle_id": "bundle-test" }),
+            &test_activation_bundle(),
+            serde_json::json!({ "status": "ready", "roles": [] }),
+        );
+
+        assert!(payload["backend_truth"]["selected_carrier_id"].is_null());
+        assert!(payload["backend_truth"]["assignment_blocker"].is_null());
+    }
+
+    #[test]
+    fn agent_init_surface_payload_rebuilds_legacy_embedded_packet_runtime_assignment() {
+        let selection = agent_init_packet_selection(
+            "/tmp/dispatch.json",
+            serde_json::json!({
+                "activation_runtime_role": "worker",
+                "request_text": "repair",
+                "dispatch_target": "implementer",
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "role_selection_full": {
+                    "ok": true,
+                    "activation_source": "test",
+                    "selection_mode": "fixed",
+                    "fallback_role": "orchestrator",
+                    "request": "repair",
+                    "selected_role": "worker",
+                    "conversational_mode": null,
+                    "single_task_only": true,
+                    "tracked_flow_entry": "dev-pack",
+                    "allow_freeform_chat": false,
+                    "confidence": "high",
+                    "matched_terms": ["repair"],
+                    "compiled_bundle": null,
+                    "execution_plan": {
+                        "development_flow": {
+                            "implementer": {
+                                "executor_backend": "junior"
+                            }
+                        }
+                    },
+                    "reason": "test"
+                }
+            }),
+            false,
+        )
+        .expect("packet selection should build");
+        let payload = build_agent_init_surface_payload(
+            test_project_root(),
+            test_config_path(),
+            serde_json::json!({ "status": "ready" }),
+            selection,
+            serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({ "bundle_id": "bundle-test" }),
+            &test_activation_bundle(),
+            serde_json::json!({ "status": "ready", "roles": [] }),
+        );
+
+        assert_eq!(
+            payload["backend_truth"]["assignment_source"],
+            "rebuilt_legacy_embedded_selection"
+        );
+        assert_eq!(payload["backend_truth"]["selected_carrier_id"], "junior");
+        assert_eq!(
+            payload["backend_truth"]["selected_model_profile_id"],
+            "codex_gpt54_mini_impl"
+        );
+        assert!(payload["backend_truth"]["assignment_blocker"].is_null());
+    }
+
+    #[test]
+    fn agent_init_surface_payload_rebuilds_from_host_environment_carrier_catalog() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        fs::write(
+            &config_path,
+            concat!(
+                "project:\n",
+                "  id: demo\n",
+                "host_environment:\n",
+                "  systems:\n",
+                "    codex:\n",
+                "      enabled: true\n",
+                "      runtime_root: .codex\n",
+                "      template_root: .codex\n",
+                "      carriers:\n",
+                "        junior:\n",
+                "          orchestration_tier: junior\n",
+                "          default_runtime_role: worker\n",
+                "          runtime_roles: [worker]\n",
+                "          task_classes: [implementation]\n",
+                "          budget_cost_units: 1\n",
+                "          reasoning_band: medium\n",
+                "          model: gpt-5.4-mini\n",
+                "          model_provider: openai\n",
+                "          model_reasoning_effort: medium\n",
+                "          plan_mode_reasoning_effort: medium\n",
+                "          sandbox_mode: workspace-write\n",
+                "          write_scope: workspace-write\n",
+                "agent_extensions:\n",
+                "  enabled: false\n",
+                "agent_system:\n",
+                "  model_selection:\n",
+                "    enabled: true\n",
+                "    candidate_scope: unified_carrier_model_profiles\n",
+                "    default_strategy: balanced_cost_quality\n",
+            ),
+        )
+        .expect("config should write");
+
+        let selection = agent_init_packet_selection(
+            "/tmp/dispatch.json",
+            serde_json::json!({
+                "activation_runtime_role": "worker",
+                "request_text": "repair",
+                "dispatch_target": "implementer",
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "role_selection_full": {
+                    "ok": true,
+                    "activation_source": "test",
+                    "selection_mode": "fixed",
+                    "fallback_role": "orchestrator",
+                    "request": "repair",
+                    "selected_role": "worker",
+                    "conversational_mode": null,
+                    "single_task_only": true,
+                    "tracked_flow_entry": "dev-pack",
+                    "allow_freeform_chat": false,
+                    "confidence": "high",
+                    "matched_terms": ["repair"],
+                    "compiled_bundle": null,
+                    "execution_plan": {
+                        "development_flow": {
+                            "implementer": {
+                                "executor_backend": "junior"
+                            }
+                        }
+                    },
+                    "reason": "test"
+                }
+            }),
+            false,
+        )
+        .expect("packet selection should build");
+        let payload = build_agent_init_surface_payload(
+            harness.path(),
+            config_path.to_str().expect("config path should render"),
+            serde_json::json!({ "status": "ready" }),
+            selection,
+            serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({ "bundle_id": "bundle-test" }),
+            &serde_json::json!({
+                "agent_system": {
+                    "model_selection": {
+                        "enabled": true,
+                        "candidate_scope": "unified_carrier_model_profiles",
+                        "default_strategy": "balanced_cost_quality"
+                    }
+                },
+                "carrier_runtime": {
+                    "model_selection": {
+                        "enabled": true,
+                        "candidate_scope": "unified_carrier_model_profiles",
+                        "default_strategy": "balanced_cost_quality"
+                    },
+                    "roles": []
+                }
+            }),
+            serde_json::json!({ "status": "ready", "roles": [] }),
+        );
+
+        assert_eq!(
+            payload["backend_truth"]["assignment_source"],
+            "rebuilt_legacy_embedded_selection"
+        );
+        assert_eq!(payload["backend_truth"]["selected_carrier_id"], "junior");
+        assert!(payload["backend_truth"]["assignment_blocker"].is_null());
+    }
+
+    #[test]
+    fn agent_init_missing_assignment_blocker_is_advisory_for_bare_explicit_role() {
+        let explicit_blocker = agent_init_missing_assignment_blocker(
+            &serde_json::json!({
+                "mode": "explicit_role",
+                "selected_role": "worker"
+            }),
+            &test_activation_bundle(),
+            &serde_json::json!({
+                "enabled": false,
+                "reason": "carrier_runtime_roles_missing"
+            }),
+        );
+        assert_eq!(
+            explicit_blocker["blocker_code"],
+            "runtime_assignment_unavailable"
+        );
+        assert_eq!(explicit_blocker["status"], "advisory");
+        assert_eq!(explicit_blocker["authoritative"], false);
+
+        let packet_blocker = agent_init_missing_assignment_blocker(
+            &serde_json::json!({
+                "mode": "dispatch_packet",
+                "selected_role": "worker"
+            }),
+            &test_activation_bundle(),
+            &serde_json::Value::Null,
+        );
+        assert!(packet_blocker.is_null());
+    }
+
+    #[test]
+    fn agent_init_missing_assignment_blocker_skips_minimal_bootstrap_explicit_role() {
+        let blocker = agent_init_missing_assignment_blocker(
+            &serde_json::json!({
+                "mode": "explicit_role",
+                "selected_role": "worker"
+            }),
+            &serde_json::json!({
+                "carrier_runtime": {
+                    "model_selection": {
+                        "enabled": false
+                    },
+                    "roles": []
+                }
+            }),
+            &serde_json::json!({
+                "enabled": false,
+                "reason": "carrier_runtime_roles_missing"
+            }),
+        );
+
+        assert!(blocker.is_null());
+    }
+
+    #[test]
+    fn agent_init_missing_assignment_blocker_blocks_authoritative_runtime_mode() {
+        let blocker = agent_init_missing_assignment_blocker(
+            &serde_json::json!({
+                "mode": "runtime",
+                "selected_role": "worker"
+            }),
+            &test_activation_bundle(),
+            &serde_json::json!({
+                "enabled": false,
+                "reason": "carrier_runtime_roles_missing"
+            }),
+        );
+
+        assert_eq!(blocker["blocker_code"], "runtime_assignment_unavailable");
+        assert_eq!(blocker["status"], "blocked");
+        assert_eq!(blocker["authoritative"], true);
+    }
+
+    #[test]
+    fn agent_init_missing_assignment_blocker_blocks_authoritative_embedded_selection() {
+        let blocker = agent_init_missing_assignment_blocker(
+            &serde_json::json!({
+                "mode": "dispatch_packet",
+                "selected_role": "worker",
+                "packet": {
+                    "role_selection_full": {
+                        "ok": true,
+                        "activation_source": "test",
+                        "selection_mode": "fixed",
+                        "fallback_role": "orchestrator",
+                        "request": "repair",
+                        "selected_role": "worker",
+                        "conversational_mode": null,
+                        "single_task_only": true,
+                        "tracked_flow_entry": "dev-pack",
+                        "allow_freeform_chat": false,
+                        "confidence": "high",
+                        "matched_terms": ["repair"],
+                        "compiled_bundle": null,
+                        "execution_plan": {
+                            "development_flow": {
+                                "implementer": {
+                                    "executor_backend": "junior"
+                                }
+                            }
+                        },
+                        "reason": "test"
+                    }
+                }
+            }),
+            &test_activation_bundle(),
+            &serde_json::Value::Null,
+        );
+
+        assert_eq!(blocker["blocker_code"], "runtime_assignment_truth_required");
+        assert_eq!(blocker["status"], "blocked");
+        assert_eq!(blocker["authoritative"], true);
+    }
+
+    #[test]
+    fn agent_init_missing_assignment_blocker_blocks_unrebuildable_embedded_selection() {
+        let blocker = agent_init_missing_assignment_blocker(
+            &serde_json::json!({
+                "mode": "dispatch_packet",
+                "selected_role": "worker",
+                "packet": {
+                    "role_selection_full": {
+                        "ok": true,
+                        "activation_source": "test",
+                        "selection_mode": "fixed",
+                        "fallback_role": "orchestrator",
+                        "request": "repair",
+                        "selected_role": "worker",
+                        "conversational_mode": null,
+                        "single_task_only": true,
+                        "tracked_flow_entry": "dev-pack",
+                        "allow_freeform_chat": false,
+                        "confidence": "high",
+                        "matched_terms": ["repair"],
+                        "compiled_bundle": null,
+                        "execution_plan": {
+                            "development_flow": {
+                                "implementer": {
+                                    "executor_backend": "junior"
+                                }
+                            }
+                        },
+                        "reason": "test"
+                    }
+                }
+            }),
+            &serde_json::json!({
+                "carrier_runtime": {
+                    "model_selection": {
+                        "enabled": true,
+                        "default_strategy": "balanced_cost_quality",
+                        "candidate_scope": "unified_carrier_model_profiles"
+                    },
+                    "roles": []
+                }
+            }),
+            &serde_json::json!({
+                "enabled": false,
+                "reason": "carrier_runtime_roles_missing"
+            }),
+        );
+
+        assert_eq!(blocker["blocker_code"], "runtime_assignment_unavailable");
+        assert_eq!(blocker["status"], "blocked");
+        assert_eq!(blocker["authoritative"], true);
     }
 
     #[test]

@@ -5373,6 +5373,16 @@ mod tests {
     }
 
     fn agent_lane_test_execution_plan(executor_backend: &str) -> serde_json::Value {
+        let (model_profile_id, model_ref, reasoning_effort) = match executor_backend {
+            "opencode_cli" => (
+                "opencode_codex_mini_review",
+                "opencode/gpt-5.1-codex-mini",
+                "low",
+            ),
+            "internal_subagents" => ("internal_fast", "internal_fast", "low"),
+            "middle" => ("codex_gpt54_medium_write", "gpt-5.4", "medium"),
+            _ => ("codex_gpt54_low_write", "gpt-5.4", "low"),
+        };
         json!({
             "backend_admissibility_matrix": [
                 {
@@ -5408,6 +5418,15 @@ mod tests {
                 "implementer": {
                     "executor_backend": executor_backend
                 }
+            },
+            "runtime_assignment": {
+                "selected_carrier_id": executor_backend,
+                "selected_backend_id": executor_backend,
+                "selected_model_profile_id": model_profile_id,
+                "selected_model_ref": model_ref,
+                "selected_reasoning_effort": reasoning_effort,
+                "selected_runtime_role": "worker",
+                "task_class": "implementation"
             }
         })
     }
@@ -6039,8 +6058,6 @@ mod tests {
             ]))),
             ExitCode::SUCCESS
         );
-        wait_for_state_unlock(harness.path());
-        assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
 
         let fake_bin = harness.path().join("fake-bin");

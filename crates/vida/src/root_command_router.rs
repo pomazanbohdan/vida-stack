@@ -1,11 +1,11 @@
 use std::process::ExitCode;
 
 use super::{
-    AgentArgs, AgentCommand, Cli, Command, ReleaseCommand, TaskArgs, TaskCommand,
     agent_dispatch_surface, agent_feedback_surface, approval_surface, docflow_proxy,
     doctor_surface, init_surfaces, lane_surface, memory_surface, print_root_help,
     project_activator_surface, protocol_surface, release_surface, resolve_runtime_project_root,
-    run_taskflow_proxy, state_store, status_surface, task_surface,
+    run_taskflow_proxy, state_store, status_surface, task_surface, AgentArgs, AgentCommand, Cli,
+    Command, ReleaseCommand, TaskArgs, TaskCommand,
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
@@ -118,7 +118,7 @@ fn prepare_runtime_state_dir(command: &Option<Command>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, command_needs_project_root_state_dir, prepare_runtime_state_dir};
+    use super::{command_needs_project_root_state_dir, prepare_runtime_state_dir, Cli};
     use crate::temp_state::TempStateHarness;
     use clap::Parser;
     use std::fs;
