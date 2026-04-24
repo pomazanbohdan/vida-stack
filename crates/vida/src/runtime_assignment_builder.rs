@@ -13,6 +13,13 @@ fn selection_strategy(carrier_runtime: &serde_json::Value) -> String {
         .to_string()
 }
 
+fn selection_strategy_supported(selection_strategy: &str) -> bool {
+    matches!(
+        selection_strategy,
+        "balanced_cost_quality" | "quality_first" | "risk_aware" | "free_first_with_quality_floor"
+    )
+}
+
 fn model_selection_enabled(
     compiled_bundle: &serde_json::Value,
     carrier_runtime: &serde_json::Value,
@@ -127,6 +134,46 @@ fn route_budget_policy(
     .map(|value| value.to_ascii_lowercase())
 }
 
+fn route_budget_policy_source_path(
+    compiled_bundle: &serde_json::Value,
+    route_key: &str,
+    conversation_role: &str,
+) -> Option<String> {
+    if json_lookup(
+        &compiled_bundle["agent_system"]["routing"][route_key],
+        &["budget_policy"],
+    )
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .is_some_and(|value| !value.is_empty())
+    {
+        return Some(format!("agent_system.routing.{route_key}.budget_policy"));
+    }
+    if json_lookup(
+        &compiled_bundle["agent_system"]["routing"][conversation_role],
+        &["budget_policy"],
+    )
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .is_some_and(|value| !value.is_empty())
+    {
+        return Some(format!(
+            "agent_system.routing.{conversation_role}.budget_policy"
+        ));
+    }
+    if json_lookup(
+        &compiled_bundle["agent_system"]["model_selection"],
+        &["budget_policy"],
+    )
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .is_some_and(|value| !value.is_empty())
+    {
+        return Some("agent_system.model_selection.budget_policy".to_string());
+    }
+    None
+}
+
 fn assignment_budget_policy(
     compiled_bundle: &serde_json::Value,
     carrier_runtime: &serde_json::Value,
@@ -146,6 +193,30 @@ fn assignment_budget_policy(
                 "strict".to_string()
             } else {
                 "informational".to_string()
+            }
+        })
+}
+
+fn assignment_budget_policy_source_path(
+    compiled_bundle: &serde_json::Value,
+    carrier_runtime: &serde_json::Value,
+    route_key: &str,
+    conversation_role: &str,
+    budget_policy: &str,
+) -> String {
+    route_budget_policy_source_path(compiled_bundle, route_key, conversation_role)
+        .or_else(|| {
+            model_selection_policy_value(compiled_bundle, carrier_runtime, &["budget_policy"])
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|_| "carrier_runtime.model_selection.budget_policy".to_string())
+        })
+        .unwrap_or_else(|| {
+            if budget_policy == "strict" {
+                "derived_from_model_selection.budget_policy.enforce_max_budget_units".to_string()
+            } else {
+                "default:informational".to_string()
             }
         })
 }
@@ -194,6 +265,69 @@ fn assignment_max_budget_units(
     })
 }
 
+fn assignment_max_budget_units_source_path(
+    compiled_bundle: &serde_json::Value,
+    carrier_runtime: &serde_json::Value,
+    route_key: &str,
+    conversation_role: &str,
+) -> Option<String> {
+    if json_u64(json_lookup(
+        &compiled_bundle["agent_system"]["routing"][route_key],
+        &["max_budget_units"],
+    ))
+    .is_some()
+    {
+        return Some(format!("agent_system.routing.{route_key}.max_budget_units"));
+    }
+    if json_u64(json_lookup(
+        &compiled_bundle["agent_system"]["routing"][conversation_role],
+        &["max_budget_units"],
+    ))
+    .is_some()
+    {
+        return Some(format!(
+            "agent_system.routing.{conversation_role}.max_budget_units"
+        ));
+    }
+    if json_u64(json_lookup(
+        &compiled_bundle["agent_system"]["routing"]["default"],
+        &["max_budget_units"],
+    ))
+    .is_some()
+    {
+        return Some("agent_system.routing.default.max_budget_units".to_string());
+    }
+    if json_u64(json_lookup(
+        &compiled_bundle["agent_system"]["routing"][conversation_role],
+        &["budget_policy", "max_budget_units"],
+    ))
+    .is_some()
+    {
+        return Some(format!(
+            "agent_system.routing.{conversation_role}.budget_policy.max_budget_units"
+        ));
+    }
+    if json_u64(model_selection_policy_value(
+        compiled_bundle,
+        carrier_runtime,
+        &["budget_policy", "max_budget_units"],
+    ))
+    .is_some()
+    {
+        return Some("model_selection.budget_policy.max_budget_units".to_string());
+    }
+    if json_u64(model_selection_policy_value(
+        compiled_bundle,
+        carrier_runtime,
+        &["max_budget_units"],
+    ))
+    .is_some()
+    {
+        return Some("model_selection.max_budget_units".to_string());
+    }
+    None
+}
+
 fn route_profile_mapping<'a>(
     compiled_bundle: &'a serde_json::Value,
     route_key: &str,
@@ -209,6 +343,61 @@ fn route_profile_mapping<'a>(
             &["profiles"],
         )
     })
+}
+
+fn route_profile_mapping_source_path(
+    compiled_bundle: &serde_json::Value,
+    route_key: &str,
+    conversation_role: &str,
+    carrier_id: &str,
+) -> Option<String> {
+    let route_profiles = json_lookup(
+        &compiled_bundle["agent_system"]["routing"][route_key],
+        &["profiles"],
+    );
+    if let Some(profiles) = route_profiles {
+        if profiles
+            .get(carrier_id)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        {
+            return Some(format!(
+                "agent_system.routing.{route_key}.profiles.{carrier_id}"
+            ));
+        }
+        if profiles
+            .as_str()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        {
+            return Some(format!("agent_system.routing.{route_key}.profiles"));
+        }
+    }
+    let role_profiles = json_lookup(
+        &compiled_bundle["agent_system"]["routing"][conversation_role],
+        &["profiles"],
+    );
+    if let Some(profiles) = role_profiles {
+        if profiles
+            .get(carrier_id)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        {
+            return Some(format!(
+                "agent_system.routing.{conversation_role}.profiles.{carrier_id}"
+            ));
+        }
+        if profiles
+            .as_str()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        {
+            return Some(format!("agent_system.routing.{conversation_role}.profiles"));
+        }
+    }
+    None
 }
 
 fn mapped_profile_for_carrier(
@@ -556,6 +745,27 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
     let selection_strategy = selection_strategy(carrier_runtime);
     let model_selection_enabled = model_selection_enabled(compiled_bundle, carrier_runtime);
     let candidate_scope = candidate_scope(compiled_bundle, carrier_runtime);
+    if !selection_strategy_supported(&selection_strategy) {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "selection_strategy_not_supported",
+            "task_class": task_class,
+            "runtime_role": execution_runtime_role,
+            "conversation_role": conversation_role,
+            "selection_strategy": selection_strategy,
+            "supported_selection_strategies": [
+                "balanced_cost_quality",
+                "quality_first",
+                "risk_aware",
+                "free_first_with_quality_floor"
+            ],
+            "selection_strategy_source_path": "carrier_runtime.model_selection.default_strategy",
+            "selection_rule": selection_rule,
+            "model_selection_enabled": model_selection_enabled,
+            "candidate_scope": candidate_scope,
+            "rejected_candidates": [],
+        });
+    }
     if !model_selection_enabled {
         return serde_json::json!({
             "enabled": false,
@@ -620,6 +830,13 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         task_class,
         conversation_role,
     );
+    let budget_policy_source_path = assignment_budget_policy_source_path(
+        compiled_bundle,
+        carrier_runtime,
+        task_class,
+        conversation_role,
+        &budget_policy,
+    );
     let allow_over_budget_escalation =
         budget_policy_allows_over_budget_escalation(compiled_bundle, carrier_runtime);
     let route_profiles = route_profile_mapping(compiled_bundle, task_class, conversation_role);
@@ -636,6 +853,14 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
             )
         })
         .flatten();
+    let max_budget_units_source_path = max_budget_units.and_then(|_| {
+        assignment_max_budget_units_source_path(
+            compiled_bundle,
+            carrier_runtime,
+            task_class,
+            conversation_role,
+        )
+    });
     let mut rejected_candidates = Vec::new();
     let mut candidates = roles
         .iter()
@@ -857,6 +1082,17 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         route_profiles,
         selected_role["role_id"].as_str().unwrap_or_default(),
     );
+    let selected_role_id = selected_role["role_id"].as_str().unwrap_or_default();
+    let selected_profile_id = selected_profile["profile_id"].as_str().unwrap_or_default();
+    let selected_route_profile_mapping_source_path =
+        selected_route_profile_mapping.as_ref().and_then(|_| {
+            route_profile_mapping_source_path(
+                compiled_bundle,
+                task_class,
+                conversation_role,
+                selected_role_id,
+            )
+        });
     let route_profile_mapping_applied = selected_route_profile_mapping.is_some();
     let tier = selected_role["tier"].as_str().unwrap_or_default();
     let rate = selected_candidate.rate;
@@ -890,6 +1126,28 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         format!("budget_policy={budget_policy}"),
         format!("budget_verdict={budget_verdict}"),
     ];
+    let mut selection_override_reasons = Vec::new();
+    if route_profile_mapping_applied {
+        selection_override_reasons.push(serde_json::json!({
+            "field": "selected_model_profile_id",
+            "reason": "route_profile_mapping_applied",
+            "source_path": selected_route_profile_mapping_source_path.clone(),
+            "selected_profile_id": selected_profile_id,
+        }));
+    }
+    if max_budget_units.is_some() {
+        selection_override_reasons.push(serde_json::json!({
+            "field": "selected_carrier_id",
+            "reason": if prefer_in_budget_first {
+                "selection_budget_preferred_in_budget_candidate"
+            } else {
+                "selection_budget_filtered_over_budget_candidates"
+            },
+            "source_path": max_budget_units_source_path.clone(),
+            "budget_policy": budget_policy.clone(),
+            "max_budget_units": max_budget_units,
+        }));
+    }
 
     let mut assignment = serde_json::json!({
         "enabled": true,
@@ -932,6 +1190,39 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
     });
     if let Some(map) = assignment.as_object_mut() {
         map.insert(
+            "selection_precedence".to_string(),
+            serde_json::json!([
+                "runtime_role_and_task_class_admissibility",
+                "carrier_score_lifecycle_readiness",
+                "route_profile_mapping",
+                "write_scope",
+                "quality_and_reasoning_floors",
+                "selection_budget_policy",
+                "selection_strategy_sort"
+            ]),
+        );
+        map.insert(
+            "selection_source_paths".to_string(),
+            serde_json::json!({
+                "selected_carrier_id": format!("carrier_runtime.roles[{selected_role_id}].role_id"),
+                "selected_backend_id": format!("carrier_runtime.roles[{selected_role_id}].role_id"),
+                "selected_carrier_tier": format!("carrier_runtime.roles[{selected_role_id}].tier"),
+                "selected_model_profile_id": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.profile_id"),
+                "selected_model_ref": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.model_ref"),
+                "selected_reasoning_effort": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.reasoning_effort"),
+                "selection_strategy": "carrier_runtime.model_selection.default_strategy",
+                "selection_rule": "carrier_runtime.model_selection.selection_rule",
+                "candidate_scope": "model_selection.candidate_scope",
+                "budget_policy": budget_policy_source_path.clone(),
+                "max_budget_units": max_budget_units_source_path.clone(),
+                "selected_route_profile_mapping": selected_route_profile_mapping_source_path.clone(),
+            }),
+        );
+        map.insert(
+            "selection_override_reasons".to_string(),
+            serde_json::Value::Array(selection_override_reasons),
+        );
+        map.insert(
             "selection_strategy".to_string(),
             serde_json::Value::String(selection_strategy),
         );
@@ -968,7 +1259,36 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         );
         map.insert(
             "budget_policy".to_string(),
-            serde_json::Value::String(budget_policy),
+            serde_json::Value::String(budget_policy.clone()),
+        );
+        map.insert(
+            "budget_scope".to_string(),
+            serde_json::Value::String("selection_filter_only".to_string()),
+        );
+        map.insert(
+            "selection_budget".to_string(),
+            serde_json::json!({
+                "scope": "selection_filter_only",
+                "policy": budget_policy,
+                "policy_source_path": budget_policy_source_path,
+                "enforces_candidate_rejection": budget_policy == "strict",
+                "prefers_in_budget_candidates": prefer_in_budget_first,
+                "max_budget_units": max_budget_units,
+                "max_budget_units_source_path": max_budget_units_source_path,
+                "selected_candidate_rate": rate,
+                "selected_over_budget": selected_over_budget,
+                "budget_verdict": budget_verdict,
+                "over_budget_escalation_allowed": allow_over_budget_escalation,
+            }),
+        );
+        map.insert(
+            "runtime_budget_ledger".to_string(),
+            serde_json::json!({
+                "status": "not_tracked_by_runtime_assignment",
+                "scope": "runtime_spend_ledger",
+                "enforcement": "not_implemented_in_this_assignment_builder",
+                "message": "selection budget limits candidate choice only; no runtime spend ledger is debited here",
+            }),
         );
         map.insert(
             "over_budget_escalation_allowed".to_string(),
@@ -1445,6 +1765,35 @@ mod tests {
         assert_eq!(assignment["selected_carrier_id"], "junior");
         assert_eq!(assignment["max_budget_units"], 1);
         assert_eq!(assignment["budget_verdict"], "in_budget");
+        assert_eq!(assignment["budget_scope"], "selection_filter_only");
+        assert_eq!(
+            assignment["selection_budget"]["scope"],
+            "selection_filter_only"
+        );
+        assert_eq!(
+            assignment["selection_budget"]["max_budget_units_source_path"],
+            "agent_system.routing.implementation.max_budget_units"
+        );
+        assert_eq!(
+            assignment["runtime_budget_ledger"]["status"],
+            "not_tracked_by_runtime_assignment"
+        );
+        assert_eq!(
+            assignment["selection_source_paths"]["selected_carrier_id"],
+            "carrier_runtime.roles[junior].role_id"
+        );
+        assert_eq!(
+            assignment["selection_source_paths"]["selected_model_profile_id"],
+            "carrier_runtime.roles[junior].model_profiles.codex_gpt54_low_write.profile_id"
+        );
+        assert!(assignment["selection_override_reasons"]
+            .as_array()
+            .expect("selection override reasons should render")
+            .iter()
+            .any(|row| {
+                row["reason"] == "selection_budget_filtered_over_budget_candidates"
+                    && row["field"] == "selected_carrier_id"
+            }));
         assert!(assignment["rejected_candidates"]
             .as_array()
             .expect("rejected candidates should render")
@@ -1842,6 +2191,20 @@ mod tests {
             "internal_fast"
         );
         assert_eq!(assignment["route_profile_mapping_applied"], true);
+        assert_eq!(
+            assignment["selection_source_paths"]["selected_route_profile_mapping"],
+            "agent_system.routing.implementation.profiles.internal_subagents"
+        );
+        assert!(assignment["selection_override_reasons"]
+            .as_array()
+            .expect("selection override reasons should render")
+            .iter()
+            .any(|row| {
+                row["reason"] == "route_profile_mapping_applied"
+                    && row["field"] == "selected_model_profile_id"
+                    && row["source_path"]
+                        == "agent_system.routing.implementation.profiles.internal_subagents"
+            }));
         assert!(assignment["rejected_candidates"]
             .as_array()
             .expect("rejected candidates should render")
@@ -1959,5 +2322,57 @@ mod tests {
             assignment["supported_candidate_scope"],
             "unified_carrier_model_profiles"
         );
+    }
+
+    #[test]
+    fn unsupported_selection_strategy_fail_closes_runtime_assignment() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "middle",
+            "tier": "middle",
+            "rate": 4,
+            "normalized_cost_units": 4,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "reasoning_band": "medium",
+            "default_model_profile": "codex_gpt54_medium_write",
+            "model_profiles": {
+                "codex_gpt54_medium_write": {
+                    "profile_id": "codex_gpt54_medium_write",
+                    "model_ref": "gpt-5.4",
+                    "provider": "openai",
+                    "reasoning_effort": "medium",
+                    "normalized_cost_units": 4,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+        compiled_bundle["carrier_runtime"]["model_selection"]["default_strategy"] =
+            serde_json::json!("unknown_strategy");
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(assignment["reason"], "selection_strategy_not_supported");
+        assert_eq!(assignment["selection_strategy"], "unknown_strategy");
+        assert_eq!(
+            assignment["selection_strategy_source_path"],
+            "carrier_runtime.model_selection.default_strategy"
+        );
+        assert!(assignment["supported_selection_strategies"]
+            .as_array()
+            .expect("supported strategies should render")
+            .iter()
+            .any(|strategy| strategy == "balanced_cost_quality"));
     }
 }

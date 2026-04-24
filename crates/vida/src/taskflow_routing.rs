@@ -385,6 +385,10 @@ where
         "max_budget_units": assignment_field("max_budget_units"),
         "selected_over_budget": assignment_field("selected_over_budget"),
         "route_profile_mapping": assignment_field("selected_route_profile_mapping"),
+        "selection_source_paths": assignment_field("selection_source_paths"),
+        "selection_override_reasons": assignment_field("selection_override_reasons"),
+        "selection_budget": assignment_field("selection_budget"),
+        "runtime_budget_ledger": assignment_field("runtime_budget_ledger"),
     })
 }
 
@@ -484,8 +488,14 @@ pub(crate) fn route_explain_payload(
         "budget_verdict": assignment_field("budget_verdict"),
         "max_budget_units": assignment_field("max_budget_units"),
         "selected_over_budget": assignment_field("selected_over_budget"),
+        "budget_scope": assignment_field("budget_scope"),
+        "selection_budget": assignment_field("selection_budget"),
+        "runtime_budget_ledger": assignment_field("runtime_budget_ledger"),
         "route_profile_mapping_applied": assignment_field("route_profile_mapping_applied"),
         "selected_route_profile_mapping": assignment_field("selected_route_profile_mapping"),
+        "selection_source_paths": assignment_field("selection_source_paths"),
+        "selection_override_reasons": assignment_field("selection_override_reasons"),
+        "selection_precedence": assignment_field("selection_precedence"),
         "selection_inputs": {
             "selection_strategy": assignment_field("selection_strategy"),
             "selection_rule": assignment_field("selection_rule"),
@@ -885,6 +895,21 @@ mod tests {
                 "selected_model_profile_readiness_status": "ready",
                 "budget_verdict": "in_budget",
                 "budget_policy": "balanced",
+                "budget_scope": "selection_filter_only",
+                "selection_budget": {
+                    "scope": "selection_filter_only",
+                    "policy": "balanced",
+                    "max_budget_units": 16,
+                    "budget_verdict": "in_budget"
+                },
+                "runtime_budget_ledger": {
+                    "status": "not_tracked_by_runtime_assignment"
+                },
+                "selection_source_paths": {
+                    "selected_carrier_id": "carrier_runtime.roles[senior].role_id",
+                    "selected_model_profile_id": "carrier_runtime.roles[senior].model_profiles.codex_spark_high_readonly.profile_id"
+                },
+                "selection_override_reasons": [],
                 "selection_strategy": "balanced_cost_quality",
                 "selection_rule": "role_task_then_readiness_then_score_then_cost_quality",
                 "model_selection_enabled": true,
@@ -920,6 +945,29 @@ mod tests {
             Some("codex_spark_high_readonly")
         );
         assert_eq!(payload["budget_verdict"].as_str(), Some("in_budget"));
+        assert_eq!(
+            payload["budget_scope"].as_str(),
+            Some("selection_filter_only")
+        );
+        assert_eq!(
+            payload["selection_budget"]["scope"].as_str(),
+            Some("selection_filter_only")
+        );
+        assert_eq!(
+            payload["runtime_budget_ledger"]["status"].as_str(),
+            Some("not_tracked_by_runtime_assignment")
+        );
+        assert_eq!(
+            payload["selection_source_paths"]["selected_carrier_id"].as_str(),
+            Some("carrier_runtime.roles[senior].role_id")
+        );
+        assert_eq!(
+            payload["selected_candidate"]["selection_source_paths"]["selected_model_profile_id"]
+                .as_str(),
+            Some(
+                "carrier_runtime.roles[senior].model_profiles.codex_spark_high_readonly.profile_id"
+            )
+        );
         assert_eq!(
             payload["selection_inputs"]["selection_rule"].as_str(),
             Some("role_task_then_readiness_then_score_then_cost_quality")
