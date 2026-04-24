@@ -488,7 +488,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
-    match super::StateStore::open_existing(state_dir).await {
+    match super::StateStore::open_existing_read_only(state_dir.clone()).await {
         Ok(store) => {
             let storage_metadata = match store.storage_metadata_summary().await {
                 Ok(summary) => summary,
@@ -1104,6 +1104,15 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
+            if super::StateStore::error_is_lock_contention(&error) {
+                return crate::status_surface::emit_degraded_read_lock_surface(
+                    "vida doctor",
+                    &state_dir,
+                    render,
+                    as_json,
+                    &error.to_string(),
+                );
+            }
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
         }

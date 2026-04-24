@@ -355,6 +355,27 @@ struct TaskMutationValidationSummary {
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskGraphMutationValidationReceipt {
+    receipt_kind: String,
+    schema_version: String,
+    receipt_id: String,
+    mutation_kind: String,
+    surface: String,
+    source_task_id: String,
+    dry_run: bool,
+    applied: bool,
+    reason: String,
+    before_validation: TaskMutationValidationSummary,
+    after_validation: TaskMutationValidationSummary,
+    before_task_count: usize,
+    after_task_count: usize,
+    planned_task_ids: Vec<String>,
+    planned_dependency_edges: Vec<TaskMutationPlannedDependency>,
+    validation_scope: String,
+    operator_truth: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 struct TaskMutationResult {
     status: String,
     surface: String,
@@ -367,6 +388,7 @@ struct TaskMutationResult {
     planned_dependencies: Vec<TaskMutationPlannedDependency>,
     created_task_ids: Vec<String>,
     validation: TaskMutationValidationSummary,
+    graph_mutation_receipt: TaskGraphMutationValidationReceipt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,6 +414,87 @@ fn task_mutation_validation_summary(
         issue_count: issues.len(),
         blocker_codes,
         issues,
+    }
+}
+
+fn graph_mutation_receipt_id(
+    mutation_kind: &str,
+    source_task_id: &str,
+    planned_tasks: &[TaskMutationPlannedTask],
+    planned_dependencies: &[TaskMutationPlannedDependency],
+) -> String {
+    let planned_task_ids = planned_tasks
+        .iter()
+        .map(|task| task.task_id.as_str())
+        .collect::<Vec<_>>()
+        .join("+");
+    let dependency_fingerprint = planned_dependencies
+        .iter()
+        .map(|dependency| {
+            format!(
+                "{}>{}:{}",
+                dependency.issue_id, dependency.depends_on_id, dependency.edge_type
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("+");
+    format!(
+        "task-graph-mutation:{mutation_kind}:{source_task_id}:tasks={planned_task_ids}:edges={dependency_fingerprint}"
+    )
+}
+
+struct GraphMutationReceiptInput<'a> {
+    mutation_kind: &'a str,
+    surface: &'a str,
+    source_task_id: &'a str,
+    dry_run: bool,
+    applied: bool,
+    reason: &'a str,
+    before_validation: TaskMutationValidationSummary,
+    after_validation: TaskMutationValidationSummary,
+    before_task_count: usize,
+    after_task_count: usize,
+    planned_tasks: &'a [TaskMutationPlannedTask],
+    planned_dependencies: &'a [TaskMutationPlannedDependency],
+}
+
+fn build_graph_mutation_receipt(
+    input: GraphMutationReceiptInput<'_>,
+) -> TaskGraphMutationValidationReceipt {
+    let planned_task_ids = input
+        .planned_tasks
+        .iter()
+        .map(|task| task.task_id.clone())
+        .collect::<Vec<_>>();
+    TaskGraphMutationValidationReceipt {
+        receipt_kind: "task_graph_mutation_receipt".to_string(),
+        schema_version: "1".to_string(),
+        receipt_id: graph_mutation_receipt_id(
+            input.mutation_kind,
+            input.source_task_id,
+            input.planned_tasks,
+            input.planned_dependencies,
+        ),
+        mutation_kind: input.mutation_kind.to_string(),
+        surface: input.surface.to_string(),
+        source_task_id: input.source_task_id.to_string(),
+        dry_run: input.dry_run,
+        applied: input.applied,
+        reason: input.reason.to_string(),
+        before_validation: input.before_validation,
+        after_validation: input.after_validation,
+        before_task_count: input.before_task_count,
+        after_task_count: input.after_task_count,
+        planned_task_ids,
+        planned_dependency_edges: input.planned_dependencies.to_vec(),
+        validation_scope: "before=current_authoritative_task_rows; after=planned_simulated_task_rows".to_string(),
+        operator_truth: serde_json::json!({
+            "receipt_records_graph_mutation_shape": true,
+            "records_before_after_validation": true,
+            "adaptive_replanner_loop_implemented": false,
+            "adaptive_replanner_loop_truth": "not_implemented_in_this_slice",
+            "applied_mutation_requires_after_validation_pass": true,
+        }),
     }
 }
 
@@ -648,6 +751,8 @@ fn build_split_mutation_preview(
         });
     }
 
+    let before_validation =
+        task_mutation_validation_summary(StateStore::validate_task_graph_rows(rows));
     let validation =
         task_mutation_validation_summary(StateStore::validate_task_graph_rows(&simulated_rows));
     let status = if validation.issue_count > 0 {
@@ -665,6 +770,21 @@ fn build_split_mutation_preview(
             .map(|task| task.task_id.clone())
             .collect()
     };
+    let applied = !dry_run && validation.issue_count == 0;
+    let graph_mutation_receipt = build_graph_mutation_receipt(GraphMutationReceiptInput {
+        mutation_kind: "split_task",
+        surface,
+        source_task_id: &source.id,
+        dry_run,
+        applied,
+        reason,
+        before_validation,
+        after_validation: validation.clone(),
+        before_task_count: rows.len(),
+        after_task_count: simulated_rows.len(),
+        planned_tasks: &planned_tasks,
+        planned_dependencies: &planned_dependencies,
+    });
     Ok((
         TaskMutationResult {
             status,
@@ -672,12 +792,13 @@ fn build_split_mutation_preview(
             mutation_kind: "split_task".to_string(),
             source_task_id: source.id.clone(),
             dry_run,
-            applied: !dry_run && validation.issue_count == 0,
+            applied,
             reason: reason.to_string(),
             planned_tasks,
             planned_dependencies,
             created_task_ids,
             validation,
+            graph_mutation_receipt,
         },
         simulated_rows,
     ))
@@ -770,6 +891,8 @@ fn build_spawn_blocker_preview(
             thread_id: String::new(),
         });
 
+    let before_validation =
+        task_mutation_validation_summary(StateStore::validate_task_graph_rows(rows));
     let validation =
         task_mutation_validation_summary(StateStore::validate_task_graph_rows(&simulated_rows));
     let dry_run = command.dry_run;
@@ -780,6 +903,44 @@ fn build_spawn_blocker_preview(
     } else {
         task_json_success_status().to_string()
     };
+    let planned_tasks = vec![TaskMutationPlannedTask {
+        task_id: command.blocker_task_id.clone(),
+        title: command.title.clone(),
+        description: blocker_description.clone(),
+        issue_type: command.issue_type.clone(),
+        status: command.status.clone(),
+        priority: blocker_priority,
+        parent_id: blocker_parent_id,
+        labels: blocker_labels,
+        execution_semantics: blocker_semantics,
+        planner_metadata: source.planner_metadata.clone(),
+    }];
+    let planned_dependencies = vec![TaskMutationPlannedDependency {
+        issue_id: source.id.clone(),
+        depends_on_id: command.blocker_task_id.clone(),
+        edge_type: "blocks".to_string(),
+        reason: "spawn_blocker_dependency".to_string(),
+    }];
+    let created_task_ids = if dry_run || validation.issue_count > 0 {
+        Vec::new()
+    } else {
+        vec![command.blocker_task_id.clone()]
+    };
+    let applied = !dry_run && validation.issue_count == 0;
+    let graph_mutation_receipt = build_graph_mutation_receipt(GraphMutationReceiptInput {
+        mutation_kind: "spawn_blocker_task",
+        surface,
+        source_task_id: &source.id,
+        dry_run,
+        applied,
+        reason: &command.reason,
+        before_validation,
+        after_validation: validation.clone(),
+        before_task_count: rows.len(),
+        after_task_count: simulated_rows.len(),
+        planned_tasks: &planned_tasks,
+        planned_dependencies: &planned_dependencies,
+    });
     Ok((
         TaskMutationResult {
             status,
@@ -789,30 +950,11 @@ fn build_spawn_blocker_preview(
             dry_run,
             applied: !dry_run && validation.issue_count == 0,
             reason: command.reason.clone(),
-            planned_tasks: vec![TaskMutationPlannedTask {
-                task_id: command.blocker_task_id.clone(),
-                title: command.title.clone(),
-                description: blocker_description.clone(),
-                issue_type: command.issue_type.clone(),
-                status: command.status.clone(),
-                priority: blocker_priority,
-                parent_id: blocker_parent_id,
-                labels: blocker_labels,
-                execution_semantics: blocker_semantics,
-                planner_metadata: source.planner_metadata.clone(),
-            }],
-            planned_dependencies: vec![TaskMutationPlannedDependency {
-                issue_id: source.id.clone(),
-                depends_on_id: command.blocker_task_id.clone(),
-                edge_type: "blocks".to_string(),
-                reason: "spawn_blocker_dependency".to_string(),
-            }],
-            created_task_ids: if dry_run || validation.issue_count > 0 {
-                Vec::new()
-            } else {
-                vec![command.blocker_task_id.clone()]
-            },
+            planned_tasks,
+            planned_dependencies,
+            created_task_ids,
             validation,
+            graph_mutation_receipt,
         },
         simulated_rows,
     ))
@@ -1347,7 +1489,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match open_task_store(state_dir).await {
+            match open_read_only_task_store(state_dir).await {
                 Ok(store) => match store.export_tasks_to_jsonl(&command.path).await {
                     Ok(exported_count) => {
                         print_task_export_summary(
@@ -1411,7 +1553,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir).await {
                 Ok(store) => match store.task_progress_summary(&command.task_id).await {
                     Ok(summary) => {
                         print_task_progress(command.render, &summary, command.json);
@@ -1468,7 +1610,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match open_task_store(state_dir).await {
+            match open_read_only_task_store(state_dir).await {
                 Ok(store) => match store.list_tasks(None, true).await {
                     Ok(tasks) => match task_rows_as_values(&tasks) {
                         Ok(rows) => {
@@ -1699,7 +1841,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir).await {
                 Ok(store) => match store.task_dependencies(&command.task_id).await {
                     Ok(dependencies) => {
                         print_task_dependencies(
@@ -1726,7 +1868,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir).await {
                 Ok(store) => match store.reverse_dependencies(&command.task_id).await {
                     Ok(dependencies) => {
                         print_task_dependencies(
@@ -1753,7 +1895,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir).await {
                 Ok(store) => match store.blocked_tasks().await {
                     Ok(tasks) => {
                         print_blocked_tasks(command.render, &tasks, command.summary, command.json);
@@ -1841,7 +1983,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir).await {
                 Ok(store) => match store.validate_task_graph().await {
                     Ok(issues) => {
                         print_task_graph_issues(command.render, &issues, command.json);
@@ -1949,7 +2091,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir).await {
                 Ok(store) => match store.critical_path().await {
                     Ok(path) => {
                         print_task_critical_path(command.render, &path, command.json);

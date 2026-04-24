@@ -4,6 +4,8 @@ use std::os::fd::AsRawFd;
 
 const AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT: usize = 80;
 const AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS: u64 = 25;
+const READ_ONLY_OPEN_RETRY_COUNT: usize = 800;
+const READ_ONLY_OPEN_RETRY_DELAY_MS: u64 = 25;
 
 struct AuthoritativeOpenGuard {
     file: std::fs::File,
@@ -56,6 +58,16 @@ pub(super) fn state_schema_document() -> String {
 }
 
 impl StateStore {
+    pub(crate) fn error_is_lock_contention(error: &StateStoreError) -> bool {
+        Self::message_is_lock_contention(&error.to_string())
+    }
+
+    pub(crate) fn message_is_lock_contention(message: &str) -> bool {
+        message.contains("LOCK")
+            || message.contains("lock")
+            || message.contains("Resource temporarily unavailable")
+    }
+
     async fn sanitize_legacy_task_execution_semantics(&self) -> Result<(), StateStoreError> {
         let _ = self
             .db
@@ -98,8 +110,7 @@ impl StateStore {
             match Self::open_once(root.clone()).await {
                 Ok(store) => return Ok(store),
                 Err(StateStoreError::Db(error)) if attempt < 79 => {
-                    let message = error.to_string();
-                    if message.contains("LOCK") || message.contains("lock") {
+                    if Self::message_is_lock_contention(&error.to_string()) {
                         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                         continue;
                     }
@@ -122,8 +133,7 @@ impl StateStore {
             match Self::open_existing_once(root.clone()).await {
                 Ok(store) => return Ok(store),
                 Err(StateStoreError::Db(error)) if attempt < 79 => {
-                    let message = error.to_string();
-                    if message.contains("LOCK") || message.contains("lock") {
+                    if Self::message_is_lock_contention(&error.to_string()) {
                         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                         continue;
                     }
@@ -141,13 +151,15 @@ impl StateStore {
             return Err(StateStoreError::MissingStateDir(root));
         }
 
-        for attempt in 0..80 {
+        for attempt in 0..READ_ONLY_OPEN_RETRY_COUNT {
             match Self::open_existing_read_only_once(root.clone()).await {
                 Ok(store) => return Ok(store),
-                Err(StateStoreError::Db(error)) if attempt < 79 => {
-                    let message = error.to_string();
-                    if message.contains("LOCK") || message.contains("lock") {
-                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                Err(StateStoreError::Db(error)) if attempt + 1 < READ_ONLY_OPEN_RETRY_COUNT => {
+                    if Self::message_is_lock_contention(&error.to_string()) {
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            READ_ONLY_OPEN_RETRY_DELAY_MS,
+                        ))
+                        .await;
                         continue;
                     }
                     return Err(StateStoreError::Db(error));
@@ -183,5 +195,71 @@ impl StateStore {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[tokio::test]
+    async fn read_only_open_bypasses_authoritative_open_guard() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-read-only-open-guard-{}-{nanos}",
+            std::process::id()
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        drop(store);
+
+        let _guard = AuthoritativeOpenGuard::acquire(&root)
+            .await
+            .expect("hold authoritative guard");
+        let read_only_open = tokio::time::timeout(
+            std::time::Duration::from_millis(1500),
+            StateStore::open_existing_read_only(root.clone()),
+        )
+        .await
+        .expect("read-only open should not wait for authoritative guard");
+
+        assert!(read_only_open.is_ok());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn read_only_open_waits_for_concurrent_read_lock() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-read-only-open-contention-{}-{nanos}",
+            std::process::id()
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        drop(store);
+
+        let first_reader = StateStore::open_existing_read_only(root.clone())
+            .await
+            .expect("first read-only store should open");
+        let second_root = root.clone();
+        let second_reader =
+            tokio::spawn(async move { StateStore::open_existing_read_only(second_root).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        drop(first_reader);
+
+        let second_result = tokio::time::timeout(std::time::Duration::from_secs(5), second_reader)
+            .await
+            .expect("second read-only open should wait for the first read lock")
+            .expect("second read-only task should not panic");
+        assert!(second_result.is_ok());
+        let _ = fs::remove_dir_all(&root);
     }
 }

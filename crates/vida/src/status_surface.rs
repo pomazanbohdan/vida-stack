@@ -10,6 +10,77 @@ use crate::status_surface_signals::final_snapshot_missing_release_admission_evid
 use crate::status_surface_text_report::{emit_status_text_report, StatusTextReportInputs};
 use crate::status_surface_truth_inputs::build_status_truth_inputs;
 
+pub(crate) fn degraded_read_lock_payload(
+    surface: &str,
+    state_dir: &std::path::Path,
+    error: &str,
+) -> serde_json::Value {
+    let blocker_codes = vec!["state_store_read_lock_contention"];
+    let next_actions = vec![
+        "Retry the read surface after concurrent VIDA state readers finish; this degraded response avoided opening the locked datastore.",
+    ];
+    serde_json::json!({
+        "surface": surface,
+        "status": "blocked",
+        "degraded": true,
+        "state_access": {
+            "mode": "degraded_lock_contention",
+            "degraded": true,
+            "state_dir": state_dir.display().to_string(),
+            "detail": "authoritative datastore was locked by another process during a read-only surface",
+            "error": error,
+        },
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": {
+            "state_dir": state_dir.display().to_string(),
+            "read_fallback": "lock_contention_degraded_response",
+        },
+        "shared_fields": {
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": {
+                "state_dir": state_dir.display().to_string(),
+                "read_fallback": "lock_contention_degraded_response",
+            },
+        },
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": {
+                "state_dir": state_dir.display().to_string(),
+                "read_fallback": "lock_contention_degraded_response",
+            },
+            "risk_tier": null,
+            "trace_id": null,
+            "workflow_class": null,
+        },
+    })
+}
+
+pub(crate) fn emit_degraded_read_lock_surface(
+    surface: &str,
+    state_dir: &std::path::Path,
+    render: crate::RenderMode,
+    as_json: bool,
+    error: &str,
+) -> ExitCode {
+    let payload = degraded_read_lock_payload(surface, state_dir, error);
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else {
+        crate::print_surface_header(render, surface);
+        crate::print_surface_line(render, "status", "blocked");
+        crate::print_surface_line(render, "state access", "degraded_lock_contention");
+        crate::print_surface_line(render, "state dir", &state_dir.display().to_string());
+    }
+    ExitCode::SUCCESS
+}
+
 pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let state_dir = args
         .state_dir
@@ -18,7 +89,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
-    match StateStore::open_existing(state_dir).await {
+    match StateStore::open_existing_read_only(state_dir.clone()).await {
         Ok(store) => match store.storage_metadata_summary().await {
             Ok(storage_metadata) => {
                 let backend_summary = format!(
@@ -434,6 +505,15 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             }
         },
         Err(error) => {
+            if StateStore::error_is_lock_contention(&error) {
+                return emit_degraded_read_lock_surface(
+                    "vida status",
+                    &state_dir,
+                    render,
+                    as_json,
+                    &error.to_string(),
+                );
+            }
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
         }
