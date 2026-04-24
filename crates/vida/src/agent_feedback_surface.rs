@@ -136,11 +136,14 @@ fn infer_feedback_outcome_from_close_reason(reason: &str) -> &'static str {
 }
 
 fn normalized_close_reason_for_feedback(reason: &str) -> String {
-    reason
-        .to_ascii_lowercase()
-        .replace("fail-closed", "contract_guard_closed")
-        .replace("fail closed", "contract_guard_closed")
-        .replace("fail_closed", "contract_guard_closed")
+    let mut normalized = reason.to_ascii_lowercase();
+    for phrase in ignored_feedback_contract_language(reason)
+        .into_iter()
+        .chain(ignored_feedback_meta_language(reason))
+    {
+        normalized = normalized.replace(&phrase, " feedback_context_language ");
+    }
+    normalized
 }
 
 fn feedback_failure_markers(normalized_reason: &str) -> Vec<String> {
@@ -178,16 +181,68 @@ fn close_feedback_outcome_inference(reason: &str, outcome: &str, score: u64) -> 
         "score": score,
         "failure_markers": feedback_failure_markers(&normalized),
         "success_markers": feedback_success_markers(&normalized),
-        "ignored_contract_language": if reason.to_ascii_lowercase().contains("fail-closed")
-            || reason.to_ascii_lowercase().contains("fail closed")
-            || reason.to_ascii_lowercase().contains("fail_closed")
-        {
-            serde_json::json!(["fail-closed"])
-        } else {
-            serde_json::json!([])
-        },
-        "rule": "fail-closed contract language is not failure evidence; explicit failure markers still score as failure",
+        "ignored_contract_language": ignored_feedback_contract_language(reason),
+        "ignored_meta_language": ignored_feedback_meta_language(reason),
+        "rule": "contract and marker-explanation language is not failure evidence; concrete failed outcomes still score as failure",
     })
+}
+
+fn ignored_feedback_contract_language(reason: &str) -> Vec<String> {
+    ignored_feedback_phrases(reason, &["fail-closed", "fail closed", "fail_closed"])
+}
+
+fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
+    ignored_feedback_phrases(
+        reason,
+        &[
+            "explicit failed markers still fail",
+            "explicit failure markers still fail",
+            "explicit failure markers still score as failure",
+            "failure markers still fail",
+            "failed markers still fail",
+            "failure marker still fails",
+            "failed marker still fails",
+            "failure markers",
+            "failed markers",
+            "failure marker",
+            "failed marker",
+            "failure keywords",
+            "failed keywords",
+            "failure keyword",
+            "failed keyword",
+            "rejected alternatives",
+            "rejected alternative",
+            "rejected candidates",
+            "rejected candidate",
+            "rejected options",
+            "rejected option",
+            "rejected routes",
+            "rejected route",
+            "rejected profiles",
+            "rejected profile",
+            "rejected model profiles",
+            "rejected model profile",
+            "did not fail",
+            "didn't fail",
+            "does not fail",
+            "do not fail",
+            "not failed",
+            "not a failure",
+            "no failure",
+            "without failure",
+            "does not count as failure",
+            "do not count as failure",
+        ],
+    )
+}
+
+fn ignored_feedback_phrases(reason: &str, phrases: &[&str]) -> Vec<String> {
+    let normalized = reason.to_ascii_lowercase();
+    phrases
+        .iter()
+        .filter(|phrase| normalized.contains(**phrase))
+        .map(|phrase| (*phrase).to_string())
+        .collect()
 }
 
 fn default_feedback_score(outcome: &str, task_class: &str) -> u64 {
@@ -757,5 +812,81 @@ mod tests {
         assert_eq!(score, 35);
         assert_eq!(inference["outcome"], "failure");
         assert_eq!(inference["failure_markers"], serde_json::json!(["failed"]));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_failure_marker_meta_language() {
+        let reason = "Added scoring guard; tests passed; explicit failed markers still fail.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "architecture");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 90);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert_eq!(
+            inference["success_markers"],
+            serde_json::json!(["tests passed"])
+        );
+        let ignored = inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render");
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "explicit failed markers still fail"));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_negated_failure_language() {
+        let reason = "Validation did not fail and proof commands passed.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        let ignored = inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render");
+        assert!(ignored.iter().any(|phrase| phrase == "did not fail"));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_rejected_alternatives_audit_language() {
+        let reason = "Added model-profile readiness audit payload with selected overrides, rejected alternatives, and readiness blockers; model_profile_readiness_audit tests passed.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "architecture");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 90);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert_eq!(
+            inference["success_markers"],
+            serde_json::json!(["tests passed"])
+        );
+        let ignored = inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render");
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "rejected alternatives"));
+    }
+
+    #[test]
+    fn close_feedback_inference_preserves_concrete_rejected_outcomes() {
+        for reason in [
+            "Task was rejected by verifier after review.",
+            "Rejected patch because it changed unrelated files.",
+        ] {
+            let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+            let score = super::default_feedback_score(outcome, "verification");
+            let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+            assert_eq!(outcome, "failure");
+            assert_eq!(score, 35);
+            assert_eq!(inference["failure_markers"], serde_json::json!(["rejected"]));
+        }
     }
 }

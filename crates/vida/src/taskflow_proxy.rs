@@ -2453,6 +2453,89 @@ fn config_actuation_census_rows_for_route(route: &serde_json::Value) -> Vec<serd
     rows
 }
 
+pub(crate) fn model_profile_readiness_audit_payload_for_route(
+    dispatch_target: &str,
+    route: &serde_json::Value,
+) -> serde_json::Value {
+    let selected_model_profile_id = route["selected_model_profile_id"].clone();
+    let selected_backend_readiness = route
+        .get("selected_backend_readiness")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let readiness_blocked = selected_backend_readiness["blocked"].as_bool() == Some(true);
+    let readiness_status = selected_backend_readiness["status"]
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| {
+            if selected_model_profile_id.as_str().is_some() {
+                Some("unknown".to_string())
+            } else {
+                None
+            }
+        });
+    let readiness_ready = selected_backend_readiness["blocked"]
+        .as_bool()
+        .map(|blocked| !blocked);
+    let mut blocker_codes = Vec::new();
+    if selected_model_profile_id.as_str().is_none() {
+        blocker_codes.push("selected_model_profile_missing".to_string());
+    }
+    if readiness_blocked {
+        blocker_codes.push("selected_model_profile_not_ready".to_string());
+    }
+    blocker_codes.sort();
+    blocker_codes.dedup();
+    let next_actions = if blocker_codes.is_empty() {
+        Vec::<String>::new()
+    } else {
+        vec![
+            "inspect selected_backend_readiness, selection_source_paths, and rejected_alternatives before enabling model-profile execution".to_string(),
+        ]
+    };
+    let status = if blocker_codes.is_empty() {
+        "pass"
+    } else {
+        "blocked"
+    };
+    serde_json::json!({
+        "surface": "vida taskflow model-profile readiness audit",
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "dispatch_target": dispatch_target,
+        "route_status": route["status"],
+        "selected_profile": {
+            "profile_id": selected_model_profile_id,
+            "model_ref": route["selected_model_ref"],
+            "provider": route["selected_model_provider"],
+            "reasoning_effort": route["selected_reasoning_effort"],
+            "reasoning_control_mode": route["selected_reasoning_control_mode"],
+            "selected_backend": route["selected_backend"],
+            "selected_carrier_id": route["selected_carrier_id"],
+            "readiness_status": readiness_status,
+            "readiness_ready": readiness_ready,
+            "readiness": selected_backend_readiness,
+        },
+        "source_paths": route["selection_source_paths"],
+        "override_reasons": route["selection_override_reasons"],
+        "selection_precedence": route["selection_precedence"],
+        "selected_route_profile_mapping": route["selected_route_profile_mapping"],
+        "selected_candidate": route["selected_candidate"],
+        "candidate_pool": route["candidate_pool"],
+        "rejected_alternatives": route["rejected_candidates"],
+        "readiness_blockers": route["readiness_blockers"],
+        "budget": {
+            "policy": route["budget_policy"],
+            "verdict": route["budget_verdict"],
+            "max_budget_units": route["max_budget_units"],
+            "selected_over_budget": route["selected_over_budget"],
+            "scope": route["budget_scope"],
+            "selection_budget": route["selection_budget"],
+            "runtime_budget_ledger": route["runtime_budget_ledger"],
+        },
+    })
+}
+
 fn build_config_actuation_census_payload(
     context: &crate::state_store::RunGraphDispatchContext,
     execution_plan: &serde_json::Value,
@@ -2461,12 +2544,15 @@ fn build_config_actuation_census_payload(
         .into_iter()
         .map(|target| {
             let route = route_payload_for_dispatch_target(execution_plan, &target);
+            let model_profile_readiness_audit =
+                model_profile_readiness_audit_payload_for_route(&target, &route);
             let rows = config_actuation_census_rows_for_route(&route);
             serde_json::json!({
                 "dispatch_target": target,
                 "status": route["status"],
                 "selected_backend": route["selected_backend"],
                 "selection_source": route["selection_source"],
+                "model_profile_readiness_audit": model_profile_readiness_audit,
                 "rows": rows,
             })
         })
@@ -3434,6 +3520,10 @@ mod tests {
         assert_eq!(payload["surface"], "vida taskflow config-actuation census");
         assert_eq!(payload["scope"], "routing_model_selection_keys");
         assert_eq!(payload["route_count"], 1);
+        assert_eq!(
+            payload["routes"][0]["model_profile_readiness_audit"]["surface"],
+            "vida taskflow model-profile readiness audit"
+        );
         assert!(payload["row_count"]
             .as_u64()
             .is_some_and(|count| count >= 10));
@@ -3486,6 +3576,191 @@ mod tests {
                 && row["proof_status"] == "rejected_no_runtime_consumer"
                 && row["operator_surface"] == "vida taskflow validate-routing"
         }));
+    }
+
+    #[test]
+    fn model_profile_readiness_audit_payload_reports_ready_selection_truth() {
+        let route = serde_json::json!({
+            "status": "pass",
+            "selected_backend": "junior",
+            "selected_carrier_id": "junior",
+            "selected_model_profile_id": "codex_gpt54_low_write",
+            "selected_model_ref": "gpt-5.4",
+            "selected_model_provider": "openai",
+            "selected_reasoning_effort": "low",
+            "selected_reasoning_control_mode": "fixed",
+            "selected_backend_readiness": {
+                "backend_id": "junior",
+                "blocked": false,
+                "status": "pass",
+                "blocker_code": null,
+                "selected_model_profile": "codex_gpt54_low_write",
+                "next_actions": []
+            },
+            "selection_source_paths": {
+                "selected_model_profile_id": "carrier_runtime.roles[junior].model_profiles.codex_gpt54_low_write.profile_id"
+            },
+            "selection_override_reasons": ["route_profile_mapping"],
+            "selection_precedence": ["route_profile_mapping", "role_default"],
+            "selected_route_profile_mapping": {
+                "runtime_role": "worker",
+                "profile_id": "codex_gpt54_low_write"
+            },
+            "selected_candidate": {
+                "profile_id": "codex_gpt54_low_write",
+                "selected": true
+            },
+            "candidate_pool": [
+                {
+                    "profile_id": "codex_gpt54_low_write",
+                    "selected": true
+                },
+                {
+                    "profile_id": "codex_spark_high_readonly",
+                    "selected": false
+                }
+            ],
+            "rejected_candidates": [
+                {
+                    "profile_id": "codex_spark_high_readonly",
+                    "reason": "write_scope_required"
+                }
+            ],
+            "readiness_blockers": [],
+            "budget_policy": "tier_budget_guard",
+            "budget_verdict": "within_budget",
+            "max_budget_units": 4,
+            "selected_over_budget": false,
+            "budget_scope": "task",
+            "selection_budget": {
+                "remaining_units": 3
+            },
+            "runtime_budget_ledger": {
+                "spent_units": 1
+            }
+        });
+
+        let payload =
+            super::model_profile_readiness_audit_payload_for_route("implementation", &route);
+
+        assert_eq!(
+            payload["surface"],
+            "vida taskflow model-profile readiness audit"
+        );
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+        assert_eq!(
+            payload["selected_profile"]["profile_id"],
+            "codex_gpt54_low_write"
+        );
+        assert_eq!(payload["selected_profile"]["readiness_status"], "pass");
+        assert_eq!(payload["selected_profile"]["readiness_ready"], true);
+        assert_eq!(
+            payload["source_paths"]["selected_model_profile_id"],
+            "carrier_runtime.roles[junior].model_profiles.codex_gpt54_low_write.profile_id"
+        );
+        assert_eq!(
+            payload["override_reasons"],
+            serde_json::json!(["route_profile_mapping"])
+        );
+        assert_eq!(
+            payload["rejected_alternatives"][0]["profile_id"],
+            "codex_spark_high_readonly"
+        );
+        assert_eq!(payload["budget"]["policy"], "tier_budget_guard");
+    }
+
+    #[test]
+    fn model_profile_readiness_audit_payload_blocks_unready_or_missing_selection() {
+        let unready_route = serde_json::json!({
+            "status": "blocked",
+            "selected_backend": "junior",
+            "selected_carrier_id": "junior",
+            "selected_model_profile_id": "codex_gpt54_low_write",
+            "selected_model_ref": "gpt-5.4",
+            "selected_model_provider": "openai",
+            "selected_reasoning_effort": "low",
+            "selected_reasoning_control_mode": "fixed",
+            "selected_backend_readiness": {
+                "backend_id": "junior",
+                "blocked": true,
+                "status": "blocked",
+                "blocker_code": "external_cli_missing_api_key",
+                "selected_model_profile": "codex_gpt54_low_write",
+                "next_actions": ["configure OPENAI_API_KEY"]
+            },
+            "selection_source_paths": {},
+            "selection_override_reasons": [],
+            "selection_precedence": [],
+            "selected_route_profile_mapping": null,
+            "selected_candidate": null,
+            "candidate_pool": [],
+            "rejected_candidates": [],
+            "readiness_blockers": [
+                {
+                    "blocker_code": "external_cli_missing_api_key"
+                }
+            ],
+            "budget_policy": null,
+            "budget_verdict": null,
+            "max_budget_units": null,
+            "selected_over_budget": null,
+            "budget_scope": null,
+            "selection_budget": null,
+            "runtime_budget_ledger": null
+        });
+        let missing_route = serde_json::json!({
+            "status": "blocked",
+            "selected_backend": "junior",
+            "selected_carrier_id": "junior",
+            "selected_model_ref": null,
+            "selected_model_provider": null,
+            "selected_reasoning_effort": null,
+            "selected_reasoning_control_mode": null,
+            "selection_source_paths": {},
+            "selection_override_reasons": [],
+            "selection_precedence": [],
+            "selected_route_profile_mapping": null,
+            "selected_candidate": null,
+            "candidate_pool": [],
+            "rejected_candidates": [],
+            "readiness_blockers": [],
+            "budget_policy": null,
+            "budget_verdict": null,
+            "max_budget_units": null,
+            "selected_over_budget": null,
+            "budget_scope": null,
+            "selection_budget": null,
+            "runtime_budget_ledger": null
+        });
+
+        let unready = super::model_profile_readiness_audit_payload_for_route(
+            "implementation",
+            &unready_route,
+        );
+        let missing = super::model_profile_readiness_audit_payload_for_route(
+            "implementation",
+            &missing_route,
+        );
+
+        assert_eq!(unready["status"], "blocked");
+        assert_eq!(
+            unready["blocker_codes"],
+            serde_json::json!(["selected_model_profile_not_ready"])
+        );
+        assert_eq!(
+            unready["selected_profile"]["readiness"]["blocker_code"],
+            "external_cli_missing_api_key"
+        );
+        assert!(unready["next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty()));
+        assert_eq!(missing["status"], "blocked");
+        assert_eq!(
+            missing["blocker_codes"],
+            serde_json::json!(["selected_model_profile_missing"])
+        );
+        assert!(missing["selected_profile"]["readiness_status"].is_null());
     }
 
     #[test]

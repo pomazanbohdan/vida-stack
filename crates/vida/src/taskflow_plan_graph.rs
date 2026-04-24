@@ -111,6 +111,9 @@ pub(crate) struct TaskPlanMaterializationReceipt {
 struct PlanGenerateOptions {
     source_file: Option<PathBuf>,
     source_text: Option<String>,
+    spec_refs: Vec<String>,
+    backlog_refs: Vec<String>,
+    context_refs: Vec<String>,
     task_prefix: Option<String>,
     parent_id: Option<String>,
     output: Option<PathBuf>,
@@ -188,7 +191,7 @@ pub(crate) async fn run_taskflow_plan(args: &[String]) -> ExitCode {
 
 fn print_plan_help() {
     println!(
-        "TaskFlow PlanGraph surfaces\n\n  vida taskflow plan generate --source-file <path> --task-prefix <prefix> --json\n  vida taskflow plan generate --source-text <text> --task-prefix <prefix> --json\n  vida taskflow plan materialize <draft.json> --dry-run --json\n  vida taskflow plan materialize <draft.json> --json"
+        "TaskFlow PlanGraph surfaces\n\n  vida taskflow plan generate --source-file <path> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] --json\n  vida taskflow plan generate --source-text <text> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] --json\n  vida taskflow plan materialize <draft.json> --dry-run --json\n  vida taskflow plan materialize <draft.json> --json"
     );
 }
 
@@ -205,6 +208,22 @@ fn parse_generate_options(args: &[String]) -> Result<PlanGenerateOptions, String
                 index += 1;
                 options.source_text = Some(required_value(args, index, "--source-text")?.to_string());
             }
+            "--spec-ref" => {
+                index += 1;
+                options.spec_refs.push(required_value(args, index, "--spec-ref")?.to_string());
+            }
+            "--backlog-ref" => {
+                index += 1;
+                options
+                    .backlog_refs
+                    .push(required_value(args, index, "--backlog-ref")?.to_string());
+            }
+            "--context-ref" => {
+                index += 1;
+                options
+                    .context_refs
+                    .push(required_value(args, index, "--context-ref")?.to_string());
+            }
             "--task-prefix" => {
                 index += 1;
                 options.task_prefix = Some(required_value(args, index, "--task-prefix")?.to_string());
@@ -218,7 +237,7 @@ fn parse_generate_options(args: &[String]) -> Result<PlanGenerateOptions, String
                 options.output = Some(PathBuf::from(required_value(args, index, "--output")?));
             }
             "--json" => options.json = true,
-            "--help" | "-h" => return Err("usage: vida taskflow plan generate --source-file <path>|--source-text <text> --task-prefix <prefix> [--parent-id <id>] [--output <path>] [--json]".to_string()),
+            "--help" | "-h" => return Err("usage: vida taskflow plan generate --source-file <path>|--source-text <text> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] [--parent-id <id>] [--output <path>] [--json]".to_string()),
             other => return Err(format!("unknown plan generate argument `{other}`")),
         }
         index += 1;
@@ -351,8 +370,12 @@ fn generate_plan_graph_draft(options: &PlanGenerateOptions) -> Result<TaskPlanGr
     }
     let source_hash = stable_hash_hex(&normalized_source);
     let analysis = analyze_plan_source(&normalized_source);
-    let input_contract =
-        build_input_contract(&source_kind, source_ref.as_deref(), &normalized_source);
+    let input_contract = build_input_contract(
+        &source_kind,
+        source_ref.as_deref(),
+        &normalized_source,
+        options,
+    );
     let nodes = build_nodes(&task_prefix, options.parent_id.clone(), &analysis);
     let edges = build_edges(&nodes, &analysis.work_items);
     let mut draft = TaskPlanGraphDraft {
@@ -381,6 +404,7 @@ fn build_input_contract(
     source_kind: &str,
     source_ref: Option<&str>,
     normalized_source: &str,
+    options: &PlanGenerateOptions,
 ) -> TaskPlanInputContract {
     let mut sources = vec![TaskPlanInputSource {
         source_type: "primary_source".to_string(),
@@ -389,39 +413,58 @@ fn build_input_contract(
         evidence: format!("source_kind={source_kind}"),
     }];
     let repo_paths = extract_repo_paths(normalized_source);
-    let spec_refs = repo_paths
+    let mut spec_refs = repo_paths
         .iter()
         .filter(|path| path.starts_with("docs/product/spec/") || path.contains("/spec/"))
         .cloned()
         .collect::<Vec<_>>();
+    push_input_refs(&mut spec_refs, &options.spec_refs);
+    let mut context_refs = repo_paths
+        .iter()
+        .filter(|path| !spec_refs.iter().any(|spec| spec == *path))
+        .cloned()
+        .collect::<Vec<_>>();
+    push_input_refs(&mut context_refs, &options.context_refs);
+    let mut backlog_refs = extract_backlog_references(normalized_source);
+    push_input_refs(&mut backlog_refs, &options.backlog_refs);
+
     for reference in &spec_refs {
         sources.push(TaskPlanInputSource {
             source_type: "spec_reference".to_string(),
             reference: reference.clone(),
             status: "provided".to_string(),
-            evidence: "source_text_repo_path".to_string(),
+            evidence: input_reference_evidence(
+                reference,
+                &options.spec_refs,
+                "cli_spec_ref",
+                "source_text_repo_path",
+            ),
         });
     }
-    let context_refs = repo_paths
-        .iter()
-        .filter(|path| !spec_refs.iter().any(|spec| spec == *path))
-        .cloned()
-        .collect::<Vec<_>>();
     for reference in &context_refs {
         sources.push(TaskPlanInputSource {
             source_type: "context_reference".to_string(),
             reference: reference.clone(),
             status: "provided".to_string(),
-            evidence: "source_text_repo_path".to_string(),
+            evidence: input_reference_evidence(
+                reference,
+                &options.context_refs,
+                "cli_context_ref",
+                "source_text_repo_path",
+            ),
         });
     }
-    let backlog_refs = extract_backlog_references(normalized_source);
     for reference in &backlog_refs {
         sources.push(TaskPlanInputSource {
             source_type: "backlog_reference".to_string(),
             reference: reference.clone(),
             status: "provided".to_string(),
-            evidence: "source_text_task_reference".to_string(),
+            evidence: input_reference_evidence(
+                reference,
+                &options.backlog_refs,
+                "cli_backlog_ref",
+                "source_text_task_reference",
+            ),
         });
     }
 
@@ -454,6 +497,31 @@ fn build_input_contract(
         sources,
         missing_context,
         operator_truth,
+    }
+}
+
+fn push_input_refs(refs: &mut Vec<String>, cli_refs: &[String]) {
+    refs.extend(
+        cli_refs
+            .iter()
+            .map(|reference| reference.trim())
+            .filter(|reference| !reference.is_empty())
+            .map(ToString::to_string),
+    );
+    refs.sort();
+    refs.dedup();
+}
+
+fn input_reference_evidence(
+    reference: &str,
+    cli_refs: &[String],
+    cli_evidence: &str,
+    source_text_evidence: &str,
+) -> String {
+    if cli_refs.iter().any(|cli_ref| cli_ref.trim() == reference) {
+        cli_evidence.to_string()
+    } else {
+        source_text_evidence.to_string()
     }
 }
 
@@ -1966,6 +2034,9 @@ mod tests {
         let options = PlanGenerateOptions {
             source_file: None,
             source_text: Some("Implement planner\n\nwith deterministic output".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: Some("parent-task".to_string()),
             output: None,
@@ -1983,6 +2054,9 @@ mod tests {
         let mut draft = generate_plan_graph_draft(&PlanGenerateOptions {
             source_file: None,
             source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2003,9 +2077,11 @@ mod tests {
         });
         let validation = validate_draft(&draft, &[]);
         assert_eq!(validation.status, "blocked");
-        assert!(validation
-            .blocker_codes
-            .contains(&"missing_dependency".to_string()));
+        assert!(
+            validation
+                .blocker_codes
+                .contains(&"missing_dependency".to_string())
+        );
     }
 
     #[test]
@@ -2015,6 +2091,9 @@ mod tests {
             source_text: Some(
                 "Final gap report\n\nRecommended split for backlog:\n- real PlanGraph generation (`crates/vida/src/taskflow_plan_graph.rs:252-385`, `crates/vida/src/taskflow_proxy.rs:1215-1400`)\n- structured planner metadata (`crates/vida/src/state_store_task_models.rs:151-205`)\n- scheduler dispatch with `max_parallel_agents` (`crates/vida/src/taskflow_consume_bundle.rs:709-760`)\n".to_string(),
             ),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2037,9 +2116,11 @@ mod tests {
             draft.nodes[1].owned_paths,
             vec!["crates/vida/src/state_store_task_models.rs".to_string()]
         );
-        assert!(draft.nodes[2]
-            .owned_paths
-            .contains(&"crates/vida/src/taskflow_consume_bundle.rs".to_string()));
+        assert!(
+            draft.nodes[2]
+                .owned_paths
+                .contains(&"crates/vida/src/taskflow_consume_bundle.rs".to_string())
+        );
         assert_eq!(draft.edges[0].task_id, draft.nodes[1].task_id);
         assert_eq!(draft.edges[0].depends_on_id, draft.nodes[0].task_id);
         assert_eq!(draft.edges[1].task_id, draft.nodes[2].task_id);
@@ -2071,6 +2152,9 @@ mod tests {
                 "Implement adaptive scheduler dispatch with state metadata and proof coverage"
                     .to_string(),
             ),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2080,18 +2164,22 @@ mod tests {
 
         assert_eq!(draft.validation.status, "valid");
         assert!(draft.nodes.len() >= 4);
-        assert!(draft
-            .nodes
-            .iter()
-            .any(|node| node.title.contains("Wire task state and schema surfaces")));
+        assert!(
+            draft
+                .nodes
+                .iter()
+                .any(|node| node.title.contains("Wire task state and schema surfaces"))
+        );
         assert!(draft.nodes.iter().any(|node| {
             node.title
                 .contains("Wire runtime and orchestration surfaces")
         }));
-        assert!(draft
-            .nodes
-            .iter()
-            .any(|node| node.title.starts_with("Prove ")));
+        assert!(
+            draft
+                .nodes
+                .iter()
+                .any(|node| node.title.starts_with("Prove "))
+        );
         assert_eq!(draft.edges.len(), draft.nodes.len() - 1);
     }
 
@@ -2100,6 +2188,9 @@ mod tests {
         let draft = generate_plan_graph_draft(&PlanGenerateOptions {
             source_file: None,
             source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2108,10 +2199,12 @@ mod tests {
         .expect("draft should generate");
 
         assert_eq!(draft.validation.status, "valid");
-        assert!(draft
-            .nodes
-            .iter()
-            .all(|node| node.evidence_confidence == "low"));
+        assert!(
+            draft
+                .nodes
+                .iter()
+                .all(|node| node.evidence_confidence == "low")
+        );
         assert!(draft.nodes.iter().all(|node| {
             node.operator_truth
                 .iter()
@@ -2141,6 +2234,9 @@ mod tests {
                  crates/vida/src/taskflow_plan_graph.rs"
                     .to_string(),
             ),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2170,10 +2266,12 @@ mod tests {
                 && source.reference == "audit-p1-planner-context-input-contract-remediation"
                 && source.status == "provided"
         }));
-        assert!(draft
-            .input_contract
-            .operator_truth
-            .contains(&"planner_input_contract_foundation_only".to_string()));
+        assert!(
+            draft
+                .input_contract
+                .operator_truth
+                .contains(&"planner_input_contract_foundation_only".to_string())
+        );
     }
 
     #[test]
@@ -2181,6 +2279,9 @@ mod tests {
         let draft = generate_plan_graph_draft(&PlanGenerateOptions {
             source_file: None,
             source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2199,15 +2300,93 @@ mod tests {
             "backlog_reference_missing",
             "context_reference_missing",
         ] {
-            assert!(draft
-                .input_contract
-                .missing_context
-                .contains(&missing.to_string()));
-            assert!(draft
-                .input_contract
-                .operator_truth
-                .contains(&format!("{missing}_requires_operator_confirmation")));
+            assert!(
+                draft
+                    .input_contract
+                    .missing_context
+                    .contains(&missing.to_string())
+            );
+            assert!(
+                draft
+                    .input_contract
+                    .operator_truth
+                    .contains(&format!("{missing}_requires_operator_confirmation"))
+            );
         }
+    }
+
+    #[test]
+    fn parse_generate_options_accepts_repeatable_input_contract_refs() {
+        let args = vec![
+            "vida".to_string(),
+            "generate".to_string(),
+            "--source-text".to_string(),
+            "Implement planner".to_string(),
+            "--task-prefix".to_string(),
+            "feature-planner".to_string(),
+            "--spec-ref".to_string(),
+            "docs/product/spec/current-spec-map.md".to_string(),
+            "--spec-ref".to_string(),
+            "docs/product/spec/runtime.md".to_string(),
+            "--backlog-ref".to_string(),
+            "audit-p1-planner-input-contract-cli-flags".to_string(),
+            "--context-ref".to_string(),
+            "crates/vida/src/taskflow_plan_graph.rs".to_string(),
+            "--json".to_string(),
+        ];
+
+        let options = parse_generate_options(&args).expect("options should parse");
+
+        assert_eq!(
+            options.spec_refs,
+            vec![
+                "docs/product/spec/current-spec-map.md".to_string(),
+                "docs/product/spec/runtime.md".to_string()
+            ]
+        );
+        assert_eq!(
+            options.backlog_refs,
+            vec!["audit-p1-planner-input-contract-cli-flags".to_string()]
+        );
+        assert_eq!(
+            options.context_refs,
+            vec!["crates/vida/src/taskflow_plan_graph.rs".to_string()]
+        );
+        assert!(options.json);
+    }
+
+    #[test]
+    fn plan_generate_input_contract_uses_cli_refs_for_missing_source_context() {
+        let draft = generate_plan_graph_draft(&PlanGenerateOptions {
+            source_file: None,
+            source_text: Some("Implement planner".to_string()),
+            spec_refs: vec!["docs/product/spec/current-spec-map.md".to_string()],
+            backlog_refs: vec!["audit-p1-planner-input-contract-cli-flags".to_string()],
+            context_refs: vec!["crates/vida/src/taskflow_plan_graph.rs".to_string()],
+            task_prefix: Some("feature-planner".to_string()),
+            parent_id: None,
+            output: None,
+            json: true,
+        })
+        .expect("draft should generate");
+
+        assert_eq!(draft.input_contract.status, "complete");
+        assert!(draft.input_contract.missing_context.is_empty());
+        assert!(draft.input_contract.sources.iter().any(|source| {
+            source.source_type == "spec_reference"
+                && source.reference == "docs/product/spec/current-spec-map.md"
+                && source.evidence == "cli_spec_ref"
+        }));
+        assert!(draft.input_contract.sources.iter().any(|source| {
+            source.source_type == "backlog_reference"
+                && source.reference == "audit-p1-planner-input-contract-cli-flags"
+                && source.evidence == "cli_backlog_ref"
+        }));
+        assert!(draft.input_contract.sources.iter().any(|source| {
+            source.source_type == "context_reference"
+                && source.reference == "crates/vida/src/taskflow_plan_graph.rs"
+                && source.evidence == "cli_context_ref"
+        }));
     }
 
     #[test]
@@ -2215,6 +2394,9 @@ mod tests {
         let draft = generate_plan_graph_draft(&PlanGenerateOptions {
             source_file: None,
             source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2243,6 +2425,9 @@ mod tests {
         let mut draft = generate_plan_graph_draft(&PlanGenerateOptions {
             source_file: None,
             source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2261,6 +2446,9 @@ mod tests {
         let mut draft = generate_plan_graph_draft(&PlanGenerateOptions {
             source_file: None,
             source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2277,9 +2465,11 @@ mod tests {
         let validation = validate_draft(&draft, &[]);
 
         assert_eq!(validation.status, "blocked");
-        assert!(validation
-            .blocker_codes
-            .contains(&"cyclic_dependency".to_string()));
+        assert!(
+            validation
+                .blocker_codes
+                .contains(&"cyclic_dependency".to_string())
+        );
     }
 
     #[tokio::test]
@@ -2291,6 +2481,9 @@ mod tests {
         let draft = generate_plan_graph_draft(&PlanGenerateOptions {
             source_file: None,
             source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2378,6 +2571,9 @@ mod tests {
         let draft = generate_plan_graph_draft(&PlanGenerateOptions {
             source_file: None,
             source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: Some("parent-b".to_string()),
             output: None,
@@ -2419,16 +2615,18 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert!(receipt.created_task_ids.is_empty());
-        assert!(receipt
-            .validation
-            .blocker_codes
-            .contains(&"existing_task_conflict".to_string()));
+        assert!(
+            receipt
+                .validation
+                .blocker_codes
+                .contains(&"existing_task_conflict".to_string())
+        );
         let _ = std::fs::remove_dir_all(state_dir);
     }
 
     #[tokio::test]
-    async fn dry_run_receipt_blocks_legacy_description_embedded_metadata_without_structured_metadata(
-    ) {
+    async fn dry_run_receipt_blocks_legacy_description_embedded_metadata_without_structured_metadata()
+     {
         let state_dir = test_state_dir("legacy-description-metadata-blocked");
         let store = StateStore::open(state_dir.clone())
             .await
@@ -2436,6 +2634,9 @@ mod tests {
         let draft = generate_plan_graph_draft(&PlanGenerateOptions {
             source_file: None,
             source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2480,15 +2681,19 @@ mod tests {
         assert_eq!(receipt.status, "blocked");
         assert!(receipt.created_task_ids.is_empty());
         assert!(receipt.skipped_existing_task_ids.is_empty());
-        assert!(receipt
-            .validation
-            .blocker_codes
-            .contains(&"existing_task_conflict".to_string()));
-        assert!(receipt
-            .validation
-            .issues
-            .iter()
-            .any(|issue| issue.contains("conflicts with PlanGraph draft: description differs")));
+        assert!(
+            receipt
+                .validation
+                .blocker_codes
+                .contains(&"existing_task_conflict".to_string())
+        );
+        assert!(
+            receipt
+                .validation
+                .issues
+                .iter()
+                .any(|issue| issue.contains("conflicts with PlanGraph draft: description differs"))
+        );
         assert!(receipt.validation.issues.iter().any(|issue| {
             issue.contains("conflicts with PlanGraph draft: planner metadata differs")
         }));
@@ -2502,6 +2707,9 @@ mod tests {
         let mut draft = generate_plan_graph_draft(&PlanGenerateOptions {
             source_file: None,
             source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2529,18 +2737,22 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert!(receipt.created_task_ids.is_empty());
-        assert!(receipt
-            .validation
-            .blocker_codes
-            .contains(&"cyclic_dependency".to_string()));
+        assert!(
+            receipt
+                .validation
+                .blocker_codes
+                .contains(&"cyclic_dependency".to_string())
+        );
         let store = StateStore::open_existing(state_dir.clone())
             .await
             .expect("state store should open");
-        assert!(store
-            .list_tasks(None, true)
-            .await
-            .expect("tasks should list")
-            .is_empty());
+        assert!(
+            store
+                .list_tasks(None, true)
+                .await
+                .expect("tasks should list")
+                .is_empty()
+        );
         let _ = std::fs::remove_dir_all(state_dir);
     }
 

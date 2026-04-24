@@ -416,6 +416,24 @@ struct AdaptiveReplanFindingPreview {
     planned_mutation_kind: String,
     source_task_id: String,
     finding: AdaptiveReplanFindingInput,
+    preview_receipt: AdaptiveReplanFindingPreviewReceipt,
+    operator_truth: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct AdaptiveReplanFindingPreviewReceipt {
+    receipt_kind: String,
+    schema_version: String,
+    receipt_id: String,
+    surface: String,
+    source_task_id: String,
+    finding_kind: String,
+    planned_mutation_category: String,
+    planned_mutation_kind: String,
+    dry_run: bool,
+    applied: bool,
+    graph_state_opened: bool,
+    graph_state_mutated: bool,
     operator_truth: serde_json::Value,
 }
 
@@ -582,6 +600,7 @@ fn adaptive_replan_preview_operator_truth() -> serde_json::Value {
         "preview_only": true,
         "finding_json_parsed": true,
         "planned_mutation_category_only": true,
+        "preview_receipt_emitted": true,
         "graph_state_opened": false,
         "graph_state_mutated": false,
         "adaptive_mutation_execution_loop_implemented": false,
@@ -598,6 +617,53 @@ fn planned_mutation_for_finding_kind(finding_kind: &str) -> (&'static str, &'sta
     }
 }
 
+fn adaptive_replan_preview_receipt_id(
+    finding: &AdaptiveReplanFindingInput,
+    planned_mutation_category: &str,
+    planned_mutation_kind: &str,
+) -> String {
+    let evidence_fingerprint = if finding.evidence_refs.is_empty() {
+        "none".to_string()
+    } else {
+        finding.evidence_refs.join("+")
+    };
+    format!(
+        "adaptive-replan-preview:{}:{}:{}:{}:evidence={}",
+        finding.source_task_id,
+        finding.finding_kind,
+        planned_mutation_category,
+        planned_mutation_kind,
+        evidence_fingerprint
+    )
+}
+
+fn build_adaptive_replan_finding_preview_receipt(
+    finding: &AdaptiveReplanFindingInput,
+    surface: &str,
+    planned_mutation_category: &str,
+    planned_mutation_kind: &str,
+) -> AdaptiveReplanFindingPreviewReceipt {
+    AdaptiveReplanFindingPreviewReceipt {
+        receipt_kind: "adaptive_replan_finding_preview_receipt".to_string(),
+        schema_version: "1".to_string(),
+        receipt_id: adaptive_replan_preview_receipt_id(
+            finding,
+            planned_mutation_category,
+            planned_mutation_kind,
+        ),
+        surface: surface.to_string(),
+        source_task_id: finding.source_task_id.clone(),
+        finding_kind: finding.finding_kind.clone(),
+        planned_mutation_category: planned_mutation_category.to_string(),
+        planned_mutation_kind: planned_mutation_kind.to_string(),
+        dry_run: true,
+        applied: false,
+        graph_state_opened: false,
+        graph_state_mutated: false,
+        operator_truth: adaptive_replan_preview_operator_truth(),
+    }
+}
+
 fn build_adaptive_replan_finding_preview(
     finding_json: &serde_json::Value,
     surface: &str,
@@ -605,6 +671,12 @@ fn build_adaptive_replan_finding_preview(
     let finding = parse_adaptive_replan_finding_input(finding_json)?;
     let (planned_mutation_category, planned_mutation_kind) =
         planned_mutation_for_finding_kind(&finding.finding_kind);
+    let preview_receipt = build_adaptive_replan_finding_preview_receipt(
+        &finding,
+        surface,
+        planned_mutation_category,
+        planned_mutation_kind,
+    );
     Ok(AdaptiveReplanFindingPreview {
         status: task_json_success_status().to_string(),
         surface: surface.to_string(),
@@ -614,6 +686,7 @@ fn build_adaptive_replan_finding_preview(
         planned_mutation_kind: planned_mutation_kind.to_string(),
         source_task_id: finding.source_task_id.clone(),
         finding,
+        preview_receipt,
         operator_truth: adaptive_replan_preview_operator_truth(),
     })
 }
@@ -645,6 +718,11 @@ fn print_adaptive_replan_finding_preview(
     print_surface_line(render, "dry_run", "true");
     print_surface_line(render, "applied", "false");
     print_surface_line(render, "graph_state_mutated", "false");
+    print_surface_line(
+        render,
+        "preview_receipt_id",
+        &result.preview_receipt.receipt_id,
+    );
 }
 
 fn print_adaptive_replan_finding_input_error(
@@ -2612,7 +2690,62 @@ mod tests {
                 preview.operator_truth["adaptive_mutation_execution_loop_implemented"],
                 false
             );
+            assert_eq!(
+                preview.preview_receipt.receipt_kind,
+                "adaptive_replan_finding_preview_receipt"
+            );
+            assert_eq!(preview.preview_receipt.schema_version, "1");
+            assert_eq!(
+                preview.preview_receipt.receipt_id,
+                format!(
+                    "adaptive-replan-preview:task-a:{finding_kind}:{expected_category}:{expected_kind}:evidence=receipt-a+receipt-b"
+                )
+            );
+            assert_eq!(preview.preview_receipt.source_task_id, "task-a");
+            assert_eq!(preview.preview_receipt.finding_kind, finding_kind);
+            assert_eq!(
+                preview.preview_receipt.planned_mutation_category,
+                expected_category
+            );
+            assert_eq!(preview.preview_receipt.planned_mutation_kind, expected_kind);
+            assert!(preview.preview_receipt.dry_run);
+            assert!(!preview.preview_receipt.applied);
+            assert!(!preview.preview_receipt.graph_state_opened);
+            assert!(!preview.preview_receipt.graph_state_mutated);
+            assert_eq!(
+                preview.preview_receipt.operator_truth["preview_receipt_emitted"],
+                true
+            );
         }
+    }
+
+    #[test]
+    fn adaptive_replan_finding_preview_receipt_is_stable_without_evidence() {
+        let preview = build_adaptive_replan_finding_preview(
+            &serde_json::json!({
+                "finding_kind": "oversized_task",
+                "source_task_id": "task-b",
+                "summary": "task is too broad"
+            }),
+            "vida task adaptive-preview",
+        )
+        .expect("valid finding should preview");
+
+        assert_eq!(
+            preview.preview_receipt.receipt_id,
+            "adaptive-replan-preview:task-b:oversized_task:task_decomposition:split_task:evidence=none"
+        );
+        assert_eq!(
+            preview.preview_receipt.surface,
+            "vida task adaptive-preview"
+        );
+        assert_eq!(preview.preview_receipt.schema_version, "1");
+        assert_eq!(preview.preview_receipt.planned_mutation_kind, "split_task");
+        assert_eq!(
+            preview.preview_receipt.planned_mutation_category,
+            "task_decomposition"
+        );
+        assert!(!preview.preview_receipt.graph_state_mutated);
     }
 
     #[test]
