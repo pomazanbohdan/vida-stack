@@ -893,7 +893,11 @@ fn taskflow_task_subcommand_supported(subcommand: &str) -> bool {
             | "deps"
             | "reverse-deps"
             | "blocked"
+            | "children"
+            | "reparent-children"
+            | "move-children"
             | "tree"
+            | "subtree"
             | "validate-graph"
             | "dep"
             | "critical-path"
@@ -2659,6 +2663,24 @@ mod tests {
     #[test]
     fn taskflow_task_subcommand_supports_replace_jsonl() {
         assert!(taskflow_task_subcommand_supported("replace-jsonl"));
+    }
+
+    #[test]
+    fn taskflow_task_subcommand_supports_task_graph_parity_commands() {
+        for subcommand in [
+            "children",
+            "reparent-children",
+            "move-children",
+            "tree",
+            "subtree",
+            "validate-graph",
+            "critical-path",
+        ] {
+            assert!(
+                taskflow_task_subcommand_supported(subcommand),
+                "`vida taskflow task {subcommand}` should remain in parity with `vida task {subcommand}`"
+            );
+        }
     }
 
     #[test]

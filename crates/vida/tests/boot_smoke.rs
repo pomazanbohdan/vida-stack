@@ -1249,6 +1249,7 @@ fn taskflow_proxy_help_supports_task_topic() {
     assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>] [--json]"));
     assert!(stdout.contains("vida task ready --scope <task-id> --json"));
     assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
+    assert!(stdout.contains("vida task reparent-children <from-parent-id> <to-parent-id> --json"));
     assert!(stdout.contains(
         "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description"
     ));
@@ -1280,6 +1281,7 @@ fn taskflow_task_help_alias_routes_to_canonical_task_help() {
     assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>] [--json]"));
     assert!(stdout.contains("vida task ready --scope <task-id> --json"));
     assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
+    assert!(stdout.contains("vida task reparent-children <from-parent-id> <to-parent-id> --json"));
     assert!(stdout.contains("vida task ensure <task-id> <title> --parent-id <parent-id>"));
     assert!(stdout.contains("vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
     assert!(

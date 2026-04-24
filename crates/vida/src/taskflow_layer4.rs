@@ -56,6 +56,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida task blocked --json");
             println!("  vida task tree <task-id> --json");
             println!("  vida task children <task-id> --json");
+            println!("  vida task reparent-children <from-parent-id> <to-parent-id> --json");
             println!("  vida task critical-path --json");
             println!("  vida task next-display-id <parent-display-id> --json");
             println!(
