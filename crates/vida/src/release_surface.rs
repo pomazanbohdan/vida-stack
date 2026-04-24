@@ -95,65 +95,18 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         }
     };
 
-    let build = if args.skip_build {
-        ReleaseBuildReceipt {
-            status: "skipped".to_string(),
-            skipped: true,
-            command: None,
-            exit_code: None,
-        }
-    } else {
-        let command = vec![
-            "cargo".to_string(),
-            "build".to_string(),
-            "-p".to_string(),
-            "vida".to_string(),
-            "--release".to_string(),
-        ];
-        match Command::new("cargo")
-            .args(["build", "-p", "vida", "--release"])
-            .status()
-        {
-            Ok(status) if status.success() => ReleaseBuildReceipt {
-                status: "pass".to_string(),
-                skipped: false,
-                command: Some(command),
-                exit_code: status.code(),
+    let build = release_build_receipt(args.skip_build);
+    if build.status == "blocked" {
+        return blocked_receipt(
+            requested_target,
+            source_binary_path,
+            build,
+            BlockedRelease {
+                blocker_code: "release_build_failed",
+                next_action: "Fix release build failures, then rerun `vida release install --json`.",
             },
-            Ok(status) => {
-                return blocked_receipt(
-                    requested_target,
-                    source_binary_path,
-                    ReleaseBuildReceipt {
-                        status: "blocked".to_string(),
-                        skipped: false,
-                        command: Some(command),
-                        exit_code: status.code(),
-                    },
-                    BlockedRelease {
-                        blocker_code: "release_build_failed",
-                        next_action: "Fix release build failures, then rerun `vida release install --json`.",
-                    },
-                );
-            }
-            Err(_) => {
-                return blocked_receipt(
-                    requested_target,
-                    source_binary_path,
-                    ReleaseBuildReceipt {
-                        status: "blocked".to_string(),
-                        skipped: false,
-                        command: Some(command),
-                        exit_code: None,
-                    },
-                    BlockedRelease {
-                        blocker_code: "release_build_failed",
-                        next_action: "Ensure `cargo build -p vida --release` can run, then rerun `vida release install --json`.",
-                    },
-                );
-            }
-        }
-    };
+        );
+    }
 
     if !source_binary.is_file() {
         return blocked_receipt(
@@ -238,6 +191,48 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         source_binary_fingerprint: Some(source_binary_fingerprint),
         requested_target,
         installed_targets,
+    }
+}
+
+pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
+    if skip_build {
+        return ReleaseBuildReceipt {
+            status: "skipped".to_string(),
+            skipped: true,
+            command: None,
+            exit_code: None,
+        };
+    }
+
+    let command = vec![
+        "cargo".to_string(),
+        "build".to_string(),
+        "-p".to_string(),
+        "vida".to_string(),
+        "--release".to_string(),
+    ];
+    match Command::new("cargo")
+        .args(["build", "-p", "vida", "--release"])
+        .status()
+    {
+        Ok(status) if status.success() => ReleaseBuildReceipt {
+            status: "pass".to_string(),
+            skipped: false,
+            command: Some(command),
+            exit_code: status.code(),
+        },
+        Ok(status) => ReleaseBuildReceipt {
+            status: "blocked".to_string(),
+            skipped: false,
+            command: Some(command),
+            exit_code: status.code(),
+        },
+        Err(_) => ReleaseBuildReceipt {
+            status: "blocked".to_string(),
+            skipped: false,
+            command: Some(command),
+            exit_code: None,
+        },
     }
 }
 

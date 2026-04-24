@@ -1744,6 +1744,356 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskCloseAutomationReceipt {
+    status: String,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    release_build: Option<crate::release_surface::ReleaseBuildReceipt>,
+    release_install: Option<crate::release_surface::ReleaseInstallReceipt>,
+    git: Option<TaskCloseGitAutomationReceipt>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskCloseGitAutomationReceipt {
+    status: String,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    explicit_files: Vec<String>,
+    commit_message: Option<String>,
+    commit_exit_code: Option<i32>,
+    push_exit_code: Option<i32>,
+}
+
+fn task_close_automation_requested(command: &TaskCloseArgs) -> bool {
+    command.release || command.install || command.commit || command.push
+}
+
+fn task_close_automation_receipt(
+    command: &TaskCloseArgs,
+    project_root: Option<&std::path::Path>,
+) -> TaskCloseAutomationReceipt {
+    let mut blocker_codes = Vec::new();
+    let mut next_actions = Vec::new();
+
+    let release_install = if command.install {
+        let receipt = crate::release_surface::release_install_receipt(&crate::ReleaseInstallArgs {
+            target: command.install_target.clone(),
+            skip_build: command.skip_release_build,
+            source_binary: command.source_binary.clone(),
+            install_root: command.install_root.clone(),
+            json: true,
+        });
+        if receipt.status != "pass" {
+            blocker_codes.extend(receipt.blocker_codes.iter().cloned());
+            next_actions.extend(receipt.next_actions.iter().cloned());
+        }
+        Some(receipt)
+    } else {
+        None
+    };
+
+    let release_build = if command.release && !command.install {
+        let receipt = crate::release_surface::release_build_receipt(false);
+        if receipt.status != "pass" {
+            blocker_codes.push("release_build_failed".to_string());
+            next_actions.push(
+                "Fix release build failures, then rerun `vida task close --release --json`."
+                    .to_string(),
+            );
+        }
+        Some(receipt)
+    } else {
+        None
+    };
+
+    let git = if command.commit || command.push {
+        let receipt = task_close_git_automation_receipt(command, project_root);
+        if receipt.status != "pass" {
+            blocker_codes.extend(receipt.blocker_codes.iter().cloned());
+            next_actions.extend(receipt.next_actions.iter().cloned());
+        }
+        Some(receipt)
+    } else {
+        None
+    };
+
+    TaskCloseAutomationReceipt {
+        status: if blocker_codes.is_empty() {
+            "pass".to_string()
+        } else {
+            "blocked".to_string()
+        },
+        blocker_codes,
+        next_actions,
+        release_build,
+        release_install,
+        git,
+    }
+}
+
+fn task_close_git_automation_receipt(
+    command: &TaskCloseArgs,
+    project_root: Option<&std::path::Path>,
+) -> TaskCloseGitAutomationReceipt {
+    let explicit_files: Vec<String> = command
+        .commit_files
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    let commit_message = command.commit_message.clone().or_else(|| {
+        command
+            .commit
+            .then(|| format!("Close {}: {}", command.task_id, command.reason))
+    });
+
+    if command.push && !command.commit {
+        return blocked_task_close_git_receipt(
+            explicit_files,
+            commit_message,
+            "push_requires_commit",
+            "Pass `--commit --commit-file <path>` with `--push` so the pushed change is explicit.",
+        );
+    }
+    if command.commit && command.commit_files.is_empty() {
+        return blocked_task_close_git_receipt(
+            explicit_files,
+            commit_message,
+            "dirty_ownership_ambiguous",
+            "Pass one or more `--commit-file <path>` values owned by this bounded task.",
+        );
+    }
+
+    let repo_root = project_root
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    if command.commit {
+        match dirty_paths_for_repo(&repo_root) {
+            Ok(dirty_paths) => {
+                let ambiguous: Vec<String> = dirty_paths
+                    .into_iter()
+                    .filter(|path| !path_is_explicitly_owned(path, &explicit_files))
+                    .collect();
+                if !ambiguous.is_empty() {
+                    return blocked_task_close_git_receipt(
+                        explicit_files,
+                        commit_message,
+                        "dirty_ownership_ambiguous",
+                        "Clean unrelated dirty files or include only the owned paths with repeated `--commit-file` values.",
+                    );
+                }
+            }
+            Err(_) => {
+                return blocked_task_close_git_receipt(
+                    explicit_files,
+                    commit_message,
+                    "git_status_failed",
+                    "Run the command from a git worktree or resolve git status errors before committing.",
+                );
+            }
+        }
+
+        let add_status = std::process::Command::new("git")
+            .arg("add")
+            .arg("--")
+            .args(&command.commit_files)
+            .current_dir(&repo_root)
+            .status();
+        match add_status {
+            Ok(status) if status.success() => {}
+            _ => {
+                return blocked_task_close_git_receipt(
+                    explicit_files,
+                    commit_message,
+                    "git_stage_failed",
+                    "Verify the explicit commit files exist and can be staged.",
+                );
+            }
+        }
+
+        let diff_status = std::process::Command::new("git")
+            .args(["diff", "--cached", "--quiet", "--"])
+            .args(&command.commit_files)
+            .current_dir(&repo_root)
+            .status();
+        match diff_status {
+            Ok(status) if status.success() => {
+                return blocked_task_close_git_receipt(
+                    explicit_files,
+                    commit_message,
+                    "no_explicit_commit_changes",
+                    "Ensure at least one explicit `--commit-file` has a staged content change.",
+                );
+            }
+            Ok(status) if status.code() == Some(1) => {}
+            _ => {
+                return blocked_task_close_git_receipt(
+                    explicit_files,
+                    commit_message,
+                    "git_status_failed",
+                    "Resolve git diff errors before committing.",
+                );
+            }
+        }
+
+        let message = commit_message
+            .as_deref()
+            .unwrap_or("Close task with post-close automation");
+        let commit_status = std::process::Command::new("git")
+            .args(["commit", "-m", message, "--"])
+            .args(&command.commit_files)
+            .current_dir(&repo_root)
+            .status();
+        match commit_status {
+            Ok(status) if status.success() => {
+                if command.push {
+                    let push_status = std::process::Command::new("git")
+                        .arg("push")
+                        .current_dir(&repo_root)
+                        .status();
+                    match push_status {
+                        Ok(push) if push.success() => TaskCloseGitAutomationReceipt {
+                            status: "pass".to_string(),
+                            blocker_codes: Vec::new(),
+                            next_actions: Vec::new(),
+                            explicit_files,
+                            commit_message,
+                            commit_exit_code: status.code(),
+                            push_exit_code: push.code(),
+                        },
+                        Ok(push) => TaskCloseGitAutomationReceipt {
+                            status: "blocked".to_string(),
+                            blocker_codes: vec!["git_push_failed".to_string()],
+                            next_actions: vec![
+                                "Fix git push configuration or remote state, then push manually."
+                                    .to_string(),
+                            ],
+                            explicit_files,
+                            commit_message,
+                            commit_exit_code: status.code(),
+                            push_exit_code: push.code(),
+                        },
+                        Err(_) => TaskCloseGitAutomationReceipt {
+                            status: "blocked".to_string(),
+                            blocker_codes: vec!["git_push_failed".to_string()],
+                            next_actions: vec![
+                                "Ensure `git push` can run in this worktree, then push manually."
+                                    .to_string(),
+                            ],
+                            explicit_files,
+                            commit_message,
+                            commit_exit_code: status.code(),
+                            push_exit_code: None,
+                        },
+                    }
+                } else {
+                    TaskCloseGitAutomationReceipt {
+                        status: "pass".to_string(),
+                        blocker_codes: Vec::new(),
+                        next_actions: Vec::new(),
+                        explicit_files,
+                        commit_message,
+                        commit_exit_code: status.code(),
+                        push_exit_code: None,
+                    }
+                }
+            }
+            Ok(status) => TaskCloseGitAutomationReceipt {
+                status: "blocked".to_string(),
+                blocker_codes: vec!["git_commit_failed".to_string()],
+                next_actions: vec![
+                    "Inspect git commit output and resolve commit blockers before retrying."
+                        .to_string(),
+                ],
+                explicit_files,
+                commit_message,
+                commit_exit_code: status.code(),
+                push_exit_code: None,
+            },
+            Err(_) => TaskCloseGitAutomationReceipt {
+                status: "blocked".to_string(),
+                blocker_codes: vec!["git_commit_failed".to_string()],
+                next_actions: vec![
+                    "Ensure `git commit` can run in this worktree before retrying.".to_string(),
+                ],
+                explicit_files,
+                commit_message,
+                commit_exit_code: None,
+                push_exit_code: None,
+            },
+        }
+    } else {
+        TaskCloseGitAutomationReceipt {
+            status: "pass".to_string(),
+            blocker_codes: Vec::new(),
+            next_actions: Vec::new(),
+            explicit_files,
+            commit_message,
+            commit_exit_code: None,
+            push_exit_code: None,
+        }
+    }
+}
+
+fn blocked_task_close_git_receipt(
+    explicit_files: Vec<String>,
+    commit_message: Option<String>,
+    blocker_code: &str,
+    next_action: &str,
+) -> TaskCloseGitAutomationReceipt {
+    TaskCloseGitAutomationReceipt {
+        status: "blocked".to_string(),
+        blocker_codes: vec![blocker_code.to_string()],
+        next_actions: vec![next_action.to_string()],
+        explicit_files,
+        commit_message,
+        commit_exit_code: None,
+        push_exit_code: None,
+    }
+}
+
+fn dirty_paths_for_repo(repo_root: &std::path::Path) -> Result<Vec<String>, String> {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(repo_root)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .filter_map(porcelain_status_path)
+        .collect::<Vec<_>>())
+}
+
+fn porcelain_status_path(line: &str) -> Option<String> {
+    let path = line.get(3..)?.trim();
+    if path.is_empty() {
+        None
+    } else {
+        Some(
+            path.rsplit_once(" -> ")
+                .map(|(_, destination)| destination)
+                .unwrap_or(path)
+                .to_string(),
+        )
+    }
+}
+
+fn path_is_explicitly_owned(path: &str, explicit_files: &[String]) -> bool {
+    explicit_files.iter().any(|explicit| {
+        path == explicit
+            || path
+                .strip_prefix(explicit)
+                .map(|suffix| suffix.starts_with('/'))
+                .unwrap_or(false)
+    })
+}
+
 pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
     match args.command {
         TaskCommand::Help(command) => match command.topic.as_deref() {
@@ -2182,11 +2532,32 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 "reason": "project_root_unavailable",
                             }),
                         };
+                        let automation = if task_close_automation_requested(&command) {
+                            Some(task_close_automation_receipt(
+                                &command,
+                                project_root.as_deref(),
+                            ))
+                        } else {
+                            None
+                        };
+                        let automation_blocked = automation
+                            .as_ref()
+                            .map(|receipt| receipt.status != "pass")
+                            .unwrap_or(false);
                         if command.json {
                             crate::print_json_pretty(&serde_json::json!({
-                                "status": "pass",
+                                "status": if automation_blocked { "blocked" } else { "pass" },
+                                "blocker_codes": automation
+                                    .as_ref()
+                                    .map(|receipt| receipt.blocker_codes.clone())
+                                    .unwrap_or_default(),
+                                "next_actions": automation
+                                    .as_ref()
+                                    .map(|receipt| receipt.next_actions.clone())
+                                    .unwrap_or_default(),
                                 "task": task,
                                 "host_agent_telemetry": telemetry,
+                                "automation": automation,
                             }));
                         } else {
                             print_task_mutation(command.render, "vida task close", &task, false);
@@ -2208,8 +2579,26 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 "host agent telemetry",
                                 &telemetry_summary,
                             );
+                            if let Some(automation) = &automation {
+                                print_surface_line(
+                                    command.render,
+                                    "automation",
+                                    &automation.status,
+                                );
+                                if !automation.blocker_codes.is_empty() {
+                                    print_surface_line(
+                                        command.render,
+                                        "automation blockers",
+                                        &automation.blocker_codes.join(", "),
+                                    );
+                                }
+                            }
                         }
-                        ExitCode::SUCCESS
+                        if automation_blocked {
+                            ExitCode::from(1)
+                        } else {
+                            ExitCode::SUCCESS
+                        }
                     }
                     Err(error) => {
                         eprintln!("Failed to close task: {error}");
@@ -2504,7 +2893,7 @@ mod tests {
         canonical_json_string_array_entries, load_adaptive_preview_finding_json,
         normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
         parse_label_values, parse_optional_label_value, parse_split_child_specs,
-        task_json_success_status,
+        task_close_automation_receipt, task_json_success_status,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
@@ -2539,6 +2928,68 @@ mod tests {
             })
             .await
             .expect("task should create");
+    }
+
+    #[test]
+    fn task_close_commit_automation_requires_explicit_owned_files() {
+        let receipt = task_close_automation_receipt(
+            &crate::TaskCloseArgs {
+                task_id: "audit-p1-task-close-release-options".to_string(),
+                reason: "close bounded task".to_string(),
+                source: None,
+                release: false,
+                install: false,
+                install_target: "all".to_string(),
+                skip_release_build: false,
+                source_binary: None,
+                install_root: None,
+                commit: true,
+                push: false,
+                commit_files: Vec::new(),
+                commit_message: None,
+                state_dir: None,
+                render: crate::RenderMode::Plain,
+                json: true,
+            },
+            None,
+        );
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["dirty_ownership_ambiguous"]);
+        let git = receipt.git.expect("git receipt should be present");
+        assert_eq!(git.status, "blocked");
+        assert_eq!(git.blocker_codes, vec!["dirty_ownership_ambiguous"]);
+    }
+
+    #[test]
+    fn task_close_push_automation_requires_explicit_commit() {
+        let receipt = task_close_automation_receipt(
+            &crate::TaskCloseArgs {
+                task_id: "audit-p1-task-close-release-options".to_string(),
+                reason: "close bounded task".to_string(),
+                source: None,
+                release: false,
+                install: false,
+                install_target: "all".to_string(),
+                skip_release_build: false,
+                source_binary: None,
+                install_root: None,
+                commit: false,
+                push: true,
+                commit_files: Vec::new(),
+                commit_message: None,
+                state_dir: None,
+                render: crate::RenderMode::Plain,
+                json: true,
+            },
+            None,
+        );
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["push_requires_commit"]);
+        let git = receipt.git.expect("git receipt should be present");
+        assert_eq!(git.status, "blocked");
+        assert_eq!(git.blocker_codes, vec!["push_requires_commit"]);
     }
 
     #[test]

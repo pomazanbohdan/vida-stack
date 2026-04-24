@@ -495,6 +495,61 @@ pub(crate) struct TaskCloseArgs {
     #[arg(long = "source", hide = true)]
     pub(crate) source: Option<String>,
 
+    #[arg(long = "release", help = "Run a release build after successful close")]
+    pub(crate) release: bool,
+
+    #[arg(
+        long = "install",
+        help = "Install the release binary after successful close"
+    )]
+    pub(crate) install: bool,
+
+    #[arg(
+        long = "install-target",
+        default_value = "all",
+        help = "Release install target when --install is set: all, local, or cargo"
+    )]
+    pub(crate) install_target: String,
+
+    #[arg(
+        long = "skip-release-build",
+        help = "Skip the release build during --install"
+    )]
+    pub(crate) skip_release_build: bool,
+
+    #[arg(
+        long = "source-binary",
+        help = "Source vida binary path for --install; defaults to target/release/vida"
+    )]
+    pub(crate) source_binary: Option<PathBuf>,
+
+    #[arg(
+        long = "install-root",
+        help = "Root used for release install paths; defaults to HOME"
+    )]
+    pub(crate) install_root: Option<PathBuf>,
+
+    #[arg(
+        long = "commit",
+        help = "Commit explicit --commit-file paths after close"
+    )]
+    pub(crate) commit: bool,
+
+    #[arg(long = "push", help = "Push after an explicit post-close commit")]
+    pub(crate) push: bool,
+
+    #[arg(
+        long = "commit-file",
+        help = "File path owned by this bounded task to stage and commit; repeat for multiple paths"
+    )]
+    pub(crate) commit_files: Vec<PathBuf>,
+
+    #[arg(
+        long = "commit-message",
+        help = "Commit message for --commit; defaults to a task-close message"
+    )]
+    pub(crate) commit_message: Option<String>,
+
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
 
@@ -837,7 +892,7 @@ pub(crate) struct DoctorArgs {
 #[cfg(test)]
 mod tests {
     use super::Cli;
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
 
     #[test]
     fn task_help_lists_mutation_commands() {
@@ -857,5 +912,21 @@ mod tests {
             help.contains("export-jsonl"),
             "task help should list export-jsonl"
         );
+    }
+
+    #[test]
+    fn task_close_help_lists_release_automation_options() {
+        let error = Cli::try_parse_from(["vida", "task", "close", "--help"])
+            .expect_err("help should render clap display error");
+        let help = error.to_string();
+
+        assert!(help.contains("--release"));
+        assert!(help.contains("--install"));
+        assert!(help.contains("--install-target"));
+        assert!(help.contains("--skip-release-build"));
+        assert!(help.contains("--commit"));
+        assert!(help.contains("--push"));
+        assert!(help.contains("--commit-file"));
+        assert!(help.contains("--commit-message"));
     }
 }
