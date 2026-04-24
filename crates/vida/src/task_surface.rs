@@ -1876,6 +1876,28 @@ struct TaskHandoffAcceptReceipt {
     receipt_path: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskContinuationCandidate {
+    task_id: String,
+    title: String,
+    status: String,
+    priority: u32,
+    issue_type: String,
+    ready_parallel_safe: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskNextLawfulReceipt {
+    status: String,
+    active_bounded_unit: serde_json::Value,
+    why_this_unit: String,
+    sequential_vs_parallel_posture: String,
+    ready_task_candidates: Vec<TaskContinuationCandidate>,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    source_surfaces: Vec<String>,
+}
+
 fn task_close_automation_requested(command: &TaskCloseArgs) -> bool {
     command.release || command.install || command.commit || command.push || command.stage_owned
 }
@@ -2451,6 +2473,206 @@ fn persist_task_handoff_accept_receipt(
     })
 }
 
+fn task_continuation_candidate(
+    task: &state_store::TaskRecord,
+    ready_parallel_safe: bool,
+) -> TaskContinuationCandidate {
+    TaskContinuationCandidate {
+        task_id: task.id.clone(),
+        title: task.title.clone(),
+        status: task.status.clone(),
+        priority: task.priority,
+        issue_type: task.issue_type.clone(),
+        ready_parallel_safe,
+    }
+}
+
+fn task_continuation_active_unit(task: &state_store::TaskRecord) -> serde_json::Value {
+    serde_json::json!({
+        "task_id": task.id,
+        "title": task.title,
+        "status": task.status,
+        "issue_type": task.issue_type,
+    })
+}
+
+fn task_continuation_source_surfaces() -> Vec<String> {
+    vec![
+        "vida task next-lawful".to_string(),
+        "StateStore::latest_explicit_run_graph_continuation_binding".to_string(),
+        "StateStore::scheduling_projection_scoped".to_string(),
+        "vida task ready --json".to_string(),
+        "vida status --json continuation_binding".to_string(),
+    ]
+}
+
+fn blocked_task_next_lawful_receipt(
+    active_bounded_unit: serde_json::Value,
+    ready_task_candidates: Vec<TaskContinuationCandidate>,
+    blocker_code: &str,
+    next_action: &str,
+) -> TaskNextLawfulReceipt {
+    TaskNextLawfulReceipt {
+        status: "blocked".to_string(),
+        active_bounded_unit,
+        why_this_unit: "blocked_until_unique_lawful_continuation_is_evidenced".to_string(),
+        sequential_vs_parallel_posture: "unknown_until_explicit_binding".to_string(),
+        ready_task_candidates,
+        blocker_codes: vec![blocker_code.to_string()],
+        next_actions: vec![next_action.to_string()],
+        source_surfaces: task_continuation_source_surfaces(),
+    }
+}
+
+fn pass_task_next_lawful_receipt(
+    active_bounded_unit: serde_json::Value,
+    why_this_unit: &str,
+    sequential_vs_parallel_posture: &str,
+    ready_task_candidates: Vec<TaskContinuationCandidate>,
+    next_action: String,
+) -> TaskNextLawfulReceipt {
+    TaskNextLawfulReceipt {
+        status: task_json_success_status().to_string(),
+        active_bounded_unit,
+        why_this_unit: why_this_unit.to_string(),
+        sequential_vs_parallel_posture: sequential_vs_parallel_posture.to_string(),
+        ready_task_candidates,
+        blocker_codes: Vec::new(),
+        next_actions: vec![next_action],
+        source_surfaces: task_continuation_source_surfaces(),
+    }
+}
+
+fn task_next_lawful_receipt(
+    tasks: &[state_store::TaskRecord],
+    ready_task_candidates: Vec<TaskContinuationCandidate>,
+    runtime_binding: Option<&state_store::RunGraphContinuationBinding>,
+) -> TaskNextLawfulReceipt {
+    let active_tasks = tasks
+        .iter()
+        .filter(|task| task.status == "in_progress" && task.issue_type != "epic")
+        .collect::<Vec<_>>();
+
+    if let Some(binding) = runtime_binding {
+        let binding_task = tasks.iter().find(|task| task.id == binding.task_id);
+        let conflicting_active = active_tasks
+            .iter()
+            .find(|task| task.id != binding.task_id)
+            .map(|task| task.id.clone());
+        if let Some(conflicting_task_id) = conflicting_active {
+            return blocked_task_next_lawful_receipt(
+                binding.active_bounded_unit.clone(),
+                ready_task_candidates,
+                "runtime_taskflow_active_conflict",
+                &format!(
+                    "Runtime binding points to `{}` but TaskFlow has active `{}`; reconcile or close the stale active task before continuing.",
+                    binding.task_id, conflicting_task_id
+                ),
+            );
+        }
+        let Some(task) = binding_task else {
+            return blocked_task_next_lawful_receipt(
+                binding.active_bounded_unit.clone(),
+                ready_task_candidates,
+                "runtime_binding_task_missing",
+                "Refresh runtime evidence or bind the intended TaskFlow task explicitly before continuing.",
+            );
+        };
+        if task.status == "closed" {
+            return blocked_task_next_lawful_receipt(
+                binding.active_bounded_unit.clone(),
+                ready_task_candidates,
+                "runtime_binding_task_closed",
+                "Refresh continuation evidence after close/release automation before continuing.",
+            );
+        }
+        let ready_conflict = ready_task_candidates
+            .iter()
+            .any(|candidate| candidate.task_id != binding.task_id);
+        if ready_conflict
+            && !ready_task_candidates
+                .iter()
+                .any(|candidate| candidate.task_id == binding.task_id)
+        {
+            return blocked_task_next_lawful_receipt(
+                binding.active_bounded_unit.clone(),
+                ready_task_candidates,
+                "runtime_ready_candidate_conflict",
+                "Runtime binding and TaskFlow ready candidates differ; inspect `vida status --json` and bind/close the intended task explicitly.",
+            );
+        }
+        return pass_task_next_lawful_receipt(
+            binding.active_bounded_unit.clone(),
+            &binding.why_this_unit,
+            &binding.sequential_vs_parallel_posture,
+            ready_task_candidates,
+            format!(
+                "Continue `{}` via the bound runtime path: {}.",
+                binding.task_id, binding.primary_path
+            ),
+        );
+    }
+
+    match active_tasks.as_slice() {
+        [active] => {
+            let ready_conflict = ready_task_candidates
+                .iter()
+                .any(|candidate| candidate.task_id != active.id);
+            if ready_conflict {
+                return blocked_task_next_lawful_receipt(
+                    task_continuation_active_unit(active),
+                    ready_task_candidates,
+                    "taskflow_active_ready_conflict",
+                    "TaskFlow has one active task and different ready candidates; close/reconcile active work or bind the intended continuation explicitly.",
+                );
+            }
+            pass_task_next_lawful_receipt(
+                task_continuation_active_unit(active),
+                "single TaskFlow in_progress task is the lawful continuation",
+                "sequential_only_active_task",
+                ready_task_candidates,
+                format!("Continue active task `{}`.", active.id),
+            )
+        }
+        [] => match ready_task_candidates.as_slice() {
+            [candidate] => pass_task_next_lawful_receipt(
+                serde_json::json!({
+                    "task_id": candidate.task_id,
+                    "title": candidate.title,
+                    "status": candidate.status,
+                    "issue_type": candidate.issue_type,
+                }),
+                "single ready TaskFlow candidate after close/release automation",
+                if candidate.ready_parallel_safe {
+                    "parallel_safe_single_candidate"
+                } else {
+                    "sequential_only_single_candidate"
+                },
+                ready_task_candidates.clone(),
+                format!("Continue ready task `{}`.", candidate.task_id),
+            ),
+            [] => blocked_task_next_lawful_receipt(
+                serde_json::Value::Null,
+                ready_task_candidates,
+                "no_ready_task_candidates",
+                "Create/import the next task or refresh TaskFlow state before continuing.",
+            ),
+            _ => blocked_task_next_lawful_receipt(
+                serde_json::Value::Null,
+                ready_task_candidates,
+                "ambiguous_ready_task_candidates",
+                "Multiple ready tasks are available; choose and bind the intended bounded unit explicitly before implementation.",
+            ),
+        },
+        _ => blocked_task_next_lawful_receipt(
+            serde_json::Value::Null,
+            ready_task_candidates,
+            "multiple_active_tasks",
+            "Close or reconcile extra in_progress tasks before selecting a continuation item.",
+        ),
+    }
+}
+
 fn dirty_paths_for_repo(repo_root: &std::path::Path) -> Result<Vec<String>, String> {
     let output = std::process::Command::new("git")
         .args(["status", "--porcelain"])
@@ -2515,7 +2737,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 | "move-children" | "tree" | "subtree" | "critical-path" | "next-display-id"
                 | "create" | "ensure" | "update" | "close" | "split" | "spawn-blocker" | "list"
                 | "adaptive-preview" | "show" | "import-jsonl" | "replace-jsonl" | "export-jsonl"
-                | "validate-graph" | "dep" | "handoff",
+                | "validate-graph" | "dep" | "handoff" | "next-lawful",
             ) => {
                 print_taskflow_proxy_help(Some("task"));
                 ExitCode::SUCCESS
@@ -2904,6 +3126,97 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 proxy_args.push("--json".to_string());
             }
             crate::taskflow_proxy::run_taskflow_next_surface(&proxy_args).await
+        }
+        TaskCommand::NextLawful(command) => {
+            let state_dir = command
+                .state_dir
+                .clone()
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open_existing_read_only(state_dir).await {
+                Ok(store) => {
+                    let tasks = match store.list_tasks(None, true).await {
+                        Ok(tasks) => tasks,
+                        Err(error) => {
+                            eprintln!("Failed to list tasks for lawful continuation: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let runtime_binding =
+                        match store.latest_explicit_run_graph_continuation_binding().await {
+                            Ok(binding) => binding,
+                            Err(error) => {
+                                eprintln!("Failed to read continuation binding: {error}");
+                                return ExitCode::from(1);
+                            }
+                        };
+                    let projection = match store
+                        .scheduling_projection_scoped(
+                            command.scope.as_deref(),
+                            runtime_binding
+                                .as_ref()
+                                .map(|binding| binding.task_id.as_str()),
+                        )
+                        .await
+                    {
+                        Ok(projection) => projection,
+                        Err(error) => {
+                            eprintln!("Failed to compute lawful continuation candidates: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let ready_task_candidates = projection
+                        .ready
+                        .iter()
+                        .map(|candidate| {
+                            task_continuation_candidate(
+                                &candidate.task,
+                                candidate.ready_parallel_safe,
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let receipt = task_next_lawful_receipt(
+                        &tasks,
+                        ready_task_candidates,
+                        runtime_binding.as_ref(),
+                    );
+                    if command.json {
+                        crate::print_json_pretty(
+                            &serde_json::to_value(&receipt)
+                                .expect("task next-lawful receipt should serialize"),
+                        );
+                    } else {
+                        print_surface_line(command.render, "next lawful", &receipt.status);
+                        print_surface_line(
+                            command.render,
+                            "posture",
+                            &receipt.sequential_vs_parallel_posture,
+                        );
+                        if !receipt.blocker_codes.is_empty() {
+                            print_surface_line(
+                                command.render,
+                                "blockers",
+                                &receipt.blocker_codes.join(", "),
+                            );
+                        }
+                        if let Some(task_id) = receipt
+                            .active_bounded_unit
+                            .get("task_id")
+                            .and_then(serde_json::Value::as_str)
+                        {
+                            print_surface_line(command.render, "active bounded unit", task_id);
+                        }
+                    }
+                    if receipt.status == task_json_success_status() {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
         }
         TaskCommand::NextDisplayId(command) => {
             let state_dir = command
@@ -3457,8 +3770,8 @@ mod tests {
         persist_task_handoff_accept_receipt, task_close_automation_receipt,
         task_close_commit_file_strings, task_close_host_agent_telemetry,
         task_close_uses_isolated_state_dir, task_create_title, task_handoff_accept_receipt,
-        task_handoff_receipt_path, task_json_success_status, task_owned_status_receipt,
-        validate_task_handoff_accept_receipt,
+        task_handoff_receipt_path, task_json_success_status, task_next_lawful_receipt,
+        task_owned_status_receipt, validate_task_handoff_accept_receipt,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
@@ -3771,6 +4084,114 @@ mod tests {
         let error =
             validate_task_handoff_accept_receipt(&receipt).expect_err("missing agent should block");
         assert_eq!(error.0, "missing_agent_id");
+    }
+
+    #[test]
+    fn task_next_lawful_selects_single_ready_candidate() {
+        let mut task = owned_task_record("task-ready", vec![]);
+        task.status = "open".to_string();
+        task.title = "Ready task".to_string();
+        let ready = vec![super::task_continuation_candidate(&task, false)];
+
+        let receipt = task_next_lawful_receipt(&[task], ready, None);
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.active_bounded_unit["task_id"], "task-ready");
+        assert_eq!(
+            receipt.why_this_unit,
+            "single ready TaskFlow candidate after close/release automation"
+        );
+        assert_eq!(
+            receipt.sequential_vs_parallel_posture,
+            "sequential_only_single_candidate"
+        );
+        assert!(receipt.blocker_codes.is_empty());
+        assert!(
+            receipt
+                .source_surfaces
+                .iter()
+                .any(|surface| surface == "vida task next-lawful")
+        );
+    }
+
+    #[test]
+    fn task_next_lawful_blocks_multiple_ready_candidates() {
+        let mut first = owned_task_record("task-a", vec![]);
+        first.status = "open".to_string();
+        let mut second = owned_task_record("task-b", vec![]);
+        second.status = "open".to_string();
+        let ready = vec![
+            super::task_continuation_candidate(&first, false),
+            super::task_continuation_candidate(&second, false),
+        ];
+
+        let receipt = task_next_lawful_receipt(&[first, second], ready, None);
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(
+            receipt.blocker_codes,
+            vec!["ambiguous_ready_task_candidates"]
+        );
+        assert_eq!(receipt.active_bounded_unit, serde_json::Value::Null);
+        assert_eq!(receipt.ready_task_candidates.len(), 2);
+    }
+
+    #[test]
+    fn task_next_lawful_blocks_runtime_taskflow_active_conflict() {
+        let mut runtime_task = owned_task_record("runtime-task", vec![]);
+        runtime_task.status = "open".to_string();
+        let active_task = owned_task_record("active-task", vec![]);
+        let ready = vec![super::task_continuation_candidate(&runtime_task, false)];
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "run-1".to_string(),
+            task_id: "runtime-task".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "task_id": "runtime-task",
+                "kind": "run_graph_task"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "runtime binding".to_string(),
+            primary_path: "vida taskflow consume continue --run-id run-1 --json".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: Some("continue".to_string()),
+            recorded_at: "2026-04-24T00:00:00Z".to_string(),
+        };
+
+        let receipt = task_next_lawful_receipt(&[runtime_task, active_task], ready, Some(&binding));
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(
+            receipt.blocker_codes,
+            vec!["runtime_taskflow_active_conflict"]
+        );
+        assert_eq!(receipt.active_bounded_unit["task_id"], "runtime-task");
+    }
+
+    #[test]
+    fn task_next_lawful_command_runs_with_single_ready_task() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(&store, "task-ready", "Ready task", "task", "open", 2, None).await;
+            store
+                .refresh_task_snapshot()
+                .await
+                .expect("snapshot should refresh");
+        });
+
+        let code = runtime.block_on(crate::run(cli(&[
+            "task",
+            "next-lawful",
+            "--state-dir",
+            harness.path().to_str().expect("state path should be utf8"),
+            "--json",
+        ])));
+
+        assert_eq!(code, ExitCode::SUCCESS);
     }
 
     #[test]

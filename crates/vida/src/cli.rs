@@ -181,6 +181,8 @@ pub(crate) enum TaskCommand {
     Progress(TaskDepsArgs),
     Ready(TaskReadyArgs),
     Next(TaskNextArgs),
+    #[command(about = "resolve the next lawful task continuation item without heuristic guessing")]
+    NextLawful(TaskNextLawfulArgs),
     NextDisplayId(TaskNextDisplayIdArgs),
     #[command(
         about = TASK_CREATE_ABOUT,
@@ -786,6 +788,21 @@ pub(crate) struct TaskNextArgs {
 }
 
 #[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskNextLawfulArgs {
+    #[arg(long = "scope")]
+    pub(crate) scope: Option<String>,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskDepsArgs {
     pub(crate) task_id: String,
 
@@ -1135,6 +1152,39 @@ mod tests {
         assert_eq!(accept.files.len(), 1);
         assert_eq!(accept.proofs.len(), 1);
         assert_eq!(accept.status.as_str(), "pass");
+    }
+
+    #[test]
+    fn task_next_lawful_help_is_discoverable() {
+        let task_help_error = Cli::try_parse_from(["vida", "task", "--help"])
+            .expect_err("help should render clap display error");
+        let task_help = task_help_error.to_string();
+        assert!(task_help.contains("next-lawful"));
+
+        let next_lawful_error = Cli::try_parse_from(["vida", "task", "next-lawful", "--help"])
+            .expect_err("help should render clap display error");
+        let next_lawful_help = next_lawful_error.to_string();
+        assert!(next_lawful_help.contains("--scope"));
+        assert!(next_lawful_help.contains("--state-dir"));
+        assert!(next_lawful_help.contains("--json"));
+
+        let parsed = Cli::try_parse_from([
+            "vida",
+            "task",
+            "next-lawful",
+            "--scope",
+            "audit-epic",
+            "--json",
+        ])
+        .expect("next-lawful should parse");
+        let Some(super::Command::Task(task_args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let TaskCommand::NextLawful(next_lawful) = task_args.command else {
+            panic!("next-lawful command should parse");
+        };
+        assert_eq!(next_lawful.scope.as_deref(), Some("audit-epic"));
+        assert!(next_lawful.json);
     }
 
     #[test]
