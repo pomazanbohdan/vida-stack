@@ -444,6 +444,70 @@ agent_system:
 #   mode: native
 #   state_owner: orchestrator_only
 #   max_parallel_agents: 4
+#   pricing:
+#     # Pricing metadata is config-owned catalog truth for operator diagnostics,
+#     # runtime bundle compilation, and normalized budget posture. Keep actual
+#     # candidate ranking and selection logic in runtime/model-selection code.
+#     normalized_cost_units_basis: model_profile_relative_units
+#     default_price_source_kind: provider_catalog
+#     freshness_defaults:
+#       required: false
+#       max_age_days: 30
+#       stale_price_policy: diagnostic_only_use_normalized_cost_units
+#       missing_price_policy: diagnostic_only_use_normalized_cost_units
+#       diagnostic_only: true
+#       enforced: false
+#     vendor_basis:
+#       openai: structured vendor pricing snapshot plus project-normalized model profile units
+#       anthropic: structured vendor pricing snapshot plus project-normalized model profile units
+#       internal: project-maintained normalized reference units for internal executor profiles
+#     providers:
+#       openai:
+#         price_basis: vendor_schedule_snapshot
+#         source_paths:
+#           - docs/process/codex-agent-configuration-guide.md
+#         freshness:
+#           required: false
+#           max_age_days: 30
+#           stale_price_policy: diagnostic_only_use_normalized_cost_units
+#           missing_price_policy: diagnostic_only_use_normalized_cost_units
+#           diagnostic_only: true
+#           enforced: false
+#       internal:
+#         price_basis: project_normalized_reference_units
+#         source_paths:
+#           - docs/process/codex-agent-configuration-guide.md
+#         freshness:
+#           required: false
+#           stale_price_policy: diagnostic_only_use_normalized_cost_units
+#           missing_price_policy: diagnostic_only_use_normalized_cost_units
+#           diagnostic_only: true
+#           enforced: false
+#     model_profile_defaults:
+#       price_source_kind: provider_catalog
+#       source_paths:
+#         - docs/process/codex-agent-configuration-guide.md
+#       freshness:
+#         required: false
+#         max_age_days: 30
+#         stale_price_policy: diagnostic_only_use_normalized_cost_units
+#         missing_price_policy: diagnostic_only_use_normalized_cost_units
+#         diagnostic_only: true
+#         enforced: false
+#     # Optional per-model-profile override, placed next to
+#     # `normalized_cost_units` inside `model_profiles.<id>`:
+#     #
+#     # pricing:
+#     #   price_source_kind: provider_catalog
+#     #   source_paths:
+#     #     - docs/process/codex-agent-configuration-guide.md
+#     #   freshness:
+#     #     required: false
+#     #     max_age_days: 30
+#     #     stale_price_policy: diagnostic_only_use_normalized_cost_units
+#     #     missing_price_policy: diagnostic_only_use_normalized_cost_units
+#     #     diagnostic_only: true
+#     #     enforced: false
 #   scoring:
 #     consecutive_failure_limit: 3
 #     promotion_score: 75

@@ -218,6 +218,44 @@ Current project decision for Codex development agents:
 
 Policy note:
 
+### Pricing Schema Boundary
+
+Pricing configuration remains a schema/input surface, not a duplicate runtime selector.
+
+Use these config layers:
+
+1. `agent_system.pricing`
+   - provider-wide pricing basis, source paths, freshness defaults, and stale/missing price policy
+2. `agent_system.pricing.providers.<provider>`
+   - provider-specific `price_basis`, `source_paths`, and `freshness`
+3. `agent_system.pricing.model_profile_defaults`
+   - default pricing metadata inherited by model profiles when no per-profile override is needed
+4. `model_profiles.<id>.normalized_cost_units`
+   - the normalized internal budget unit already used for bounded budget posture
+5. `model_profiles.<id>.pricing`
+   - optional per-profile override for source paths or freshness when one profile needs narrower evidence than the provider default
+
+Field intent:
+
+1. `normalized_cost_units_basis`
+   - states how the project interprets `normalized_cost_units`; it does not replace the numeric field on each model profile
+2. `price_basis`
+   - records whether prices come from a vendor schedule snapshot, provider-configured CLI posture, project-maintained internal reference units, or another bounded catalog basis
+3. `source_paths`
+   - points to the bounded operator/doc paths that justify the pricing snapshot or normalization basis
+4. `freshness.max_age_days`
+   - defines when a recorded pricing snapshot becomes stale for diagnostics
+5. `freshness.stale_price_policy` and `freshness.missing_price_policy`
+   - define what the system should report when price evidence is stale or absent
+6. `diagnostic_only` vs `enforced`
+   - separates fields that should only surface in status/bundle diagnostics from fields that may later become fail-closed runtime requirements
+
+Boundary rule:
+
+1. keep candidate admissibility, readiness, score guards, and cost-quality selection order in runtime/model-selection law,
+2. keep pricing metadata in config/schema/docs so operators can update price evidence without rewriting selection logic,
+3. compile the configured pricing metadata into runtime/operator views only as evidence and policy posture, not as a second selection engine.
+
 1. this is project policy, not a statement of framework law,
 2. if the exact deployable Codex model identifiers differ from the project shorthand, keep the same tier policy and map it to the nearest supported Codex model ids during implementation.
 

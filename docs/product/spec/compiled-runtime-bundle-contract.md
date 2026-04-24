@@ -170,8 +170,17 @@ The root `metadata` block must expose at least:
 9. backend policy,
 10. model-profile catalog and default-profile bindings for active carriers/backends,
 11. profile-selection strategy, quality/reasoning floors, and budget posture when the runtime enforces them,
-12. activation scope.
-13. promoted compact project startup projections when they are admitted for execution.
+12. pricing metadata for active providers/model profiles, including normalized cost units basis, provider price basis, source paths, freshness posture, and stale/missing price policy when configured,
+13. activation scope.
+14. promoted compact project startup projections when they are admitted for execution.
+
+Pricing metadata rule:
+
+1. compiled pricing metadata is evidence/config posture, not a second carrier-selection algorithm,
+2. provider-level pricing config should compile from project activation surfaces such as `agent_system.pricing.providers.<provider>`,
+3. model-profile pricing config should compile from `normalized_cost_units` plus any optional per-profile pricing override,
+4. when freshness policy is marked diagnostic-only, runtime/operator surfaces may report stale or missing pricing evidence without changing admissibility or selection order,
+5. when a future project explicitly marks freshness/presence policy as enforced, that enforcement must remain visible as compiled policy data rather than being inferred from undocumented runtime heuristics.
 
 ### 5.4 `protocol_binding_registry`
 

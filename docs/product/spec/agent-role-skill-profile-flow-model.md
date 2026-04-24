@@ -243,9 +243,11 @@ The orchestrator must consume this compiled identity instead of rediscovering th
 4. local effective score for that tier or profile,
 5. internal rate or normalized cost units used for that tier/profile,
 6. pricing basis used for the bounded task estimate,
-7. local score-store path when score refresh is runtime-local,
-8. local observability/history store path when host-agent telemetry is runtime-local,
-9. local budget rollup surface when spend tracking is runtime-local.
+7. pricing source paths and freshness posture when price evidence is config-tracked,
+8. stale/missing price policy and whether that policy is diagnostic-only or enforced,
+9. local score-store path when score refresh is runtime-local,
+10. local observability/history store path when host-agent telemetry is runtime-local,
+11. local budget rollup surface when spend tracking is runtime-local.
 
 Carrier-selection proof fields should expose at least:
 

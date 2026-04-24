@@ -43,6 +43,17 @@ host_environment:
             plan_mode_reasoning_effort: medium
             sandbox_mode: workspace-write
             normalized_cost_units: 1
+            pricing:
+              price_source_kind: provider_catalog
+              source_paths:
+                - docs/process/codex-agent-configuration-guide.md
+              freshness:
+                required: false
+                max_age_days: 30
+                stale_price_policy: diagnostic_only_use_normalized_cost_units
+                missing_price_policy: diagnostic_only_use_normalized_cost_units
+                diagnostic_only: true
+                enforced: false
             speed_tier: fast
             quality_tier: medium
             write_scope: workspace-write
@@ -660,10 +671,123 @@ agent_system:
     retirement_failure_limit: 8
 
   pricing:
+    normalized_cost_units_basis: model_profile_relative_units
+    default_price_source_kind: provider_catalog
+    freshness_defaults:
+      required: false
+      max_age_days: 30
+      stale_price_policy: diagnostic_only_use_normalized_cost_units
+      missing_price_policy: diagnostic_only_use_normalized_cost_units
+      diagnostic_only: true
+      enforced: false
     vendor_basis:
       openai: structured role configs and reasoning-effort tuning in Codex project config; prefer explicit task/runtime settings over implicit chat heuristics
       anthropic: structured prompt templates, explicit sections, and evaluation-backed refinement loops
       microsoft: record one bounded decision/design artifact per change and route on explicit cost-quality tradeoffs instead of ad hoc escalation
+      internal: project-maintained normalized reference units for internal executor profiles
+      hermes: provider-configured external CLI posture with project-normalized review units
+      opencode: provider-configured external CLI posture with project-normalized review units
+      kilo: provider-configured external CLI posture with project-normalized review units
+      vibe: provider-configured external CLI posture with project-normalized review units
+    providers:
+      openai:
+        price_basis: vendor_schedule_snapshot
+        source_paths:
+          - docs/process/codex-agent-configuration-guide.md
+        freshness:
+          required: false
+          max_age_days: 30
+          stale_price_policy: diagnostic_only_use_normalized_cost_units
+          missing_price_policy: diagnostic_only_use_normalized_cost_units
+          diagnostic_only: true
+          enforced: false
+      anthropic:
+        price_basis: vendor_schedule_snapshot
+        source_paths:
+          - docs/process/codex-agent-configuration-guide.md
+        freshness:
+          required: false
+          max_age_days: 30
+          stale_price_policy: diagnostic_only_use_normalized_cost_units
+          missing_price_policy: diagnostic_only_use_normalized_cost_units
+          diagnostic_only: true
+          enforced: false
+      microsoft:
+        price_basis: decision_record_or_vendor_snapshot
+        source_paths:
+          - docs/process/codex-agent-configuration-guide.md
+        freshness:
+          required: false
+          max_age_days: 30
+          stale_price_policy: diagnostic_only_use_normalized_cost_units
+          missing_price_policy: diagnostic_only_use_normalized_cost_units
+          diagnostic_only: true
+          enforced: false
+      internal:
+        price_basis: project_normalized_reference_units
+        source_paths:
+          - docs/process/codex-agent-configuration-guide.md
+        freshness:
+          required: false
+          stale_price_policy: diagnostic_only_use_normalized_cost_units
+          missing_price_policy: diagnostic_only_use_normalized_cost_units
+          diagnostic_only: true
+          enforced: false
+      hermes:
+        price_basis: provider_configured_external_cli
+        source_paths:
+          - docs/process/codex-agent-configuration-guide.md
+        freshness:
+          required: false
+          max_age_days: 30
+          stale_price_policy: diagnostic_only_use_normalized_cost_units
+          missing_price_policy: diagnostic_only_use_normalized_cost_units
+          diagnostic_only: true
+          enforced: false
+      opencode:
+        price_basis: provider_configured_external_cli
+        source_paths:
+          - docs/process/codex-agent-configuration-guide.md
+        freshness:
+          required: false
+          max_age_days: 30
+          stale_price_policy: diagnostic_only_use_normalized_cost_units
+          missing_price_policy: diagnostic_only_use_normalized_cost_units
+          diagnostic_only: true
+          enforced: false
+      kilo:
+        price_basis: provider_configured_external_cli
+        source_paths:
+          - docs/process/codex-agent-configuration-guide.md
+        freshness:
+          required: false
+          max_age_days: 30
+          stale_price_policy: diagnostic_only_use_normalized_cost_units
+          missing_price_policy: diagnostic_only_use_normalized_cost_units
+          diagnostic_only: true
+          enforced: false
+      vibe:
+        price_basis: provider_configured_external_cli
+        source_paths:
+          - docs/process/codex-agent-configuration-guide.md
+        freshness:
+          required: false
+          max_age_days: 30
+          stale_price_policy: diagnostic_only_use_normalized_cost_units
+          missing_price_policy: diagnostic_only_use_normalized_cost_units
+          diagnostic_only: true
+          enforced: false
+    model_profile_defaults:
+      price_source_kind: provider_catalog
+      source_paths:
+        - docs/process/codex-agent-configuration-guide.md
+      freshness:
+        required: false
+        max_age_days: 30
+        stale_price_policy: diagnostic_only_use_normalized_cost_units
+        missing_price_policy: diagnostic_only_use_normalized_cost_units
+        diagnostic_only: true
+        enforced: false
 
   model_selection:
     enabled: true
@@ -738,6 +862,14 @@ agent_system:
           model_ref: internal_fast
           reasoning_effort: low
           normalized_cost_units: 6
+          pricing:
+            price_source_kind: provider_catalog
+            source_paths:
+              - docs/process/codex-agent-configuration-guide.md
+            freshness:
+              required: false
+              diagnostic_only: true
+              enforced: false
           speed_tier: fast
           quality_tier: medium_high
           write_scope: orchestrator_native
@@ -918,6 +1050,17 @@ agent_system:
           model_ref: opencode/gpt-5.1-codex-mini
           reasoning_effort: low
           normalized_cost_units: 1
+          pricing:
+            price_source_kind: provider_catalog
+            source_paths:
+              - docs/process/codex-agent-configuration-guide.md
+            freshness:
+              required: false
+              max_age_days: 30
+              stale_price_policy: diagnostic_only_use_normalized_cost_units
+              missing_price_policy: diagnostic_only_use_normalized_cost_units
+              diagnostic_only: true
+              enforced: false
           speed_tier: fast
           quality_tier: high
           write_scope: none
