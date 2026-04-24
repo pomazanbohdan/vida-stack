@@ -2532,10 +2532,82 @@ fn task_continuation_source_surfaces() -> Vec<String> {
     vec![
         "vida task next-lawful".to_string(),
         "StateStore::latest_explicit_run_graph_continuation_binding".to_string(),
+        "StateStore::latest_run_graph_status".to_string(),
+        "StateStore::run_graph_continuation_binding(latest_run_id)".to_string(),
         "StateStore::scheduling_projection_scoped".to_string(),
         "vida task ready --json".to_string(),
         "vida status --json continuation_binding".to_string(),
+        "vida taskflow consume continue --json projection_truth.continuation_binding".to_string(),
     ]
+}
+
+fn continuation_binding_active_kind(binding: &state_store::RunGraphContinuationBinding) -> &str {
+    binding
+        .active_bounded_unit
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown")
+}
+
+fn continuation_binding_requires_open_task(
+    binding: &state_store::RunGraphContinuationBinding,
+) -> bool {
+    continuation_binding_active_kind(binding) != "downstream_dispatch_target"
+}
+
+fn task_status_for_binding<'a>(
+    tasks: &'a [state_store::TaskRecord],
+    binding: &state_store::RunGraphContinuationBinding,
+) -> Option<&'a str> {
+    tasks
+        .iter()
+        .find(|task| task.id == binding.task_id)
+        .map(|task| task.status.as_str())
+}
+
+fn continuation_bindings_same_unit(
+    left: &state_store::RunGraphContinuationBinding,
+    right: &state_store::RunGraphContinuationBinding,
+) -> bool {
+    left.run_id == right.run_id
+        && left.task_id == right.task_id
+        && left.active_bounded_unit == right.active_bounded_unit
+}
+
+fn select_task_next_lawful_binding<'a>(
+    tasks: &[state_store::TaskRecord],
+    explicit_binding: Option<&'a state_store::RunGraphContinuationBinding>,
+    current_binding: Option<&'a state_store::RunGraphContinuationBinding>,
+) -> Result<Option<&'a state_store::RunGraphContinuationBinding>, TaskNextLawfulReceipt> {
+    match (explicit_binding, current_binding) {
+        (Some(explicit), Some(current)) if !continuation_bindings_same_unit(explicit, current) => {
+            let explicit_status = task_status_for_binding(tasks, explicit);
+            if continuation_binding_requires_open_task(explicit)
+                && matches!(explicit_status, Some("closed"))
+            {
+                return Ok(Some(current));
+            }
+            Err(blocked_task_next_lawful_receipt(
+                explicit.active_bounded_unit.clone(),
+                Vec::new(),
+                "continuation_source_drift",
+                &format!(
+                    "Continuation sources disagree: explicit binding `{}`/`{}` points to `{}`, while current latest-run binding `{}`/`{}` from `{}` points to `{}`. Reconcile with `vida status --json` and `vida taskflow consume continue --json` before continuing.",
+                    explicit.run_id,
+                    explicit.binding_source,
+                    explicit.task_id,
+                    current.run_id,
+                    current.binding_source,
+                    current.binding_source,
+                    current.task_id
+                ),
+            ))
+        }
+        (Some(explicit), Some(_current)) => Ok(Some(explicit)),
+        (Some(explicit), None) => Ok(Some(explicit)),
+        (None, Some(current)) => Ok(Some(current)),
+        (None, None) => Ok(None),
+    }
 }
 
 fn blocked_task_next_lawful_receipt(
@@ -2602,21 +2674,23 @@ fn task_next_lawful_receipt(
                 ),
             );
         }
-        let Some(task) = binding_task else {
-            return blocked_task_next_lawful_receipt(
-                binding.active_bounded_unit.clone(),
-                ready_task_candidates,
-                "runtime_binding_task_missing",
-                "Refresh runtime evidence or bind the intended TaskFlow task explicitly before continuing.",
-            );
-        };
-        if task.status == "closed" {
-            return blocked_task_next_lawful_receipt(
-                binding.active_bounded_unit.clone(),
-                ready_task_candidates,
-                "runtime_binding_task_closed",
-                "Refresh continuation evidence after close/release automation before continuing.",
-            );
+        if continuation_binding_requires_open_task(binding) {
+            let Some(task) = binding_task else {
+                return blocked_task_next_lawful_receipt(
+                    binding.active_bounded_unit.clone(),
+                    ready_task_candidates,
+                    "runtime_binding_task_missing",
+                    "Refresh runtime evidence or bind the intended TaskFlow task explicitly before continuing.",
+                );
+            };
+            if task.status == "closed" {
+                return blocked_task_next_lawful_receipt(
+                    binding.active_bounded_unit.clone(),
+                    ready_task_candidates,
+                    "runtime_binding_task_closed",
+                    "Refresh continuation evidence after close/release automation before continuing.",
+                );
+            }
         }
         let ready_conflict = ready_task_candidates
             .iter()
@@ -3179,20 +3253,61 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
-                    let runtime_binding =
+                    let explicit_binding =
                         match store.latest_explicit_run_graph_continuation_binding().await {
                             Ok(binding) => binding,
                             Err(error) => {
-                                eprintln!("Failed to read continuation binding: {error}");
+                                eprintln!("Failed to read explicit continuation binding: {error}");
                                 return ExitCode::from(1);
                             }
                         };
+                    let latest_run_graph_status = match store.latest_run_graph_status().await {
+                        Ok(status) => status,
+                        Err(error) => {
+                            eprintln!("Failed to read latest run graph status: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let current_binding = match latest_run_graph_status.as_ref() {
+                        Some(status) => {
+                            match store.run_graph_continuation_binding(&status.run_id).await {
+                                Ok(binding) => binding,
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to read current latest-run continuation binding: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            }
+                        }
+                        None => None,
+                    };
+                    let runtime_binding = match select_task_next_lawful_binding(
+                        &tasks,
+                        explicit_binding.as_ref(),
+                        current_binding.as_ref(),
+                    ) {
+                        Ok(binding) => binding,
+                        Err(receipt) => {
+                            if command.json {
+                                crate::print_json_pretty(&serde_json::to_value(&receipt).expect(
+                                    "task next-lawful source drift receipt should serialize",
+                                ));
+                            } else {
+                                print_surface_line(command.render, "next lawful", &receipt.status);
+                                print_surface_line(
+                                    command.render,
+                                    "blockers",
+                                    &receipt.blocker_codes.join(", "),
+                                );
+                            }
+                            return ExitCode::from(1);
+                        }
+                    };
                     let projection = match store
                         .scheduling_projection_scoped(
                             command.scope.as_deref(),
-                            runtime_binding
-                                .as_ref()
-                                .map(|binding| binding.task_id.as_str()),
+                            runtime_binding.map(|binding| binding.task_id.as_str()),
                         )
                         .await
                     {
@@ -3212,11 +3327,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             )
                         })
                         .collect::<Vec<_>>();
-                    let receipt = task_next_lawful_receipt(
-                        &tasks,
-                        ready_task_candidates,
-                        runtime_binding.as_ref(),
-                    );
+                    let receipt =
+                        task_next_lawful_receipt(&tasks, ready_task_candidates, runtime_binding);
                     if command.json {
                         crate::print_json_pretty(
                             &serde_json::to_value(&receipt)
@@ -3805,12 +3917,12 @@ mod tests {
         canonical_json_string_array_entries, load_adaptive_preview_finding_json,
         normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
         parse_label_values, parse_optional_label_value, parse_split_child_specs,
-        persist_task_handoff_accept_receipt, task_close_automation_receipt,
-        task_close_commit_file_strings, task_close_host_agent_telemetry,
-        task_close_uses_isolated_state_dir, task_create_title, task_handoff_accept_receipt,
-        task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
-        task_json_success_status, task_next_lawful_receipt, task_owned_status_receipt,
-        validate_task_handoff_accept_receipt,
+        persist_task_handoff_accept_receipt, select_task_next_lawful_binding,
+        task_close_automation_receipt, task_close_commit_file_strings,
+        task_close_host_agent_telemetry, task_close_uses_isolated_state_dir, task_create_title,
+        task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
+        task_handoff_receipt_root, task_json_success_status, task_next_lawful_receipt,
+        task_owned_status_receipt, validate_task_handoff_accept_receipt,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::EnvVarGuard;
@@ -4316,6 +4428,121 @@ mod tests {
             vec!["runtime_taskflow_active_conflict"]
         );
         assert_eq!(receipt.active_bounded_unit["task_id"], "runtime-task");
+    }
+
+    fn test_continuation_binding(
+        run_id: &str,
+        task_id: &str,
+        binding_source: &str,
+        active_kind: &str,
+    ) -> crate::state_store::RunGraphContinuationBinding {
+        crate::state_store::RunGraphContinuationBinding {
+            run_id: run_id.to_string(),
+            task_id: task_id.to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": active_kind,
+                "task_id": task_id,
+                "run_id": run_id,
+            }),
+            binding_source: binding_source.to_string(),
+            why_this_unit: format!("{binding_source} selects {task_id}"),
+            primary_path: "vida taskflow consume continue --json".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: Some("continue".to_string()),
+            recorded_at: "2026-04-24T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn task_next_lawful_prefers_current_binding_over_stale_closed_explicit_binding() {
+        let mut stale_task = owned_task_record("stale-task", vec![]);
+        stale_task.status = "closed".to_string();
+        let current_task = owned_task_record("current-task", vec![]);
+        let explicit = test_continuation_binding(
+            "old-run",
+            "stale-task",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+        let current = test_continuation_binding(
+            "current-run",
+            "current-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+
+        let selected = select_task_next_lawful_binding(
+            &[stale_task, current_task],
+            Some(&explicit),
+            Some(&current),
+        )
+        .expect("stale closed explicit binding should yield to current binding")
+        .expect("current binding should select");
+
+        assert_eq!(selected.task_id, "current-task");
+        assert_eq!(
+            selected.binding_source,
+            "consume_continue_after_downstream_chain"
+        );
+    }
+
+    #[test]
+    fn task_next_lawful_blocks_open_explicit_and_current_source_drift() {
+        let explicit_task = owned_task_record("explicit-task", vec![]);
+        let current_task = owned_task_record("current-task", vec![]);
+        let explicit = test_continuation_binding(
+            "old-run",
+            "explicit-task",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+        let current = test_continuation_binding(
+            "current-run",
+            "current-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+
+        let receipt = select_task_next_lawful_binding(
+            &[explicit_task, current_task],
+            Some(&explicit),
+            Some(&current),
+        )
+        .expect_err("open explicit/current disagreement should fail closed");
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["continuation_source_drift"]);
+        assert!(
+            receipt
+                .next_actions
+                .iter()
+                .any(|action| action.contains("consume_continue_after_downstream_chain"))
+        );
+    }
+
+    #[test]
+    fn task_next_lawful_allows_downstream_dispatch_target_from_current_binding() {
+        let mut closed_task = owned_task_record("closed-feature-task", vec![]);
+        closed_task.status = "closed".to_string();
+        let binding = test_continuation_binding(
+            "current-run",
+            "closed-feature-task",
+            "consume_continue_after_downstream_chain",
+            "downstream_dispatch_target",
+        );
+
+        let receipt = task_next_lawful_receipt(&[closed_task], Vec::new(), Some(&binding));
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(
+            receipt.active_bounded_unit["task_id"],
+            "closed-feature-task"
+        );
+        assert_eq!(
+            receipt.why_this_unit,
+            "consume_continue_after_downstream_chain selects closed-feature-task"
+        );
     }
 
     #[test]
