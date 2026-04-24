@@ -89,6 +89,8 @@ struct TaskflowSchedulerDispatchPlan {
     dry_run: bool,
     execute_requested: bool,
     execute_supported: bool,
+    execution_attempted: bool,
+    execution_status: String,
     scope_task_id: Option<String>,
     requested_current_task_id: Option<String>,
     selected_current_task_id: Option<String>,
@@ -317,6 +319,13 @@ fn build_taskflow_scheduler_dispatch_plan(
         dry_run,
         execute_requested,
         execute_supported: false,
+        execution_attempted: false,
+        execution_status: if execute_requested {
+            "unsupported"
+        } else {
+            "preview"
+        }
+        .to_string(),
         scope_task_id: scope_task_id.map(str::to_string),
         requested_current_task_id: requested_current_task_id.map(str::to_string),
         selected_current_task_id,
@@ -2480,6 +2489,11 @@ mod tests {
         let plan = build_taskflow_scheduler_dispatch_plan(projection, 2, None, None, true, false);
 
         assert_eq!(plan.status, "pass");
+        assert_eq!(plan.max_parallel_agents, 2);
+        assert!(!plan.execute_requested);
+        assert!(!plan.execute_supported);
+        assert!(!plan.execution_attempted);
+        assert_eq!(plan.execution_status, "preview");
         assert_eq!(plan.selection_source, "critical_path_ready_head");
         assert_eq!(
             plan.selected_primary_task
@@ -2538,8 +2552,18 @@ mod tests {
                 .iter()
                 .any(|code| code == "unsupported_blocker_code")
         );
+        assert_eq!(plan.max_parallel_agents, 1);
+        assert!(plan.execute_requested);
         assert!(!plan.execute_supported);
+        assert!(!plan.execution_attempted);
+        assert_eq!(plan.execution_status, "unsupported");
         assert!(!plan.dry_run);
+        assert_eq!(plan.selected_task_ids, vec!["critical-ready"]);
+        assert!(plan.next_actions.iter().any(|action| {
+            action.contains("preview-first")
+                && action.contains("without `--execute`")
+                && action.contains("normal delegated runtime flow")
+        }));
     }
 
     #[test]
