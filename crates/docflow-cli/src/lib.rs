@@ -18,7 +18,10 @@ use std::fs;
 use time::format_description::well_known::Rfc3339;
 
 #[derive(Debug, Parser)]
-#[command(name = "docflow", about = "Thin DocFlow CLI shell")]
+#[command(
+    name = "docflow",
+    about = "Standalone DocFlow CLI for documentation readiness, validation, and agent handoff"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -223,9 +226,15 @@ pub struct RenameArtifactArgs {
 
 #[derive(Debug, Args)]
 pub struct InitArgs {
+    #[arg(long = "json", default_value_t = false)]
+    pub json: bool,
+    #[arg(default_value = "")]
     pub markdown_file: String,
+    #[arg(default_value = "")]
     pub artifact_path: String,
+    #[arg(default_value = "")]
     pub artifact_type: String,
+    #[arg(default_value = "")]
     pub change_note: String,
     #[arg(long, default_value = "")]
     pub title: String,
@@ -683,7 +692,7 @@ pub fn run(cli: Cli) -> String {
             Ok(rendered) => rendered,
             Err(error) => format!("touch\n  error: {error}"),
         },
-        Command::Init(args) => match init_artifact(args) {
+        Command::Init(args) => match init_command(args) {
             Ok(rendered) => rendered,
             Err(error) => format!("init\n  error: {error}"),
         },
@@ -2742,6 +2751,13 @@ fn init_artifact(args: InitArgs) -> Result<String, String> {
     } else {
         format!("# {title}\n\nPurpose: {}\n", args.purpose)
     };
+    let changelog_ref = format!(
+        "{}.changelog.jsonl",
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("artifact")
+    );
+    let source_path = normalize_path_for_repo(&path);
     let footer = vec![
         ("artifact_path".to_string(), args.artifact_path.clone()),
         ("artifact_type".to_string(), args.artifact_type.clone()),
@@ -2755,18 +2771,10 @@ fn init_artifact(args: InitArgs) -> Result<String, String> {
             args.schema_version.to_string(),
         ),
         ("status".to_string(), args.status.clone()),
-        ("source_path".to_string(), normalize_path_for_repo(&path)),
+        ("source_path".to_string(), source_path.clone()),
         ("created_at".to_string(), created_at.clone()),
-        ("updated_at".to_string(), created_at),
-        (
-            "changelog_ref".to_string(),
-            format!(
-                "{}.changelog.jsonl",
-                path.file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or("artifact")
-            ),
-        ),
+        ("updated_at".to_string(), created_at.clone()),
+        ("changelog_ref".to_string(), changelog_ref.clone()),
     ];
     write_markdown_with_footer(&path, body, &footer)?;
     append_changelog_event(
@@ -2782,15 +2790,176 @@ fn init_artifact(args: InitArgs) -> Result<String, String> {
         &BTreeMap::new(),
     )?;
 
-    Ok(render_mutation_result(
-        "init",
-        &[
-            format!("  file: {}", normalize_path_for_repo(&path)),
-            format!("  artifact_path: {}", args.artifact_path),
-            format!("  artifact_type: {}", args.artifact_type),
+    if args.json {
+        serde_json::to_string(&serde_json::json!({
+            "command": "init",
+            "mode": "artifact_init",
+            "status": "ok",
+            "file": source_path,
+            "artifact_path": args.artifact_path,
+            "artifact_type": args.artifact_type,
+            "artifact_version": args.artifact_version,
+            "artifact_revision": footer_value(&footer, "artifact_revision"),
+            "schema_version": args.schema_version,
+            "created_at": created_at,
+            "updated_at": created_at,
+            "changelog_ref": changelog_ref,
+            "validation": {
+                "verdict": "ok",
+                "issues": []
+            },
+            "blocker_codes": [],
+            "next_actions": [
+                "Run docflow check-file --path <file>",
+                "Run docflow readiness-file --path <file>"
+            ]
+        }))
+        .map_err(|error| error.to_string())
+    } else {
+        Ok(render_mutation_result(
+            "init",
+            &[
+                format!("  file: {}", normalize_path_for_repo(&path)),
+                format!("  artifact_path: {}", args.artifact_path),
+                format!("  artifact_type: {}", args.artifact_type),
+            ],
+            std::slice::from_ref(&path),
+        ))
+    }
+}
+
+fn footer_value(footer: &[(String, String)], key: &str) -> String {
+    footer
+        .iter()
+        .find_map(|(field, value)| (field == key).then(|| value.clone()))
+        .unwrap_or_default()
+}
+
+fn init_command(args: InitArgs) -> Result<String, String> {
+    if is_init_info_request(&args) {
+        return render_init_info(args.json);
+    }
+    if args.markdown_file.is_empty() {
+        return Err(
+            "init artifact mode requires markdown_file, artifact_path, artifact_type, change_note"
+                .to_string(),
+        );
+    }
+    if args.artifact_path.is_empty() || args.artifact_type.is_empty() || args.change_note.is_empty()
+    {
+        return Err(
+            "init artifact mode requires markdown_file, artifact_path, artifact_type, change_note"
+                .to_string(),
+        );
+    }
+    init_artifact(args)
+}
+
+fn is_init_info_request(args: &InitArgs) -> bool {
+    args.markdown_file.is_empty()
+        && args.artifact_path.is_empty()
+        && args.artifact_type.is_empty()
+        && args.change_note.is_empty()
+}
+
+fn render_init_info(json: bool) -> Result<String, String> {
+    let payload = serde_json::json!({
+        "command": "init",
+        "mode": "agent_bootstrap",
+        "status": "ready",
+        "runtime_root": runtime_root().to_string_lossy(),
+        "purpose": "DocFlow validates, inventories, relates, and proves project documentation artifacts before and after bounded development work.",
+        "agent_startup": {
+            "read_first": [
+                "AGENTS.md",
+                "AGENTS.sidecar.md",
+                "docs/project-root-map.md",
+                "docs/process/documentation-tooling-map.md"
+            ],
+            "preferred_machine_mode": "--json",
+            "safe_first_commands": [
+                "docflow init --json",
+                "docflow doctor --root .",
+                "docflow check-file --path <file>",
+                "docflow readiness-check --profile active-canon",
+                "docflow registry --root ."
+            ]
+        },
+        "command_map": {
+            "orientation": [
+                "docflow init",
+                "docflow help",
+                "docflow overview --registry-count <n> --relation-count <n>"
+            ],
+            "validation": [
+                "docflow check-file --path <file>",
+                "docflow validate-footer --path <file> --content <markdown>",
+                "docflow fastcheck --profile <profile>"
+            ],
+            "readiness": [
+                "docflow readiness-check --profile <profile>",
+                "docflow readiness-file --path <file>",
+                "docflow readiness-write --root <root>"
+            ],
+            "inventory_relations": [
+                "docflow registry --root <root>",
+                "docflow relations-scan --root <root>",
+                "docflow artifact-impact --root <root> --artifact-path <artifact>"
+            ],
+            "mutation": [
+                "docflow init <markdown_file> <artifact_path> <artifact_type> <change_note>",
+                "docflow touch <markdown_file> <change_note>",
+                "docflow move <markdown_file> <destination> <change_note>",
+                "docflow rename-artifact <markdown_file> <artifact_path> <change_note>"
+            ]
+        },
+        "artifact_init": {
+            "command": "docflow init <markdown_file> <artifact_path> <artifact_type> <change_note>",
+            "required_fields": [
+                "markdown_file",
+                "artifact_path",
+                "artifact_type",
+                "change_note"
+            ],
+            "optional_fields": [
+                "title",
+                "purpose",
+                "artifact_version",
+                "artifact_revision",
+                "schema_version",
+                "status",
+                "task_id",
+                "actor",
+                "scope",
+                "tags"
+            ]
+        },
+        "instructions": [
+            "Use docflow init at session start to discover the standalone utility contract.",
+            "Read AGENTS.md and AGENTS.sidecar.md before documentation mutation.",
+            "Use JSON mode for agent handoff, blocker parsing, and next_actions.",
+            "Run validation/readiness before closing documentation-shaped work.",
+            "Use artifact init mode only when creating a new canonical markdown artifact."
         ],
-        std::slice::from_ref(&path),
-    ))
+        "blocker_codes": [],
+        "next_actions": [
+            "Run docflow doctor --root .",
+            "Run docflow readiness-check --profile active-canon",
+            "Run docflow help for the complete command surface"
+        ],
+    });
+    if json {
+        serde_json::to_string(&payload).map_err(|error| error.to_string())
+    } else {
+        Ok(format!(
+            "docflow init\n  mode: agent_bootstrap\n  status: ready\n  purpose: {}\n  runtime_root: {}\n  read_first:\n    - AGENTS.md\n    - AGENTS.sidecar.md\n    - docs/project-root-map.md\n    - docs/process/documentation-tooling-map.md\n  safe_first_commands:\n    - docflow init --json\n    - docflow doctor --root .\n    - docflow check-file --path <file>\n    - docflow readiness-check --profile active-canon\n  artifact_init:\n    command: {}\n  agent_instructions:\n    1) Read bootstrap docs before mutation.\n    2) Prefer --json for handoff, blockers, and next_actions.\n    3) Validate/readiness-check touched docs before closure.\n    4) Use artifact init mode only for new canonical markdown artifacts.\n  next_actions:\n    - docflow doctor --root .\n    - docflow readiness-check --profile active-canon\n    - docflow help",
+            payload["purpose"]
+                .as_str()
+                .unwrap_or("DocFlow documentation utility."),
+            payload["runtime_root"].as_str().unwrap_or("unknown"),
+            payload["artifact_init"]["command"],
+        ))
+    }
 }
 
 fn move_artifact(args: MoveArgs) -> Result<String, String> {
@@ -3588,6 +3757,7 @@ fn collect_tree_issues(
 mod tests {
     use super::{Cli, activation_issue_for, protocol_coverage_issue_for, run};
     use clap::Parser;
+    use serde_json::Value;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -4513,6 +4683,81 @@ mod tests {
         assert!(changelog_body.contains("\"reason\":\"initialize artifact\""));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn init_artifact_json_reports_created_artifact() {
+        let root = temp_dir("init-json-root");
+        let markdown = root.join("docs/process/new-json.md");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "init",
+            markdown.to_string_lossy().as_ref(),
+            "process/new-json",
+            "process_doc",
+            "initialize artifact as json",
+            "--json",
+        ]);
+        let rendered = run(cli);
+        let payload: Value = serde_json::from_str(&rendered)
+            .unwrap_or_else(|error| panic!("artifact init should emit JSON: {error}"));
+        assert_eq!(
+            payload.get("mode").and_then(|value| value.as_str()),
+            Some("artifact_init")
+        );
+        assert_eq!(
+            payload
+                .get("artifact_path")
+                .and_then(|value| value.as_str()),
+            Some("process/new-json")
+        );
+        assert_eq!(
+            payload
+                .get("validation")
+                .and_then(|value| value.get("verdict"))
+                .and_then(|value| value.as_str()),
+            Some("ok")
+        );
+        assert!(markdown.exists());
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn init_without_args_prints_agent_ready_instructions() {
+        let cli = Cli::parse_from(["docflow", "init"]);
+        let rendered = run(cli);
+        assert!(rendered.contains("docflow init"));
+        assert!(rendered.contains("mode: agent_bootstrap"));
+        assert!(rendered.contains("AGENTS.sidecar.md"));
+        assert!(rendered.contains("docflow readiness-check --profile active-canon"));
+    }
+
+    #[test]
+    fn init_without_args_json_outputs_instructions_payload() {
+        let cli = Cli::parse_from(["docflow", "init", "--json"]);
+        let rendered = run(cli);
+        let payload: Value = serde_json::from_str(&rendered).unwrap_or_else(|error| {
+            panic!("init command should emit JSON when --json is set: {error}")
+        });
+        assert_eq!(
+            payload.get("command"),
+            Some(&Value::String("init".to_string()))
+        );
+        assert_eq!(
+            payload.get("mode").and_then(|value| value.as_str()),
+            Some("agent_bootstrap")
+        );
+        assert!(payload.get("instructions").is_some());
+        assert!(payload.get("next_actions").is_some());
+        assert!(
+            payload
+                .get("artifact_init")
+                .and_then(|value| value.get("command"))
+                .and_then(|value| value.as_str())
+                .is_some()
+        );
     }
 
     #[test]

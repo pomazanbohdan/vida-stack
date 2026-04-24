@@ -14,6 +14,7 @@ members = [
     "crates/docflow-readiness",
     "crates/docflow-relations",
     "crates/docflow-validation",
+    "crates/taskflow-cli",
     "crates/taskflow-config",
     "crates/taskflow-contracts",
     "crates/taskflow-core",

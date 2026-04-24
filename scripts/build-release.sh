@@ -57,6 +57,8 @@ DIST_DIR="$ROOT_DIR/dist"
 PACKAGE_ROOT="$DIST_DIR/package"
 STAGE_DIR="$PACKAGE_ROOT/$ARCHIVE_BASE"
 VIDA_BIN="$STAGE_DIR/bin/vida"
+TASKFLOW_BIN="$STAGE_DIR/bin/taskflow"
+DOCFLOW_BIN="$STAGE_DIR/bin/docflow"
 INSTALL_ASSETS_DIR="$STAGE_DIR/install/assets"
 INSTALLER_ASSET="$DIST_DIR/vida-install.sh"
 MANIFEST_OUT="$DIST_DIR/${ARCHIVE_BASE}.manifest.json"
@@ -82,14 +84,22 @@ cp -R "$ROOT_DIR/vida" "$STAGE_DIR/vida"
 find "$STAGE_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$STAGE_DIR" -type f -name '*.pyc' -delete
 
-cargo build --release -p vida
-RUNTIME_SOURCE="$ROOT_DIR/target/release/vida"
-if [[ -f "$ROOT_DIR/target/release/vida.exe" ]]; then
-  RUNTIME_SOURCE="$ROOT_DIR/target/release/vida.exe"
-fi
-[[ -f "$RUNTIME_SOURCE" ]] || fail "Missing built runtime binary: $RUNTIME_SOURCE"
-cp "$RUNTIME_SOURCE" "$VIDA_BIN"
-chmod +x "$VIDA_BIN"
+cargo build --release -p vida -p taskflow-cli -p docflow-cli
+copy_runtime_binary() {
+  local binary_name="$1"
+  local destination="$2"
+  local source="$ROOT_DIR/target/release/$binary_name"
+  if [[ -f "$ROOT_DIR/target/release/${binary_name}.exe" ]]; then
+    source="$ROOT_DIR/target/release/${binary_name}.exe"
+  fi
+  [[ -f "$source" ]] || fail "Missing built runtime binary: $source"
+  cp "$source" "$destination"
+  chmod +x "$destination"
+}
+
+copy_runtime_binary vida "$VIDA_BIN"
+copy_runtime_binary taskflow "$TASKFLOW_BIN"
+copy_runtime_binary docflow "$DOCFLOW_BIN"
 cp "$ROOT_DIR/docs/framework/templates/vida.config.yaml.template" "$INSTALL_ASSETS_DIR/vida.config.yaml.template"
 
 PY_MANIFEST_OUT="$(normalize_path_for_python "$MANIFEST_OUT")"
@@ -119,25 +129,35 @@ manifest = {
         ".kilo/",
         ".opencode/",
         "bin/vida",
+        "bin/taskflow",
+        "bin/docflow",
         "install/assets/",
         "vida/",
     ],
     "installed_entrypoints": [
         "vida",
+        "taskflow",
+        "docflow",
         "vida docflow",
         "vida taskflow",
     ],
     "bundled_binaries": [
         "bin/vida",
+        "bin/taskflow",
+        "bin/docflow",
     ],
     "installer_managed_runtimes": [
         "vida",
+        "taskflow",
+        "docflow",
     ],
     "launcher_contracts": {
         "taskflow": "vida taskflow",
         "docflow": "vida docflow"
     },
     "installed_compatibility_contracts": {
+        "taskflow": "canonical taskflow runtime",
+        "docflow": "canonical docflow runtime",
         "vida docflow": "canonical docflow runtime",
         "vida taskflow": "canonical taskflow runtime"
     },

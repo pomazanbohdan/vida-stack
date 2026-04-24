@@ -79,10 +79,13 @@ jobs:
           manifests = sorted(Path("dist").glob("vida-stack-v*.manifest.json"))
           assert manifests, "release manifest was not generated"
           data = json.loads(manifests[0].read_text())
-          expected_roots = ["AGENTS.md", "AGENTS.sidecar.md", ".codex/", "bin/vida", "install/assets/", "vida/"]
+          expected_roots = ["AGENTS.md", "AGENTS.sidecar.md", ".codex/", ".qwen/", ".kilo/", ".opencode/", "bin/vida", "bin/taskflow", "bin/docflow", "install/assets/", "vida/"]
           assert data["included_roots"] == expected_roots, data["included_roots"]
-          assert data["bundled_binaries"] == ["bin/vida"], data["bundled_binaries"]
-          assert data["installer_managed_runtimes"] == ["vida"], data["installer_managed_runtimes"]
+          assert data["installed_entrypoints"] == ["vida", "taskflow", "docflow", "vida docflow", "vida taskflow"], data["installed_entrypoints"]
+          assert data["installed_compatibility_contracts"]["taskflow"] == "canonical taskflow runtime", data["installed_compatibility_contracts"]
+          assert data["installed_compatibility_contracts"]["docflow"] == "canonical docflow runtime", data["installed_compatibility_contracts"]
+          assert data["bundled_binaries"] == ["bin/vida", "bin/taskflow", "bin/docflow"], data["bundled_binaries"]
+          assert data["installer_managed_runtimes"] == ["vida", "taskflow", "docflow"], data["installer_managed_runtimes"]
 
           archive = sorted(Path("dist").glob("vida-stack-v*.tar.gz"))[0]
           with tarfile.open(archive, "r:gz") as tf:
@@ -91,6 +94,8 @@ jobs:
           assert any(name.endswith("/AGENTS.md") for name in names), names[:20]
           assert any(name.endswith("/AGENTS.sidecar.md") for name in names), names[:20]
           assert any(name.endswith("/bin/vida") for name in names), names[:20]
+          assert any(name.endswith("/bin/taskflow") for name in names), names[:20]
+          assert any(name.endswith("/bin/docflow") for name in names), names[:20]
           assert any("/.codex/config.toml" in name for name in names), names[:20]
           assert any("/vida/root-map.md" in name for name in names), names[:20]
           assert any("/install/assets/vida.config.yaml.template" in name for name in names), names[:20]
@@ -134,13 +139,23 @@ jobs:
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor --state-dir "$TMP_STATE" >/tmp/vida-doctor.txt
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida status --state-dir "$TMP_STATE" --json >/tmp/vida-status.json
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor --state-dir "$TMP_STATE" --json >/tmp/vida-doctor-json.txt
+          PATH="$TMP_BIN:$PATH" taskflow help >/tmp/taskflow-help.txt
+          PATH="$TMP_BIN:$PATH" docflow --help >/tmp/docflow-help.txt
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida taskflow help >/tmp/vida-taskflow-help.txt
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida docflow help >/tmp/vida-docflow-help.txt
+
+          PATH="$TMP_BIN:$PATH" docflow init >/tmp/docflow-init.txt
+          PATH="$TMP_BIN:$PATH" docflow init --json >/tmp/docflow-init.json
+
           (
             cd "$TMP_PROJECT"
             VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida init >/tmp/vida-init.txt
           )
 
+          grep -q "TaskFlow CLI" /tmp/taskflow-help.txt
+          grep -q "Standalone DocFlow CLI" /tmp/docflow-help.txt
+          grep -q "mode: agent_bootstrap" /tmp/docflow-init.txt
+          grep -q '"mode":"agent_bootstrap"' /tmp/docflow-init.json
           grep -q "$INSTALL_ROOT/current" /tmp/vida-root.txt
           grep -q "storage metadata: ok" /tmp/vida-doctor.txt
           grep -q '"surface": "vida status"' /tmp/vida-status.json
