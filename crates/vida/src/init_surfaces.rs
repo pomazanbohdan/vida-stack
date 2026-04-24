@@ -13,6 +13,7 @@ use super::{
 use crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload;
 
 const DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS: u64 = 10;
+const COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS: u64 = 30;
 
 async fn best_effort_record_agent_init_dispatch_timeout_receipt(
     state_root: &Path,
@@ -1408,7 +1409,7 @@ pub(crate) async fn run_boot(args: BootArgs) -> ExitCode {
         .unwrap_or_else(|| PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT));
 
     match tokio::time::timeout(
-        std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+        std::time::Duration::from_secs(COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS),
         StateStore::open(state_dir),
     )
     .await
@@ -1602,7 +1603,7 @@ pub(crate) async fn run_boot(args: BootArgs) -> ExitCode {
         }
         Err(_) => {
             eprintln!(
-                "Timed out opening authoritative state store for `vida boot` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+                "Timed out opening authoritative state store for `vida boot` after {COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS}s (cold authoritative state open timeout)"
             );
             ExitCode::from(1)
         }
@@ -1618,7 +1619,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
         PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
 
     match tokio::time::timeout(
-        std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+        std::time::Duration::from_secs(COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS),
         StateStore::open(state_dir),
     )
     .await
@@ -1854,7 +1855,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
         }
         Err(_) => {
             eprintln!(
-                "Timed out opening authoritative state store for `vida orchestrator-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+                "Timed out opening authoritative state store for `vida orchestrator-init` after {COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS}s (cold authoritative state open timeout)"
             );
             ExitCode::from(1)
         }
@@ -1867,7 +1868,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
         .unwrap_or_else(state_store::default_state_dir);
 
     match tokio::time::timeout(
-        std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+        std::time::Duration::from_secs(COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS),
         async {
             match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => Ok(store),
@@ -2283,7 +2284,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
         }
         Err(_) => {
             eprintln!(
-                "Timed out opening authoritative state store for `vida agent-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+                "Timed out opening authoritative state store for `vida agent-init` after {COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS}s (cold authoritative state open timeout)"
             );
             ExitCode::from(1)
         }
