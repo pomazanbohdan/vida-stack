@@ -171,6 +171,16 @@ fn copy_executable(from: &str, to: &str) {
     fs::set_permissions(to, perms).expect("copied binary perms should be updated");
 }
 
+fn task_rows_from_payload<'a>(
+    value: &'a serde_json::Value,
+    label: &str,
+) -> &'a Vec<serde_json::Value> {
+    value
+        .as_array()
+        .or_else(|| value.get("tasks").and_then(serde_json::Value::as_array))
+        .unwrap_or_else(|| panic!("{label} payload should expose task rows"))
+}
+
 fn write_file(path: &str, body: &str) {
     if let Some(parent) = std::path::Path::new(path).parent() {
         fs::create_dir_all(parent).expect("parent dir should exist");
@@ -2496,6 +2506,93 @@ fn agent_init_renders_worker_startup_view_json_for_explicit_role() {
         stderr.contains("Authoritative state root is not project-bound"),
         "{stderr}"
     );
+}
+
+#[test]
+fn bootstrap_init_surfaces_report_installed_vs_source_launcher_parity() {
+    let home_root = format!("{}/home", unique_state_dir());
+    let local_vida = format!("{home_root}/.local/bin/vida");
+    let cargo_vida = format!("{home_root}/.cargo/bin/vida");
+    fs::create_dir_all(format!("{home_root}/.local/bin")).expect("local bin dir should exist");
+    fs::create_dir_all(format!("{home_root}/.cargo/bin")).expect("cargo bin dir should exist");
+    copy_executable(env!("CARGO_BIN_EXE_vida"), &local_vida);
+    copy_executable(env!("CARGO_BIN_EXE_vida"), &cargo_vida);
+
+    for (project_id, project_name, args) in [
+        (
+            "launcher-parity-orchestrator-smoke",
+            "Launcher Parity Orchestrator Smoke",
+            vec!["orchestrator-init", "--json"],
+        ),
+        (
+            "launcher-parity-agent-smoke",
+            "Launcher Parity Agent Smoke",
+            vec!["agent-init", "--role", "worker", "--json"],
+        ),
+    ] {
+        let (project_root, state_dir) = bootstrap_project_runtime(project_id, project_name);
+        let output = run_command_with_state_lock_retry(|| {
+            let mut command = vida();
+            command
+                .args(&args)
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("HOME", &home_root)
+                .env("VIDA_STATE_DIR", &state_dir);
+            command
+        });
+        assert!(
+            output.status.success(),
+            "{} {:?}",
+            String::from_utf8_lossy(&output.stderr),
+            args
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).expect("init surface json should parse");
+        let launcher = &parsed["runtime_bundle_summary"]["launcher_runtime_paths"];
+        assert_eq!(launcher["status"], "pass", "{args:?}");
+        assert_eq!(launcher["next_actions"].as_array().map(Vec::len), Some(0));
+        assert_eq!(launcher["divergent_installed_binaries"], false);
+        assert_eq!(launcher["vida"], "vida");
+        assert_eq!(launcher["taskflow_surface"], "vida taskflow");
+        assert_eq!(launcher["project_root"], project_root);
+
+        let active_fingerprint = launcher["active_executable_fingerprint"]
+            .as_str()
+            .expect("active executable fingerprint should render");
+        assert!(!active_fingerprint.is_empty());
+        let installed = launcher["installed_binaries"]
+            .as_array()
+            .expect("installed binary evidence should render");
+        assert!(
+            installed.len() >= 3,
+            "HOME-installed copies and active source binary should be reported: {installed:?}"
+        );
+        let installed_paths = installed
+            .iter()
+            .map(|entry| {
+                assert_eq!(entry["fingerprint"], active_fingerprint);
+                entry["path"]
+                    .as_str()
+                    .expect("installed binary path should render")
+                    .to_string()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(installed_paths.contains(&local_vida));
+        assert!(installed_paths.contains(&cargo_vida));
+        assert_eq!(
+            installed
+                .iter()
+                .filter(|entry| entry["active"] == true)
+                .count(),
+            1,
+            "exactly one active source-built launcher should be marked active"
+        );
+        fs::remove_dir_all(project_root).expect("temp root should be removed");
+    }
 }
 
 #[test]
@@ -10188,9 +10285,7 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     let project_list_stderr = String::from_utf8_lossy(&project_list.stderr);
     let project_list_json: serde_json::Value =
         serde_json::from_str(&project_list_stdout).expect("project list json should parse");
-    let project_rows = project_list_json
-        .as_array()
-        .expect("project list payload should be an array");
+    let project_rows = task_rows_from_payload(&project_list_json, "project list");
     assert_eq!(project_rows.len(), 2);
     assert!(project_rows.iter().any(|row| row["id"] == "vida-root"));
     assert!(project_rows.iter().any(|row| row["id"] == "vida-child"));
@@ -10365,9 +10460,7 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     let installed_ready_stderr = String::from_utf8_lossy(&installed_ready.stderr);
     let installed_ready_json: serde_json::Value =
         serde_json::from_str(&installed_ready_stdout).expect("installed ready json should parse");
-    let installed_ready_rows = installed_ready_json
-        .as_array()
-        .expect("installed ready payload should be an array");
+    let installed_ready_rows = task_rows_from_payload(&installed_ready_json, "installed ready");
     assert_eq!(installed_ready_rows.len(), 1);
     assert_eq!(installed_ready_rows[0]["id"], "vida-child");
     assert_eq!(
@@ -10382,9 +10475,7 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     let installed_list_stderr = String::from_utf8_lossy(&installed_list.stderr);
     let installed_list_json: serde_json::Value =
         serde_json::from_str(&installed_list_stdout).expect("installed list json should parse");
-    let installed_rows = installed_list_json
-        .as_array()
-        .expect("installed list payload should be an array");
+    let installed_rows = task_rows_from_payload(&installed_list_json, "installed list");
     assert_eq!(installed_rows.len(), 2);
     assert!(installed_rows.iter().any(|row| row["id"] == "vida-root"));
     assert!(installed_rows.iter().any(|row| row["id"] == "vida-child"));
