@@ -2172,6 +2172,15 @@ pub(crate) fn normalize_taskflow_diagnostic_operator_contract_payload(
     Ok(payload)
 }
 
+fn normalize_taskflow_route_diagnostic_payload(
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    normalize_taskflow_diagnostic_operator_contract_payload(
+        payload,
+        "inspect route diagnostic blockers with `vida taskflow route explain --json` or `vida taskflow validate-routing --json`",
+    )
+}
+
 fn execution_plan_from_dispatch_context(
     context: &crate::state_store::RunGraphDispatchContext,
 ) -> Option<&serde_json::Value> {
@@ -2510,18 +2519,15 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                 "blocker_codes": ["run_graph_dispatch_context_missing"],
                 "run_id": parsed.run_id,
             });
-            let payload = normalize_taskflow_diagnostic_operator_contract_payload(
-                payload,
-                "create or select a run-graph dispatch context before using this diagnostic surface",
-            )
-            .unwrap_or_else(|_| {
-                serde_json::json!({
-                    "surface": "vida taskflow diagnostic",
-                    "status": "blocked",
-                    "blocker_codes": ["unsupported_blocker_code"],
-                    "next_actions": ["inspect diagnostic blockers"]
-                })
-            });
+            let payload =
+                normalize_taskflow_route_diagnostic_payload(payload).unwrap_or_else(|_| {
+                    serde_json::json!({
+                        "surface": "vida taskflow diagnostic",
+                        "status": "blocked",
+                        "blocker_codes": ["unsupported_blocker_code"],
+                        "next_actions": ["inspect diagnostic blockers"]
+                    })
+                });
             crate::print_json_pretty(&payload);
             return ExitCode::from(1);
         }
@@ -2607,6 +2613,14 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
             build_config_actuation_census_payload(&context, execution_plan)
         }
     };
+    let payload = normalize_taskflow_route_diagnostic_payload(payload).unwrap_or_else(|_| {
+        serde_json::json!({
+            "surface": "vida taskflow diagnostic",
+            "status": "blocked",
+            "blocker_codes": ["unsupported_blocker_code"],
+            "next_actions": ["inspect diagnostic blockers"]
+        })
+    });
 
     if parsed.as_json {
         crate::print_json_pretty(&payload);
@@ -3273,6 +3287,69 @@ mod tests {
     }
 
     #[test]
+    fn route_diagnostic_payload_normalizer_applies_pass_contract_parity() {
+        let payload = serde_json::json!({
+            "surface": "vida taskflow route explain",
+            "status": "blocked",
+            "blocker_codes": [],
+            "next_actions": [" stale action "],
+            "route": {
+                "status": "pass",
+                "blocker_codes": []
+            }
+        });
+
+        let normalized = super::normalize_taskflow_route_diagnostic_payload(payload)
+            .expect("route diagnostic payload should normalize");
+
+        assert_eq!(normalized["status"], "pass");
+        assert_eq!(normalized["blocker_codes"], serde_json::json!([]));
+        assert_eq!(normalized["next_actions"], serde_json::json!([]));
+        assert_eq!(normalized["shared_fields"]["status"], normalized["status"]);
+        assert_eq!(
+            normalized["operator_contracts"]["blocker_codes"],
+            normalized["blocker_codes"]
+        );
+        assert_eq!(
+            normalized["operator_contracts"]["next_actions"],
+            normalized["next_actions"]
+        );
+    }
+
+    #[test]
+    fn config_diagnostic_payload_normalizer_applies_blocked_contract_parity() {
+        let payload = serde_json::json!({
+            "surface": "vida taskflow config-actuation census",
+            "status": "pass",
+            "blocker_codes": ["route_missing"],
+            "next_actions": [],
+            "routes": []
+        });
+
+        let normalized = super::normalize_taskflow_route_diagnostic_payload(payload)
+            .expect("config diagnostic payload should normalize");
+
+        assert_eq!(normalized["status"], "blocked");
+        assert_eq!(
+            normalized["blocker_codes"],
+            serde_json::json!(["unsupported_blocker_code"])
+        );
+        assert_eq!(
+            normalized["next_actions"],
+            serde_json::json!(["inspect route diagnostic blockers with `vida taskflow route explain --json` or `vida taskflow validate-routing --json`"])
+        );
+        assert_eq!(normalized["shared_fields"]["status"], normalized["status"]);
+        assert_eq!(
+            normalized["operator_contracts"]["blocker_codes"],
+            normalized["blocker_codes"]
+        );
+        assert_eq!(
+            normalized["operator_contracts"]["next_actions"],
+            normalized["next_actions"]
+        );
+    }
+
+    #[test]
     fn route_payload_accepts_runtime_selected_internal_host_carrier_without_matrix_row() {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
@@ -3357,7 +3434,9 @@ mod tests {
         assert_eq!(payload["surface"], "vida taskflow config-actuation census");
         assert_eq!(payload["scope"], "routing_model_selection_keys");
         assert_eq!(payload["route_count"], 1);
-        assert!(payload["row_count"].as_u64().is_some_and(|count| count >= 10));
+        assert!(payload["row_count"]
+            .as_u64()
+            .is_some_and(|count| count >= 10));
         let rows = payload["routes"][0]["rows"]
             .as_array()
             .expect("config actuation rows should render");
