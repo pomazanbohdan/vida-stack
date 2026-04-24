@@ -1997,6 +1997,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RouteDiagnosticMode {
     Explain,
+    ModelProfileReadinessAudit,
     ValidateRouting,
     ConfigActuationCensus,
 }
@@ -2017,13 +2018,16 @@ fn parse_taskflow_route_diagnostic_args(
         [head, subcommand, ..] if head == "route" && subcommand == "explain" => {
             (RouteDiagnosticMode::Explain, 2)
         }
+        [head, subcommand, ..] if head == "route" && subcommand == "model-profile-readiness" => {
+            (RouteDiagnosticMode::ModelProfileReadinessAudit, 2)
+        }
         [head, ..] if head == "validate-routing" => (RouteDiagnosticMode::ValidateRouting, 1),
         [head, subcommand, ..] if head == "config-actuation" && subcommand == "census" => {
             (RouteDiagnosticMode::ConfigActuationCensus, 2)
         }
         _ => {
             return Err(
-                "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
+                "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
             );
         }
     };
@@ -2064,12 +2068,12 @@ fn parse_taskflow_route_diagnostic_args(
             }
             "--help" | "-h" => {
                 return Err(
-                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
+                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
                 );
             }
             _ => {
                 return Err(
-                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
+                    "Usage: vida taskflow route explain [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow route model-profile-readiness [--run-id <run-id>] [--dispatch-target <target>|--runtime-role <role>] [--json]\n       vida taskflow validate-routing [--run-id <run-id>] [--json]\n       vida taskflow config-actuation census [--run-id <run-id>] [--json]",
                 );
             }
         }
@@ -2596,6 +2600,9 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
             let payload = serde_json::json!({
                 "surface": match parsed.mode {
                     RouteDiagnosticMode::Explain => "vida taskflow route explain",
+                    RouteDiagnosticMode::ModelProfileReadinessAudit => {
+                        "vida taskflow route model-profile-readiness"
+                    }
                     RouteDiagnosticMode::ValidateRouting => "vida taskflow validate-routing",
                     RouteDiagnosticMode::ConfigActuationCensus => {
                         "vida taskflow config-actuation census"
@@ -2630,7 +2637,8 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     };
 
-    let payload = match parsed.mode {
+    let mode = parsed.mode;
+    let payload = match mode {
         RouteDiagnosticMode::Explain => {
             let dispatch_target = match parsed.dispatch_target {
                 Some(target) => target,
@@ -2660,6 +2668,34 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                 "dispatch_target": dispatch_target,
                 "route": explain,
             })
+        }
+        RouteDiagnosticMode::ModelProfileReadinessAudit => {
+            let dispatch_target = match parsed.dispatch_target {
+                Some(target) => target,
+                None => match parsed.runtime_role.as_deref() {
+                    Some(role) => match crate::taskflow_routing::dispatch_target_for_runtime_role(
+                        execution_plan,
+                        role,
+                    ) {
+                        Some(target) => target,
+                        None => {
+                            eprintln!(
+                                "Unable to resolve dispatch target for runtime role `{role}`."
+                            );
+                            return ExitCode::from(1);
+                        }
+                    },
+                    None => "implementation".to_string(),
+                },
+            };
+            let route = route_payload_for_dispatch_target(execution_plan, &dispatch_target);
+            let mut audit =
+                model_profile_readiness_audit_payload_for_route(&dispatch_target, &route);
+            if let Some(object) = audit.as_object_mut() {
+                object.insert("run_id".to_string(), serde_json::Value::String(context.run_id));
+                object.insert("task_id".to_string(), serde_json::Value::String(context.task_id));
+            }
+            audit
         }
         RouteDiagnosticMode::ValidateRouting => {
             let routes = route_validate_targets(execution_plan)
@@ -2699,14 +2735,18 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
             build_config_actuation_census_payload(&context, execution_plan)
         }
     };
-    let payload = normalize_taskflow_route_diagnostic_payload(payload).unwrap_or_else(|_| {
-        serde_json::json!({
-            "surface": "vida taskflow diagnostic",
-            "status": "blocked",
-            "blocker_codes": ["unsupported_blocker_code"],
-            "next_actions": ["inspect diagnostic blockers"]
+    let payload = if matches!(mode, RouteDiagnosticMode::ModelProfileReadinessAudit) {
+        payload
+    } else {
+        normalize_taskflow_route_diagnostic_payload(payload).unwrap_or_else(|_| {
+            serde_json::json!({
+                "surface": "vida taskflow diagnostic",
+                "status": "blocked",
+                "blocker_codes": ["unsupported_blocker_code"],
+                "next_actions": ["inspect diagnostic blockers"]
+            })
         })
-    });
+    };
 
     if parsed.as_json {
         crate::print_json_pretty(&payload);
@@ -3284,6 +3324,38 @@ mod tests {
             super::RouteDiagnosticMode::ConfigActuationCensus
         );
         assert!(parsed.as_json);
+    }
+
+    #[test]
+    fn route_diagnostic_parser_accepts_model_profile_readiness_audit() {
+        let args = vec![
+            "route".to_string(),
+            "model-profile-readiness".to_string(),
+            "--runtime-role".to_string(),
+            "worker".to_string(),
+            "--json".to_string(),
+        ];
+        let parsed = super::parse_taskflow_route_diagnostic_args(&args).unwrap();
+        assert_eq!(
+            parsed.mode,
+            super::RouteDiagnosticMode::ModelProfileReadinessAudit
+        );
+        assert_eq!(parsed.runtime_role.as_deref(), Some("worker"));
+        assert!(parsed.as_json);
+    }
+
+    #[test]
+    fn route_diagnostic_help_discovers_model_profile_readiness_audit() {
+        let args = vec![
+            "route".to_string(),
+            "model-profile-readiness".to_string(),
+            "--help".to_string(),
+        ];
+        let usage = super::parse_taskflow_route_diagnostic_args(&args)
+            .expect_err("route help should return usage text");
+
+        assert!(usage.contains("vida taskflow route model-profile-readiness"));
+        assert!(usage.contains("--dispatch-target <target>|--runtime-role <role>"));
     }
 
     #[test]
