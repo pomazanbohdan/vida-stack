@@ -487,7 +487,8 @@ fn build_graph_mutation_receipt(
         after_task_count: input.after_task_count,
         planned_task_ids,
         planned_dependency_edges: input.planned_dependencies.to_vec(),
-        validation_scope: "before=current_authoritative_task_rows; after=planned_simulated_task_rows".to_string(),
+        validation_scope:
+            "before=current_authoritative_task_rows; after=planned_simulated_task_rows".to_string(),
         operator_truth: serde_json::json!({
             "receipt_records_graph_mutation_shape": true,
             "records_before_after_validation": true,
@@ -2114,8 +2115,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
+        build_spawn_blocker_preview, build_split_mutation_preview,
         canonical_json_string_array_entries, normalize_task_json_contract_arrays,
-        parse_label_values, parse_optional_label_value, task_json_success_status,
+        parse_label_values, parse_optional_label_value, parse_split_child_specs,
+        task_json_success_status,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
@@ -2403,6 +2406,144 @@ mod tests {
             assert!(blocker.dependencies.iter().any(|dependency| {
                 dependency.depends_on_id == "epic-root" && dependency.edge_type == "parent-child"
             }));
+        });
+    }
+
+    #[test]
+    fn split_preview_includes_first_class_graph_mutation_receipt() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(&store, "dep-task", "Dependency", "task", "open", 1, None).await;
+            create_task_for_test(
+                &store,
+                "source-task",
+                "Source task",
+                "task",
+                "open",
+                2,
+                None,
+            )
+            .await;
+            store
+                .add_task_dependency("source-task", "dep-task", "depends-on", "test")
+                .await
+                .expect("dependency should create");
+            let source = store
+                .show_task("source-task")
+                .await
+                .expect("source task should load");
+            let rows = store.all_tasks().await.expect("task rows should load");
+            let child_specs = parse_split_child_specs(&[
+                "source-task-a:First slice".to_string(),
+                "source-task-b:Second slice".to_string(),
+            ])
+            .expect("child specs should parse");
+
+            let (result, _simulated_rows) = build_split_mutation_preview(
+                &rows,
+                &source,
+                &child_specs,
+                "oversized task",
+                "vida task split",
+                false,
+            )
+            .expect("split preview should build");
+
+            let receipt = &result.graph_mutation_receipt;
+            assert_eq!(receipt.receipt_kind, "task_graph_mutation_receipt");
+            assert_eq!(receipt.schema_version, "1");
+            assert_eq!(receipt.mutation_kind, "split_task");
+            assert_eq!(receipt.source_task_id, "source-task");
+            assert_eq!(receipt.dry_run, false);
+            assert_eq!(receipt.applied, true);
+            assert_eq!(receipt.before_validation.status, "pass");
+            assert_eq!(receipt.after_validation.status, "pass");
+            assert_eq!(receipt.before_task_count, rows.len());
+            assert_eq!(receipt.after_task_count, rows.len() + 2);
+            assert_eq!(
+                receipt.planned_task_ids,
+                vec!["source-task-a".to_string(), "source-task-b".to_string()]
+            );
+            assert_eq!(
+                receipt.operator_truth["adaptive_replanner_loop_implemented"],
+                false
+            );
+            assert_eq!(
+                receipt.operator_truth["adaptive_replanner_loop_truth"],
+                "not_implemented_in_this_slice"
+            );
+        });
+    }
+
+    #[test]
+    fn spawn_blocker_preview_receipt_records_dry_run_truth() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(
+                &store,
+                "source-task",
+                "Source task",
+                "task",
+                "open",
+                2,
+                None,
+            )
+            .await;
+            let source = store
+                .show_task("source-task")
+                .await
+                .expect("source task should load");
+            let rows = store.all_tasks().await.expect("task rows should load");
+            let command = crate::TaskSpawnBlockerArgs {
+                task_id: "source-task".to_string(),
+                blocker_task_id: "blocker-task".to_string(),
+                title: "Blocker title".to_string(),
+                reason: "new dependency discovered".to_string(),
+                description: None,
+                issue_type: "task".to_string(),
+                status: "open".to_string(),
+                priority: None,
+                labels: Vec::new(),
+                dry_run: true,
+                state_dir: Some(harness.path().to_path_buf()),
+                render: crate::RenderMode::Plain,
+                json: true,
+            };
+
+            let (result, _simulated_rows) =
+                build_spawn_blocker_preview(&rows, &source, &command, "vida task spawn-blocker")
+                    .expect("spawn blocker preview should build");
+
+            let receipt = &result.graph_mutation_receipt;
+            assert_eq!(receipt.receipt_kind, "task_graph_mutation_receipt");
+            assert_eq!(receipt.mutation_kind, "spawn_blocker_task");
+            assert_eq!(receipt.dry_run, true);
+            assert_eq!(receipt.applied, false);
+            assert_eq!(receipt.before_validation.status, "pass");
+            assert_eq!(receipt.after_validation.status, "pass");
+            assert_eq!(receipt.before_task_count, rows.len());
+            assert_eq!(receipt.after_task_count, rows.len() + 1);
+            assert_eq!(receipt.planned_task_ids, vec!["blocker-task".to_string()]);
+            assert_eq!(
+                receipt.planned_dependency_edges[0].reason,
+                "spawn_blocker_dependency"
+            );
+            assert_eq!(
+                receipt.operator_truth["records_before_after_validation"],
+                true
+            );
         });
     }
 
