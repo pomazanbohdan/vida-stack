@@ -1,8 +1,9 @@
 use std::process::ExitCode;
 
 use super::{
-    Cli, Command, ReleaseCommand, TaskArgs, TaskCommand, agent_feedback_surface, approval_surface,
-    docflow_proxy, doctor_surface, init_surfaces, lane_surface, memory_surface, print_root_help,
+    AgentArgs, AgentCommand, Cli, Command, ReleaseCommand, TaskArgs, TaskCommand,
+    agent_dispatch_surface, agent_feedback_surface, approval_surface, docflow_proxy,
+    doctor_surface, init_surfaces, lane_surface, memory_surface, print_root_help,
     project_activator_surface, protocol_surface, release_surface, resolve_runtime_project_root,
     run_taskflow_proxy, state_store, status_surface, task_surface,
 };
@@ -22,6 +23,7 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         Some(Command::Boot(args)) => init_surfaces::run_boot(args).await,
         Some(Command::OrchestratorInit(args)) => init_surfaces::run_orchestrator_init(args).await,
         Some(Command::AgentInit(args)) => init_surfaces::run_agent_init(args).await,
+        Some(Command::Agent(args)) => agent_dispatch_surface::run_agent(args).await,
         Some(Command::Protocol(args)) => protocol_surface::run_protocol(args).await,
         Some(Command::ProjectActivator(args)) => {
             project_activator_surface::run_project_activator(args).await
@@ -58,6 +60,12 @@ fn task_command_needs_project_root(args: &TaskArgs) -> bool {
     !matches!(args.command, TaskCommand::Help(_))
 }
 
+fn agent_command_needs_project_root(args: &AgentArgs) -> bool {
+    match &args.command {
+        AgentCommand::DispatchNext(command) => command.state_dir.is_none(),
+    }
+}
+
 fn proxy_command_needs_project_root(args: &[String]) -> bool {
     !matches!(
         args.first().map(String::as_str),
@@ -68,6 +76,7 @@ fn proxy_command_needs_project_root(args: &[String]) -> bool {
 fn command_needs_project_root_state_dir(command: &Option<Command>) -> bool {
     match command {
         Some(Command::Task(args)) => task_command_needs_project_root(args),
+        Some(Command::Agent(args)) => agent_command_needs_project_root(args),
         Some(Command::Taskflow(args) | Command::Consume(args) | Command::Recovery(args)) => {
             proxy_command_needs_project_root(&args.args)
         }

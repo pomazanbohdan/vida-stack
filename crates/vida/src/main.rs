@@ -1,4 +1,5 @@
 mod activation_status;
+mod agent_dispatch_surface;
 mod agent_extension_bundle_validation;
 mod agent_extension_catalog_projection;
 mod agent_extension_registry_projection;

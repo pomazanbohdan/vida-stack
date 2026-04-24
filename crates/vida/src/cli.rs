@@ -70,6 +70,8 @@ pub(crate) enum Command {
         about = "render the bounded startup view or packet activation view for a worker/agent lane"
     )]
     AgentInit(AgentInitArgs),
+    #[command(about = "preview delegated agent lane selection without executing dispatch")]
+    Agent(AgentArgs),
     #[command(about = "resolve and render framework protocol/guide surfaces")]
     Protocol(ProtocolArgs),
     #[command(about = "inspect project activation posture and bounded onboarding next steps")]
@@ -116,6 +118,44 @@ pub(crate) enum Command {
 pub(crate) struct ProxyArgs {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub(crate) args: Vec<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct AgentArgs {
+    #[command(subcommand)]
+    pub(crate) command: AgentCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum AgentCommand {
+    #[command(about = "preview next bounded agent dispatch lanes from TaskFlow readiness")]
+    DispatchNext(AgentDispatchNextArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct AgentDispatchNextArgs {
+    #[arg(
+        long = "lanes",
+        default_value_t = 4,
+        help = "Maximum agent lanes to preview"
+    )]
+    pub(crate) lanes: usize,
+
+    #[arg(long = "scope", help = "Optional TaskFlow scope task id")]
+    pub(crate) scope: Option<String>,
+
+    #[arg(
+        long = "current-task-id",
+        help = "Optional current task id for parallel-safety checks"
+    )]
+    pub(crate) current_task_id: Option<String>,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1152,6 +1192,56 @@ mod tests {
         assert_eq!(accept.files.len(), 1);
         assert_eq!(accept.proofs.len(), 1);
         assert_eq!(accept.status.as_str(), "pass");
+    }
+
+    #[test]
+    fn agent_dispatch_next_help_is_discoverable() {
+        let root_error = Cli::try_parse_from(["vida", "--help"])
+            .expect_err("help should render clap display error");
+        let root_help = root_error.to_string();
+        assert!(root_help.contains("agent"));
+
+        let agent_error = Cli::try_parse_from(["vida", "agent", "--help"])
+            .expect_err("help should render clap display error");
+        let agent_help = agent_error.to_string();
+        assert!(agent_help.contains("dispatch-next"));
+
+        let dispatch_error = Cli::try_parse_from(["vida", "agent", "dispatch-next", "--help"])
+            .expect_err("help should render clap display error");
+        let dispatch_help = dispatch_error.to_string();
+        assert!(dispatch_help.contains("--lanes"));
+        assert!(dispatch_help.contains("--scope"));
+        assert!(dispatch_help.contains("--current-task-id"));
+        assert!(dispatch_help.contains("--state-dir"));
+        assert!(dispatch_help.contains("--json"));
+
+        let parsed = Cli::try_parse_from([
+            "vida",
+            "agent",
+            "dispatch-next",
+            "--lanes",
+            "4",
+            "--scope",
+            "audit-epic",
+            "--state-dir",
+            "/tmp/vida-state",
+            "--json",
+        ])
+        .expect("agent dispatch-next should parse");
+        let Some(super::Command::Agent(agent_args)) = parsed.command else {
+            panic!("agent command should parse");
+        };
+        let crate::AgentCommand::DispatchNext(dispatch) = agent_args.command;
+        assert_eq!(dispatch.lanes, 4);
+        assert_eq!(dispatch.scope.as_deref(), Some("audit-epic"));
+        assert_eq!(
+            dispatch
+                .state_dir
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            Some("/tmp/vida-state".to_string())
+        );
+        assert!(dispatch.json);
     }
 
     #[test]
