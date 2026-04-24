@@ -2580,6 +2580,17 @@ fn enrich_dev_team_readiness_with_agent_selection(
         })
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    let selected_model = selected_dev_team_role
+        .get("selected_model")
+        .cloned()
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "model_ref": selected_dev_team_role
+                    .get("default_model")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+            })
+        });
     let selected_cost_units = selected_dev_team_role
         .get("cost_policy")
         .and_then(|cost| cost.get("budget_units"))
@@ -2593,7 +2604,7 @@ fn enrich_dev_team_readiness_with_agent_selection(
             "selected_backend": backend_truth.get("selected_backend").cloned().unwrap_or(serde_json::Value::Null),
             "selected_carrier_id": backend_truth.get("selected_carrier_id").cloned().unwrap_or(serde_json::Value::Null),
             "selected_model_profile_id": backend_truth.get("selected_model_profile_id").cloned().unwrap_or(serde_json::Value::Null),
-            "selected_model": selected_dev_team_role.get("default_model").cloned().unwrap_or(serde_json::Value::Null),
+            "selected_model": selected_model,
             "selected_cost_units": selected_cost_units,
         }),
     );
@@ -2806,6 +2817,10 @@ mod agent_init_surface_tests {
         assert_eq!(
             payload["dev_team_readiness"]["active_selection"]["selected_cost_units"],
             1
+        );
+        assert_eq!(
+            payload["dev_team_readiness"]["active_selection"]["selected_model"]["model_ref"],
+            "gpt-5.4"
         );
     }
 
