@@ -1849,13 +1849,28 @@ struct TaskCloseGitAutomationReceipt {
     push_exit_code: Option<i32>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskOwnedStatusReceipt {
+    status: String,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    task_id: String,
+    ownership_source: String,
+    owned_paths: Vec<String>,
+    dirty_files: Vec<String>,
+    owned_files: Vec<String>,
+    unowned_files: Vec<String>,
+    stageable_files: Vec<String>,
+}
+
 fn task_close_automation_requested(command: &TaskCloseArgs) -> bool {
-    command.release || command.install || command.commit || command.push
+    command.release || command.install || command.commit || command.push || command.stage_owned
 }
 
 fn task_close_automation_receipt(
     command: &TaskCloseArgs,
     project_root: Option<&std::path::Path>,
+    task: Option<&state_store::TaskRecord>,
 ) -> TaskCloseAutomationReceipt {
     let mut blocker_codes = Vec::new();
     let mut next_actions = Vec::new();
@@ -1891,8 +1906,8 @@ fn task_close_automation_receipt(
         None
     };
 
-    let git = if command.commit || command.push {
-        let receipt = task_close_git_automation_receipt(command, project_root);
+    let git = if command.commit || command.push || command.stage_owned {
+        let receipt = task_close_git_automation_receipt(command, project_root, task);
         if receipt.status != "pass" {
             blocker_codes.extend(receipt.blocker_codes.iter().cloned());
             next_actions.extend(receipt.next_actions.iter().cloned());
@@ -1919,12 +1934,9 @@ fn task_close_automation_receipt(
 fn task_close_git_automation_receipt(
     command: &TaskCloseArgs,
     project_root: Option<&std::path::Path>,
+    task: Option<&state_store::TaskRecord>,
 ) -> TaskCloseGitAutomationReceipt {
-    let explicit_files: Vec<String> = command
-        .commit_files
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect();
+    let explicit_files = task_close_commit_file_strings(command, task);
     let commit_message = command.commit_message.clone().or_else(|| {
         command
             .commit
@@ -1939,12 +1951,20 @@ fn task_close_git_automation_receipt(
             "Pass `--commit --commit-file <path>` with `--push` so the pushed change is explicit.",
         );
     }
-    if command.commit && command.commit_files.is_empty() {
+    if command.stage_owned && !command.commit {
+        return blocked_task_close_git_receipt(
+            explicit_files,
+            commit_message,
+            "stage_owned_requires_commit",
+            "Pass `--commit --stage-owned` so owned-path staging is tied to an explicit commit request.",
+        );
+    }
+    if command.commit && explicit_files.is_empty() {
         return blocked_task_close_git_receipt(
             explicit_files,
             commit_message,
             "dirty_ownership_ambiguous",
-            "Pass one or more `--commit-file <path>` values owned by this bounded task.",
+            "Pass one or more `--commit-file <path>` values, or pass `--stage-owned` when the task has planner_metadata.owned_paths.",
         );
     }
 
@@ -1979,10 +1999,14 @@ fn task_close_git_automation_receipt(
             }
         }
 
+        let stage_files: Vec<std::path::PathBuf> = explicit_files
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect();
         let add_status = std::process::Command::new("git")
             .arg("add")
             .arg("--")
-            .args(&command.commit_files)
+            .args(&stage_files)
             .current_dir(&repo_root)
             .status();
         match add_status {
@@ -1999,7 +2023,7 @@ fn task_close_git_automation_receipt(
 
         let diff_status = std::process::Command::new("git")
             .args(["diff", "--cached", "--quiet", "--"])
-            .args(&command.commit_files)
+            .args(&stage_files)
             .current_dir(&repo_root)
             .status();
         match diff_status {
@@ -2027,7 +2051,7 @@ fn task_close_git_automation_receipt(
             .unwrap_or("Close task with post-close automation");
         let commit_status = std::process::Command::new("git")
             .args(["commit", "-m", message, "--"])
-            .args(&command.commit_files)
+            .args(&stage_files)
             .current_dir(&repo_root)
             .status();
         match commit_status {
@@ -2135,6 +2159,111 @@ fn blocked_task_close_git_receipt(
         commit_message,
         commit_exit_code: None,
         push_exit_code: None,
+    }
+}
+
+fn task_close_commit_file_strings(
+    command: &TaskCloseArgs,
+    task: Option<&state_store::TaskRecord>,
+) -> Vec<String> {
+    let mut files: Vec<String> = command
+        .commit_files
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    if command.stage_owned {
+        if let Some(task) = task {
+            files.extend(task.planner_metadata.owned_paths.iter().cloned());
+        }
+    }
+    canonical_owned_paths(files)
+}
+
+fn canonical_owned_paths(paths: Vec<String>) -> Vec<String> {
+    let mut canonical = Vec::new();
+    for path in paths {
+        let trimmed = path.trim().trim_end_matches('/').to_string();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !canonical.contains(&trimmed) {
+            canonical.push(trimmed);
+        }
+    }
+    canonical
+}
+
+fn task_owned_status_receipt(
+    task_id: &str,
+    metadata_owned_paths: Vec<String>,
+    override_files: Vec<String>,
+    dirty_files: Vec<String>,
+) -> TaskOwnedStatusReceipt {
+    let override_files = canonical_owned_paths(override_files);
+    let metadata_owned_paths = canonical_owned_paths(metadata_owned_paths);
+    let (owned_paths, ownership_source) = if !override_files.is_empty() {
+        (override_files, "explicit_file_overrides".to_string())
+    } else if !metadata_owned_paths.is_empty() {
+        (
+            metadata_owned_paths,
+            "planner_metadata.owned_paths".to_string(),
+        )
+    } else {
+        (Vec::new(), "missing".to_string())
+    };
+
+    if owned_paths.is_empty() {
+        return TaskOwnedStatusReceipt {
+            status: "blocked".to_string(),
+            blocker_codes: vec!["missing_owned_paths".to_string()],
+            next_actions: vec![
+                "Add planner_metadata.owned_paths to the task or rerun with repeated `--file <path>` overrides.".to_string(),
+            ],
+            task_id: task_id.to_string(),
+            ownership_source,
+            owned_paths,
+            dirty_files,
+            owned_files: Vec::new(),
+            unowned_files: Vec::new(),
+            stageable_files: Vec::new(),
+        };
+    }
+
+    let mut owned_files = Vec::new();
+    let mut unowned_files = Vec::new();
+    for path in &dirty_files {
+        if path_is_explicitly_owned(path, &owned_paths) {
+            owned_files.push(path.clone());
+        } else {
+            unowned_files.push(path.clone());
+        }
+    }
+    let stageable_files = owned_files.clone();
+    let blocked = !unowned_files.is_empty();
+
+    TaskOwnedStatusReceipt {
+        status: if blocked { "blocked" } else { "pass" }.to_string(),
+        blocker_codes: if blocked {
+            vec!["dirty_ownership_ambiguous".to_string()]
+        } else {
+            Vec::new()
+        },
+        next_actions: if blocked {
+            vec![
+                "Commit/stash unrelated dirty files or expand the explicit owned path set before staging.".to_string(),
+            ]
+        } else if stageable_files.is_empty() {
+            vec!["No dirty files are covered by the selected ownership source.".to_string()]
+        } else {
+            vec!["Stage only `stageable_files` before committing this task.".to_string()]
+        },
+        task_id: task_id.to_string(),
+        ownership_source,
+        owned_paths,
+        dirty_files,
+        owned_files,
+        unowned_files,
+        stageable_files,
     }
 }
 
@@ -2363,6 +2492,86 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
                 Err(error) => {
                     eprintln!("Failed to show task: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        TaskCommand::OwnedStatus(command) => {
+            let state_dir = command
+                .state_dir
+                .clone()
+                .unwrap_or_else(state_store::default_state_dir);
+            let repo_root = project_root_for_task_state(&state_dir)
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            match task_show_snapshot_first(state_dir, &command.task_id).await {
+                Ok((task, _metadata)) => {
+                    let dirty_files = match dirty_paths_for_repo(&repo_root) {
+                        Ok(paths) => paths,
+                        Err(error) => {
+                            let receipt = TaskOwnedStatusReceipt {
+                                status: "blocked".to_string(),
+                                blocker_codes: vec!["git_status_failed".to_string()],
+                                next_actions: vec![
+                                    "Run the command from a git worktree or resolve git status errors before staging.".to_string(),
+                                ],
+                                task_id: command.task_id.clone(),
+                                ownership_source: "unresolved".to_string(),
+                                owned_paths: Vec::new(),
+                                dirty_files: Vec::new(),
+                                owned_files: Vec::new(),
+                                unowned_files: Vec::new(),
+                                stageable_files: Vec::new(),
+                            };
+                            if command.json {
+                                let mut value = serde_json::to_value(&receipt)
+                                    .expect("owned status receipt should serialize");
+                                value["git_error"] = serde_json::json!(error);
+                                crate::print_json_pretty(&value);
+                            } else {
+                                eprintln!("Failed to inspect git status: {error}");
+                            }
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let receipt = task_owned_status_receipt(
+                        &task.id,
+                        task.planner_metadata.owned_paths.clone(),
+                        command
+                            .files
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect(),
+                        dirty_files,
+                    );
+                    if command.json {
+                        crate::print_json_pretty(
+                            &serde_json::to_value(&receipt)
+                                .expect("owned status receipt should serialize"),
+                        );
+                    } else {
+                        print_surface_line(command.render, "owned status", &receipt.status);
+                        if !receipt.blocker_codes.is_empty() {
+                            print_surface_line(
+                                command.render,
+                                "blockers",
+                                &receipt.blocker_codes.join(", "),
+                            );
+                        }
+                        print_surface_line(
+                            command.render,
+                            "stageable files",
+                            &receipt.stageable_files.len().to_string(),
+                        );
+                    }
+                    if receipt.status == "pass" {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Failed to inspect task owned status: {error}");
                     ExitCode::from(1)
                 }
             }
@@ -2615,6 +2824,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             Some(task_close_automation_receipt(
                                 &command,
                                 project_root.as_deref(),
+                                Some(&task),
                             ))
                         } else {
                             None
@@ -2972,8 +3182,9 @@ mod tests {
         canonical_json_string_array_entries, load_adaptive_preview_finding_json,
         normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
         parse_label_values, parse_optional_label_value, parse_split_child_specs,
-        task_close_automation_receipt, task_close_host_agent_telemetry,
-        task_close_uses_isolated_state_dir, task_create_title, task_json_success_status,
+        task_close_automation_receipt, task_close_commit_file_strings,
+        task_close_host_agent_telemetry, task_close_uses_isolated_state_dir, task_create_title,
+        task_json_success_status, task_owned_status_receipt,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
@@ -3035,6 +3246,140 @@ mod tests {
             render: crate::RenderMode::Plain,
             json: false,
         }
+    }
+
+    fn owned_task_record(task_id: &str, owned_paths: Vec<&str>) -> crate::state_store::TaskRecord {
+        crate::state_store::TaskRecord {
+            id: task_id.to_string(),
+            display_id: None,
+            title: "Owned task".to_string(),
+            description: String::new(),
+            status: "in_progress".to_string(),
+            priority: 2,
+            issue_type: "task".to_string(),
+            created_at: "2026-04-24T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "2026-04-24T00:00:00Z".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+            planner_metadata: crate::state_store::TaskPlannerMetadata {
+                owned_paths: owned_paths.into_iter().map(str::to_string).collect(),
+                acceptance_targets: Vec::new(),
+                proof_targets: Vec::new(),
+                risk: None,
+                estimate: None,
+                lane_hint: None,
+            },
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn task_owned_status_splits_dirty_files_by_owned_paths() {
+        let receipt = task_owned_status_receipt(
+            "task-owned",
+            vec!["crates/vida/src".to_string()],
+            Vec::new(),
+            vec![
+                "crates/vida/src/task_surface.rs".to_string(),
+                "README.md".to_string(),
+            ],
+        );
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.ownership_source, "planner_metadata.owned_paths");
+        assert_eq!(receipt.owned_files, vec!["crates/vida/src/task_surface.rs"]);
+        assert_eq!(
+            receipt.stageable_files,
+            vec!["crates/vida/src/task_surface.rs"]
+        );
+        assert_eq!(receipt.unowned_files, vec!["README.md"]);
+        assert_eq!(receipt.blocker_codes, vec!["dirty_ownership_ambiguous"]);
+    }
+
+    #[test]
+    fn task_owned_status_fails_closed_without_ownership_source() {
+        let receipt = task_owned_status_receipt(
+            "task-owned",
+            Vec::new(),
+            Vec::new(),
+            vec!["crates/vida/src/task_surface.rs".to_string()],
+        );
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.ownership_source, "missing");
+        assert_eq!(receipt.blocker_codes, vec!["missing_owned_paths"]);
+        assert!(receipt.stageable_files.is_empty());
+    }
+
+    #[test]
+    fn task_close_stage_owned_uses_task_planner_owned_paths_with_commit_files() {
+        let task = owned_task_record("task-owned", vec!["crates/vida/src"]);
+        let files = task_close_commit_file_strings(
+            &crate::TaskCloseArgs {
+                task_id: "task-owned".to_string(),
+                reason: "done".to_string(),
+                source: None,
+                release: false,
+                install: false,
+                install_target: "all".to_string(),
+                skip_release_build: false,
+                source_binary: None,
+                install_root: None,
+                commit: true,
+                push: false,
+                stage_owned: true,
+                commit_files: vec![std::path::PathBuf::from("README.md")],
+                commit_message: None,
+                state_dir: None,
+                render: crate::RenderMode::Plain,
+                json: true,
+            },
+            Some(&task),
+        );
+
+        assert_eq!(files, vec!["README.md", "crates/vida/src"]);
+    }
+
+    #[test]
+    fn task_close_stage_owned_without_commit_fails_closed() {
+        let task = owned_task_record("task-owned", vec!["crates/vida/src"]);
+        let receipt = task_close_automation_receipt(
+            &crate::TaskCloseArgs {
+                task_id: "task-owned".to_string(),
+                reason: "done".to_string(),
+                source: None,
+                release: false,
+                install: false,
+                install_target: "all".to_string(),
+                skip_release_build: false,
+                source_binary: None,
+                install_root: None,
+                commit: false,
+                push: false,
+                stage_owned: true,
+                commit_files: Vec::new(),
+                commit_message: None,
+                state_dir: None,
+                render: crate::RenderMode::Plain,
+                json: true,
+            },
+            None,
+            Some(&task),
+        );
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["stage_owned_requires_commit"]);
+        let git = receipt.git.expect("git receipt should be present");
+        assert_eq!(git.status, "blocked");
+        assert_eq!(git.blocker_codes, vec!["stage_owned_requires_commit"]);
+        assert_eq!(git.explicit_files, vec!["crates/vida/src"]);
     }
 
     #[test]
@@ -3141,12 +3486,14 @@ mod tests {
                 install_root: None,
                 commit: true,
                 push: false,
+                stage_owned: false,
                 commit_files: Vec::new(),
                 commit_message: None,
                 state_dir: None,
                 render: crate::RenderMode::Plain,
                 json: true,
             },
+            None,
             None,
         );
 
@@ -3172,12 +3519,14 @@ mod tests {
                 install_root: None,
                 commit: false,
                 push: true,
+                stage_owned: false,
                 commit_files: Vec::new(),
                 commit_message: None,
                 state_dir: None,
                 render: crate::RenderMode::Plain,
                 json: true,
             },
+            None,
             None,
         );
 

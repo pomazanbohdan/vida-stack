@@ -179,6 +179,8 @@ pub(crate) enum TaskCommand {
         after_help = TASK_UPDATE_AFTER_HELP
     )]
     Update(TaskUpdateArgs),
+    #[command(about = "inspect dirty git files against one task's owned paths")]
+    OwnedStatus(TaskOwnedStatusArgs),
     Close(TaskCloseArgs),
     #[command(about = "split one oversized task into bounded child tasks")]
     Split(TaskSplitArgs),
@@ -326,6 +328,26 @@ pub(crate) struct TaskListArgs {
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskShowArgs {
     pub(crate) task_id: String,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskOwnedStatusArgs {
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "file",
+        help = "Explicit owned path override. Repeat for multiple files or directories."
+    )]
+    pub(crate) files: Vec<PathBuf>,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
@@ -546,6 +568,12 @@ pub(crate) struct TaskCloseArgs {
 
     #[arg(long = "push", help = "Push after an explicit post-close commit")]
     pub(crate) push: bool,
+
+    #[arg(
+        long = "stage-owned",
+        help = "For --commit, stage dirty files covered by task planner_metadata.owned_paths"
+    )]
+    pub(crate) stage_owned: bool,
 
     #[arg(
         long = "commit-file",
@@ -949,6 +977,40 @@ mod tests {
         assert!(help.contains("[TITLE]"));
         assert!(help.contains("--title <TITLE>"));
         assert!(help.contains("Provide exactly one title source"));
+    }
+
+    #[test]
+    fn task_owned_status_help_and_close_stage_owned_are_discoverable() {
+        let owned_error = Cli::try_parse_from(["vida", "task", "owned-status", "--help"])
+            .expect_err("help should render clap display error");
+        let owned_help = owned_error.to_string();
+        assert!(owned_help.contains("<TASK_ID>"));
+        assert!(owned_help.contains("--file"));
+        assert!(owned_help.contains("--json"));
+
+        let close_error = Cli::try_parse_from(["vida", "task", "close", "--help"])
+            .expect_err("help should render clap display error");
+        let close_help = close_error.to_string();
+        assert!(close_help.contains("--stage-owned"));
+
+        let parsed = Cli::try_parse_from([
+            "vida",
+            "task",
+            "close",
+            "task-owned",
+            "--reason",
+            "done",
+            "--stage-owned",
+        ])
+        .expect("--stage-owned should parse");
+        let Some(super::Command::Task(task_args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let TaskCommand::Close(close) = task_args.command else {
+            panic!("close command should parse");
+        };
+        assert!(close.stage_owned);
+        assert!(!close.commit);
     }
 
     #[test]
