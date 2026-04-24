@@ -43,6 +43,15 @@ pub(crate) fn infer_task_class_from_task_payload(task: &serde_json::Value) -> St
         .filter_map(serde_json::Value::as_str)
         .map(|value| value.to_ascii_lowercase())
         .collect::<Vec<_>>();
+    if labels.iter().any(|label| label == "coach") {
+        return "coach".to_string();
+    }
+    if labels
+        .iter()
+        .any(|label| label == "tester" || label == "prover")
+    {
+        return "verification".to_string();
+    }
     let mut text = String::new();
     if let Some(title) = task["title"].as_str() {
         text.push_str(title);

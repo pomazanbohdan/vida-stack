@@ -129,7 +129,9 @@ pub(crate) struct AgentArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(crate) enum AgentCommand {
-    #[command(about = "preview next bounded agent dispatch lanes with carrier/model/cost selection truth from TaskFlow readiness")]
+    #[command(
+        about = "preview next bounded agent dispatch lanes with carrier/model/cost selection truth from TaskFlow readiness"
+    )]
     DispatchNext(AgentDispatchNextArgs),
 }
 
@@ -156,6 +158,12 @@ pub(crate) struct AgentDispatchNextArgs {
 
     #[arg(long = "json")]
     pub(crate) json: bool,
+
+    #[arg(
+        long = "dev-team",
+        help = "Preview configured dev-team flow sequence from vida.config.yaml, including analyst, developer, duplication reviewer, final coach, tester/prover, and release closure"
+    )]
+    pub(crate) dev_team: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1214,6 +1222,7 @@ mod tests {
         assert!(dispatch_help.contains("--current-task-id"));
         assert!(dispatch_help.contains("--state-dir"));
         assert!(dispatch_help.contains("--json"));
+        assert!(dispatch_help.contains("--dev-team"));
 
         let parsed = Cli::try_parse_from([
             "vida",
@@ -1241,7 +1250,24 @@ mod tests {
                 .map(|path| path.display().to_string()),
             Some("/tmp/vida-state".to_string())
         );
+        assert!(!dispatch.dev_team);
         assert!(dispatch.json);
+
+        let dispatch_dev_team = Cli::try_parse_from([
+            "vida",
+            "agent",
+            "dispatch-next",
+            "--lanes",
+            "5",
+            "--dev-team",
+        ])
+        .expect("agent dispatch-next should parse");
+        let Some(super::Command::Agent(agent_args)) = dispatch_dev_team.command else {
+            panic!("agent command should parse");
+        };
+        let crate::AgentCommand::DispatchNext(dispatch_dev_team) = agent_args.command;
+        assert!(dispatch_dev_team.dev_team);
+        assert_eq!(dispatch_dev_team.lanes, 5);
     }
 
     #[test]
