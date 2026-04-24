@@ -3203,7 +3203,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing_read_only(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => match store.task_progress_summary(&command.task_id).await {
                     Ok(summary) => {
                         print_task_progress(command.render, &summary, command.json);
@@ -3214,6 +3214,27 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::from(1)
                     }
                 },
+                Err(error) if is_authoritative_state_lock_error(&error) => {
+                    let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
+                        Ok(rows) => rows,
+                        Err(snapshot_error) => {
+                            eprintln!(
+                                "Failed to read task progress from snapshot: {snapshot_error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    };
+                    match StateStore::task_progress_summary_from_rows(&rows, &command.task_id) {
+                        Ok(summary) => {
+                            print_task_progress(command.render, &summary, command.json);
+                            ExitCode::SUCCESS
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to compute task progress from snapshot: {error}");
+                            ExitCode::from(1)
+                        }
+                    }
+                }
                 Err(error) => {
                     eprintln!("Failed to open authoritative state store: {error}");
                     ExitCode::from(1)
@@ -3261,7 +3282,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .state_dir
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing_read_only(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => {
                     let tasks = match store.list_tasks(None, true).await {
                         Ok(tasks) => tasks,
@@ -3359,8 +3380,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 .retain(|candidate| candidate.task_id == current_task_id);
                         }
                     }
-                    let receipt =
-                        task_next_lawful_receipt(&tasks, ready_task_candidates, scoped_runtime_binding);
+                    let receipt = task_next_lawful_receipt(
+                        &tasks,
+                        ready_task_candidates,
+                        scoped_runtime_binding,
+                    );
                     if command.json {
                         crate::print_json_pretty(
                             &serde_json::to_value(&receipt)
@@ -3671,7 +3695,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing_read_only(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => match store.task_dependencies(&command.task_id).await {
                     Ok(dependencies) => {
                         print_task_dependencies(
@@ -3688,6 +3712,33 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::from(1)
                     }
                 },
+                Err(error) if is_authoritative_state_lock_error(&error) => {
+                    let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
+                        Ok(rows) => rows,
+                        Err(snapshot_error) => {
+                            eprintln!(
+                                "Failed to read task dependencies from snapshot: {snapshot_error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    };
+                    match StateStore::task_dependencies_from_rows(&rows, &command.task_id) {
+                        Ok(dependencies) => {
+                            print_task_dependencies(
+                                command.render,
+                                "vida task deps",
+                                &command.task_id,
+                                &dependencies,
+                                command.json,
+                            );
+                            ExitCode::SUCCESS
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to read task dependencies from snapshot: {error}");
+                            ExitCode::from(1)
+                        }
+                    }
+                }
                 Err(error) => {
                     eprintln!("Failed to open authoritative state store: {error}");
                     ExitCode::from(1)
@@ -3698,7 +3749,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing_read_only(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => match store.reverse_dependencies(&command.task_id).await {
                     Ok(dependencies) => {
                         print_task_dependencies(
@@ -3715,6 +3766,25 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::from(1)
                     }
                 },
+                Err(error) if is_authoritative_state_lock_error(&error) => {
+                    let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
+                        Ok(rows) => rows,
+                        Err(snapshot_error) => {
+                            eprintln!("Failed to read reverse dependencies from snapshot: {snapshot_error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let dependencies =
+                        StateStore::reverse_dependencies_from_rows(&rows, &command.task_id);
+                    print_task_dependencies(
+                        command.render,
+                        "vida task reverse-deps",
+                        &command.task_id,
+                        &dependencies,
+                        command.json,
+                    );
+                    ExitCode::SUCCESS
+                }
                 Err(error) => {
                     eprintln!("Failed to open authoritative state store: {error}");
                     ExitCode::from(1)
@@ -3725,7 +3795,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing_read_only(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => match store.blocked_tasks().await {
                     Ok(tasks) => {
                         print_blocked_tasks(command.render, &tasks, command.summary, command.json);
@@ -3736,6 +3806,20 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::from(1)
                     }
                 },
+                Err(error) if is_authoritative_state_lock_error(&error) => {
+                    let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
+                        Ok(rows) => rows,
+                        Err(snapshot_error) => {
+                            eprintln!(
+                                "Failed to read blocked tasks from snapshot: {snapshot_error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let tasks = StateStore::blocked_tasks_from_rows(&rows);
+                    print_blocked_tasks(command.render, &tasks, command.summary, command.json);
+                    ExitCode::SUCCESS
+                }
                 Err(error) => {
                     eprintln!("Failed to open authoritative state store: {error}");
                     ExitCode::from(1)
@@ -3813,7 +3897,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing_read_only(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => match store.validate_task_graph().await {
                     Ok(issues) => {
                         print_task_graph_issues(command.render, &issues, command.json);
@@ -3828,6 +3912,22 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::from(1)
                     }
                 },
+                Err(error) if is_authoritative_state_lock_error(&error) => {
+                    let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
+                        Ok(rows) => rows,
+                        Err(snapshot_error) => {
+                            eprintln!("Failed to read task graph snapshot: {snapshot_error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let issues = StateStore::validate_task_graph_rows(&rows);
+                    print_task_graph_issues(command.render, &issues, command.json);
+                    if issues.is_empty() {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
+                    }
+                }
                 Err(error) => {
                     eprintln!("Failed to open authoritative state store: {error}");
                     ExitCode::from(1)
@@ -3921,7 +4021,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing_read_only(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => match store.critical_path().await {
                     Ok(path) => {
                         print_task_critical_path(command.render, &path, command.json);
@@ -3932,6 +4032,27 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::from(1)
                     }
                 },
+                Err(error) if is_authoritative_state_lock_error(&error) => {
+                    let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
+                        Ok(rows) => rows,
+                        Err(snapshot_error) => {
+                            eprintln!(
+                                "Failed to read critical path from snapshot: {snapshot_error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    };
+                    match StateStore::critical_path_from_rows(&rows) {
+                        Ok(path) => {
+                            print_task_critical_path(command.render, &path, command.json);
+                            ExitCode::SUCCESS
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to compute critical path from snapshot: {error}");
+                            ExitCode::from(1)
+                        }
+                    }
+                }
                 Err(error) => {
                     eprintln!("Failed to open authoritative state store: {error}");
                     ExitCode::from(1)
@@ -3944,22 +4065,22 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        ADAPTIVE_REPLAN_FINDING_KINDS, build_adaptive_replan_finding_preview,
-        build_spawn_blocker_preview, build_split_mutation_preview,
-        canonical_json_string_array_entries, load_adaptive_preview_finding_json,
-        normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
-        parse_label_values, parse_optional_label_value, parse_split_child_specs,
-        persist_task_handoff_accept_receipt, select_task_next_lawful_binding,
-        task_close_automation_receipt, task_close_commit_file_strings,
-        task_close_host_agent_telemetry, task_close_uses_isolated_state_dir, task_create_title,
-        task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
-        task_handoff_receipt_root, task_json_success_status, task_next_lawful_receipt,
-        task_owned_status_receipt, validate_task_handoff_accept_receipt,
+        build_adaptive_replan_finding_preview, build_spawn_blocker_preview,
+        build_split_mutation_preview, canonical_json_string_array_entries,
+        load_adaptive_preview_finding_json, normalize_task_json_contract_arrays,
+        parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
+        parse_split_child_specs, persist_task_handoff_accept_receipt,
+        select_task_next_lawful_binding, task_close_automation_receipt,
+        task_close_commit_file_strings, task_close_host_agent_telemetry,
+        task_close_uses_isolated_state_dir, task_create_title, task_handoff_accept_receipt,
+        task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
+        task_json_success_status, task_next_lawful_receipt, task_owned_status_receipt,
+        validate_task_handoff_accept_receipt, ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::temp_state::TempStateHarness;
-    use crate::test_cli_support::EnvVarGuard;
     use crate::test_cli_support::cli;
     use crate::test_cli_support::guard_current_dir;
+    use crate::test_cli_support::EnvVarGuard;
     use std::fs;
     use std::process::ExitCode;
 
@@ -4197,11 +4318,9 @@ mod tests {
                 "cargo check -p vida --bin vida"
             ]
         );
-        assert!(
-            receipt
-                .receipt_path
-                .ends_with(".vida/receipts/task-handoffs/task-handoff-123.json")
-        );
+        assert!(receipt
+            .receipt_path
+            .ends_with(".vida/receipts/task-handoffs/task-handoff-123.json"));
         assert_eq!(receipt.receipt_root, receipt_root.display().to_string());
         assert_eq!(receipt.isolation, "project_state_dir");
         validate_task_handoff_accept_receipt(&receipt)
@@ -4368,16 +4487,14 @@ mod tests {
             receipt["receipt_root"],
             isolated_state_dir.join("receipts").display().to_string()
         );
-        assert!(
-            receipt["receipt_path"]
-                .as_str()
-                .expect("receipt path should be string")
-                .starts_with(
-                    isolated_handoff_receipts
-                        .to_str()
-                        .expect("receipt dir should be utf8")
-                )
-        );
+        assert!(receipt["receipt_path"]
+            .as_str()
+            .expect("receipt path should be string")
+            .starts_with(
+                isolated_handoff_receipts
+                    .to_str()
+                    .expect("receipt dir should be utf8")
+            ));
     }
 
     #[test]
@@ -4400,12 +4517,10 @@ mod tests {
             "sequential_only_single_candidate"
         );
         assert!(receipt.blocker_codes.is_empty());
-        assert!(
-            receipt
-                .source_surfaces
-                .iter()
-                .any(|surface| surface == "vida task next-lawful")
-        );
+        assert!(receipt
+            .source_surfaces
+            .iter()
+            .any(|surface| surface == "vida task next-lawful"));
     }
 
     #[test]
@@ -4584,12 +4699,10 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert_eq!(receipt.blocker_codes, vec!["continuation_source_drift"]);
-        assert!(
-            receipt
-                .next_actions
-                .iter()
-                .any(|action| action.contains("consume_continue_after_downstream_chain"))
-        );
+        assert!(receipt
+            .next_actions
+            .iter()
+            .any(|action| action.contains("consume_continue_after_downstream_chain")));
     }
 
     #[test]
@@ -4701,11 +4814,9 @@ mod tests {
             isolated_state_dir.display().to_string()
         );
         assert_eq!(telemetry["feedback_store"], "not_recorded");
-        assert!(
-            !project_root
-                .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
-                .exists()
-        );
+        assert!(!project_root
+            .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
+            .exists());
         assert!(!project_root.join(crate::WORKER_STRATEGY_STATE).exists());
     }
 
@@ -4890,12 +5001,10 @@ mod tests {
             vec!["invalid_adaptive_replan_finding_input".to_string()]
         );
         assert_eq!(error.field.as_deref(), Some("finding_kind"));
-        assert!(
-            error
-                .supported_finding_kinds
-                .iter()
-                .any(|kind| kind == "verification_finding")
-        );
+        assert!(error
+            .supported_finding_kinds
+            .iter()
+            .any(|kind| kind == "verification_finding"));
         assert_eq!(error.operator_truth["parsing_and_validation_only"], true);
     }
 

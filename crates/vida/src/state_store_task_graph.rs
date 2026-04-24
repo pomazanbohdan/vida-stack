@@ -271,6 +271,13 @@ impl StateStore {
         task_id: &str,
     ) -> Result<TaskProgressSummary, StateStoreError> {
         let rows = self.all_tasks().await?;
+        Self::task_progress_summary_from_rows(&rows, task_id)
+    }
+
+    pub(crate) fn task_progress_summary_from_rows(
+        rows: &[TaskRecord],
+        task_id: &str,
+    ) -> Result<TaskProgressSummary, StateStoreError> {
         let root_task = rows
             .iter()
             .find(|task| task.id == task_id)
@@ -442,6 +449,12 @@ impl StateStore {
 
     pub async fn critical_path(&self) -> Result<TaskCriticalPath, StateStoreError> {
         let tasks = self.all_tasks().await?;
+        Self::critical_path_from_rows(&tasks)
+    }
+
+    pub(crate) fn critical_path_from_rows(
+        tasks: &[TaskRecord],
+    ) -> Result<TaskCriticalPath, StateStoreError> {
         let issues = Self::validate_task_graph_rows(&tasks);
         if !issues.is_empty() {
             return Err(StateStoreError::InvalidTaskRecord {

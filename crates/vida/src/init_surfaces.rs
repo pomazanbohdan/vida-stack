@@ -1865,39 +1865,22 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
     let state_dir = args
         .state_dir
         .unwrap_or_else(state_store::default_state_dir);
-    let instruction_source_root = PathBuf::from(state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT);
-    let framework_memory_source_root =
-        PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
 
     match tokio::time::timeout(
         std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
-        StateStore::open(state_dir),
+        async {
+            match StateStore::open_existing_read_only(state_dir.clone()).await {
+                Ok(store) => Ok(store),
+                Err(crate::state_store::StateStoreError::MissingStateDir(_)) => {
+                    StateStore::open(state_dir.clone()).await
+                }
+                Err(error) => Err(error),
+            }
+        },
     )
     .await
     {
         Ok(Ok(store)) => {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
-                ensure_launcher_bootstrap(
-                    &store,
-                    &instruction_source_root,
-                    &framework_memory_source_root,
-                ),
-            )
-            .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    eprintln!("{error}");
-                    return ExitCode::from(1);
-                }
-                Err(_) => {
-                    eprintln!(
-                        "Timed out ensuring launcher bootstrap for `vida agent-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
-                    );
-                    return ExitCode::from(1);
-                }
-            }
             let bundle = match tokio::time::timeout(
                 std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
                 build_taskflow_consume_bundle_payload(&store),
@@ -2265,6 +2248,15 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(Err(error)) => {
+            if StateStore::message_is_lock_contention(&error.to_string()) {
+                return crate::status_surface::emit_degraded_read_lock_surface(
+                    "vida agent-init",
+                    &state_dir,
+                    RenderMode::Plain,
+                    args.json,
+                    &error.to_string(),
+                );
+            }
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
         }
@@ -2897,10 +2889,36 @@ mod agent_init_surface_tests {
         let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
         assert_eq!(
             runtime.block_on(run(cli(&["agent-init", "--role", "worker", "--json"]))),
             ExitCode::SUCCESS
         );
+    }
+
+    #[test]
+    fn parallel_agent_init_role_views_do_not_contend_on_write_open() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+
+        let results = runtime.block_on(async {
+            tokio::join!(
+                run(cli(&["agent-init", "--role", "worker", "--json"])),
+                run(cli(&["agent-init", "--role", "worker", "--json"])),
+                run(cli(&["agent-init", "--role", "worker", "--json"])),
+                run(cli(&["agent-init", "--role", "worker", "--json"]))
+            )
+        });
+
+        assert_eq!(results.0, ExitCode::SUCCESS);
+        assert_eq!(results.1, ExitCode::SUCCESS);
+        assert_eq!(results.2, ExitCode::SUCCESS);
+        assert_eq!(results.3, ExitCode::SUCCESS);
     }
 }

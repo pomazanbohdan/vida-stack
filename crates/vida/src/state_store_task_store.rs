@@ -496,6 +496,51 @@ impl StateStore {
         Ok(dependencies)
     }
 
+    pub(crate) fn task_dependencies_from_rows(
+        rows: &[TaskRecord],
+        task_id: &str,
+    ) -> Result<Vec<TaskDependencyStatus>, StateStoreError> {
+        let by_id = rows
+            .iter()
+            .cloned()
+            .map(|task| (task.id.clone(), task))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let task = by_id
+            .get(task_id)
+            .cloned()
+            .ok_or_else(|| StateStoreError::MissingTask {
+                task_id: task_id.to_string(),
+            })?;
+
+        let mut dependencies = task
+            .dependencies
+            .into_iter()
+            .map(|dependency| {
+                let depends_on_id = dependency.depends_on_id.clone();
+                let dependency_status = by_id
+                    .get(&depends_on_id)
+                    .map(|task| task.status.clone())
+                    .unwrap_or_else(|| "missing".to_string());
+                TaskDependencyStatus {
+                    issue_id: dependency.issue_id,
+                    depends_on_id: depends_on_id.clone(),
+                    edge_type: dependency.edge_type,
+                    dependency_status,
+                    dependency_issue_type: by_id
+                        .get(&depends_on_id)
+                        .map(|task| task.issue_type.clone()),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        dependencies.sort_by(|left, right| {
+            left.edge_type
+                .cmp(&right.edge_type)
+                .then_with(|| left.depends_on_id.cmp(&right.depends_on_id))
+        });
+        Ok(dependencies)
+    }
+
     pub async fn reverse_dependencies(
         &self,
         task_id: &str,
@@ -546,6 +591,53 @@ impl StateStore {
         Ok(reverse)
     }
 
+    pub(crate) fn reverse_dependencies_from_rows(
+        rows: &[TaskRecord],
+        task_id: &str,
+    ) -> Vec<TaskDependencyStatus> {
+        let by_id = rows
+            .iter()
+            .map(|task| (task.id.clone(), task))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        let mut reverse = rows
+            .iter()
+            .flat_map(|task| {
+                let issue_id = task.id.clone();
+                let issue_status = task.status.clone();
+                let issue_type = task.issue_type.clone();
+                task.dependencies
+                    .iter()
+                    .filter(|dependency| dependency.depends_on_id == task_id)
+                    .map(move |dependency| TaskDependencyStatus {
+                        issue_id: issue_id.clone(),
+                        depends_on_id: dependency.depends_on_id.clone(),
+                        edge_type: dependency.edge_type.clone(),
+                        dependency_status: issue_status.clone(),
+                        dependency_issue_type: Some(issue_type.clone()),
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        reverse.sort_by(|left, right| {
+            left.edge_type
+                .cmp(&right.edge_type)
+                .then_with(|| left.issue_id.cmp(&right.issue_id))
+        });
+
+        for item in &mut reverse {
+            item.dependency_issue_type = by_id
+                .get(&item.issue_id)
+                .map(|task| task.issue_type.clone());
+            item.dependency_status = by_id
+                .get(&item.issue_id)
+                .map(|task| task.status.clone())
+                .unwrap_or_else(|| "missing".to_string());
+        }
+
+        reverse
+    }
+
     pub async fn blocked_tasks(&self) -> Result<Vec<BlockedTaskRecord>, StateStoreError> {
         let tasks = self.all_tasks().await?;
         let by_id = tasks
@@ -584,6 +676,46 @@ impl StateStore {
 
         blocked.sort_by(|left, right| task_ready_sort_key(&left.task, &right.task));
         Ok(blocked)
+    }
+
+    pub(crate) fn blocked_tasks_from_rows(rows: &[TaskRecord]) -> Vec<BlockedTaskRecord> {
+        let by_id = rows
+            .iter()
+            .cloned()
+            .map(|task| (task.id.clone(), task))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        let mut blocked = rows
+            .iter()
+            .cloned()
+            .filter(|task| task.status == "open" || task.status == "in_progress")
+            .filter(|task| task.issue_type != "epic")
+            .filter_map(|task| {
+                let blockers = task
+                    .dependencies
+                    .iter()
+                    .filter(|dependency| dependency.edge_type != "parent-child")
+                    .filter_map(|dependency| {
+                        let blocker_task = by_id.get(&dependency.depends_on_id)?;
+                        if blocker_task.status == "closed" {
+                            return None;
+                        }
+                        Some(TaskDependencyStatus {
+                            issue_id: dependency.issue_id.clone(),
+                            depends_on_id: dependency.depends_on_id.clone(),
+                            edge_type: dependency.edge_type.clone(),
+                            dependency_status: blocker_task.status.clone(),
+                            dependency_issue_type: Some(blocker_task.issue_type.clone()),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                (!blockers.is_empty()).then_some(BlockedTaskRecord { task, blockers })
+            })
+            .collect::<Vec<_>>();
+
+        blocked.sort_by(|left, right| task_ready_sort_key(&left.task, &right.task));
+        blocked
     }
 
     pub async fn add_task_dependency(
@@ -1376,12 +1508,10 @@ mod tests {
         assert!(!receipt.downstream_dispatch_ready);
         assert!(receipt.downstream_dispatch_blockers.is_empty());
         assert!(receipt.downstream_dispatch_packet_path.is_none());
-        assert!(
-            receipt
-                .downstream_dispatch_result_path
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty())
-        );
+        assert!(receipt
+            .downstream_dispatch_result_path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()));
         let resolved = crate::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
             &store,
             Some("run-close-task"),
