@@ -210,6 +210,25 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "failed keywords",
             "failure keyword",
             "failed keyword",
+            "records failure",
+            "recorded failure",
+            "recording failure",
+            "failure-case coverage",
+            "failure case coverage",
+            "failure-path coverage",
+            "failure path coverage",
+            "failure scenario coverage",
+            "failure scenarios covered",
+            "failure cases covered",
+            "failure coverage",
+            "failure-case",
+            "failure case",
+            "rejected wording coverage",
+            "rejected wording",
+            "rejected patch wording",
+            "concrete rejected patch wording",
+            "rejected outcome coverage",
+            "rejection coverage",
             "rejected alternatives",
             "rejected alternative",
             "rejected candidates",
@@ -875,10 +894,58 @@ mod tests {
     }
 
     #[test]
+    fn close_feedback_inference_ignores_failure_case_coverage_language() {
+        let reason = "Added close-feedback smoke coverage for rejected alternatives and concrete rejected patch wording records failure; task_smoke test passed.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert_eq!(
+            inference["success_markers"],
+            serde_json::json!(["test passed"])
+        );
+        let ignored = inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render");
+        assert!(ignored.iter().any(|phrase| phrase == "records failure"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "concrete rejected patch wording"));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_failure_case_coverage_terms() {
+        let reason =
+            "Added failure-case coverage and rejected wording coverage; proof commands passed.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert_eq!(
+            inference["success_markers"],
+            serde_json::json!(["proof commands passed"])
+        );
+        let ignored = inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render");
+        assert!(ignored.iter().any(|phrase| phrase == "failure-case coverage"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "rejected wording coverage"));
+    }
+
+    #[test]
     fn close_feedback_inference_preserves_concrete_rejected_outcomes() {
         for reason in [
             "Task was rejected by verifier after review.",
             "Rejected patch because it changed unrelated files.",
+            "Concrete rejected patch because it removed operator evidence.",
         ] {
             let outcome = super::infer_feedback_outcome_from_close_reason(reason);
             let score = super::default_feedback_score(outcome, "verification");
