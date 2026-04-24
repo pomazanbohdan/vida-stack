@@ -114,6 +114,7 @@ struct PlanGenerateOptions {
     spec_refs: Vec<String>,
     backlog_refs: Vec<String>,
     context_refs: Vec<String>,
+    require_context: bool,
     task_prefix: Option<String>,
     parent_id: Option<String>,
     output: Option<PathBuf>,
@@ -191,7 +192,7 @@ pub(crate) async fn run_taskflow_plan(args: &[String]) -> ExitCode {
 
 fn print_plan_help() {
     println!(
-        "TaskFlow PlanGraph surfaces\n\n  vida taskflow plan generate --source-file <path> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] --json\n  vida taskflow plan generate --source-text <text> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] --json\n  vida taskflow plan materialize <draft.json> --dry-run --json\n  vida taskflow plan materialize <draft.json> --json"
+        "TaskFlow PlanGraph surfaces\n\n  vida taskflow plan generate --source-file <path> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] [--require-context] --json\n  vida taskflow plan generate --source-text <text> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] [--require-context] --json\n  vida taskflow plan materialize <draft.json> --dry-run --json\n  vida taskflow plan materialize <draft.json> --json"
     );
 }
 
@@ -224,6 +225,7 @@ fn parse_generate_options(args: &[String]) -> Result<PlanGenerateOptions, String
                     .context_refs
                     .push(required_value(args, index, "--context-ref")?.to_string());
             }
+            "--require-context" => options.require_context = true,
             "--task-prefix" => {
                 index += 1;
                 options.task_prefix = Some(required_value(args, index, "--task-prefix")?.to_string());
@@ -237,7 +239,7 @@ fn parse_generate_options(args: &[String]) -> Result<PlanGenerateOptions, String
                 options.output = Some(PathBuf::from(required_value(args, index, "--output")?));
             }
             "--json" => options.json = true,
-            "--help" | "-h" => return Err("usage: vida taskflow plan generate --source-file <path>|--source-text <text> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] [--parent-id <id>] [--output <path>] [--json]".to_string()),
+            "--help" | "-h" => return Err("usage: vida taskflow plan generate --source-file <path>|--source-text <text> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] [--require-context] [--parent-id <id>] [--output <path>] [--json]".to_string()),
             other => return Err(format!("unknown plan generate argument `{other}`")),
         }
         index += 1;
@@ -396,7 +398,7 @@ fn generate_plan_graph_draft(options: &PlanGenerateOptions) -> Result<TaskPlanGr
             issues: Vec::new(),
         },
     };
-    draft.validation = validate_generated_draft(&draft);
+    draft.validation = validate_generated_draft(&draft, options.require_context);
     Ok(draft)
 }
 
@@ -1571,8 +1573,24 @@ async fn materialize_plan_graph_draft(
     })
 }
 
-fn validate_generated_draft(draft: &TaskPlanGraphDraft) -> TaskPlanValidation {
-    validate_draft_inner(draft, &[], true)
+fn validate_generated_draft(
+    draft: &TaskPlanGraphDraft,
+    require_context: bool,
+) -> TaskPlanValidation {
+    let mut validation = validate_draft_inner(draft, &[], true);
+    if require_context && !draft.input_contract.missing_context.is_empty() {
+        validation
+            .blocker_codes
+            .push("missing_plan_context".to_string());
+        validation.issues.push(format!(
+            "required PlanGraph input context is missing: {}",
+            draft.input_contract.missing_context.join(", ")
+        ));
+        validation.blocker_codes.sort();
+        validation.blocker_codes.dedup();
+        validation.status = "blocked".to_string();
+    }
+    validation
 }
 
 fn validate_draft(draft: &TaskPlanGraphDraft, existing: &[TaskRecord]) -> TaskPlanValidation {
@@ -2037,6 +2055,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: Some("parent-task".to_string()),
             output: None,
@@ -2057,6 +2076,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2094,6 +2114,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2155,6 +2176,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2191,6 +2213,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2237,6 +2260,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2282,6 +2306,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2332,6 +2357,7 @@ mod tests {
             "audit-p1-planner-input-contract-cli-flags".to_string(),
             "--context-ref".to_string(),
             "crates/vida/src/taskflow_plan_graph.rs".to_string(),
+            "--require-context".to_string(),
             "--json".to_string(),
         ];
 
@@ -2352,7 +2378,64 @@ mod tests {
             options.context_refs,
             vec!["crates/vida/src/taskflow_plan_graph.rs".to_string()]
         );
+        assert!(options.require_context);
         assert!(options.json);
+    }
+
+    #[test]
+    fn plan_generate_keeps_heuristic_partial_context_available_without_strict_gate() {
+        let draft = generate_plan_graph_draft(&PlanGenerateOptions {
+            source_file: None,
+            source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
+            require_context: false,
+            task_prefix: Some("feature-planner".to_string()),
+            parent_id: None,
+            output: None,
+            json: true,
+        })
+        .expect("draft should generate");
+
+        assert_eq!(draft.validation.status, "valid");
+        assert_eq!(draft.input_contract.status, "partial");
+        assert!(
+            draft
+                .input_contract
+                .operator_truth
+                .contains(&"planner_input_contract_foundation_only".to_string())
+        );
+    }
+
+    #[test]
+    fn plan_generate_require_context_blocks_missing_input_contract_refs() {
+        let draft = generate_plan_graph_draft(&PlanGenerateOptions {
+            source_file: None,
+            source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
+            require_context: true,
+            task_prefix: Some("feature-planner".to_string()),
+            parent_id: None,
+            output: None,
+            json: true,
+        })
+        .expect("draft should generate");
+
+        assert_eq!(draft.validation.status, "blocked");
+        assert!(
+            draft
+                .validation
+                .blocker_codes
+                .contains(&"missing_plan_context".to_string())
+        );
+        assert!(draft.validation.issues.iter().any(|issue| {
+            issue.contains(
+                "required PlanGraph input context is missing: spec_reference_missing, backlog_reference_missing, context_reference_missing",
+            )
+        }));
     }
 
     #[test]
@@ -2363,6 +2446,7 @@ mod tests {
             spec_refs: vec!["docs/product/spec/current-spec-map.md".to_string()],
             backlog_refs: vec!["audit-p1-planner-input-contract-cli-flags".to_string()],
             context_refs: vec!["crates/vida/src/taskflow_plan_graph.rs".to_string()],
+            require_context: true,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2372,6 +2456,7 @@ mod tests {
 
         assert_eq!(draft.input_contract.status, "complete");
         assert!(draft.input_contract.missing_context.is_empty());
+        assert_eq!(draft.validation.status, "valid");
         assert!(draft.input_contract.sources.iter().any(|source| {
             source.source_type == "spec_reference"
                 && source.reference == "docs/product/spec/current-spec-map.md"
@@ -2397,6 +2482,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2428,6 +2514,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2449,6 +2536,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2484,6 +2572,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2574,6 +2663,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: Some("parent-b".to_string()),
             output: None,
@@ -2637,6 +2727,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
@@ -2710,6 +2801,7 @@ mod tests {
             spec_refs: Vec::new(),
             backlog_refs: Vec::new(),
             context_refs: Vec::new(),
+            require_context: false,
             task_prefix: Some("feature-planner".to_string()),
             parent_id: None,
             output: None,
