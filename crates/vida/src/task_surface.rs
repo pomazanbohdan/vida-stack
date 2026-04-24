@@ -1974,6 +1974,7 @@ fn task_close_git_automation_receipt(
     task: Option<&state_store::TaskRecord>,
 ) -> TaskCloseGitAutomationReceipt {
     let explicit_files = task_close_commit_file_strings(command, task);
+    let has_explicit_commit_files = !command.commit_files.is_empty();
     let commit_message = command.commit_message.clone().or_else(|| {
         command
             .commit
@@ -2010,6 +2011,7 @@ fn task_close_git_automation_receipt(
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
+    let mut ignored_dirty_files = Vec::new();
     if command.commit {
         match dirty_paths_for_repo(&repo_root) {
             Ok(dirty_paths) => {
@@ -2017,13 +2019,17 @@ fn task_close_git_automation_receipt(
                     .into_iter()
                     .filter(|path| !path_is_explicitly_owned(path, &explicit_files))
                     .collect();
-                if !ambiguous.is_empty() {
-                    return blocked_task_close_git_receipt(
-                        explicit_files,
-                        commit_message,
-                        "dirty_ownership_ambiguous",
-                        "Clean unrelated dirty files or include only the owned paths with repeated `--commit-file` values.",
-                    );
+                if !has_explicit_commit_files {
+                    if !ambiguous.is_empty() {
+                        return blocked_task_close_git_receipt(
+                            explicit_files,
+                            commit_message,
+                            "dirty_ownership_ambiguous",
+                            "Clean unrelated dirty files or include only the owned paths with repeated `--commit-file` values.",
+                        );
+                    }
+                } else {
+                    ignored_dirty_files = ambiguous;
                 }
             }
             Err(_) => {
@@ -2102,7 +2108,9 @@ fn task_close_git_automation_receipt(
                         Ok(push) if push.success() => TaskCloseGitAutomationReceipt {
                             status: "pass".to_string(),
                             blocker_codes: Vec::new(),
-                            next_actions: Vec::new(),
+                            next_actions: task_close_commit_allowlist_next_actions(
+                                &ignored_dirty_files,
+                            ),
                             explicit_files,
                             commit_message,
                             commit_exit_code: status.code(),
@@ -2137,7 +2145,9 @@ fn task_close_git_automation_receipt(
                     TaskCloseGitAutomationReceipt {
                         status: "pass".to_string(),
                         blocker_codes: Vec::new(),
-                        next_actions: Vec::new(),
+                        next_actions: task_close_commit_allowlist_next_actions(
+                            &ignored_dirty_files,
+                        ),
                         explicit_files,
                         commit_message,
                         commit_exit_code: status.code(),
@@ -2182,6 +2192,17 @@ fn task_close_git_automation_receipt(
     }
 }
 
+fn task_close_commit_allowlist_next_actions(ignored_dirty_files: &[String]) -> Vec<String> {
+    if ignored_dirty_files.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!(
+            "Ignored {} unrelated dirty file(s) because explicit `--commit-file` allowlist was supplied.",
+            ignored_dirty_files.len()
+        )]
+    }
+}
+
 fn blocked_task_close_git_receipt(
     explicit_files: Vec<String>,
     commit_message: Option<String>,
@@ -2203,17 +2224,21 @@ fn task_close_commit_file_strings(
     command: &TaskCloseArgs,
     task: Option<&state_store::TaskRecord>,
 ) -> Vec<String> {
-    let mut files: Vec<String> = command
-        .commit_files
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect();
+    if !command.commit_files.is_empty() {
+        let files: Vec<String> = command
+            .commit_files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect();
+        return canonical_owned_paths(files);
+    }
+
     if command.stage_owned {
         if let Some(task) = task {
-            files.extend(task.planner_metadata.owned_paths.iter().cloned());
+            return canonical_owned_paths(task.planner_metadata.owned_paths.clone());
         }
     }
-    canonical_owned_paths(files)
+    Vec::new()
 }
 
 fn canonical_owned_paths(paths: Vec<String>) -> Vec<String> {
@@ -4071,7 +4096,8 @@ mod tests {
         parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
         parse_split_child_specs, persist_task_handoff_accept_receipt,
         select_task_next_lawful_binding, task_close_automation_receipt,
-        task_close_commit_file_strings, task_close_host_agent_telemetry,
+        task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
+        task_close_host_agent_telemetry,
         task_close_uses_isolated_state_dir, task_create_title, task_handoff_accept_receipt,
         task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
         task_json_success_status, task_next_lawful_receipt, task_owned_status_receipt,
@@ -4211,7 +4237,7 @@ mod tests {
     }
 
     #[test]
-    fn task_close_stage_owned_uses_task_planner_owned_paths_with_commit_files() {
+    fn task_close_commit_files_prioritize_explicit_commit_paths() {
         let task = owned_task_record("task-owned", vec!["crates/vida/src"]);
         let files = task_close_commit_file_strings(
             &crate::TaskCloseArgs {
@@ -4236,7 +4262,52 @@ mod tests {
             Some(&task),
         );
 
-        assert_eq!(files, vec!["README.md", "crates/vida/src"]);
+        assert_eq!(files, vec!["README.md"]);
+    }
+
+    #[test]
+    fn task_close_commit_files_falls_back_to_stage_owned_without_explicit_paths() {
+        let task = owned_task_record("task-owned", vec!["crates/vida/src"]);
+        let files = task_close_commit_file_strings(
+            &crate::TaskCloseArgs {
+                task_id: "task-owned".to_string(),
+                reason: "done".to_string(),
+                source: None,
+                release: false,
+                install: false,
+                install_target: "all".to_string(),
+                skip_release_build: false,
+                source_binary: None,
+                install_root: None,
+                commit: true,
+                push: false,
+                stage_owned: true,
+                commit_files: Vec::new(),
+                commit_message: None,
+                state_dir: None,
+                render: crate::RenderMode::Plain,
+                json: true,
+            },
+            Some(&task),
+        );
+
+        assert_eq!(files, vec!["crates/vida/src"]);
+    }
+
+    #[test]
+    fn task_close_commit_allowlist_reports_ignored_dirty_files_diagnostically() {
+        let next_actions = task_close_commit_allowlist_next_actions(&[
+            "AGENTS.md".to_string(),
+            "crates/vida/src/taskflow_proxy.rs".to_string(),
+        ]);
+
+        assert_eq!(
+            next_actions,
+            vec![
+                "Ignored 2 unrelated dirty file(s) because explicit `--commit-file` allowlist was supplied."
+            ]
+        );
+        assert!(task_close_commit_allowlist_next_actions(&[]).is_empty());
     }
 
     #[test]
