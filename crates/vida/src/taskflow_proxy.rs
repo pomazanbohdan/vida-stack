@@ -2104,6 +2104,74 @@ async fn latest_or_requested_dispatch_context(
     store.run_graph_dispatch_context(&run_id).await
 }
 
+fn string_array_from_payload(value: &serde_json::Value) -> Vec<String> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+pub(crate) fn normalize_taskflow_diagnostic_operator_contract_payload(
+    mut payload: serde_json::Value,
+    fallback_blocked_next_action: &str,
+) -> Result<serde_json::Value, String> {
+    let blocker_codes = string_array_from_payload(&payload["blocker_codes"]);
+    let blocker_codes = crate::operator_contracts::normalize_blocker_codes(
+        &blocker_codes,
+        crate::release_contract_adapters::canonical_blocker_codes,
+        crate::contract_profile_adapter::blocker_code(
+            crate::release1_contracts::BlockerCode::Unsupported,
+        ),
+    );
+    let next_actions = if blocker_codes.is_empty() {
+        Vec::new()
+    } else {
+        let mut next_actions = string_array_from_payload(&payload["next_actions"]);
+        if next_actions.is_empty() {
+            next_actions.push(fallback_blocked_next_action.to_string());
+        }
+        next_actions
+    };
+    let artifact_refs = payload
+        .get("artifact_refs")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let finalized = crate::operator_contracts::finalize_release1_operator_truth(
+        blocker_codes,
+        next_actions,
+        artifact_refs,
+    )?;
+    let Some(object) = payload.as_object_mut() else {
+        return Err("taskflow diagnostic payload must be a JSON object".to_string());
+    };
+    object.insert(
+        "status".to_string(),
+        serde_json::Value::String(finalized.status.to_string()),
+    );
+    object.insert(
+        "blocker_codes".to_string(),
+        serde_json::to_value(finalized.blocker_codes)
+            .expect("normalized blocker_codes should serialize"),
+    );
+    object.insert(
+        "next_actions".to_string(),
+        serde_json::to_value(finalized.next_actions)
+            .expect("normalized next_actions should serialize"),
+    );
+    object.insert("artifact_refs".to_string(), finalized.artifact_refs);
+    object.insert("shared_fields".to_string(), finalized.shared_fields);
+    object.insert(
+        "operator_contracts".to_string(),
+        finalized.operator_contracts,
+    );
+    Ok(payload)
+}
+
 fn execution_plan_from_dispatch_context(
     context: &crate::state_store::RunGraphDispatchContext,
 ) -> Option<&serde_json::Value> {
@@ -2441,6 +2509,18 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                 "status": "blocked",
                 "blocker_codes": ["run_graph_dispatch_context_missing"],
                 "run_id": parsed.run_id,
+            });
+            let payload = normalize_taskflow_diagnostic_operator_contract_payload(
+                payload,
+                "create or select a run-graph dispatch context before using this diagnostic surface",
+            )
+            .unwrap_or_else(|_| {
+                serde_json::json!({
+                    "surface": "vida taskflow diagnostic",
+                    "status": "blocked",
+                    "blocker_codes": ["unsupported_blocker_code"],
+                    "next_actions": ["inspect diagnostic blockers"]
+                })
             });
             crate::print_json_pretty(&payload);
             return ExitCode::from(1);
@@ -3104,6 +3184,92 @@ mod tests {
             super::RouteDiagnosticMode::ConfigActuationCensus
         );
         assert!(parsed.as_json);
+    }
+
+    #[test]
+    fn taskflow_diagnostic_operator_contract_normalizer_derives_blocked_truth() {
+        let payload = serde_json::json!({
+            "surface": "vida taskflow diagnostic",
+            "status": "pass",
+            "blocker_codes": [" migration_required "],
+            "next_actions": [" Run migration preflight "],
+            "artifact_refs": {
+                "source": "unit-test"
+            }
+        });
+
+        let normalized = super::normalize_taskflow_diagnostic_operator_contract_payload(
+            payload,
+            "inspect diagnostic blockers",
+        )
+        .expect("diagnostic payload should normalize");
+
+        assert_eq!(normalized["status"], "blocked");
+        assert_eq!(
+            normalized["blocker_codes"],
+            serde_json::json!(["migration_required"])
+        );
+        assert_eq!(
+            normalized["next_actions"],
+            serde_json::json!(["run migration preflight"])
+        );
+        assert_eq!(normalized["shared_fields"]["status"], normalized["status"]);
+        assert_eq!(
+            normalized["operator_contracts"]["blocker_codes"],
+            normalized["blocker_codes"]
+        );
+        assert_eq!(
+            normalized["operator_contracts"]["next_actions"],
+            normalized["next_actions"]
+        );
+        assert_eq!(normalized["artifact_refs"]["source"], "unit-test");
+    }
+
+    #[test]
+    fn taskflow_diagnostic_operator_contract_normalizer_derives_pass_truth() {
+        let payload = serde_json::json!({
+            "surface": "vida taskflow diagnostic",
+            "status": "blocked",
+            "blocker_codes": [],
+            "next_actions": [" stale action "]
+        });
+
+        let normalized = super::normalize_taskflow_diagnostic_operator_contract_payload(
+            payload,
+            "inspect diagnostic blockers",
+        )
+        .expect("diagnostic payload should normalize");
+
+        assert_eq!(normalized["status"], "pass");
+        assert_eq!(normalized["blocker_codes"], serde_json::json!([]));
+        assert_eq!(normalized["next_actions"], serde_json::json!([]));
+        assert_eq!(normalized["shared_fields"]["status"], "pass");
+        assert_eq!(normalized["operator_contracts"]["status"], "pass");
+    }
+
+    #[test]
+    fn taskflow_diagnostic_operator_contract_normalizer_falls_back_for_unknown_blockers() {
+        let payload = serde_json::json!({
+            "surface": "vida taskflow diagnostic",
+            "blocker_codes": ["not_registry_backed"],
+            "next_actions": []
+        });
+
+        let normalized = super::normalize_taskflow_diagnostic_operator_contract_payload(
+            payload,
+            "inspect diagnostic blockers",
+        )
+        .expect("diagnostic payload should normalize");
+
+        assert_eq!(normalized["status"], "blocked");
+        assert_eq!(
+            normalized["blocker_codes"],
+            serde_json::json!(["unsupported_blocker_code"])
+        );
+        assert_eq!(
+            normalized["next_actions"],
+            serde_json::json!(["inspect diagnostic blockers"])
+        );
     }
 
     #[test]

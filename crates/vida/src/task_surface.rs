@@ -375,6 +375,37 @@ struct TaskGraphMutationValidationReceipt {
     operator_truth: serde_json::Value,
 }
 
+#[allow(dead_code)]
+pub(crate) const ADAPTIVE_REPLAN_FINDING_KINDS: &[&str] = &[
+    "verification_finding",
+    "proof_gap",
+    "scope_drift",
+    "oversized_task",
+];
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub(crate) struct AdaptiveReplanFindingInput {
+    schema_version: String,
+    input_kind: String,
+    finding_kind: String,
+    source_task_id: String,
+    summary: String,
+    evidence_refs: Vec<String>,
+    operator_truth: serde_json::Value,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub(crate) struct AdaptiveReplanFindingInputError {
+    status: String,
+    blocker_codes: Vec<String>,
+    reason: String,
+    field: Option<String>,
+    supported_finding_kinds: Vec<String>,
+    operator_truth: serde_json::Value,
+}
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 struct TaskMutationResult {
     status: String,
@@ -415,6 +446,120 @@ fn task_mutation_validation_summary(
         blocker_codes,
         issues,
     }
+}
+
+#[allow(dead_code)]
+pub(crate) fn adaptive_replan_finding_input_operator_truth() -> serde_json::Value {
+    serde_json::json!({
+        "input_model": "adaptive_replan_finding_input",
+        "schema_version": "1",
+        "accepted_finding_kinds": ADAPTIVE_REPLAN_FINDING_KINDS,
+        "parsing_and_validation_only": true,
+        "adaptive_mutation_execution_loop_implemented": false,
+        "adaptive_mutation_execution_loop_truth": "not_implemented_in_this_slice",
+        "valid_input_does_not_mutate_task_graph": true,
+    })
+}
+
+#[allow(dead_code)]
+fn adaptive_replan_finding_input_error(
+    reason: impl Into<String>,
+    field: Option<&str>,
+) -> AdaptiveReplanFindingInputError {
+    AdaptiveReplanFindingInputError {
+        status: "blocked".to_string(),
+        blocker_codes: vec!["invalid_adaptive_replan_finding_input".to_string()],
+        reason: reason.into(),
+        field: field.map(str::to_string),
+        supported_finding_kinds: ADAPTIVE_REPLAN_FINDING_KINDS
+            .iter()
+            .map(|kind| kind.to_string())
+            .collect(),
+        operator_truth: adaptive_replan_finding_input_operator_truth(),
+    }
+}
+
+#[allow(dead_code)]
+fn required_non_empty_json_string(
+    input: &serde_json::Value,
+    field: &str,
+) -> Result<String, AdaptiveReplanFindingInputError> {
+    input
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            adaptive_replan_finding_input_error(
+                format!("`{field}` must be a non-empty string"),
+                Some(field),
+            )
+        })
+}
+
+#[allow(dead_code)]
+fn optional_json_string_list(
+    input: &serde_json::Value,
+    field: &str,
+) -> Result<Vec<String>, AdaptiveReplanFindingInputError> {
+    let Some(value) = input.get(field) else {
+        return Ok(Vec::new());
+    };
+    let rows = value.as_array().ok_or_else(|| {
+        adaptive_replan_finding_input_error(format!("`{field}` must be an array"), Some(field))
+    })?;
+    let mut values = Vec::with_capacity(rows.len());
+    for row in rows {
+        let Some(entry) = row
+            .as_str()
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+        else {
+            return Err(adaptive_replan_finding_input_error(
+                format!("`{field}` entries must be non-empty strings"),
+                Some(field),
+            ));
+        };
+        values.push(entry.to_string());
+    }
+    values.sort();
+    values.dedup();
+    Ok(values)
+}
+
+#[allow(dead_code)]
+pub(crate) fn parse_adaptive_replan_finding_input(
+    input: &serde_json::Value,
+) -> Result<AdaptiveReplanFindingInput, AdaptiveReplanFindingInputError> {
+    if !input.is_object() {
+        return Err(adaptive_replan_finding_input_error(
+            "adaptive replan finding input must be a JSON object",
+            None,
+        ));
+    }
+    let finding_kind = required_non_empty_json_string(input, "finding_kind")?;
+    if !ADAPTIVE_REPLAN_FINDING_KINDS.contains(&finding_kind.as_str()) {
+        return Err(adaptive_replan_finding_input_error(
+            format!("unsupported adaptive replan finding kind `{finding_kind}`"),
+            Some("finding_kind"),
+        ));
+    }
+    Ok(AdaptiveReplanFindingInput {
+        schema_version: input
+            .get("schema_version")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("1")
+            .to_string(),
+        input_kind: "adaptive_replan_finding_input".to_string(),
+        finding_kind,
+        source_task_id: required_non_empty_json_string(input, "source_task_id")?,
+        summary: required_non_empty_json_string(input, "summary")?,
+        evidence_refs: optional_json_string_list(input, "evidence_refs")?,
+        operator_truth: adaptive_replan_finding_input_operator_truth(),
+    })
 }
 
 fn graph_mutation_receipt_id(
@@ -2117,8 +2262,8 @@ mod tests {
     use super::{
         build_spawn_blocker_preview, build_split_mutation_preview,
         canonical_json_string_array_entries, normalize_task_json_contract_arrays,
-        parse_label_values, parse_optional_label_value, parse_split_child_specs,
-        task_json_success_status,
+        parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
+        parse_split_child_specs, task_json_success_status, ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
@@ -2196,6 +2341,85 @@ mod tests {
             parse_optional_label_value(Some("alpha, beta")),
             Some(vec!["alpha".to_string(), "beta".to_string()])
         );
+    }
+
+    #[test]
+    fn adaptive_replan_finding_input_accepts_supported_finding_kinds() {
+        for finding_kind in ADAPTIVE_REPLAN_FINDING_KINDS {
+            let parsed = parse_adaptive_replan_finding_input(&serde_json::json!({
+                "finding_kind": finding_kind,
+                "source_task_id": "task-a",
+                "summary": "bounded finding summary",
+                "evidence_refs": ["receipt-b", " receipt-a ", "receipt-a"]
+            }))
+            .expect("supported finding kind should parse");
+
+            assert_eq!(parsed.schema_version, "1");
+            assert_eq!(parsed.input_kind, "adaptive_replan_finding_input");
+            assert_eq!(parsed.finding_kind, *finding_kind);
+            assert_eq!(parsed.source_task_id, "task-a");
+            assert_eq!(
+                parsed.evidence_refs,
+                vec!["receipt-a".to_string(), "receipt-b".to_string()]
+            );
+            assert_eq!(parsed.operator_truth["parsing_and_validation_only"], true);
+            assert_eq!(
+                parsed.operator_truth["adaptive_mutation_execution_loop_implemented"],
+                false
+            );
+            assert_eq!(
+                parsed.operator_truth["adaptive_mutation_execution_loop_truth"],
+                "not_implemented_in_this_slice"
+            );
+            assert_eq!(
+                parsed.operator_truth["valid_input_does_not_mutate_task_graph"],
+                true
+            );
+        }
+    }
+
+    #[test]
+    fn adaptive_replan_finding_input_rejects_unsupported_kind() {
+        let error = parse_adaptive_replan_finding_input(&serde_json::json!({
+            "finding_kind": "general_comment",
+            "source_task_id": "task-a",
+            "summary": "not actionable"
+        }))
+        .expect_err("unsupported finding kind should fail closed");
+
+        assert_eq!(error.status, "blocked");
+        assert_eq!(
+            error.blocker_codes,
+            vec!["invalid_adaptive_replan_finding_input".to_string()]
+        );
+        assert_eq!(error.field.as_deref(), Some("finding_kind"));
+        assert!(error
+            .supported_finding_kinds
+            .iter()
+            .any(|kind| kind == "verification_finding"));
+        assert_eq!(error.operator_truth["parsing_and_validation_only"], true);
+    }
+
+    #[test]
+    fn adaptive_replan_finding_input_rejects_invalid_required_fields() {
+        let missing_summary = parse_adaptive_replan_finding_input(&serde_json::json!({
+            "finding_kind": "proof_gap",
+            "source_task_id": "task-a",
+            "summary": "   "
+        }))
+        .expect_err("blank summary should fail closed");
+        assert_eq!(missing_summary.field.as_deref(), Some("summary"));
+        assert!(missing_summary.reason.contains("non-empty string"));
+
+        let invalid_evidence = parse_adaptive_replan_finding_input(&serde_json::json!({
+            "finding_kind": "oversized_task",
+            "source_task_id": "task-a",
+            "summary": "task is too broad",
+            "evidence_refs": ["ok", ""]
+        }))
+        .expect_err("blank evidence ref should fail closed");
+        assert_eq!(invalid_evidence.field.as_deref(), Some("evidence_refs"));
+        assert!(invalid_evidence.reason.contains("entries"));
     }
 
     #[test]

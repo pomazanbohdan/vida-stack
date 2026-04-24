@@ -10,6 +10,15 @@ const REQUIRED_EXECUTION_PREPARATION_ARTIFACTS: &[&str] = &[
     "dependency_impact_summary",
     "spec_alignment_summary",
 ];
+const EXECUTION_ARTIFACT_REGISTRY_CONTRACT_ID: &str =
+    "execution_preparation_artifact_registry_contract";
+const EXECUTION_ARTIFACT_REGISTRY_SCHEMA_VERSION: &str = "foundation-v1";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArtifactRegistryContractViolation {
+    pub(crate) code: String,
+    pub(crate) detail: String,
+}
 
 #[derive(Debug, Clone)]
 struct ArtifactSource {
@@ -223,6 +232,9 @@ fn build_artifact_list_payload(snapshot: &ArtifactSnapshot, project_root: Option
         .filter(|artifact| artifact["materialized"].as_bool() == Some(true))
         .map(|artifact| artifact["artifact_id"].clone())
         .collect();
+    let artifact_registry_contract = build_execution_artifact_registry_contract(&artifacts);
+    let artifact_registry_validation =
+        execution_artifact_registry_validation_payload(&artifact_registry_contract);
 
     json!({
         "surface": "vida taskflow artifacts list",
@@ -235,6 +247,8 @@ fn build_artifact_list_payload(snapshot: &ArtifactSnapshot, project_root: Option
         },
         "required_artifacts": required_artifacts,
         "artifacts": artifacts,
+        "artifact_registry_contract": artifact_registry_contract,
+        "artifact_registry_validation": artifact_registry_validation,
         "missing_artifacts": missing_artifacts,
         "materialized_artifacts": materialized_artifacts,
         "execution_preparation_evidence": snapshot.artifacts_payload
@@ -271,6 +285,8 @@ fn build_artifact_show_payload(list_payload: &Value, artifact_id: &str) -> Value
             "artifact_scope": list_payload["artifact_scope"].clone(),
             "source": list_payload["source"].clone(),
             "artifact": artifact,
+            "artifact_registry_contract": list_payload["artifact_registry_contract"].clone(),
+            "artifact_registry_validation": list_payload["artifact_registry_validation"].clone(),
             "execution_preparation_evidence": list_payload["execution_preparation_evidence"].clone(),
             "operator_contracts": list_payload["operator_contracts"].clone(),
             "shared_fields": list_payload["shared_fields"].clone(),
@@ -342,9 +358,11 @@ fn normalize_artifact(
         .unwrap_or(false);
     let required_now = status != "not_required";
     let missing = required_now && !ready;
+    let owner_id = execution_artifact_owner_id(artifact_id).unwrap_or("unknown_artifact_owner");
 
     json!({
         "artifact_id": artifact_id,
+        "owner_id": owner_id,
         "required": true,
         "required_now": required_now,
         "ready": ready,
@@ -355,6 +373,242 @@ fn normalize_artifact(
         "queryable": true,
         "source_field_present": artifact.is_some(),
     })
+}
+
+fn execution_artifact_owner_id(artifact_id: &str) -> Option<&'static str> {
+    match artifact_id {
+        "architecture_preparation_report" => Some("architecture_preparation"),
+        "developer_handoff_packet" => Some("developer_handoff"),
+        "change_boundary" => Some("change_boundary"),
+        "dependency_impact_summary" => Some("dependency_impact"),
+        "spec_alignment_summary" => Some("spec_alignment"),
+        _ => None,
+    }
+}
+
+fn build_execution_artifact_registry_contract(artifacts: &[Value]) -> Value {
+    let entries: Vec<Value> = artifacts
+        .iter()
+        .map(|artifact| {
+            json!({
+                "artifact_id": artifact["artifact_id"].clone(),
+                "owner_id": artifact["owner_id"].clone(),
+                "status": artifact["status"].clone(),
+                "path": artifact["path"].clone(),
+                "ready": artifact["ready"].clone(),
+                "required_now": artifact["required_now"].clone(),
+                "materialized": artifact["materialized"].clone(),
+                "missing": artifact["missing"].clone(),
+            })
+        })
+        .collect();
+    json!({
+        "contract_id": EXECUTION_ARTIFACT_REGISTRY_CONTRACT_ID,
+        "schema_version": EXECUTION_ARTIFACT_REGISTRY_SCHEMA_VERSION,
+        "scope": "execution_preparation",
+        "status": "foundation",
+        "persistence": "derived_runtime_consumption_snapshot",
+        "entries": entries,
+    })
+}
+
+pub(crate) fn validate_execution_artifact_registry_contract(
+    contract: &Value,
+) -> Result<(), ArtifactRegistryContractViolation> {
+    if contract["contract_id"].as_str() != Some(EXECUTION_ARTIFACT_REGISTRY_CONTRACT_ID) {
+        return Err(registry_violation(
+            "invalid_contract_id",
+            "execution-preparation artifact registry contract id is missing or invalid",
+        ));
+    }
+    if contract["schema_version"].as_str() != Some(EXECUTION_ARTIFACT_REGISTRY_SCHEMA_VERSION) {
+        return Err(registry_violation(
+            "invalid_schema_version",
+            "execution-preparation artifact registry schema version is missing or invalid",
+        ));
+    }
+    if contract["scope"].as_str() != Some("execution_preparation") {
+        return Err(registry_violation(
+            "invalid_scope",
+            "execution-preparation artifact registry scope is missing or invalid",
+        ));
+    }
+    let entries = contract["entries"].as_array().ok_or_else(|| {
+        registry_violation(
+            "missing_entries",
+            "execution-preparation artifact registry entries must be an array",
+        )
+    })?;
+    if entries.is_empty() {
+        return Err(registry_violation(
+            "empty_entries",
+            "execution-preparation artifact registry entries must not be empty",
+        ));
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    for entry in entries {
+        validate_execution_artifact_registry_entry(entry, &mut seen)?;
+    }
+    let missing_canonical = REQUIRED_EXECUTION_PREPARATION_ARTIFACTS
+        .iter()
+        .find(|artifact_id| !seen.contains(**artifact_id));
+    if let Some(artifact_id) = missing_canonical {
+        return Err(registry_violation(
+            "missing_canonical_artifact",
+            &format!("artifact registry contract is missing canonical artifact `{artifact_id}`"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_execution_artifact_registry_entry(
+    entry: &Value,
+    seen: &mut std::collections::BTreeSet<String>,
+) -> Result<(), ArtifactRegistryContractViolation> {
+    let artifact_id = entry["artifact_id"].as_str().ok_or_else(|| {
+        registry_violation(
+            "missing_artifact_id",
+            "artifact registry entries must include artifact_id",
+        )
+    })?;
+    if !seen.insert(artifact_id.to_string()) {
+        return Err(registry_violation(
+            "duplicate_artifact_id",
+            &format!("artifact registry entry `{artifact_id}` is duplicated"),
+        ));
+    }
+    if !REQUIRED_EXECUTION_PREPARATION_ARTIFACTS.contains(&artifact_id) {
+        return Err(registry_violation(
+            "unknown_artifact_id",
+            &format!("artifact registry entry `{artifact_id}` is not canonical"),
+        ));
+    }
+
+    let expected_owner = execution_artifact_owner_id(artifact_id).ok_or_else(|| {
+        registry_violation(
+            "unknown_artifact_owner",
+            &format!("artifact registry entry `{artifact_id}` has no owner mapping"),
+        )
+    })?;
+    let owner_id = entry["owner_id"].as_str().ok_or_else(|| {
+        registry_violation(
+            "missing_owner_id",
+            &format!("artifact registry entry `{artifact_id}` must include owner_id"),
+        )
+    })?;
+    if owner_id != expected_owner {
+        return Err(registry_violation(
+            "owner_id_mismatch",
+            &format!(
+                "artifact registry entry `{artifact_id}` owner `{owner_id}` does not match `{expected_owner}`"
+            ),
+        ));
+    }
+
+    let status = entry["status"].as_str().ok_or_else(|| {
+        registry_violation(
+            "missing_status",
+            &format!("artifact registry entry `{artifact_id}` must include status"),
+        )
+    })?;
+    let ready = entry["ready"].as_bool().ok_or_else(|| {
+        registry_violation(
+            "missing_ready",
+            &format!("artifact registry entry `{artifact_id}` must include ready"),
+        )
+    })?;
+    let required_now = entry["required_now"].as_bool().ok_or_else(|| {
+        registry_violation(
+            "missing_required_now",
+            &format!("artifact registry entry `{artifact_id}` must include required_now"),
+        )
+    })?;
+    let materialized = entry["materialized"].as_bool().ok_or_else(|| {
+        registry_violation(
+            "missing_materialized",
+            &format!("artifact registry entry `{artifact_id}` must include materialized"),
+        )
+    })?;
+    let missing = entry["missing"].as_bool().ok_or_else(|| {
+        registry_violation(
+            "missing_missing_flag",
+            &format!("artifact registry entry `{artifact_id}` must include missing"),
+        )
+    })?;
+    let path = entry.get("path").unwrap_or(&Value::Null);
+    if !path.is_null()
+        && path
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .is_none()
+    {
+        return Err(registry_violation(
+            "invalid_path",
+            &format!(
+                "artifact registry entry `{artifact_id}` path must be null or a non-empty string"
+            ),
+        ));
+    }
+    if ready
+        && path
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .is_none()
+    {
+        return Err(registry_violation(
+            "ready_artifact_missing_path",
+            &format!("artifact registry entry `{artifact_id}` is ready without a path"),
+        ));
+    }
+    if materialized
+        && path
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .is_none()
+    {
+        return Err(registry_violation(
+            "materialized_artifact_missing_path",
+            &format!("artifact registry entry `{artifact_id}` is materialized without a path"),
+        ));
+    }
+    if status == "not_required" && required_now {
+        return Err(registry_violation(
+            "not_required_artifact_marked_required_now",
+            &format!("artifact registry entry `{artifact_id}` has contradictory required_now"),
+        ));
+    }
+    if status != "not_required" && required_now && !ready && !missing {
+        return Err(registry_violation(
+            "required_pending_artifact_not_marked_missing",
+            &format!(
+                "artifact registry entry `{artifact_id}` is required and pending but not missing"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn registry_violation(code: &str, detail: &str) -> ArtifactRegistryContractViolation {
+    ArtifactRegistryContractViolation {
+        code: code.to_string(),
+        detail: detail.to_string(),
+    }
+}
+
+fn execution_artifact_registry_validation_payload(contract: &Value) -> Value {
+    match validate_execution_artifact_registry_contract(contract) {
+        Ok(()) => json!({
+            "status": "pass",
+            "blocker_code": Value::Null,
+            "detail": "execution-preparation artifact registry contract is valid",
+        }),
+        Err(error) => json!({
+            "status": "blocked",
+            "blocker_code": error.code,
+            "detail": error.detail,
+        }),
+    }
 }
 
 fn artifact_path_materialized(artifact_path: &str, project_root: Option<&Path>) -> bool {
@@ -502,9 +756,27 @@ mod tests {
             },
             artifacts_payload: json!({
                 "required_artifacts": [
+                    "architecture_preparation_report",
+                    "change_boundary",
+                    "dependency_impact_summary",
                     "developer_handoff_packet",
                     "spec_alignment_summary"
                 ],
+                "architecture_preparation_report": {
+                    "ready": false,
+                    "status": "not_required",
+                    "path": null
+                },
+                "change_boundary": {
+                    "ready": false,
+                    "status": "not_required",
+                    "path": null
+                },
+                "dependency_impact_summary": {
+                    "ready": false,
+                    "status": "not_required",
+                    "path": null
+                },
                 "developer_handoff_packet": {
                     "ready": true,
                     "status": "ready",
@@ -527,6 +799,7 @@ mod tests {
 
         let payload = build_artifact_list_payload(&snapshot, Some(&temp_root));
         assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["artifact_registry_validation"]["status"], "pass");
         assert_eq!(
             payload["missing_artifacts"],
             json!(["spec_alignment_summary"])
@@ -539,8 +812,129 @@ mod tests {
         let show = build_artifact_show_payload(&payload, "developer_handoff_packet");
         assert_eq!(show["status"], "pass");
         assert_eq!(show["artifact"]["materialized"], true);
+        assert_eq!(
+            show["artifact_registry_contract"]["contract_id"],
+            EXECUTION_ARTIFACT_REGISTRY_CONTRACT_ID
+        );
 
         let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn execution_artifact_registry_contract_links_owner_id_path_and_status() {
+        let artifacts = REQUIRED_EXECUTION_PREPARATION_ARTIFACTS
+            .iter()
+            .map(|artifact_id| {
+                normalize_artifact(
+                    artifact_id,
+                    Some(&json!({
+                        "ready": false,
+                        "status": format!("pending_{artifact_id}"),
+                        "path": null,
+                    })),
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let contract = build_execution_artifact_registry_contract(&artifacts);
+
+        validate_execution_artifact_registry_contract(&contract)
+            .expect("canonical registry contract should validate");
+        assert_eq!(
+            contract["contract_id"],
+            EXECUTION_ARTIFACT_REGISTRY_CONTRACT_ID
+        );
+        let entries = contract["entries"]
+            .as_array()
+            .expect("registry entries should render");
+        assert!(entries.iter().any(|entry| {
+            entry["artifact_id"] == "developer_handoff_packet"
+                && entry["owner_id"] == "developer_handoff"
+                && entry["status"] == "pending_developer_handoff_packet"
+                && entry["path"].is_null()
+                && entry["missing"] == true
+        }));
+    }
+
+    #[test]
+    fn execution_artifact_registry_contract_fails_closed_on_owner_mismatch() {
+        let artifacts = REQUIRED_EXECUTION_PREPARATION_ARTIFACTS
+            .iter()
+            .map(|artifact_id| {
+                normalize_artifact(
+                    artifact_id,
+                    Some(&json!({
+                        "ready": false,
+                        "status": format!("pending_{artifact_id}"),
+                        "path": null,
+                    })),
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut contract = build_execution_artifact_registry_contract(&artifacts);
+        contract["entries"][0]["owner_id"] = json!("wrong_owner");
+
+        let error = validate_execution_artifact_registry_contract(&contract)
+            .expect_err("owner mismatch should fail closed");
+
+        assert_eq!(error.code, "owner_id_mismatch");
+    }
+
+    #[test]
+    fn execution_artifact_registry_contract_fails_closed_on_ready_without_path() {
+        let artifacts = REQUIRED_EXECUTION_PREPARATION_ARTIFACTS
+            .iter()
+            .map(|artifact_id| {
+                let ready = *artifact_id == "developer_handoff_packet";
+                let status = if ready {
+                    "ready".to_string()
+                } else {
+                    format!("pending_{artifact_id}")
+                };
+                normalize_artifact(
+                    artifact_id,
+                    Some(&json!({
+                        "ready": ready,
+                        "status": status,
+                        "path": null,
+                    })),
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        let contract = build_execution_artifact_registry_contract(&artifacts);
+
+        let error = validate_execution_artifact_registry_contract(&contract)
+            .expect_err("ready artifact without path should fail closed");
+
+        assert_eq!(error.code, "ready_artifact_missing_path");
+    }
+
+    #[test]
+    fn execution_artifact_registry_contract_fails_closed_when_canonical_id_missing() {
+        let artifacts = REQUIRED_EXECUTION_PREPARATION_ARTIFACTS
+            .iter()
+            .filter(|artifact_id| **artifact_id != "spec_alignment_summary")
+            .map(|artifact_id| {
+                normalize_artifact(
+                    artifact_id,
+                    Some(&json!({
+                        "ready": false,
+                        "status": format!("pending_{artifact_id}"),
+                        "path": null,
+                    })),
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        let contract = build_execution_artifact_registry_contract(&artifacts);
+
+        let error = validate_execution_artifact_registry_contract(&contract)
+            .expect_err("missing canonical artifact should fail closed");
+
+        assert_eq!(error.code, "missing_canonical_artifact");
     }
 
     #[test]
