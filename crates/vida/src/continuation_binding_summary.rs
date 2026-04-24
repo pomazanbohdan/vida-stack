@@ -225,9 +225,175 @@ pub(crate) fn build_continuation_binding_summary(
     })
 }
 
+pub(crate) fn taskflow_active_candidates_from_tasks(
+    tasks: &[crate::state_store::TaskRecord],
+) -> Vec<serde_json::Value> {
+    tasks
+        .iter()
+        .filter(|task| task.status == "in_progress")
+        .map(|task| {
+            serde_json::json!({
+                "task_id": task.id,
+                "display_id": task.display_id,
+                "status": task.status,
+                "issue_type": task.issue_type,
+                "title": task.title,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn add_taskflow_active_work_truth(
+    mut summary: serde_json::Value,
+    taskflow_active_candidates: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let binding_source = summary
+        .get("binding_source")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let active_bounded_unit = summary.get("active_bounded_unit").cloned();
+    let run_graph_task_id = active_bounded_unit
+        .as_ref()
+        .and_then(|unit| unit.get("task_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let bound_to_run_graph_task = active_bounded_unit
+        .as_ref()
+        .and_then(|unit| unit.get("kind"))
+        .and_then(serde_json::Value::as_str)
+        == Some("run_graph_task");
+    let active_candidate_matches = run_graph_task_id.as_deref().is_some_and(|task_id| {
+        taskflow_active_candidates.iter().any(|candidate| {
+            candidate.get("task_id").and_then(serde_json::Value::as_str) == Some(task_id)
+        })
+    });
+    let orthogonal = bound_to_run_graph_task
+        && !taskflow_active_candidates.is_empty()
+        && !active_candidate_matches;
+
+    if let serde_json::Value::Object(object) = &mut summary {
+        object.insert(
+            "binding_scope".to_string(),
+            serde_json::Value::String(
+                if binding_source.starts_with("latest_run_graph") {
+                    "run_graph_latest"
+                } else if binding_source.contains("task") {
+                    "taskflow_explicit"
+                } else if binding_source.is_empty() {
+                    "unbound"
+                } else {
+                    "run_graph_explicit"
+                }
+                .to_string(),
+            ),
+        );
+        object.insert(
+            "taskflow_active_candidates".to_string(),
+            serde_json::Value::Array(taskflow_active_candidates.clone()),
+        );
+        object.insert(
+            "orthogonal_to_taskflow_active_work".to_string(),
+            serde_json::Value::Bool(orthogonal),
+        );
+    }
+
+    if !orthogonal {
+        return summary;
+    }
+
+    if let serde_json::Value::Object(object) = &mut summary {
+        object.insert(
+            "status".to_string(),
+            serde_json::Value::String("ambiguous".to_string()),
+        );
+        object.insert(
+            "continuation_allowed".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        object.insert("active_bounded_unit".to_string(), serde_json::Value::Null);
+        object.insert(
+            "run_graph_latest_binding".to_string(),
+            active_bounded_unit.unwrap_or(serde_json::Value::Null),
+        );
+        object.insert(
+            "binding_scope".to_string(),
+            serde_json::Value::String(
+                "run_graph_latest_orthogonal_to_taskflow_active_work".to_string(),
+            ),
+        );
+        object.insert(
+            "ambiguity_reason".to_string(),
+            serde_json::Value::String(
+                "latest_run_graph_binding_orthogonal_to_taskflow_active_work".to_string(),
+            ),
+        );
+        object.insert("why_this_unit".to_string(), serde_json::Value::Null);
+        object.insert(
+            "primary_path".to_string(),
+            serde_json::Value::String("diagnosis_path".to_string()),
+        );
+        object.insert(
+            "sequential_vs_parallel_posture".to_string(),
+            serde_json::Value::String("unknown_until_explicit_taskflow_binding".to_string()),
+        );
+        let mut next_actions = object
+            .get("next_actions")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        next_actions.insert(
+            0,
+            serde_json::Value::String(
+                "Do not assume the latest run-graph binding is the active bounded unit while TaskFlow has different in-progress task candidates.".to_string(),
+            ),
+        );
+        next_actions.insert(
+            1,
+            serde_json::Value::String(
+                "Bind the intended TaskFlow active task explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id> --json` or close/reconcile stale in-progress tasks before writing.".to_string(),
+            ),
+        );
+        object.insert(
+            "next_actions".to_string(),
+            serde_json::Value::Array(next_actions),
+        );
+    }
+
+    summary
+}
+
 #[cfg(test)]
 mod tests {
-    use super::build_continuation_binding_summary;
+    use super::{
+        add_taskflow_active_work_truth, build_continuation_binding_summary,
+        taskflow_active_candidates_from_tasks,
+    };
+
+    fn task_record(task_id: &str, status: &str) -> crate::state_store::TaskRecord {
+        crate::state_store::TaskRecord {
+            id: task_id.to_string(),
+            display_id: None,
+            title: format!("Task {task_id}"),
+            description: String::new(),
+            status: status.to_string(),
+            priority: 2,
+            issue_type: "task".to_string(),
+            created_at: "2026-04-24T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "2026-04-24T00:00:00Z".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+            planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+            dependencies: Vec::new(),
+        }
+    }
 
     #[test]
     fn active_run_graph_status_binds_current_bounded_unit() {
@@ -274,11 +440,13 @@ mod tests {
         assert_eq!(summary["binding_source"], "latest_run_graph_status");
         assert_eq!(summary["continuation_required_now"], true);
         assert_eq!(summary["pause_boundary_gate"], "non_blocking_only");
-        assert!(summary["next_actions"]
-            .as_array()
-            .is_some_and(|rows| rows.iter().any(|row| row
-                .as_str()
-                .is_some_and(|value| value.contains("consume continue --run-id task-1 --json")))));
+        assert!(
+            summary["next_actions"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row.as_str().is_some_and(
+                    |value| value.contains("consume continue --run-id task-1 --json")
+                )))
+        );
     }
 
     #[test]
@@ -461,5 +629,76 @@ mod tests {
             summary["sequential_vs_parallel_posture"],
             "sequential_only_explicit_task_bound"
         );
+    }
+
+    #[test]
+    fn taskflow_active_work_truth_marks_latest_run_graph_binding_orthogonal() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-run-closure-validation-proof-feature-task",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "runtime-run-closure-validation-proof-feature-task".to_string();
+        status.active_node = "implementer".to_string();
+        status.status = "running".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+
+        let summary = build_continuation_binding_summary(None, Some(&status), None, None, false);
+        let taskflow_candidates = taskflow_active_candidates_from_tasks(&[task_record(
+            "audit-p1-current-task",
+            "in_progress",
+        )]);
+        let summary = add_taskflow_active_work_truth(summary, taskflow_candidates);
+
+        assert_eq!(summary["status"], "ambiguous");
+        assert_eq!(summary["continuation_allowed"], false);
+        assert_eq!(
+            summary["ambiguity_reason"],
+            "latest_run_graph_binding_orthogonal_to_taskflow_active_work"
+        );
+        assert_eq!(
+            summary["binding_scope"],
+            "run_graph_latest_orthogonal_to_taskflow_active_work"
+        );
+        assert_eq!(summary["orthogonal_to_taskflow_active_work"], true);
+        assert_eq!(
+            summary["run_graph_latest_binding"]["task_id"],
+            "runtime-run-closure-validation-proof-feature-task"
+        );
+        assert_eq!(
+            summary["taskflow_active_candidates"][0]["task_id"],
+            "audit-p1-current-task"
+        );
+        assert!(summary["next_actions"].as_array().is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row.as_str().is_some_and(|value| {
+                    value.contains("Do not assume the latest run-graph binding")
+                })
+            })
+        }));
+    }
+
+    #[test]
+    fn taskflow_active_work_truth_preserves_matching_latest_run_graph_binding() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "task-1",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "task-1".to_string();
+        status.active_node = "implementer".to_string();
+        status.status = "running".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+
+        let summary = build_continuation_binding_summary(None, Some(&status), None, None, false);
+        let taskflow_candidates =
+            taskflow_active_candidates_from_tasks(&[task_record("task-1", "in_progress")]);
+        let summary = add_taskflow_active_work_truth(summary, taskflow_candidates);
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["continuation_allowed"], true);
+        assert_eq!(summary["binding_scope"], "run_graph_latest");
+        assert_eq!(summary["orthogonal_to_taskflow_active_work"], false);
+        assert_eq!(summary["active_bounded_unit"]["task_id"], "task-1");
     }
 }

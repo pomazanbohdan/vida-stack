@@ -135,6 +135,17 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             latest_run_graph_dispatch_receipt.as_ref(),
             continuation_binding_evidence_ambiguous,
         );
+    let taskflow_active_candidates = store
+        .list_tasks(Some("in_progress"), true)
+        .await
+        .map(|tasks| {
+            crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&tasks)
+        })
+        .unwrap_or_default();
+    let continuation_binding = crate::continuation_binding_summary::add_taskflow_active_work_truth(
+        continuation_binding,
+        taskflow_active_candidates,
+    );
     let runtime_consumption = crate::runtime_consumption_summary(store.root())?;
     let latest_final_snapshot_path = latest_final_runtime_consumption_snapshot_path(store.root())?;
     let protocol_binding_receipt = store
