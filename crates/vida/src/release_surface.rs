@@ -1,7 +1,10 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process;
 use std::process::{Command, ExitCode};
+use std::thread;
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -18,6 +21,7 @@ pub(crate) struct ReleaseInstallReceipt {
     pub requested_target: String,
     pub installed_targets: Vec<ReleaseInstalledTarget>,
     pub io_error: Option<ReleaseIoErrorDetail>,
+    pub error_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -44,6 +48,8 @@ pub(crate) struct ReleaseIoErrorDetail {
     pub error_message: String,
     pub next_action_hint: String,
 }
+
+const INSTALL_BINARY_RETRY_LIMIT: usize = 6;
 
 pub(crate) fn run_release_install(args: ReleaseInstallArgs) -> ExitCode {
     let receipt = release_install_receipt(&args);
@@ -159,14 +165,15 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
     for (target, path) in target_paths {
         if let Some(parent) = path.parent() {
             if let Err(error) = fs::create_dir_all(parent) {
+                let io_error = io_error_detail("create_dir", Some(parent), None, &error);
                 return blocked_receipt(
                     requested_target,
                     source_binary_path,
                     build,
                     BlockedRelease {
-                        blocker_code: "install_target_write_failed",
-                        next_action: next_action_for_io_error(&error).to_string(),
-                        io_error: Some(io_error_detail("create_dir", Some(parent), None, &error)),
+                        blocker_code: release_install_error_blocker_code(&io_error.error_kind),
+                        next_action: io_error.next_action_hint.clone(),
+                        io_error: Some(io_error),
                     },
                 );
             }
@@ -177,7 +184,7 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
                 source_binary_path,
                 build,
                 BlockedRelease {
-                    blocker_code: "install_target_write_failed",
+                    blocker_code: release_install_error_blocker_code(&io_error.error_kind),
                     next_action: io_error.next_action_hint.clone(),
                     io_error: Some(io_error),
                 },
@@ -186,12 +193,13 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         let fingerprint = match binary_fingerprint(&path) {
             Ok(fingerprint) => fingerprint,
             Err(io_error) => {
+                let blocker_code = release_install_error_blocker_code(&io_error.error_kind);
                 return blocked_receipt(
                     requested_target,
                     source_binary_path,
                     build,
                     BlockedRelease {
-                        blocker_code: "install_target_write_failed",
+                        blocker_code,
                         next_action: io_error.next_action_hint.clone(),
                         io_error: Some(io_error),
                     },
@@ -218,6 +226,7 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         requested_target,
         installed_targets,
         io_error: None,
+        error_kind: None,
     }
 }
 
@@ -275,6 +284,10 @@ fn blocked_receipt(
     build: ReleaseBuildReceipt,
     blocked: BlockedRelease,
 ) -> ReleaseInstallReceipt {
+    let error_kind = blocked
+        .io_error
+        .as_ref()
+        .map(|error| error.error_kind.clone());
     ReleaseInstallReceipt {
         status: "blocked".to_string(),
         blocker_codes: vec![blocked.blocker_code.to_string()],
@@ -285,6 +298,7 @@ fn blocked_receipt(
         requested_target,
         installed_targets: Vec::new(),
         io_error: blocked.io_error,
+        error_kind,
     }
 }
 
@@ -345,26 +359,67 @@ fn install_binary(source: &Path, destination: &Path) -> Result<(), ReleaseIoErro
                 "install destination has no file name",
             )
         })?;
-    let staging_path = parent.join(format!(".{file_name}.installing"));
+    for attempt in 0..INSTALL_BINARY_RETRY_LIMIT {
+        let staging_path = release_install_staging_path(parent, file_name, attempt);
+        if attempt > 0 {
+            thread::sleep(install_binary_retry_delay(attempt));
+            let _ = fs::remove_file(&staging_path);
+        }
 
-    fs::copy(source, &staging_path)
-        .map_err(|error| io_error_detail("copy", Some(destination), Some(&staging_path), &error))?;
+        match install_binary_once(source, destination, &staging_path) {
+            Ok(()) => return Ok(()),
+            Err((error, operation)) => {
+                if is_text_file_busy_error(&error) && attempt + 1 < INSTALL_BINARY_RETRY_LIMIT {
+                    continue;
+                }
+                let detail =
+                    io_error_detail(operation, Some(destination), Some(&staging_path), &error);
+                let _ = fs::remove_file(&staging_path);
+                return Err(detail);
+            }
+        }
+    }
+
+    unreachable!("install_binary retry loop must return or continue")
+}
+
+fn install_binary_once(
+    source: &Path,
+    destination: &Path,
+    staging_path: &Path,
+) -> Result<(), (io::Error, &'static str)> {
+    fs::copy(source, staging_path).map_err(|error| (error, "copy"))?;
     let permissions = fs::metadata(source)
-        .map_err(|error| io_error_detail("read_source_metadata", Some(source), None, &error))?
+        .map_err(|error| (error, "read_source_metadata"))?
         .permissions();
-    fs::set_permissions(&staging_path, permissions).map_err(|error| {
-        io_error_detail(
-            "set_permissions",
-            Some(destination),
-            Some(&staging_path),
-            &error,
-        )
-    })?;
-    fs::rename(&staging_path, destination).map_err(|error| {
-        let _ = fs::remove_file(&staging_path);
-        io_error_detail("rename", Some(destination), Some(&staging_path), &error)
-    })?;
+    fs::set_permissions(staging_path, permissions).map_err(|error| (error, "set_permissions"))?;
+    fs::rename(staging_path, destination).map_err(|error| (error, "rename"))?;
     Ok(())
+}
+
+fn install_binary_retry_delay(attempt: usize) -> Duration {
+    Duration::from_millis(match attempt {
+        1 => 25,
+        2 => 50,
+        3 => 100,
+        4 => 150,
+        _ => 200,
+    })
+}
+
+fn release_install_staging_path(parent: &Path, file_name: &str, attempt: usize) -> PathBuf {
+    parent.join(format!(
+        ".{file_name}.installing.{}.{}",
+        process::id(),
+        attempt + 1
+    ))
+}
+
+fn is_text_file_busy_error(error: &io::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    error.raw_os_error() == Some(26)
+        || message.contains("text file busy")
+        || message.contains("text file is busy")
 }
 
 fn io_error_detail(
@@ -377,7 +432,7 @@ fn io_error_detail(
         operation: operation.to_string(),
         target_path: target_path.map(|path| path.display().to_string()),
         staging_path: staging_path.map(|path| path.display().to_string()),
-        error_kind: format!("{:?}", error.kind()),
+        error_kind: release_install_error_kind(error),
         error_message: error.to_string(),
         next_action_hint: next_action_for_io_error(error).to_string(),
     }
@@ -401,13 +456,46 @@ fn synthetic_io_error_detail(
 
 fn next_action_for_io_error(error: &io::Error) -> &'static str {
     let message = error.to_string().to_ascii_lowercase();
-    if error.kind() == io::ErrorKind::PermissionDenied {
+    if is_text_file_busy_error(error) {
+        "The destination binary is in use (`text file is busy`). Stop the running process and rerun `vida release install --json`."
+    } else if error.kind() == io::ErrorKind::PermissionDenied {
         "Check install target permissions, choose a writable `--install-root`, or rerun with an explicitly approved install path."
     } else if error.raw_os_error() == Some(30) || message.contains("read-only file system") {
         "The install target is on a read-only filesystem or blocked by sandboxing; choose a writable `--install-root` such as `/tmp/...` or rerun with explicit filesystem approval."
     } else {
         "Inspect the structured IO error detail, choose a writable install target, and rerun the install command."
     }
+}
+
+fn release_install_error_blocker_code(error_kind: &str) -> &'static str {
+    match error_kind {
+        "text_file_busy" => "install_target_text_file_busy",
+        "install_target_permission_denied" => "install_target_permission_denied",
+        "install_target_read_only_or_sandbox_blocked" => {
+            "install_target_read_only_or_sandbox_blocked"
+        }
+        _ => "install_target_write_failed",
+    }
+}
+
+fn release_install_error_kind(error: &io::Error) -> String {
+    if is_text_file_busy_error(error) {
+        "text_file_busy".to_string()
+    } else if is_read_only_or_sandbox_error(error) {
+        "install_target_read_only_or_sandbox_blocked".to_string()
+    } else if error.kind() == io::ErrorKind::PermissionDenied {
+        "install_target_permission_denied".to_string()
+    } else {
+        format!("{:?}", error.kind()).to_ascii_lowercase()
+    }
+}
+
+fn is_read_only_or_sandbox_error(error: &io::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    error.raw_os_error() == Some(30)
+        || message.contains("read-only file system")
+        || message.contains("operation not permitted")
+        || message.contains("sandbox")
 }
 
 #[cfg(test)]
@@ -544,17 +632,11 @@ mod tests {
 
         assert_eq!(detail.operation, "copy");
         assert_eq!(detail.target_path, Some(destination.display().to_string()));
-        assert_eq!(
-            detail.staging_path,
-            Some(
-                destination
-                    .parent()
-                    .expect("destination parent")
-                    .join(".vida.installing")
-                    .display()
-                    .to_string()
-            )
-        );
+        let staging_path = detail
+            .staging_path
+            .as_ref()
+            .expect("staging path should be recorded");
+        assert!(staging_path.contains(".vida.installing."));
         assert!(!detail.error_kind.is_empty());
         assert!(!detail.error_message.is_empty());
         assert!(!detail.next_action_hint.is_empty());
@@ -574,5 +656,113 @@ mod tests {
         assert!(!detail.error_kind.is_empty());
         assert!(!detail.error_message.is_empty());
         assert!(!detail.next_action_hint.is_empty());
+    }
+
+    #[test]
+    fn release_install_detects_text_file_busy_error() {
+        let destination = Path::new("/tmp");
+
+        let text_file_busy_error = io::Error::from_raw_os_error(26);
+        let detail = io_error_detail("rename", None, Some(destination), &text_file_busy_error);
+        assert_eq!(detail.error_kind, "text_file_busy");
+        assert_eq!(
+            release_install_error_blocker_code(&detail.error_kind),
+            "install_target_text_file_busy"
+        );
+
+        assert!(is_text_file_busy_error(&text_file_busy_error));
+        assert!(is_text_file_busy_error(&io::Error::from_raw_os_error(26)));
+        assert!(is_text_file_busy_error(&io::Error::new(
+            io::ErrorKind::Other,
+            "text file is busy"
+        )));
+        assert!(!is_text_file_busy_error(&io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "permission denied"
+        )));
+
+        assert!(is_text_file_busy_error(&io::Error::new(
+            io::ErrorKind::Other,
+            "Text file busy"
+        )));
+        assert_eq!(
+            release_install_error_blocker_code("text_file_busy"),
+            "install_target_text_file_busy"
+        );
+    }
+
+    #[test]
+    fn release_install_permission_denied_maps_to_blocker_and_error_kind() {
+        let destination = Path::new("/tmp");
+        let permission_denied_error =
+            io::Error::new(io::ErrorKind::PermissionDenied, "permission denied");
+        let detail = io_error_detail("copy", Some(destination), None, &permission_denied_error);
+
+        assert_eq!(detail.error_kind, "install_target_permission_denied");
+        assert_eq!(
+            detail.next_action_hint,
+            next_action_for_io_error(&permission_denied_error)
+        );
+        assert_eq!(
+            release_install_error_blocker_code(&detail.error_kind),
+            "install_target_permission_denied"
+        );
+    }
+
+    #[test]
+    fn release_install_read_only_sandbox_maps_to_blocker_and_error_kind() {
+        let destination = Path::new("/tmp");
+        let sandbox_error = io::Error::new(io::ErrorKind::Other, "read-only file system");
+        let detail = io_error_detail("copy", Some(destination), None, &sandbox_error);
+
+        assert_eq!(
+            detail.error_kind,
+            "install_target_read_only_or_sandbox_blocked"
+        );
+        assert_eq!(
+            release_install_error_blocker_code(&detail.error_kind),
+            "install_target_read_only_or_sandbox_blocked"
+        );
+    }
+
+    #[test]
+    fn release_install_blocked_receipt_includes_top_level_error_kind() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let destination = harness.path().join("bin").join("vida");
+        let detail = io_error_detail(
+            "copy",
+            Some(&destination),
+            Some(&harness.path().join(".vida.installing")),
+            &io::Error::new(io::ErrorKind::PermissionDenied, "permission denied"),
+        );
+
+        let receipt = blocked_receipt(
+            "local".to_string(),
+            "/tmp/source".to_string(),
+            ReleaseBuildReceipt {
+                status: "pass".to_string(),
+                skipped: true,
+                command: None,
+                exit_code: Some(0),
+            },
+            BlockedRelease {
+                blocker_code: release_install_error_blocker_code(&detail.error_kind),
+                next_action: detail.next_action_hint.clone(),
+                io_error: Some(detail),
+            },
+        );
+
+        assert_eq!(
+            receipt.error_kind,
+            Some("install_target_permission_denied".to_string())
+        );
+        assert_eq!(
+            receipt.blocker_codes,
+            vec!["install_target_permission_denied"]
+        );
+        assert_eq!(
+            receipt.next_actions,
+            vec![receipt.io_error.as_ref().unwrap().next_action_hint.clone()]
+        );
     }
 }
