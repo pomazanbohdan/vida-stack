@@ -129,7 +129,7 @@ pub(crate) struct AgentArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(crate) enum AgentCommand {
-    #[command(about = "preview next bounded agent dispatch lanes from TaskFlow readiness")]
+    #[command(about = "preview next bounded agent dispatch lanes with carrier/model/cost selection truth from TaskFlow readiness")]
     DispatchNext(AgentDispatchNextArgs),
 }
 
@@ -138,7 +138,7 @@ pub(crate) struct AgentDispatchNextArgs {
     #[arg(
         long = "lanes",
         default_value_t = 4,
-        help = "Maximum agent lanes to preview"
+        help = "Maximum preview lanes to inspect before any manual `vida agent-init` launch"
     )]
     pub(crate) lanes: usize,
 

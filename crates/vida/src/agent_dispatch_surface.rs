@@ -3,14 +3,30 @@ use std::process::ExitCode;
 use crate::{AgentArgs, AgentCommand, AgentDispatchNextArgs, state_store, state_store::StateStore};
 
 #[derive(Debug, Clone, serde::Serialize)]
+struct AgentDispatchLaneSelectionTruth {
+    selected_carrier: String,
+    selected_backend: String,
+    selected_model_profile: String,
+    selected_model_ref: String,
+    selected_reasoning_effort: String,
+    rate: u64,
+    estimated_task_price_units: u64,
+    budget_verdict: String,
+    runtime_role: String,
+    task_class: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 struct AgentDispatchLanePreview {
     lane_index: usize,
     task_id: String,
     title: String,
-    role: String,
+    runtime_role: String,
+    task_class: String,
     dispatch_command: String,
     ready_parallel_safe: bool,
     selection_reason: String,
+    selection_truth: AgentDispatchLaneSelectionTruth,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -71,6 +87,68 @@ fn agent_init_command(task_id: &str, state_dir: Option<&std::path::Path>) -> Str
     command
 }
 
+fn required_string_field(payload: &serde_json::Value, key: &str) -> Option<String> {
+    payload[key]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn selection_truth_for_task(
+    activation_bundle: &serde_json::Value,
+    task: &state_store::TaskRecord,
+) -> Result<AgentDispatchLaneSelectionTruth, String> {
+    let task_value = serde_json::to_value(task)
+        .map_err(|error| format!("task_record_serialization_failed:{error}"))?;
+    let task_class = crate::infer_task_class_from_task_payload(&task_value);
+    let runtime_role = crate::runtime_role_for_task_class(&task_class).to_string();
+    let assignment = crate::build_runtime_assignment_from_resolved_constraints(
+        activation_bundle,
+        "worker",
+        &task_class,
+        &runtime_role,
+    );
+    if !assignment["enabled"].as_bool().unwrap_or(false) {
+        let reason = required_string_field(&assignment, "reason")
+            .unwrap_or_else(|| "runtime_assignment_disabled".to_string());
+        return Err(reason);
+    }
+
+    let selected_carrier = required_string_field(&assignment, "selected_carrier_id")
+        .ok_or_else(|| "selected_carrier_id_missing".to_string())?;
+    let selected_backend = required_string_field(&assignment, "selected_backend_id")
+        .ok_or_else(|| "selected_backend_id_missing".to_string())?;
+    let selected_model_profile = required_string_field(&assignment, "selected_model_profile_id")
+        .ok_or_else(|| "selected_model_profile_id_missing".to_string())?;
+    let selected_model_ref = required_string_field(&assignment, "selected_model_ref")
+        .ok_or_else(|| "selected_model_ref_missing".to_string())?;
+    let selected_reasoning_effort =
+        required_string_field(&assignment, "selected_reasoning_effort")
+            .ok_or_else(|| "selected_reasoning_effort_missing".to_string())?;
+    let budget_verdict = required_string_field(&assignment, "budget_verdict")
+        .ok_or_else(|| "budget_verdict_missing".to_string())?;
+    let rate = assignment["rate"]
+        .as_u64()
+        .ok_or_else(|| "rate_missing".to_string())?;
+    let estimated_task_price_units = assignment["estimated_task_price_units"]
+        .as_u64()
+        .ok_or_else(|| "estimated_task_price_units_missing".to_string())?;
+
+    Ok(AgentDispatchLaneSelectionTruth {
+        selected_carrier,
+        selected_backend,
+        selected_model_profile,
+        selected_model_ref,
+        selected_reasoning_effort,
+        rate,
+        estimated_task_price_units,
+        budget_verdict,
+        runtime_role,
+        task_class,
+    })
+}
+
 fn blocked_candidate(
     candidate: &state_store::TaskSchedulingCandidate,
     reasons: Vec<String>,
@@ -86,6 +164,7 @@ fn blocked_candidate(
 }
 
 fn build_agent_dispatch_next_preview(
+    activation_bundle: &serde_json::Value,
     projection: &state_store::TaskSchedulingProjection,
     lanes_requested: usize,
     configured_max_parallel_agents: usize,
@@ -133,30 +212,48 @@ fn build_agent_dispatch_next_preview(
     };
 
     if effective_max_parallel_agents > 0 {
-        selected_lanes.push(AgentDispatchLanePreview {
-            lane_index: 1,
-            task_id: primary.task.id.clone(),
-            title: primary.task.title.clone(),
-            role: "worker".to_string(),
-            dispatch_command: agent_init_command(&primary.task.id, explicit_state_dir),
-            ready_parallel_safe: primary.ready_parallel_safe,
-            selection_reason: "primary_ready_task".to_string(),
-        });
+        match selection_truth_for_task(activation_bundle, &primary.task) {
+            Ok(selection_truth) => selected_lanes.push(AgentDispatchLanePreview {
+                lane_index: 1,
+                task_id: primary.task.id.clone(),
+                title: primary.task.title.clone(),
+                runtime_role: selection_truth.runtime_role.clone(),
+                task_class: selection_truth.task_class.clone(),
+                dispatch_command: agent_init_command(&primary.task.id, explicit_state_dir),
+                ready_parallel_safe: primary.ready_parallel_safe,
+                selection_reason: "primary_ready_task".to_string(),
+                selection_truth,
+            }),
+            Err(reason) => blocker_codes.push(format!(
+                "selected_lane_runtime_assignment_truth_missing:task={}:{}",
+                primary.task.id, reason
+            )),
+        }
     }
 
     let mut remaining = effective_max_parallel_agents.saturating_sub(selected_lanes.len());
     for candidate in projection.ready.iter().skip(1) {
         if candidate.ready_parallel_safe && remaining > 0 {
-            selected_lanes.push(AgentDispatchLanePreview {
-                lane_index: selected_lanes.len() + 1,
-                task_id: candidate.task.id.clone(),
-                title: candidate.task.title.clone(),
-                role: "worker".to_string(),
-                dispatch_command: agent_init_command(&candidate.task.id, explicit_state_dir),
-                ready_parallel_safe: candidate.ready_parallel_safe,
-                selection_reason: "parallel_safe_ready_task".to_string(),
-            });
-            remaining -= 1;
+            match selection_truth_for_task(activation_bundle, &candidate.task) {
+                Ok(selection_truth) => {
+                    selected_lanes.push(AgentDispatchLanePreview {
+                        lane_index: selected_lanes.len() + 1,
+                        task_id: candidate.task.id.clone(),
+                        title: candidate.task.title.clone(),
+                        runtime_role: selection_truth.runtime_role.clone(),
+                        task_class: selection_truth.task_class.clone(),
+                        dispatch_command: agent_init_command(&candidate.task.id, explicit_state_dir),
+                        ready_parallel_safe: candidate.ready_parallel_safe,
+                        selection_reason: "parallel_safe_ready_task".to_string(),
+                        selection_truth,
+                    });
+                    remaining -= 1;
+                }
+                Err(reason) => blocker_codes.push(format!(
+                    "selected_lane_runtime_assignment_truth_missing:task={}:{}",
+                    candidate.task.id, reason
+                )),
+            }
             continue;
         }
 
@@ -194,9 +291,20 @@ fn build_agent_dispatch_next_preview(
     {
         blocker_codes.push("no_dispatch_lanes_selected".to_string());
     }
+    if blocker_codes
+        .iter()
+        .any(|code| code.starts_with("selected_lane_runtime_assignment_truth_missing:"))
+    {
+        selected_lanes.clear();
+        blocker_codes.push("selected_lane_runtime_assignment_truth_required".to_string());
+        next_actions.push(
+            "Selection truth is incomplete for at least one chosen lane; fix runtime assignment evidence before launching `vida agent-init`."
+                .to_string(),
+        );
+    }
     if !selected_lanes.is_empty() {
         next_actions.push(
-            "Preview only: run the selected `vida agent-init` commands manually/canonically after operator review."
+            "Preview only: review the selected carrier/model/cost truth first; run the shown `vida agent-init` command only after operator review."
                 .to_string(),
         );
     }
@@ -259,6 +367,10 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                 }
             };
             let preview = build_agent_dispatch_next_preview(
+                &match crate::build_taskflow_consume_bundle_payload(&store).await {
+                    Ok(payload) => payload.activation_bundle,
+                    Err(_) => serde_json::Value::Null,
+                },
                 &projection,
                 command.lanes,
                 configured_max_parallel_agents,
@@ -272,6 +384,20 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
             } else {
                 println!("agent dispatch-next: {}", preview.status);
                 println!("lanes selected: {}", preview.lanes_selected);
+                println!(
+                    "preview only: review carrier/model/cost selection truth before launching any `vida agent-init` command"
+                );
+                for lane in &preview.selected_lanes {
+                    println!(
+                        "lane {}: {} [{} / {} / rate={} / est_cost={}]",
+                        lane.lane_index,
+                        lane.task_id,
+                        lane.selection_truth.selected_carrier,
+                        lane.selection_truth.selected_model_ref,
+                        lane.selection_truth.rate,
+                        lane.selection_truth.estimated_task_price_units
+                    );
+                }
                 if !preview.blocker_codes.is_empty() {
                     println!("blockers: {}", preview.blocker_codes.join(", "));
                 }
@@ -342,6 +468,64 @@ mod tests {
         }
     }
 
+    fn activation_bundle_with_worker_selection_truth() -> serde_json::Value {
+        serde_json::json!({
+            "carrier_runtime": {
+                "roles": [
+                    {
+                        "role_id": "junior",
+                        "tier": "junior",
+                        "default_runtime_role": "worker",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation", "verification"],
+                        "normalized_cost_units": 1,
+                        "quality_tier": "medium",
+                        "write_scope": "scoped_only",
+                        "model_profiles": {
+                            "gpt-5.4-low": {
+                                "profile_id": "gpt-5.4-low",
+                                "model_ref": "gpt-5.4",
+                                "provider": "openai",
+                                "reasoning_effort": "low",
+                                "quality_tier": "medium",
+                                "speed_tier": "fast",
+                                "sandbox_mode": "workspace-write",
+                                "write_scope": "scoped_only",
+                                "runtime_roles": ["worker"],
+                                "task_classes": ["implementation", "verification"],
+                                "normalized_cost_units": 1
+                            }
+                        }
+                    }
+                ],
+                "dispatch_aliases": [],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "demotion_score": 45
+                    },
+                    "agents": {
+                        "junior": {
+                            "effective_score": 70,
+                            "lifecycle_state": "active"
+                        }
+                    },
+                    "store_path": ".vida/state/worker-strategy.json",
+                    "scorecards_path": ".vida/state/worker-scorecards.json"
+                },
+                "model_selection": {
+                    "enabled": true,
+                    "default_strategy": "balanced_cost_quality",
+                    "selection_rule": "role_task_then_readiness_then_score_then_cost_quality",
+                    "candidate_scope": "unified_carrier_model_profiles",
+                    "budget_policy": "informational"
+                }
+            },
+            "agent_system": {
+                "max_parallel_agents": 4
+            }
+        })
+    }
+
     #[test]
     fn agent_dispatch_next_preview_selects_parallel_safe_lanes_with_commands() {
         let projection = TaskSchedulingProjection {
@@ -356,6 +540,7 @@ mod tests {
         };
 
         let preview = build_agent_dispatch_next_preview(
+            &activation_bundle_with_worker_selection_truth(),
             &projection,
             2,
             4,
@@ -372,6 +557,16 @@ mod tests {
         assert!(!preview.execution_attempted);
         assert_eq!(preview.selected_lanes[0].task_id, "task-a");
         assert_eq!(preview.selected_lanes[1].task_id, "task-b");
+        assert_eq!(preview.selected_lanes[0].task_class, "implementation");
+        assert_eq!(
+            preview.selected_lanes[0].selection_truth.selected_carrier,
+            "junior"
+        );
+        assert_eq!(
+            preview.selected_lanes[0].selection_truth.selected_model_ref,
+            "gpt-5.4"
+        );
+        assert_eq!(preview.selected_lanes[0].selection_truth.rate, 1);
         assert!(
             preview.selected_lanes[1]
                 .dispatch_command
@@ -394,7 +589,8 @@ mod tests {
             parallel_candidates_after_current: Vec::new(),
         };
 
-        let preview = build_agent_dispatch_next_preview(&projection, 4, 4, None);
+        let preview =
+            build_agent_dispatch_next_preview(&activation_bundle_with_worker_selection_truth(), &projection, 4, 4, None);
 
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
@@ -420,7 +616,8 @@ mod tests {
             parallel_candidates_after_current: Vec::new(),
         };
 
-        let preview = build_agent_dispatch_next_preview(&projection, 4, 4, None);
+        let preview =
+            build_agent_dispatch_next_preview(&activation_bundle_with_worker_selection_truth(), &projection, 4, 4, None);
 
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 1);
@@ -445,7 +642,13 @@ mod tests {
             parallel_candidates_after_current: Vec::new(),
         };
 
-        let preview = build_agent_dispatch_next_preview(&projection, 4, 2, None);
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle_with_worker_selection_truth(),
+            &projection,
+            4,
+            2,
+            None,
+        );
 
         assert_eq!(preview.status, "pass");
         assert_eq!(preview.mode, "preview");
@@ -463,7 +666,31 @@ mod tests {
     }
 
     #[test]
-    fn agent_dispatch_next_command_passes_with_explicit_state_dir_single_ready_task() {
+    fn agent_dispatch_next_preview_fails_closed_when_selection_truth_is_missing() {
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("task-a".to_string()),
+            ready: vec![candidate("task-a", "Task A", true, false, Vec::new())],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+
+        let preview =
+            build_agent_dispatch_next_preview(&serde_json::json!({}), &projection, 1, 1, None);
+
+        assert_eq!(preview.status, "blocked");
+        assert_eq!(preview.lanes_selected, 0);
+        assert!(
+            preview
+                .blocker_codes
+                .contains(&"selected_lane_runtime_assignment_truth_required".to_string())
+        );
+        assert!(preview.blocker_codes.iter().any(|code| code.starts_with(
+            "selected_lane_runtime_assignment_truth_missing:task=task-a:"
+        )));
+    }
+
+    #[test]
+    fn agent_dispatch_next_command_fails_closed_without_runtime_selection_truth() {
         let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         runtime.block_on(async {
@@ -505,6 +732,6 @@ mod tests {
             "--json",
         ])));
 
-        assert_eq!(code, ExitCode::SUCCESS);
+        assert_eq!(code, ExitCode::from(1));
     }
 }
