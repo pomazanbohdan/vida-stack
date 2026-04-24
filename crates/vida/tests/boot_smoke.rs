@@ -1552,6 +1552,240 @@ fn taskflow_scheduler_dispatch_reports_preview_plan() {
     assert!(parsed.get("scheduling").is_some());
 }
 
+fn create_scheduler_smoke_task(
+    state_dir: &str,
+    task_id: &str,
+    title: &str,
+    priority: &str,
+    execution_mode: &str,
+    order_bucket: Option<&str>,
+    parallel_group: Option<&str>,
+    conflict_domain: Option<&str>,
+) {
+    let output = bounded_vida_output(
+        &["-k", "5s", "20s"],
+        "scheduler smoke task create should run",
+        |command| {
+            command.args([
+                "task",
+                "create",
+                task_id,
+                title,
+                "--type",
+                "task",
+                "--status",
+                "open",
+                "--priority",
+                priority,
+                "--execution-mode",
+                execution_mode,
+                "--state-dir",
+                state_dir,
+                "--json",
+            ]);
+            if let Some(value) = order_bucket {
+                command.args(["--order-bucket", value]);
+            }
+            if let Some(value) = parallel_group {
+                command.args(["--parallel-group", value]);
+            }
+            if let Some(value) = conflict_domain {
+                command.args(["--conflict-domain", value]);
+            }
+        },
+    );
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn seed_scheduler_execute_smoke_tasks(state_dir: &str) {
+    create_scheduler_smoke_task(
+        state_dir,
+        "sched-primary",
+        "Scheduler primary",
+        "1",
+        "parallel_safe",
+        Some("wave-a"),
+        Some("docs"),
+        Some("primary"),
+    );
+    create_scheduler_smoke_task(
+        state_dir,
+        "sched-parallel-a",
+        "Scheduler parallel A",
+        "2",
+        "parallel_safe",
+        Some("wave-a"),
+        Some("docs"),
+        Some("parallel-a"),
+    );
+    create_scheduler_smoke_task(
+        state_dir,
+        "sched-unsafe",
+        "Scheduler unsafe",
+        "3",
+        "sequential",
+        None,
+        None,
+        None,
+    );
+}
+
+fn scheduler_execute_smoke_payload(requested_parallel_limit: u64) -> serde_json::Value {
+    let state_dir = unique_state_dir();
+    let boot = boot_with_retry(&state_dir);
+    assert!(
+        boot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+    seed_scheduler_execute_smoke_tasks(&state_dir);
+
+    let output = bounded_vida_output(
+        &["-k", "5s", "20s"],
+        "scheduler execute smoke should run",
+        |command| {
+            command.args([
+                "taskflow",
+                "scheduler",
+                "dispatch",
+                "--current-task-id",
+                "sched-primary",
+                "--state-dir",
+                &state_dir,
+                "--execute",
+                "--limit",
+                &requested_parallel_limit.to_string(),
+                "--json",
+            ]);
+        },
+    );
+    assert!(
+        !output.status.success(),
+        "scheduler --execute should remain blocked until external execution is available, got success: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    serde_json::from_slice(&output.stdout).expect("scheduler execute json should parse")
+}
+
+#[test]
+fn taskflow_scheduler_dispatch_execute_smoke_reports_projection_truth_and_parallel_cap() {
+    let cap_one = scheduler_execute_smoke_payload(1);
+    assert_eq!(cap_one["surface"], "vida taskflow scheduler dispatch");
+    assert_eq!(cap_one["status"], "blocked");
+    assert_eq!(cap_one["max_parallel_agents"], 1);
+    assert_eq!(cap_one["execute_requested"], true);
+    assert_eq!(cap_one["execute_supported"], false);
+    assert_eq!(cap_one["execution_attempted"], false);
+    assert_eq!(
+        cap_one["execution_status"],
+        "blocked_external_execution_unavailable"
+    );
+    assert_eq!(
+        cap_one["blocker_codes"],
+        serde_json::json!(["scheduler_execute_external_execution_unavailable"])
+    );
+    assert_eq!(
+        cap_one["dispatch_receipt"]["receipt_status"],
+        "execute_projection_not_persisted"
+    );
+    assert_eq!(
+        cap_one["dispatch_receipt"]["execute_status"],
+        "blocked_external_execution_unavailable"
+    );
+    assert_eq!(
+        cap_one["dispatch_receipt"]["preview_only_reason"],
+        "scheduler_execute_external_execution_unavailable"
+    );
+    assert_eq!(cap_one["dispatch_receipt"]["receipt_persisted"], false);
+    assert_eq!(
+        cap_one["dispatch_receipt"]["receipt_id"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        cap_one["dispatch_receipt"]["receipt_path"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        cap_one["selected_task_ids"],
+        serde_json::json!(["sched-primary"])
+    );
+    assert_eq!(cap_one["selected_parallel_tasks"], serde_json::json!([]));
+    let cap_one_rejected = cap_one["rejected_candidates"]
+        .as_array()
+        .expect("rejected candidates should render");
+    assert!(cap_one_rejected.iter().any(|candidate| {
+        candidate["task"]["id"] == "sched-parallel-a"
+            && candidate["reasons"]
+                .as_array()
+                .expect("candidate reasons should render")
+                .iter()
+                .any(|reason| reason == "max_parallel_agents_cap_reached")
+    }));
+    assert!(cap_one_rejected.iter().any(|candidate| {
+        candidate["task"]["id"] == "sched-unsafe"
+            && candidate["parallel_blockers"]
+                .as_array()
+                .expect("parallel blockers should render")
+                .iter()
+                .any(|reason| reason == "execution_mode_not_parallel_safe")
+    }));
+
+    let cap_two = scheduler_execute_smoke_payload(2);
+    assert_eq!(cap_two["surface"], "vida taskflow scheduler dispatch");
+    assert_eq!(cap_two["status"], "blocked");
+    assert_eq!(cap_two["max_parallel_agents"], 2);
+    assert_eq!(cap_two["execute_requested"], true);
+    assert_eq!(cap_two["execute_supported"], false);
+    assert_eq!(cap_two["execution_attempted"], false);
+    assert_eq!(
+        cap_two["execution_status"],
+        "blocked_external_execution_unavailable"
+    );
+    assert_eq!(
+        cap_two["selected_task_ids"],
+        serde_json::json!(["sched-primary", "sched-parallel-a"])
+    );
+    assert_eq!(
+        cap_two["selected_parallel_tasks"][0]["id"],
+        "sched-parallel-a"
+    );
+    assert_eq!(
+        cap_two["reservations"][0]["reservation_status"],
+        "execute_projection_unpersisted"
+    );
+    assert_eq!(
+        cap_two["reservations"][0]["execute_status"],
+        "blocked_external_execution_unavailable"
+    );
+    assert_eq!(
+        cap_two["reservations"][0]["preview_only_reason"],
+        "scheduler_execute_external_execution_unavailable"
+    );
+    assert_eq!(cap_two["reservations"][0]["execution_attempted"], false);
+    assert_eq!(
+        cap_two["dispatch_receipt"]["selected_task_ids"],
+        serde_json::json!(["sched-primary", "sched-parallel-a"])
+    );
+    assert_eq!(cap_two["dispatch_receipt"]["execute_supported"], false);
+    assert_eq!(cap_two["dispatch_receipt"]["execution_attempted"], false);
+    let cap_two_rejected = cap_two["rejected_candidates"]
+        .as_array()
+        .expect("rejected candidates should render");
+    assert!(cap_two_rejected.iter().any(|candidate| {
+        candidate["task"]["id"] == "sched-unsafe"
+            && candidate["reasons"]
+                .as_array()
+                .expect("candidate reasons should render")
+                .iter()
+                .any(|reason| reason == "execution_mode_not_parallel_safe")
+    }));
+}
+
 #[test]
 fn taskflow_proxy_help_supports_graph_summary_topic() {
     let output = vida()

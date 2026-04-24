@@ -372,15 +372,15 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
                 "  Preview canonical scheduler selection for one critical-path task plus compatible parallel-safe siblings under the configured max_parallel_agents ceiling."
             );
             println!(
-                "  This surface is preview-first for this wave and must not be treated as autonomous multi-run launch authority."
+                "  `--execute` performs bounded scheduler selection and reservation/dispatch receipt projection, but does not attempt external lane execution until an execution backend is available."
             );
             println!();
             println!("Canonical commands:");
             println!(
-                "  vida taskflow scheduler dispatch [--scope <task-id>] [--current-task-id <task-id>] [--dry-run] [--json]"
+                "  vida taskflow scheduler dispatch [--scope <task-id>] [--current-task-id <task-id>] [--limit <n>] [--dry-run] [--json]"
             );
             println!(
-                "  vida taskflow scheduler dispatch --execute [--scope <task-id>] [--current-task-id <task-id>] [--json]"
+                "  vida taskflow scheduler dispatch --execute [--scope <task-id>] [--current-task-id <task-id>] [--limit <n>] [--json]"
             );
             println!();
             println!("Returned semantics:");
@@ -391,7 +391,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("Failure modes:");
             println!("  Missing or unreadable authoritative state fails closed.");
             println!(
-                "  `--execute` is intentionally blocked in this wave; scheduler dispatch remains preview-first until multi-run recovery parity is proven."
+                "  If external execution is unavailable, `--execute` returns `execution_attempted=false` with `scheduler_execute_external_execution_unavailable`."
             );
             println!(
                 "  Missing readiness or explicit parallel-safe semantics never widen execution; incompatible candidates stay in rejected_candidates with reasons."
