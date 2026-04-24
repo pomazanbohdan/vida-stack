@@ -1874,6 +1874,8 @@ struct TaskHandoffAcceptReceipt {
     blocker_codes: Vec<String>,
     next_actions: Vec<String>,
     receipt_path: String,
+    receipt_root: String,
+    isolation: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -2316,11 +2318,35 @@ fn task_handoff_receipt_filename_timestamp() -> String {
         .to_string()
 }
 
-fn task_handoff_receipt_dir(project_root: &std::path::Path) -> std::path::PathBuf {
-    project_root
-        .join(".vida")
-        .join("receipts")
-        .join("task-handoffs")
+fn task_handoff_project_receipt_root(project_root: &std::path::Path) -> std::path::PathBuf {
+    project_root.join(".vida").join("receipts")
+}
+
+fn task_handoff_isolated_receipt_root(state_dir: &std::path::Path) -> std::path::PathBuf {
+    state_dir.join("receipts")
+}
+
+fn task_handoff_receipt_dir(receipt_root: &std::path::Path) -> std::path::PathBuf {
+    receipt_root.join("task-handoffs")
+}
+
+fn task_handoff_receipt_root(
+    state_dir: &std::path::Path,
+    explicit_state_dir: bool,
+) -> (std::path::PathBuf, &'static str) {
+    if task_close_uses_isolated_state_dir(state_dir, explicit_state_dir) {
+        return (
+            task_handoff_isolated_receipt_root(state_dir),
+            "isolated_state_dir",
+        );
+    }
+    let project_root = project_root_for_task_state(state_dir)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    (
+        task_handoff_project_receipt_root(&project_root),
+        "project_state_dir",
+    )
 }
 
 fn sanitize_task_handoff_receipt_component(value: &str) -> String {
@@ -2341,11 +2367,11 @@ fn sanitize_task_handoff_receipt_component(value: &str) -> String {
 }
 
 fn task_handoff_receipt_path(
-    project_root: &std::path::Path,
+    receipt_root: &std::path::Path,
     task_id: &str,
     filename_timestamp: &str,
 ) -> std::path::PathBuf {
-    task_handoff_receipt_dir(project_root).join(format!(
+    task_handoff_receipt_dir(receipt_root).join(format!(
         "{}-{}.json",
         sanitize_task_handoff_receipt_component(task_id),
         filename_timestamp
@@ -2382,12 +2408,16 @@ fn blocked_task_handoff_accept_receipt(
         blocker_codes: vec![blocker_code.to_string()],
         next_actions: vec![next_action.to_string()],
         receipt_path: "not_persisted".to_string(),
+        receipt_root: "not_persisted".to_string(),
+        isolation: "not_persisted".to_string(),
     }
 }
 
 fn task_handoff_accept_receipt(
     command: &TaskHandoffAcceptArgs,
     receipt_path: &std::path::Path,
+    receipt_root: &std::path::Path,
+    isolation: &str,
     accepted_at: String,
 ) -> TaskHandoffAcceptReceipt {
     let changed_files = canonical_owned_paths(
@@ -2410,6 +2440,8 @@ fn task_handoff_accept_receipt(
         blocker_codes,
         next_actions,
         receipt_path: receipt_path.display().to_string(),
+        receipt_root: receipt_root.display().to_string(),
+        isolation: isolation.to_string(),
     }
 }
 
@@ -2984,20 +3016,26 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
         }
         TaskCommand::Handoff(command) => match command.command {
             TaskHandoffCommand::Accept(command) => {
+                let explicit_state_dir = command.state_dir.is_some();
                 let state_dir = command
                     .state_dir
                     .clone()
                     .unwrap_or_else(state_store::default_state_dir);
-                let project_root = project_root_for_task_state(&state_dir)
-                    .or_else(|| std::env::current_dir().ok())
-                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let (receipt_root, isolation) =
+                    task_handoff_receipt_root(&state_dir, explicit_state_dir);
                 let accepted_at = task_handoff_timestamp();
                 let receipt_path = task_handoff_receipt_path(
-                    &project_root,
+                    &receipt_root,
                     &command.task_id,
                     &task_handoff_receipt_filename_timestamp(),
                 );
-                let mut receipt = task_handoff_accept_receipt(&command, &receipt_path, accepted_at);
+                let mut receipt = task_handoff_accept_receipt(
+                    &command,
+                    &receipt_path,
+                    &receipt_root,
+                    isolation,
+                    accepted_at,
+                );
                 match task_show_snapshot_first(state_dir, &command.task_id).await {
                     Ok((_task, _metadata)) => {}
                     Err(error) => {
@@ -3770,10 +3808,12 @@ mod tests {
         persist_task_handoff_accept_receipt, task_close_automation_receipt,
         task_close_commit_file_strings, task_close_host_agent_telemetry,
         task_close_uses_isolated_state_dir, task_create_title, task_handoff_accept_receipt,
-        task_handoff_receipt_path, task_json_success_status, task_next_lawful_receipt,
-        task_owned_status_receipt, validate_task_handoff_accept_receipt,
+        task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
+        task_json_success_status, task_next_lawful_receipt, task_owned_status_receipt,
+        validate_task_handoff_accept_receipt,
     };
     use crate::temp_state::TempStateHarness;
+    use crate::test_cli_support::EnvVarGuard;
     use crate::test_cli_support::cli;
     use crate::test_cli_support::guard_current_dir;
     use std::fs;
@@ -3972,7 +4012,8 @@ mod tests {
     #[test]
     fn task_handoff_accept_receipt_records_queryable_contents() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let receipt_path = task_handoff_receipt_path(harness.path(), "task/handoff", "123");
+        let receipt_root = task_handoff_project_receipt_root(harness.path());
+        let receipt_path = task_handoff_receipt_path(&receipt_root, "task/handoff", "123");
         let receipt = task_handoff_accept_receipt(
             &crate::TaskHandoffAcceptArgs {
                 task_id: "task/handoff".to_string(),
@@ -3993,6 +4034,8 @@ mod tests {
                 json: true,
             },
             &receipt_path,
+            &receipt_root,
+            "project_state_dir",
             "2026-04-24T00:00:00Z".to_string(),
         );
 
@@ -4015,6 +4058,8 @@ mod tests {
                 .receipt_path
                 .ends_with(".vida/receipts/task-handoffs/task-handoff-123.json")
         );
+        assert_eq!(receipt.receipt_root, receipt_root.display().to_string());
+        assert_eq!(receipt.isolation, "project_state_dir");
         validate_task_handoff_accept_receipt(&receipt)
             .expect("pass handoff with agent should validate");
         persist_task_handoff_accept_receipt(&receipt, &receipt_path)
@@ -4037,7 +4082,8 @@ mod tests {
     #[test]
     fn blocked_task_handoff_without_detail_fails_validation() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let receipt_path = task_handoff_receipt_path(harness.path(), "task-a", "123");
+        let receipt_root = task_handoff_project_receipt_root(harness.path());
+        let receipt_path = task_handoff_receipt_path(&receipt_root, "task-a", "123");
         let receipt = task_handoff_accept_receipt(
             &crate::TaskHandoffAcceptArgs {
                 task_id: "task-a".to_string(),
@@ -4052,6 +4098,8 @@ mod tests {
                 json: true,
             },
             &receipt_path,
+            &receipt_root,
+            "project_state_dir",
             "2026-04-24T00:00:00Z".to_string(),
         );
 
@@ -4063,7 +4111,8 @@ mod tests {
     #[test]
     fn task_handoff_accept_without_agent_fails_validation() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let receipt_path = task_handoff_receipt_path(harness.path(), "task-a", "123");
+        let receipt_root = task_handoff_project_receipt_root(harness.path());
+        let receipt_path = task_handoff_receipt_path(&receipt_root, "task-a", "123");
         let receipt = task_handoff_accept_receipt(
             &crate::TaskHandoffAcceptArgs {
                 task_id: "task-a".to_string(),
@@ -4078,12 +4127,113 @@ mod tests {
                 json: true,
             },
             &receipt_path,
+            &receipt_root,
+            "project_state_dir",
             "2026-04-24T00:00:00Z".to_string(),
         );
 
         let error =
             validate_task_handoff_accept_receipt(&receipt).expect_err("missing agent should block");
         assert_eq!(error.0, "missing_agent_id");
+    }
+
+    #[test]
+    fn task_handoff_accept_isolated_state_dir_writes_receipt_under_state_dir() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let project_root = harness.path().join("project");
+        fs::create_dir_all(project_root.join(".vida/receipts"))
+            .expect("project receipt directory should initialize");
+        fs::write(project_root.join("vida.config.yaml"), "project: test\n")
+            .expect("project marker should write");
+        fs::write(project_root.join("AGENTS.md"), "test project\n")
+            .expect("agents marker should write");
+        fs::create_dir_all(project_root.join(".vida/config"))
+            .expect("config marker directory should initialize");
+        fs::create_dir_all(project_root.join(".vida/db"))
+            .expect("db marker directory should initialize");
+        fs::create_dir_all(project_root.join(".vida/project"))
+            .expect("project marker directory should initialize");
+        let isolated_state_dir = harness.path().join("isolated-state");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(isolated_state_dir.clone())
+                .await
+                .expect("isolated state store should open");
+            create_task_for_test(
+                &store,
+                "task-handoff",
+                "Task handoff",
+                "task",
+                "open",
+                2,
+                None,
+            )
+            .await;
+            store
+                .refresh_task_snapshot()
+                .await
+                .expect("snapshot should refresh");
+        });
+
+        let (receipt_root, isolation) = task_handoff_receipt_root(&isolated_state_dir, true);
+        assert_eq!(isolation, "isolated_state_dir");
+        assert_eq!(receipt_root, isolated_state_dir.join("receipts"));
+
+        let _vida_root = EnvVarGuard::unset("VIDA_ROOT");
+        let _cwd = guard_current_dir(&project_root);
+        let code = runtime.block_on(crate::run(cli(&[
+            "task",
+            "handoff",
+            "accept",
+            "task-handoff",
+            "--agent",
+            "worker-1",
+            "--file",
+            "crates/vida/src/task_surface.rs",
+            "--proof",
+            "cargo check -p vida --bin vida",
+            "--state-dir",
+            isolated_state_dir
+                .to_str()
+                .expect("state dir should be utf8"),
+            "--json",
+        ])));
+        drop(_cwd);
+
+        assert_eq!(code, ExitCode::SUCCESS);
+        let project_handoff_receipts = project_root.join(".vida/receipts/task-handoffs");
+        assert!(
+            !project_handoff_receipts.exists(),
+            "isolated handoff must not write project receipts at {}",
+            project_handoff_receipts.display()
+        );
+        let isolated_handoff_receipts = isolated_state_dir.join("receipts/task-handoffs");
+        let receipts = fs::read_dir(&isolated_handoff_receipts)
+            .expect("isolated receipt directory should exist")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("isolated receipts should list");
+        assert_eq!(receipts.len(), 1);
+        let receipt_text =
+            fs::read_to_string(receipts[0].path()).expect("isolated receipt should read");
+        let receipt: serde_json::Value =
+            serde_json::from_str(&receipt_text).expect("isolated receipt should parse");
+        assert_eq!(receipt["status"], "pass");
+        assert_eq!(receipt["task_id"], "task-handoff");
+        assert_eq!(receipt["isolation"], "isolated_state_dir");
+        assert_eq!(
+            receipt["receipt_root"],
+            isolated_state_dir.join("receipts").display().to_string()
+        );
+        assert!(
+            receipt["receipt_path"]
+                .as_str()
+                .expect("receipt path should be string")
+                .starts_with(
+                    isolated_handoff_receipts
+                        .to_str()
+                        .expect("receipt dir should be utf8")
+                )
+        );
     }
 
     #[test]
