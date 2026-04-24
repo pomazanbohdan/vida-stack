@@ -428,6 +428,185 @@ agent_extensions:
     require_flow_resolution: true
     fail_closed_on_validation_error: true
 
+dev_team:
+  enabled: true
+  contract_doc: docs/process/team-development-and-orchestration-protocol.md
+  preserve_existing_agent_extensions: true
+  preserve_existing_flow_sets: true
+  validation:
+    require_role_contracts: true
+    require_flow_definitions: true
+    require_runtime_role_binding: true
+    require_task_class_binding: true
+    require_default_carrier_binding: true
+    require_handoff_contracts: true
+    require_ordered_closure_flow: true
+    fail_closed_on_validation_error: true
+  roles:
+    analyst:
+      runtime_role: business_analyst
+      task_classes:
+        - specification
+        - planning
+      default_carrier: middle
+      default_model: gpt-5.4
+      default_model_reasoning_effort: medium
+      cost_policy:
+        budget_units: 4
+        selection_rule: cheapest_eligible_specification_carrier
+      handoff:
+        next_role: developer
+        required_outputs:
+          - detailed_task_brief
+          - architectural_context
+          - bounded_problem_statement
+          - acceptance_contract
+          - owned_write_scope
+          - stop_rules
+          - duplication_risk_map
+        fail_closed_on_missing_handoff: true
+    developer:
+      runtime_role: worker
+      task_classes:
+        - implementation
+        - delivery_task
+        - execution_block
+      default_carrier: junior
+      default_model: gpt-5.4
+      default_model_reasoning_effort: low
+      cost_policy:
+        budget_units: 1
+        fallback_carrier: middle
+        selection_rule: cheapest_eligible_write_carrier
+      handoff:
+        next_role: duplication_reviewer
+        required_outputs:
+          - changed_files
+          - verification_notes
+          - residual_risks
+          - explicit_blockers
+        fail_closed_on_missing_handoff: true
+    duplication_reviewer:
+      runtime_role: verifier
+      task_classes:
+        - review
+        - verification
+        - quality_gate
+      default_carrier: senior
+      default_model: gpt-5.3-codex-spark
+      default_model_reasoning_effort: high
+      cost_policy:
+        budget_units: 16
+        selection_rule: independent_duplication_and_architecture_reuse_review
+      review_contract:
+        purpose: Confirm the implementation is architectural and integrated, reuses existing framework/runtime contracts, and does not duplicate code, config semantics, taskflow projections, or operator surfaces.
+        required_checks:
+          - shared_contract_reuse
+          - duplicated_logic_scan
+          - duplicated_config_schema_scan
+          - existing_helper_reuse
+          - architecture_boundary_integrity
+          - no_dead_code_or_unwired_helpers
+        fail_closed_on_duplication: true
+      handoff:
+        next_role: coach
+        required_outputs:
+          - duplication_review_report
+          - reused_contracts
+          - duplicate_risks
+          - required_rework_or_clearance
+        fail_closed_on_missing_handoff: true
+    coach:
+      runtime_role: coach
+      task_classes:
+        - coach
+        - review
+      default_carrier: middle
+      default_model: gpt-5.4
+      default_model_reasoning_effort: medium
+      cost_policy:
+        budget_units: 4
+        selection_rule: final_spec_conformance_review_after_duplication_clearance
+      handoff:
+        next_role: tester
+        required_outputs:
+          - final_implementation_review
+          - spec_conformance_review
+          - rework_or_approve_decision
+          - unresolved_risks
+        fail_closed_on_missing_handoff: true
+    tester:
+      runtime_role: verifier
+      task_classes:
+        - verification
+        - review
+        - quality_gate
+      default_carrier: senior
+      default_model: gpt-5.3-codex-spark
+      default_model_reasoning_effort: high
+      cost_policy:
+        budget_units: 16
+        selection_rule: independent_verification_before_closure
+      handoff:
+        next_role: prover
+        required_outputs:
+          - verification_evidence
+          - failing_or_passing_checks
+          - residual_risks
+        fail_closed_on_missing_handoff: true
+    prover:
+      runtime_role: prover
+      task_classes:
+        - verification
+        - quality_gate
+        - release_readiness
+      default_carrier: senior
+      default_model: gpt-5.3-codex-spark
+      default_model_reasoning_effort: high
+      cost_policy:
+        budget_units: 16
+        selection_rule: proof_strength_before_release
+      handoff:
+        next_role: release_closure
+        required_outputs:
+          - closure_readiness_decision
+          - proof_summary
+          - release_risks
+        fail_closed_on_missing_handoff: true
+    release_closure:
+      runtime_role: prover
+      task_classes:
+        - release_readiness
+        - quality_gate
+      default_carrier: senior
+      default_model: gpt-5.3-codex-spark
+      default_model_reasoning_effort: high
+      cost_policy:
+        budget_units: 16
+        selection_rule: fail_closed_until_release_receipt
+      handoff:
+        next_role: terminal_closure
+        required_outputs:
+          - release_or_hold_decision
+          - closure_receipt
+          - follow_up_actions
+        fail_closed_on_missing_handoff: true
+  flows:
+    default_delivery:
+      enabled: true
+      description: System analyst produces the detailed task brief, developer implements on the cheapest write lane, duplication reviewer checks architectural reuse/no duplication, final coach reviews the completed implementation, then tester/prover gates release closure.
+      sequential: true
+      allow_parallel_handoffs: false
+      fail_closed_on_missing_step_contract: true
+      steps:
+        - analyst
+        - developer
+        - duplication_reviewer
+        - coach
+        - tester
+        - prover
+        - release_closure
+
 autonomous_execution:
   next_task_boundary_analysis: true
   next_task_boundary_report: none

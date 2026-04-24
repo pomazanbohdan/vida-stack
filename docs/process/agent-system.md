@@ -10,6 +10,7 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - canonical runtime outputs are `carrier_runtime` and `runtime_assignment`
 - `codex_multi_agent` and `codex_runtime_assignment` are compatibility aliases only and must not be treated as owner-law canonical fields
 - the canonical executor registry is `vida.config.yaml -> agent_system.subagents`
+- the canonical development-team contract is `vida.config.yaml -> dev_team`, which defines the analyst -> developer -> duplication_reviewer -> coach -> tester -> prover -> release_closure handoff path, role/task-class bindings, and fail-closed validation posture without replacing `agent_extensions`
 - dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model
 - route policy is owned by explicit executor fields such as `executor_backend`, `fanout_executor_backends`, and `fallback_executor_backend`
 - legacy `subagents`, `fanout_subagents`, and `bridge_fallback_subagent` fields are compatibility aliases only

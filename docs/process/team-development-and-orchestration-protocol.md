@@ -29,11 +29,13 @@ Project development runs as:
 1. orchestrator-led,
 2. delivery-task shaped,
 3. delegation-first,
-4. coach-separated,
-5. verification-backed,
-6. skill-aware before bounded work begins,
-7. fail-closed on missing packet data or shared-scope ambiguity.
-8. explorer/read-only findings feed packet shaping, not root-session write ownership.
+4. system-analysis-first for complex or write-producing work,
+5. duplication-review-backed before final coach review,
+6. coach-separated,
+7. verification-backed,
+8. skill-aware before bounded work begins,
+9. fail-closed on missing packet data or shared-scope ambiguity.
+10. explorer/read-only findings feed packet shaping, not root-session write ownership.
 
 ## Team Topology
 
@@ -44,11 +46,19 @@ The active project development team is:
 2. `junior`
    - default low-cost carrier tier for one bounded write-producing packet with `runtime_role=worker`
 3. `middle`
-   - carrier tier for specification/planning packets and formative review with `runtime_role=coach`
+   - carrier tier for system analyst specification/planning packets and detailed pre-development task briefs with `runtime_role=business_analyst`
 4. `senior`
-   - carrier tier for independent proof and closure-readiness checks with `runtime_role=verifier`
+   - carrier tier for independent duplication/architecture reuse review, proof, and closure-readiness checks with `runtime_role=verifier`
 5. `architect`
    - carrier tier for high-cost conflict resolution with `runtime_role=solution_architect`
+
+The configured development chain is:
+
+1. `analyst`: a middle-cost system analyst lane that researches the bounded task, existing code/contracts, architectural context, acceptance targets, owned paths, and duplication risks before implementation.
+2. `developer`: the cheapest eligible write lane that implements only after the analyst handoff is present.
+3. `duplication_reviewer`: an independent review lane that checks whether the implementation reuses existing framework/runtime contracts, avoids duplicate code/config semantics/operator surfaces, and has no dead or unwired helpers.
+4. `coach`: the final coach lane that reviews the completed implementation against the analyst brief, spec, acceptance targets, and duplication-review result.
+5. `tester` / `prover`: independent verification and proof lanes that gate release closure.
 
 ## Canonical Work Unit
 
