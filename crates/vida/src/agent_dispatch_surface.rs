@@ -12,6 +12,8 @@ struct AgentDispatchLaneSelectionTruth {
     rate: u64,
     estimated_task_price_units: u64,
     budget_verdict: String,
+    selection_source_paths: serde_json::Value,
+    pricing_readiness: serde_json::Value,
     runtime_role: String,
     task_class: String,
 }
@@ -342,6 +344,8 @@ fn selection_truth_for_task_with_role_and_class(
         rate,
         estimated_task_price_units,
         budget_verdict,
+        selection_source_paths: assignment["selection_source_paths"].clone(),
+        pricing_readiness: assignment["pricing_readiness"].clone(),
         runtime_role,
         task_class,
     })
@@ -1284,6 +1288,61 @@ mod tests {
         })
     }
 
+    fn activation_bundle_with_missing_price_data() -> serde_json::Value {
+        serde_json::json!({
+            "carrier_runtime": {
+                "roles": [
+                    {
+                        "role_id": "developer-seat",
+                        "tier": "junior",
+                        "default_runtime_role": "worker",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "model_profiles": {
+                            "developer": {
+                                "profile_id": "developer-profile",
+                                "model_ref": "gpt-5.4",
+                                "provider": "openai",
+                                "reasoning_effort": "low",
+                                "quality_tier": "medium",
+                                "speed_tier": "fast",
+                                "sandbox_mode": "workspace-write",
+                                "write_scope": "scoped_only",
+                                "runtime_roles": ["worker"],
+                                "task_classes": ["implementation"]
+                            }
+                        }
+                    }
+                ],
+                "dispatch_aliases": [],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "demotion_score": 45
+                    },
+                    "agents": {
+                        "developer-seat": {
+                            "effective_score": 72,
+                            "lifecycle_state": "active"
+                        }
+                    },
+                    "store_path": ".vida/state/worker-strategy.json",
+                    "scorecards_path": ".vida/state/worker-scorecards.json"
+                },
+                "model_selection": {
+                    "enabled": true,
+                    "default_strategy": "balanced_cost_quality",
+                    "selection_rule": "role_task_then_readiness_then_score_then_cost_quality",
+                    "candidate_scope": "unified_carrier_model_profiles",
+                    "budget_policy": "informational",
+                    "free_profiles_allowed": true
+                }
+            },
+            "agent_system": {
+                "max_parallel_agents": 4
+            }
+        })
+    }
+
     fn assertion_message_contains_actionable_blocker(blocker_codes: &[String], task_id: &str) {
         let expected_prefix =
             format!("selected_lane_runtime_assignment_truth_missing:task={task_id}:");
@@ -1334,6 +1393,18 @@ mod tests {
             "gpt-5.4"
         );
         assert_eq!(preview.selected_lanes[0].selection_truth.rate, 1);
+        assert!(preview.selected_lanes[0]
+            .selection_truth
+            .selection_source_paths["selected_rate"]
+            .as_str()
+            .is_some_and(
+                |path| path.starts_with("carrier_runtime.roles[junior].model_profiles.")
+                    && path.ends_with(".normalized_cost_units")
+            ));
+        assert_eq!(
+            preview.selected_lanes[0].selection_truth.pricing_readiness["pricing_freshness_status"],
+            "missing"
+        );
         assert!(preview.selected_lanes[1]
             .dispatch_command
             .contains("--state-dir /tmp/vida-state"));
@@ -1772,6 +1843,34 @@ mod tests {
             .iter()
             .any(|code| code
                 .starts_with("selected_lane_runtime_assignment_truth_missing:task=task-a:")));
+    }
+
+    #[test]
+    fn agent_dispatch_next_preview_actionable_blocker_for_missing_rate_data() {
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("task-a".to_string()),
+            ready: vec![candidate("task-a", "Task A", true, true, Vec::new())],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle_with_missing_price_data(),
+            &projection,
+            1,
+            1,
+            None,
+            false,
+        );
+
+        assert_eq!(preview.status, "blocked");
+        assert_eq!(preview.lanes_selected, 0);
+        assertion_message_contains_actionable_blocker(&preview.blocker_codes, "task-a");
+        assert!(preview
+            .blocker_codes
+            .iter()
+            .any(|code| code.ends_with(":selected_rate_missing")));
+        assert!(preview.blocked_candidates.is_empty());
     }
 
     #[test]
