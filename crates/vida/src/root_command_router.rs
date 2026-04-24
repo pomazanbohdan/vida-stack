@@ -1,10 +1,10 @@
 use std::process::ExitCode;
 
 use super::{
-    agent_feedback_surface, approval_surface, docflow_proxy, doctor_surface, init_surfaces,
-    lane_surface, memory_surface, print_root_help, project_activator_surface, protocol_surface,
-    resolve_runtime_project_root, run_taskflow_proxy, state_store, status_surface, task_surface,
-    Cli, Command, TaskArgs, TaskCommand,
+    Cli, Command, ReleaseCommand, TaskArgs, TaskCommand, agent_feedback_surface, approval_surface,
+    docflow_proxy, doctor_surface, init_surfaces, lane_surface, memory_surface, print_root_help,
+    project_activator_surface, protocol_surface, release_surface, resolve_runtime_project_root,
+    run_taskflow_proxy, state_store, status_surface, task_surface,
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
@@ -45,6 +45,9 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
             prefixed.extend(args.args);
             run_taskflow_proxy(super::ProxyArgs { args: prefixed }).await
         }
+        Some(Command::Release(args)) => match args.command {
+            ReleaseCommand::Install(args) => release_surface::run_release_install(args),
+        },
         Some(Command::Taskflow(args)) => run_taskflow_proxy(args).await,
         Some(Command::Docflow(args)) => docflow_proxy::run_docflow_proxy(args),
         Some(Command::External(args)) => run_unknown(&args),
@@ -106,7 +109,7 @@ fn prepare_runtime_state_dir(command: &Option<Command>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{command_needs_project_root_state_dir, prepare_runtime_state_dir, Cli};
+    use super::{Cli, command_needs_project_root_state_dir, prepare_runtime_state_dir};
     use crate::temp_state::TempStateHarness;
     use clap::Parser;
     use std::fs;

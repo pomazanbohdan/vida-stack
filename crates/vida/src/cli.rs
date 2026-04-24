@@ -82,6 +82,8 @@ pub(crate) enum Command {
     Approval(ProxyArgs),
     #[command(about = "thin root alias to the TaskFlow recovery family")]
     Recovery(ProxyArgs),
+    #[command(about = "build and install the VIDA release binary")]
+    Release(ReleaseArgs),
     #[command(
         about = "delegate to the TaskFlow runtime family",
         long_about = TASKFLOW_LONG_ABOUT,
@@ -98,6 +100,50 @@ pub(crate) enum Command {
 pub(crate) struct ProxyArgs {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub(crate) args: Vec<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct ReleaseArgs {
+    #[command(subcommand)]
+    pub(crate) command: ReleaseCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum ReleaseCommand {
+    #[command(
+        about = "build and install target/release/vida to configured local binary paths",
+        long_about = "Build and install the VIDA release binary.\n\nBy default this runs `cargo build -p vida --release` and installs `target/release/vida` to both local and cargo bin targets. Use `--skip-build` with `--source-binary` and `--install-root` for deterministic smoke tests or controlled local installs."
+    )]
+    Install(ReleaseInstallArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct ReleaseInstallArgs {
+    #[arg(
+        long = "target",
+        default_value = "all",
+        help = "Install target: all, local, or cargo"
+    )]
+    pub(crate) target: String,
+
+    #[arg(long = "skip-build", help = "Skip `cargo build -p vida --release`")]
+    pub(crate) skip_build: bool,
+
+    #[arg(
+        long = "source-binary",
+        help = "Source vida binary path; defaults to target/release/vida"
+    )]
+    pub(crate) source_binary: Option<PathBuf>,
+
+    #[arg(
+        long = "install-root",
+        help = "Root used for install paths; defaults to HOME"
+    )]
+    pub(crate) install_root: Option<PathBuf>,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone)]

@@ -44,6 +44,7 @@ mod protocol_surface;
 mod registry_projection_utils;
 mod release1_contracts;
 mod release_contract_adapters;
+mod release_surface;
 mod root_command_router;
 mod runtime_assignment_builder;
 mod runtime_assignment_policy;
