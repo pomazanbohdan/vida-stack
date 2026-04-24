@@ -1634,6 +1634,25 @@ async fn run_task_spawn_blocker_like(command: TaskSpawnBlockerArgs, surface: &st
 }
 
 async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) -> ExitCode {
+    let title = match task_create_title(&command) {
+        Ok(title) => title,
+        Err(error) => {
+            if command.json {
+                crate::print_json_pretty(&serde_json::json!({
+                    "status": "blocked",
+                    "blocker_codes": ["invalid_task_title_input"],
+                    "reason": error,
+                    "usage": "vida task create <task-id> <title> --json OR vida task create <task-id> --title <title> --json",
+                }));
+            } else {
+                eprintln!("{error}");
+                eprintln!(
+                    "Usage: vida task create <task-id> <title> --json OR vida task create <task-id> --title <title> --json"
+                );
+            }
+            return ExitCode::from(2);
+        }
+    };
     let state_dir = command
         .state_dir
         .clone()
@@ -1736,7 +1755,7 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
             match store
                 .create_task(state_store::CreateTaskRequest {
                     task_id: &command.task_id,
-                    title: &command.title,
+                    title: &title,
                     display_id: (!display_id.is_empty()).then_some(display_id.as_str()),
                     description: &command.description,
                     issue_type: &command.issue_type,
@@ -1781,6 +1800,30 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
         Err(error) => {
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
+        }
+    }
+}
+
+fn task_create_title(command: &TaskCreateArgs) -> Result<String, String> {
+    let positional = command
+        .positional_title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let option = command
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match (positional, option) {
+        (Some(_), Some(_)) => Err(
+            "Provide only one task title source: positional <TITLE> or --title <TITLE>."
+                .to_string(),
+        ),
+        (Some(title), None) | (None, Some(title)) => Ok(title.to_string()),
+        (None, None) => {
+            Err("Missing task title. Use positional <TITLE> or --title <TITLE>.".to_string())
         }
     }
 }
@@ -2930,7 +2973,7 @@ mod tests {
         normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
         parse_label_values, parse_optional_label_value, parse_split_child_specs,
         task_close_automation_receipt, task_close_host_agent_telemetry,
-        task_close_uses_isolated_state_dir, task_json_success_status,
+        task_close_uses_isolated_state_dir, task_create_title, task_json_success_status,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
@@ -2965,6 +3008,58 @@ mod tests {
             })
             .await
             .expect("task should create");
+    }
+
+    fn minimal_task_create_args(
+        positional_title: Option<&str>,
+        title: Option<&str>,
+    ) -> crate::TaskCreateArgs {
+        crate::TaskCreateArgs {
+            task_id: "task-title-test".to_string(),
+            positional_title: positional_title.map(str::to_string),
+            title: title.map(str::to_string),
+            issue_type: "task".to_string(),
+            status: "open".to_string(),
+            priority: 2,
+            display_id: None,
+            parent_id: None,
+            parent_display_id: None,
+            auto_display_from: None,
+            description: String::new(),
+            labels: Vec::new(),
+            execution_mode: None,
+            order_bucket: None,
+            parallel_group: None,
+            conflict_domain: None,
+            state_dir: None,
+            render: crate::RenderMode::Plain,
+            json: false,
+        }
+    }
+
+    #[test]
+    fn task_create_title_resolves_positional_or_title_option() {
+        assert_eq!(
+            task_create_title(&minimal_task_create_args(Some("Positional title"), None))
+                .expect("positional title should resolve"),
+            "Positional title"
+        );
+        assert_eq!(
+            task_create_title(&minimal_task_create_args(None, Some("Flag title")))
+                .expect("--title should resolve"),
+            "Flag title"
+        );
+    }
+
+    #[test]
+    fn task_create_title_rejects_missing_or_duplicate_sources() {
+        let missing = task_create_title(&minimal_task_create_args(None, None))
+            .expect_err("missing title should fail");
+        assert!(missing.contains("Missing task title"));
+
+        let duplicate = task_create_title(&minimal_task_create_args(Some("A"), Some("B")))
+            .expect_err("duplicate title sources should fail");
+        assert!(duplicate.contains("only one task title source"));
     }
 
     #[test]

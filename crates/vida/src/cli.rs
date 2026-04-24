@@ -14,7 +14,7 @@ const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
-const TASK_CREATE_AFTER_HELP: &str = "Examples:\n  vida task create <task-id> <title> --parent-id <parent-id> --json\n  vida task create <task-id> <title> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n\nNotes:\n  Missing execution semantics fail closed for parallel scheduling.\n  Use `vida taskflow graph-summary --json` to verify parallel-safe admission after mutation.";
+const TASK_CREATE_AFTER_HELP: &str = "Examples:\n  vida task create <task-id> <title> --parent-id <parent-id> --json\n  vida task create <task-id> --title <title> --json\n  vida task create <task-id> <title> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n\nNotes:\n  Provide exactly one title source: positional <title> or --title <title>.\n  Missing execution semantics fail closed for parallel scheduling.\n  Use `vida taskflow graph-summary --json` to verify parallel-safe admission after mutation.";
 
 const TASK_UPDATE_ABOUT: &str = "Update one tracked task in the authoritative backlog store.";
 const TASK_UPDATE_LONG_ABOUT: &str = "Update one tracked task in the authoritative backlog store.\n\nUse execution-semantics flags to correct sequencing and parallelism truth without moving ordering back into notes:\n- `--execution-mode sequential|parallel_safe|exclusive`\n- `--order-bucket <id>`\n- `--parallel-group <id>`\n- `--conflict-domain <id>`\n- matching `--clear-*` flags remove one semantics field";
@@ -354,7 +354,16 @@ pub(crate) struct TaskNextDisplayIdArgs {
 #[derive(Args, Debug, Clone)]
 pub(crate) struct TaskCreateArgs {
     pub(crate) task_id: String,
-    pub(crate) title: String,
+
+    #[arg(value_name = "TITLE", help = "Task title; alternatively pass --title")]
+    pub(crate) positional_title: Option<String>,
+
+    #[arg(
+        long = "title",
+        value_name = "TITLE",
+        help = "Task title; alternative to positional <TITLE>"
+    )]
+    pub(crate) title: Option<String>,
 
     #[arg(long = "type", default_value = "task")]
     pub(crate) issue_type: String,
@@ -891,7 +900,7 @@ pub(crate) struct DoctorArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{Cli, TaskCommand};
     use clap::{CommandFactory, Parser};
 
     #[test]
@@ -928,5 +937,44 @@ mod tests {
         assert!(help.contains("--push"));
         assert!(help.contains("--commit-file"));
         assert!(help.contains("--commit-message"));
+    }
+
+    #[test]
+    fn task_create_help_lists_positional_and_title_option() {
+        let error = Cli::try_parse_from(["vida", "task", "create", "--help"])
+            .expect_err("help should render clap display error");
+        let help = error.to_string();
+
+        assert!(help.contains("<TASK_ID>"));
+        assert!(help.contains("[TITLE]"));
+        assert!(help.contains("--title <TITLE>"));
+        assert!(help.contains("Provide exactly one title source"));
+    }
+
+    #[test]
+    fn task_create_accepts_positional_title_and_title_option() {
+        let positional = Cli::try_parse_from(["vida", "task", "create", "task-a", "Task A"])
+            .expect("positional title should parse");
+        let Some(super::Command::Task(task_args)) = positional.command else {
+            panic!("task command should parse");
+        };
+        let TaskCommand::Create(create) = task_args.command else {
+            panic!("create command should parse");
+        };
+        assert_eq!(create.task_id, "task-a");
+        assert_eq!(create.positional_title.as_deref(), Some("Task A"));
+        assert_eq!(create.title, None);
+
+        let option = Cli::try_parse_from(["vida", "task", "create", "task-b", "--title", "Task B"])
+            .expect("--title should parse");
+        let Some(super::Command::Task(task_args)) = option.command else {
+            panic!("task command should parse");
+        };
+        let TaskCommand::Create(create) = task_args.command else {
+            panic!("create command should parse");
+        };
+        assert_eq!(create.task_id, "task-b");
+        assert_eq!(create.positional_title, None);
+        assert_eq!(create.title.as_deref(), Some("Task B"));
     }
 }
