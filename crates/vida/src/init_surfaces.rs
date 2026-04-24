@@ -1667,12 +1667,18 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                             bundle.orchestrator_init_view,
                             &project_activation_view,
                         );
+                    let dev_team_readiness =
+                        super::taskflow_consume_bundle::build_dev_team_readiness(
+                            &bundle.config_path,
+                            &bundle.activation_bundle,
+                        );
                     if args.json {
                         println!(
                             "{}",
                             serde_json::to_string_pretty(&serde_json::json!({
                                 "surface": "vida orchestrator-init",
                                 "init": init_view,
+                                "dev_team_readiness": dev_team_readiness,
                                 "runtime_bundle_summary": {
                                     "bundle_id": bundle.metadata["bundle_id"],
                                     "root_artifact_id": bundle.control_core["root_artifact_id"],
@@ -2014,6 +2020,10 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     bundle.agent_init_view,
                     &project_activation_view,
                 );
+            let dev_team_readiness = super::taskflow_consume_bundle::build_dev_team_readiness(
+                &bundle.config_path,
+                &bundle.activation_bundle,
+            );
             let activation_semantics = agent_init_activation_semantics(&selection);
             let surface_payload = build_agent_init_surface_payload(
                 init_view.clone(),
@@ -2026,6 +2036,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     "state_dir": store.root().display().to_string(),
                     "launcher_runtime_paths": bundle.launcher_runtime_paths,
                 }),
+                dev_team_readiness,
             );
 
             if args.execute_dispatch {
@@ -2519,6 +2530,7 @@ fn build_agent_init_surface_payload(
     selection: serde_json::Value,
     activation_semantics: serde_json::Value,
     runtime_bundle_summary: serde_json::Value,
+    dev_team_readiness: serde_json::Value,
 ) -> serde_json::Value {
     let execution_truth = agent_init_execution_truth(&selection);
     let backend_truth = agent_init_backend_truth(&selection, &execution_truth);
@@ -2527,6 +2539,11 @@ fn build_agent_init_surface_payload(
         .and_then(|packet| packet.get("activation_evidence"))
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    let dev_team_readiness = enrich_dev_team_readiness_with_agent_selection(
+        dev_team_readiness,
+        &selection,
+        &backend_truth,
+    );
 
     serde_json::json!({
         "surface": "vida agent-init",
@@ -2535,9 +2552,52 @@ fn build_agent_init_surface_payload(
         "activation_semantics": activation_semantics,
         "execution_truth": execution_truth,
         "backend_truth": backend_truth,
+        "dev_team_readiness": dev_team_readiness,
         "packet_activation_evidence": packet_activation_evidence,
         "runtime_bundle_summary": runtime_bundle_summary,
     })
+}
+
+fn enrich_dev_team_readiness_with_agent_selection(
+    mut dev_team_readiness: serde_json::Value,
+    selection: &serde_json::Value,
+    backend_truth: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(dev_team_object) = dev_team_readiness.as_object_mut() else {
+        return dev_team_readiness;
+    };
+    let selected_runtime_role = selection
+        .get("selected_role")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty());
+    let selected_dev_team_role = dev_team_object
+        .get("roles")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|roles| {
+            roles
+                .iter()
+                .find(|role| role["runtime_role"].as_str() == selected_runtime_role)
+        })
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let selected_cost_units = selected_dev_team_role
+        .get("cost_policy")
+        .and_then(|cost| cost.get("budget_units"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    dev_team_object.insert(
+        "active_selection".to_string(),
+        serde_json::json!({
+            "selected_runtime_role": selected_runtime_role,
+            "selected_dev_team_role": selected_dev_team_role.get("role_id").cloned().unwrap_or(serde_json::Value::Null),
+            "selected_backend": backend_truth.get("selected_backend").cloned().unwrap_or(serde_json::Value::Null),
+            "selected_carrier_id": backend_truth.get("selected_carrier_id").cloned().unwrap_or(serde_json::Value::Null),
+            "selected_model_profile_id": backend_truth.get("selected_model_profile_id").cloned().unwrap_or(serde_json::Value::Null),
+            "selected_model": selected_dev_team_role.get("default_model").cloned().unwrap_or(serde_json::Value::Null),
+            "selected_cost_units": selected_cost_units,
+        }),
+    );
+    dev_team_readiness
 }
 
 pub(crate) async fn render_agent_init_packet_activation_with_store(
@@ -2579,6 +2639,10 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
             "state_dir": store.root().display().to_string(),
             "launcher_runtime_paths": bundle.launcher_runtime_paths,
         }),
+        super::taskflow_consume_bundle::build_dev_team_readiness(
+            &bundle.config_path,
+            &bundle.activation_bundle,
+        ),
     ))
 }
 
@@ -2680,6 +2744,19 @@ mod agent_init_surface_tests {
             selection,
             serde_json::json!({ "activation_kind": "activation_view" }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
+            serde_json::json!({
+                "status": "ready",
+                "roles": [
+                    {
+                        "role_id": "developer",
+                        "runtime_role": "worker",
+                        "default_model": "gpt-5.4",
+                        "cost_policy": {
+                            "budget_units": 1
+                        }
+                    }
+                ]
+            }),
         );
 
         assert_eq!(
@@ -2718,6 +2795,18 @@ mod agent_init_surface_tests {
         assert_eq!(payload["backend_truth"]["override_active"], true);
         assert_eq!(payload["backend_truth"]["lawful_override"], true);
         assert_eq!(payload["backend_truth"]["override_status"], "lawful");
+        assert_eq!(
+            payload["dev_team_readiness"]["active_selection"]["selected_dev_team_role"],
+            "developer"
+        );
+        assert_eq!(
+            payload["dev_team_readiness"]["active_selection"]["selected_carrier_id"],
+            "junior"
+        );
+        assert_eq!(
+            payload["dev_team_readiness"]["active_selection"]["selected_cost_units"],
+            1
+        );
     }
 
     #[test]
@@ -2740,6 +2829,7 @@ mod agent_init_surface_tests {
             selection,
             serde_json::json!({ "activation_kind": "activation_view" }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
+            serde_json::json!({ "status": "ready", "roles": [] }),
         );
 
         assert_eq!(payload["selection"]["mode"], "downstream_packet");
@@ -2765,6 +2855,7 @@ mod agent_init_surface_tests {
             }),
             serde_json::json!({ "activation_kind": "activation_view" }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
+            serde_json::json!({ "status": "ready", "roles": [] }),
         );
 
         assert!(payload["execution_truth"].is_null());

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -717,6 +717,7 @@ fn build_taskflow_agent_system_snapshot(
     let agent_identity = crate::carrier_runtime_metadata::snapshot_agent_identity(carrier_runtime);
     let runtime_role_identity =
         crate::carrier_runtime_metadata::snapshot_runtime_role_identity(carrier_runtime);
+    let dev_team_readiness = build_dev_team_readiness(config_path, activation_bundle);
 
     serde_json::json!({
         "materialization_mode": materialization_mode,
@@ -742,6 +743,7 @@ fn build_taskflow_agent_system_snapshot(
         },
         "carriers": carriers,
         "runtime_roles": runtime_roles,
+        "dev_team_readiness": dev_team_readiness,
         "worker_strategy": {
             "selection_policy": carrier_runtime["worker_strategy"]["selection_policy"],
             "agents": carrier_runtime["worker_strategy"]["agents"],
@@ -759,19 +761,310 @@ fn normalize_agent_system_max_parallel_agents(agent_system: &serde_json::Value) 
         .unwrap_or(1)
 }
 
+pub(crate) fn build_dev_team_readiness(
+    config_path: &str,
+    activation_bundle: &serde_json::Value,
+) -> serde_json::Value {
+    let source_paths = dev_team_source_paths(config_path, None);
+    let config_text = match std::fs::read_to_string(config_path) {
+        Ok(text) => text,
+        Err(error) => {
+            return serde_json::json!({
+                "status": "config_unreadable",
+                "configured": false,
+                "enabled": serde_json::Value::Null,
+                "roles": [],
+                "sequence": [],
+                "flows": [],
+                "blockers": [format!("dev_team_config_unreadable: {error}")],
+                "source_paths": source_paths,
+            });
+        }
+    };
+    let overlay: serde_yaml::Value = match serde_yaml::from_str(&config_text) {
+        Ok(value) => value,
+        Err(error) => {
+            return serde_json::json!({
+                "status": "config_invalid",
+                "configured": false,
+                "enabled": serde_json::Value::Null,
+                "roles": [],
+                "sequence": [],
+                "flows": [],
+                "blockers": [format!("dev_team_config_invalid: {error}")],
+                "source_paths": source_paths,
+            });
+        }
+    };
+    let Some(dev_team) = crate::yaml_lookup(&overlay, &["dev_team"]) else {
+        return serde_json::json!({
+            "status": "missing_config",
+            "configured": false,
+            "enabled": serde_json::Value::Null,
+            "roles": [],
+            "sequence": [],
+            "flows": [],
+            "blockers": ["missing_dev_team_config"],
+            "source_paths": source_paths,
+        });
+    };
+
+    let enabled = crate::yaml_bool(crate::yaml_lookup(dev_team, &["enabled"]), true);
+    let contract_doc = crate::yaml_string(crate::yaml_lookup(dev_team, &["contract_doc"]));
+    let source_paths = dev_team_source_paths(config_path, contract_doc.as_deref());
+    let carrier_catalog = carrier_catalog_by_id(activation_bundle);
+
+    let mut blockers = Vec::new();
+    let roles = dev_team_roles(dev_team, &carrier_catalog, &mut blockers);
+    let flows = dev_team_flows(dev_team, &roles, &mut blockers);
+    let sequence = default_dev_team_sequence(&flows);
+
+    if !enabled {
+        blockers.push("dev_team_disabled".to_string());
+    }
+    if roles.is_empty() {
+        blockers.push("missing_dev_team_roles".to_string());
+    }
+    if sequence.is_empty() {
+        blockers.push("missing_dev_team_sequence".to_string());
+    }
+
+    let status = if !enabled {
+        "disabled"
+    } else if blockers.is_empty() {
+        "ready"
+    } else {
+        "blocked"
+    };
+
+    serde_json::json!({
+        "status": status,
+        "configured": true,
+        "enabled": enabled,
+        "roles": roles,
+        "sequence": sequence,
+        "flows": flows,
+        "blockers": blockers,
+        "source_paths": source_paths,
+    })
+}
+
+fn dev_team_source_paths(config_path: &str, contract_doc: Option<&str>) -> Vec<String> {
+    let mut source_paths = vec![config_path.to_string()];
+    if let Some(contract_doc) = contract_doc
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        source_paths.push(contract_doc.to_string());
+    }
+    source_paths
+}
+
+fn carrier_catalog_by_id(
+    activation_bundle: &serde_json::Value,
+) -> BTreeMap<String, serde_json::Value> {
+    crate::carrier_runtime_section(activation_bundle)["roles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            row["role_id"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .map(|carrier_id| (carrier_id.to_string(), row.clone()))
+        })
+        .collect()
+}
+
+fn dev_team_roles(
+    dev_team: &serde_yaml::Value,
+    carrier_catalog: &BTreeMap<String, serde_json::Value>,
+    blockers: &mut Vec<String>,
+) -> Vec<serde_json::Value> {
+    let mut roles = Vec::new();
+    let Some(role_map) =
+        crate::yaml_lookup(dev_team, &["roles"]).and_then(serde_yaml::Value::as_mapping)
+    else {
+        return roles;
+    };
+
+    for (role_id, role_entry) in role_map
+        .iter()
+        .filter_map(|(key, value)| key.as_str().map(|id| (id, value)))
+    {
+        let runtime_role = crate::yaml_string(crate::yaml_lookup(role_entry, &["runtime_role"]));
+        if runtime_role.as_deref().unwrap_or_default().is_empty() {
+            blockers.push(format!("missing_runtime_role:{role_id}"));
+        }
+        let task_classes =
+            crate::yaml_string_list(crate::yaml_lookup(role_entry, &["task_classes"]));
+        if task_classes.is_empty() {
+            blockers.push(format!("missing_task_classes:{role_id}"));
+        }
+        let default_carrier =
+            crate::yaml_string(crate::yaml_lookup(role_entry, &["default_carrier"]));
+        if default_carrier.as_deref().unwrap_or_default().is_empty() {
+            blockers.push(format!("missing_default_carrier:{role_id}"));
+        }
+        let handoff_next_role =
+            crate::yaml_string(crate::yaml_lookup(role_entry, &["handoff", "next_role"]));
+        let required_outputs = crate::yaml_string_list(crate::yaml_lookup(
+            role_entry,
+            &["handoff", "required_outputs"],
+        ));
+        if handoff_next_role.as_deref().unwrap_or_default().is_empty() {
+            blockers.push(format!("missing_handoff_next_role:{role_id}"));
+        }
+        if required_outputs.is_empty() {
+            blockers.push(format!("missing_handoff_outputs:{role_id}"));
+        }
+        let carrier = default_carrier
+            .as_deref()
+            .and_then(|carrier_id| carrier_catalog.get(carrier_id));
+        if default_carrier.is_some() && carrier.is_none() {
+            blockers.push(format!("unknown_default_carrier:{role_id}"));
+        }
+
+        roles.push(serde_json::json!({
+            "role_id": role_id,
+            "runtime_role": runtime_role,
+            "task_classes": task_classes,
+            "default_carrier": default_carrier,
+            "default_model": crate::yaml_string(crate::yaml_lookup(role_entry, &["default_model"])),
+            "default_model_reasoning_effort": crate::yaml_string(
+                crate::yaml_lookup(role_entry, &["default_model_reasoning_effort"])
+            ),
+            "cost_policy": {
+                "budget_units": crate::yaml_lookup(role_entry, &["cost_policy", "budget_units"])
+                    .and_then(serde_yaml::Value::as_u64),
+                "fallback_carrier": crate::yaml_string(
+                    crate::yaml_lookup(role_entry, &["cost_policy", "fallback_carrier"])
+                ),
+                "selection_rule": crate::yaml_string(
+                    crate::yaml_lookup(role_entry, &["cost_policy", "selection_rule"])
+                ),
+            },
+            "handoff": {
+                "next_role": handoff_next_role,
+                "required_outputs": required_outputs,
+                "fail_closed_on_missing_handoff": crate::yaml_bool(
+                    crate::yaml_lookup(role_entry, &["handoff", "fail_closed_on_missing_handoff"]),
+                    false,
+                ),
+            },
+            "selected_carrier": carrier.cloned().map(|carrier| {
+                serde_json::json!({
+                    "carrier_id": carrier["role_id"],
+                    "model": carrier["model"],
+                    "model_provider": carrier["model_provider"],
+                    "reasoning_effort": carrier["model_reasoning_effort"],
+                    "normalized_cost_units": carrier["normalized_cost_units"],
+                    "rate": carrier["rate"],
+                    "runtime_roles": carrier["runtime_roles"],
+                    "task_classes": carrier["task_classes"],
+                })
+            }).unwrap_or(serde_json::Value::Null),
+        }));
+    }
+
+    roles.sort_by(|left, right| {
+        left["role_id"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["role_id"].as_str().unwrap_or_default())
+    });
+    roles
+}
+
+fn dev_team_flows(
+    dev_team: &serde_yaml::Value,
+    roles: &[serde_json::Value],
+    blockers: &mut Vec<String>,
+) -> Vec<serde_json::Value> {
+    let mut flows = Vec::new();
+    let known_roles = roles
+        .iter()
+        .filter_map(|row| row["role_id"].as_str())
+        .collect::<HashSet<_>>();
+    let Some(flow_map) =
+        crate::yaml_lookup(dev_team, &["flows"]).and_then(serde_yaml::Value::as_mapping)
+    else {
+        return flows;
+    };
+
+    for (flow_id, flow_entry) in flow_map
+        .iter()
+        .filter_map(|(key, value)| key.as_str().map(|id| (id, value)))
+    {
+        let steps = crate::yaml_string_list(crate::yaml_lookup(flow_entry, &["steps"]));
+        if steps.is_empty() {
+            blockers.push(format!("missing_flow_steps:{flow_id}"));
+        }
+        for step in &steps {
+            if !known_roles.contains(step.as_str()) {
+                blockers.push(format!("unknown_flow_step:{flow_id}:{step}"));
+            }
+        }
+        flows.push(serde_json::json!({
+            "flow_id": flow_id,
+            "enabled": crate::yaml_bool(crate::yaml_lookup(flow_entry, &["enabled"]), true),
+            "description": crate::yaml_string(crate::yaml_lookup(flow_entry, &["description"])),
+            "sequential": crate::yaml_bool(crate::yaml_lookup(flow_entry, &["sequential"]), false),
+            "allow_parallel_handoffs": crate::yaml_bool(
+                crate::yaml_lookup(flow_entry, &["allow_parallel_handoffs"]),
+                false,
+            ),
+            "steps": steps,
+        }));
+    }
+
+    flows.sort_by(|left, right| {
+        left["flow_id"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["flow_id"].as_str().unwrap_or_default())
+    });
+    flows
+}
+
+fn default_dev_team_sequence(flows: &[serde_json::Value]) -> Vec<String> {
+    flows
+        .iter()
+        .find(|flow| {
+            flow["enabled"].as_bool().unwrap_or(false)
+                && flow["flow_id"].as_str() == Some("default_delivery")
+        })
+        .or_else(|| {
+            flows
+                .iter()
+                .find(|flow| flow["enabled"].as_bool().unwrap_or(false))
+        })
+        .and_then(|flow| flow["steps"].as_array())
+        .map(|steps| {
+            steps
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        build_taskflow_agent_system_snapshot, bundle_check_operator_contracts_consistency_error,
-        consume_bundle_check_next_actions, consume_bundle_operator_contract_status,
-        db_first_activation_snapshot_validation_error, fail_fast_with_timeout,
-        normalize_agent_system_max_parallel_agents, normalize_consume_bundle_blocker_codes,
-        push_unique_string, taskflow_docflow_seam_receipt_backed_check,
+        build_dev_team_readiness, build_taskflow_agent_system_snapshot,
+        bundle_check_operator_contracts_consistency_error, consume_bundle_check_next_actions,
+        consume_bundle_operator_contract_status, db_first_activation_snapshot_validation_error,
+        fail_fast_with_timeout, normalize_agent_system_max_parallel_agents,
+        normalize_consume_bundle_blocker_codes, push_unique_string,
+        taskflow_docflow_seam_receipt_backed_check,
     };
     use crate::{
         release_contract_adapters::release_contract_status,
-        runtime_consumption_surface::build_docflow_receipt_evidence, DoctorLauncherSummary,
-        RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence, TaskflowConsumeBundlePayload,
+        runtime_consumption_surface::build_docflow_receipt_evidence, temp_state::TempStateHarness,
+        DoctorLauncherSummary, RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence,
+        TaskflowConsumeBundlePayload,
     };
 
     fn minimal_payload_for_operator_contract_status_checks() -> TaskflowConsumeBundlePayload {
@@ -873,6 +1166,10 @@ mod tests {
         let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
         assert_eq!(snapshot["carriers"][0]["carrier_id"], "canonical");
         assert_eq!(snapshot["dispatch_aliases"]["role_id"], "canonical");
+        assert_eq!(
+            snapshot["dev_team_readiness"]["status"],
+            "config_unreadable"
+        );
         assert!(snapshot.get("codex_multi_agent").is_none());
     }
 
@@ -948,6 +1245,119 @@ mod tests {
         assert_eq!(
             normalize_agent_system_max_parallel_agents(&missing_value),
             1
+        );
+    }
+
+    #[test]
+    fn build_dev_team_readiness_reports_configured_roles_and_sequence() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+dev_team:
+  enabled: true
+  contract_doc: docs/process/team-development-and-orchestration-protocol.md
+  roles:
+    developer:
+      runtime_role: worker
+      task_classes: [implementation, delivery_task]
+      default_carrier: junior
+      default_model: gpt-5.4
+      default_model_reasoning_effort: low
+      cost_policy:
+        budget_units: 1
+        fallback_carrier: middle
+        selection_rule: cheapest_eligible_write_carrier
+      handoff:
+        next_role: coach
+        required_outputs: [changed_files]
+        fail_closed_on_missing_handoff: true
+    coach:
+      runtime_role: coach
+      task_classes: [review]
+      default_carrier: middle
+      default_model: gpt-5.4
+      default_model_reasoning_effort: medium
+      cost_policy:
+        budget_units: 4
+        selection_rule: cheapest_eligible_review_carrier
+      handoff:
+        next_role: developer
+        required_outputs: [review_notes]
+        fail_closed_on_missing_handoff: true
+  flows:
+    default_delivery:
+      enabled: true
+      sequential: true
+      allow_parallel_handoffs: false
+      steps: [developer, coach]
+"#,
+        )
+        .expect("config should write");
+        let readiness = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &serde_json::json!({
+                "carrier_runtime": {
+                    "roles": [
+                        {
+                            "role_id": "junior",
+                            "model": "gpt-5.4",
+                            "model_provider": "openai",
+                            "model_reasoning_effort": "low",
+                            "normalized_cost_units": 1,
+                            "rate": 1,
+                            "runtime_roles": ["worker"],
+                            "task_classes": ["implementation"]
+                        },
+                        {
+                            "role_id": "middle",
+                            "model": "gpt-5.4",
+                            "model_provider": "openai",
+                            "model_reasoning_effort": "medium",
+                            "normalized_cost_units": 4,
+                            "rate": 4,
+                            "runtime_roles": ["coach"],
+                            "task_classes": ["review"]
+                        }
+                    ]
+                }
+            }),
+        );
+
+        assert_eq!(readiness["status"], "ready");
+        assert_eq!(readiness["configured"], true);
+        assert_eq!(
+            readiness["sequence"],
+            serde_json::json!(["developer", "coach"])
+        );
+        assert_eq!(readiness["roles"][1]["role_id"], "developer");
+        assert_eq!(
+            readiness["roles"][1]["selected_carrier"]["carrier_id"],
+            "junior"
+        );
+        assert_eq!(
+            readiness["source_paths"][1],
+            "docs/process/team-development-and-orchestration-protocol.md"
+        );
+    }
+
+    #[test]
+    fn build_dev_team_readiness_reports_missing_config_truthfully() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        std::fs::write(&config_path, "project:\n  id: demo\n").expect("config should write");
+
+        let readiness = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &serde_json::json!({}),
+        );
+
+        assert_eq!(readiness["status"], "missing_config");
+        assert_eq!(readiness["configured"], false);
+        assert_eq!(
+            readiness["blockers"],
+            serde_json::json!(["missing_dev_team_config"])
         );
     }
 
