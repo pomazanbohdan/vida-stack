@@ -95,6 +95,120 @@ fn run_command_json(args: &[&str], state_dir: &str) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("json output should parse")
 }
 
+fn seed_model_profile_readiness_dispatch_context(state_dir: &str) {
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let runtime_assignment = serde_json::json!({
+            "enabled": true,
+            "selected_backend_id": "junior",
+            "selected_carrier_id": "junior",
+            "selected_model_profile_id": "codex_gpt54_low_write",
+            "selected_model_ref": "gpt-5.4",
+            "selected_model_provider": "openai",
+            "selected_reasoning_effort": "low",
+            "selected_reasoning_control_mode": "fixed",
+            "model_selection_enabled": true,
+            "candidate_scope": "unified_carrier_model_profiles",
+            "selection_source_paths": {
+                "selected_model_profile_id": "carrier_runtime.roles[junior].model_profiles.codex_gpt54_low_write.profile_id"
+            },
+            "selection_override_reasons": ["route_profile_mapping"],
+            "selection_precedence": ["route_profile_mapping", "role_default"],
+            "selected_route_profile_mapping": {
+                "runtime_role": "worker",
+                "profile_id": "codex_gpt54_low_write"
+            },
+            "selected_candidate": {
+                "profile_id": "codex_gpt54_low_write",
+                "selected": true
+            },
+            "rejected_candidates": [
+                {
+                    "profile_id": "codex_spark_high_readonly",
+                    "reason": "write_scope_required"
+                }
+            ],
+            "budget_policy": "tier_budget_guard",
+            "budget_verdict": "within_budget",
+            "max_budget_units": 4,
+            "selected_over_budget": false,
+            "budget_scope": "task",
+            "selection_budget": {
+                "remaining_units": 3
+            },
+            "runtime_budget_ledger": {
+                "spent_units": 1
+            }
+        });
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "execution_lane_sequence": ["implementation"],
+                    "lane_catalog": {
+                        "implementation": {
+                            "executor_backend": "opencode_cli",
+                            "fallback_executor_backend": "internal_subagents",
+                            "carrier_runtime_assignment": runtime_assignment
+                        }
+                    }
+                }
+            }
+        });
+        let context = serde_json::json!({
+            "run_id": "run-model-profile-readiness-smoke",
+            "task_id": "task-model-profile-readiness-smoke",
+            "request_text": "model profile readiness smoke",
+            "recorded_at": "2026-04-24T00:00:00Z",
+            "role_selection": {
+                "ok": true,
+                "activation_source": "smoke-test",
+                "selection_mode": "fixed",
+                "fallback_role": "orchestrator",
+                "request": "model profile readiness smoke",
+                "selected_role": "worker",
+                "conversational_mode": null,
+                "single_task_only": false,
+                "tracked_flow_entry": null,
+                "allow_freeform_chat": false,
+                "confidence": "high",
+                "matched_terms": ["implementation"],
+                "compiled_bundle": null,
+                "reason": "smoke-test",
+                "execution_plan": execution_plan
+            }
+        });
+        db.query(
+            "UPSERT run_graph_dispatch_context:`run-model-profile-readiness-smoke` CONTENT $context",
+        )
+        .bind(("context", context))
+        .await
+        .expect("seed run graph dispatch context");
+        drop(db);
+    });
+}
+
+fn run_model_profile_readiness_seed_helper(state_dir: &str) {
+    let output = Command::new(std::env::current_exe().expect("current test executable"))
+        .arg("taskflow_model_profile_readiness_seed_helper")
+        .arg("--exact")
+        .env("VIDA_MODEL_PROFILE_READINESS_SEED_STATE_DIR", state_dir)
+        .output()
+        .expect("seed helper should run");
+    assert!(
+        output.status.success(),
+        "seed helper stdout: {}\nseed helper stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn extract_plain_surface_line(output: &str, label: &str) -> String {
     let prefix = format!("{label}: ");
     output
@@ -158,6 +272,83 @@ where
 fn assert_json_status_pass(output: &str) {
     let parsed: serde_json::Value = serde_json::from_str(output).expect("json output should parse");
     assert_eq!(parsed["status"], "pass");
+}
+
+#[test]
+fn taskflow_model_profile_readiness_cli_smoke_matches_config_census_embedding() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    run_model_profile_readiness_seed_helper(&state_dir);
+
+    let standalone = run_command_json(
+        &[
+            "taskflow",
+            "route",
+            "model-profile-readiness",
+            "--run-id",
+            "run-model-profile-readiness-smoke",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let census = run_command_json(
+        &[
+            "taskflow",
+            "config-actuation",
+            "census",
+            "--run-id",
+            "run-model-profile-readiness-smoke",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let embedded = &census["routes"][0]["model_profile_readiness_audit"];
+
+    assert_eq!(
+        standalone["surface"],
+        "vida taskflow model-profile readiness audit"
+    );
+    assert_eq!(standalone["status"], "pass");
+    assert_eq!(standalone["dispatch_target"], "implementation");
+    assert_eq!(
+        standalone["selected_profile"]["profile_id"],
+        "codex_gpt54_low_write"
+    );
+    assert_eq!(
+        standalone["source_paths"]["selected_model_profile_id"],
+        "carrier_runtime.roles[junior].model_profiles.codex_gpt54_low_write.profile_id"
+    );
+    assert_eq!(
+        standalone["override_reasons"],
+        serde_json::json!(["route_profile_mapping"])
+    );
+    assert_eq!(
+        standalone["rejected_alternatives"][0]["profile_id"],
+        "codex_spark_high_readonly"
+    );
+    assert_eq!(standalone["run_id"], "run-model-profile-readiness-smoke");
+    assert_eq!(standalone["task_id"], "task-model-profile-readiness-smoke");
+
+    assert_eq!(embedded["surface"], standalone["surface"]);
+    assert_eq!(embedded["status"], standalone["status"]);
+    assert_eq!(embedded["blocker_codes"], standalone["blocker_codes"]);
+    assert_eq!(embedded["selected_profile"], standalone["selected_profile"]);
+    assert_eq!(embedded["source_paths"], standalone["source_paths"]);
+    assert_eq!(embedded["override_reasons"], standalone["override_reasons"]);
+    assert_eq!(
+        embedded["rejected_alternatives"],
+        standalone["rejected_alternatives"]
+    );
+}
+
+#[test]
+fn taskflow_model_profile_readiness_seed_helper() {
+    let Some(state_dir) = std::env::var_os("VIDA_MODEL_PROFILE_READINESS_SEED_STATE_DIR") else {
+        return;
+    };
+    seed_model_profile_readiness_dispatch_context(&state_dir.to_string_lossy());
 }
 
 fn donor_ready_semantic(value: &str) -> String {
@@ -1134,6 +1325,10 @@ fn task_close_feedback_outcome_inference_handles_rejected_context_and_rejected_f
             "feedback-concrete-rejected-failure",
             "Concrete rejected failure",
         ),
+        (
+            "feedback-coverage-meta-language",
+            "Coverage meta language",
+        ),
     ] {
         let create = run_with_state_lock_retry(|| {
             let mut command = vida();
@@ -1212,6 +1407,56 @@ fn task_close_feedback_outcome_inference_handles_rejected_context_and_rejected_f
             .iter()
             .any(|phrase| phrase == "rejected alternatives")
     );
+
+    let coverage_close = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "task",
+                "close",
+                "feedback-coverage-meta-language",
+                "--reason",
+                "Added close-feedback smoke coverage for rejected alternatives and concrete rejected patch wording records failure; task_smoke test passed.",
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        coverage_close.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&coverage_close.stdout),
+        String::from_utf8_lossy(&coverage_close.stderr)
+    );
+    let coverage_json: serde_json::Value =
+        serde_json::from_slice(&coverage_close.stdout).expect("coverage close json should parse");
+    assert_eq!(coverage_json["status"], "pass");
+    assert_eq!(coverage_json["host_agent_telemetry"]["status"], "recorded");
+    assert_eq!(
+        coverage_json["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(
+        coverage_json["host_agent_telemetry"]["feedback"]["safety_baseline"]["safety_gate"],
+        "observe"
+    );
+    assert_eq!(
+        coverage_json["host_agent_telemetry"]["feedback_outcome_inference"]["failure_markers"],
+        serde_json::json!([])
+    );
+    let ignored_coverage_meta = coverage_json["host_agent_telemetry"]
+        ["feedback_outcome_inference"]["ignored_meta_language"]
+        .as_array()
+        .expect("ignored meta language should render");
+    assert!(ignored_coverage_meta
+        .iter()
+        .any(|phrase| phrase == "records failure"));
+    assert!(ignored_coverage_meta
+        .iter()
+        .any(|phrase| phrase == "concrete rejected patch wording"));
 
     let rejected_close = run_with_state_lock_retry(|| {
         let mut command = vida();
