@@ -269,6 +269,108 @@ fn assert_operator_contracts_consistency(surface: &serde_json::Value, label: &st
 }
 
 #[test]
+fn taskflow_plan_generate_require_context_blocks_missing_cli_refs() {
+    let state_dir = unique_state_dir();
+    let parsed = run_command_json(
+        &[
+            "taskflow",
+            "plan",
+            "generate",
+            "--source-text",
+            "Implement planner",
+            "--task-prefix",
+            "smoke-plan",
+            "--require-context",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(parsed["validation"]["status"], "blocked");
+    assert!(
+        parsed["validation"]["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should be an array")
+            .contains(&serde_json::json!("missing_plan_context"))
+    );
+    assert_eq!(parsed["input_contract"]["status"], "partial");
+    assert_eq!(
+        require_string_array(
+            &parsed["input_contract"]["missing_context"],
+            "missing_context"
+        ),
+        vec![
+            "spec_reference_missing".to_string(),
+            "backlog_reference_missing".to_string(),
+            "context_reference_missing".to_string(),
+        ]
+    );
+    let _ = fs::remove_dir_all(state_dir);
+}
+
+#[test]
+fn taskflow_plan_generate_require_context_passes_with_cli_refs() {
+    let state_dir = unique_state_dir();
+    let parsed = run_command_json(
+        &[
+            "taskflow",
+            "plan",
+            "generate",
+            "--source-text",
+            "Implement planner",
+            "--task-prefix",
+            "smoke-plan",
+            "--require-context",
+            "--spec-ref",
+            "docs/product/spec/current-spec-map.md",
+            "--backlog-ref",
+            "audit-p1-plan-generate-require-context-cli-smoke",
+            "--context-ref",
+            "crates/vida/tests/task_smoke.rs",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(parsed["validation"]["status"], "valid");
+    assert_eq!(parsed["input_contract"]["status"], "complete");
+    assert!(
+        parsed["input_contract"]["missing_context"]
+            .as_array()
+            .expect("missing_context should be an array")
+            .is_empty()
+    );
+    assert!(
+        parsed["input_contract"]["sources"]
+            .as_array()
+            .expect("sources should be an array")
+            .iter()
+            .any(|source| source["source_type"] == "spec_reference"
+                && source["reference"] == "docs/product/spec/current-spec-map.md"
+                && source["evidence"] == "cli_spec_ref")
+    );
+    assert!(
+        parsed["input_contract"]["sources"]
+            .as_array()
+            .expect("sources should be an array")
+            .iter()
+            .any(|source| source["source_type"] == "backlog_reference"
+                && source["reference"] == "audit-p1-plan-generate-require-context-cli-smoke"
+                && source["evidence"] == "cli_backlog_ref")
+    );
+    assert!(
+        parsed["input_contract"]["sources"]
+            .as_array()
+            .expect("sources should be an array")
+            .iter()
+            .any(|source| source["source_type"] == "context_reference"
+                && source["reference"] == "crates/vida/tests/task_smoke.rs"
+                && source["evidence"] == "cli_context_ref")
+    );
+    let _ = fs::remove_dir_all(state_dir);
+}
+
+#[test]
 fn task_command_round_trip_succeeds_via_binary_surface() {
     let state_dir = unique_state_dir();
     let jsonl_path = format!("{state_dir}/issues.jsonl");
@@ -980,6 +1082,185 @@ fn agent_feedback_fails_closed_for_unsupported_outcome() {
 }
 
 #[test]
+fn task_close_feedback_outcome_inference_handles_rejected_context_and_rejected_failure() {
+    let project_root = unique_state_dir();
+    fs::create_dir_all(&project_root).expect("project root should exist");
+    let state_dir = format!("{project_root}/.vida/data/state");
+
+    let init = vida()
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("init should run");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let activator = vida()
+        .args([
+            "project-activator",
+            "--project-id",
+            "feedback-close-inference",
+            "--project-name",
+            "Feedback Close Inference",
+            "--language",
+            "english",
+            "--host-cli-system",
+            "codex",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("project activator should run");
+    assert!(
+        activator.status.success(),
+        "{}",
+        String::from_utf8_lossy(&activator.stderr)
+    );
+
+    for (task_id, title) in [
+        (
+            "feedback-positive-rejected-context",
+            "Positive rejected context",
+        ),
+        (
+            "feedback-concrete-rejected-failure",
+            "Concrete rejected failure",
+        ),
+    ] {
+        let create = run_with_state_lock_retry(|| {
+            let mut command = vida();
+            command
+                .args([
+                    "task",
+                    "create",
+                    task_id,
+                    title,
+                    "--type",
+                    "task",
+                    "--status",
+                    "open",
+                    "--priority",
+                    "1",
+                    "--labels",
+                    "verification",
+                    "--json",
+                ])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+            command
+        });
+        assert!(
+            create.status.success(),
+            "{}",
+            String::from_utf8_lossy(&create.stderr)
+        );
+    }
+
+    let positive_close = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "task",
+                "close",
+                "feedback-positive-rejected-context",
+                "--reason",
+                "Added model-profile readiness audit payload with selected overrides, rejected alternatives, and readiness blockers; model_profile_readiness_audit tests passed.",
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        positive_close.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&positive_close.stdout),
+        String::from_utf8_lossy(&positive_close.stderr)
+    );
+    let positive_json: serde_json::Value =
+        serde_json::from_slice(&positive_close.stdout).expect("positive close json should parse");
+    assert_eq!(positive_json["status"], "pass");
+    assert_eq!(positive_json["host_agent_telemetry"]["status"], "recorded");
+    assert_eq!(
+        positive_json["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(
+        positive_json["host_agent_telemetry"]["feedback"]["safety_baseline"]["safety_gate"],
+        "observe"
+    );
+    assert_eq!(
+        positive_json["host_agent_telemetry"]["feedback_outcome_inference"]["failure_markers"],
+        serde_json::json!([])
+    );
+    assert!(
+        positive_json["host_agent_telemetry"]["feedback_outcome_inference"]["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase == "rejected alternatives")
+    );
+
+    let rejected_close = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "task",
+                "close",
+                "feedback-concrete-rejected-failure",
+                "--reason",
+                "Rejected patch because it changed unrelated files.",
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        rejected_close.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&rejected_close.stdout),
+        String::from_utf8_lossy(&rejected_close.stderr)
+    );
+    let rejected_json: serde_json::Value =
+        serde_json::from_slice(&rejected_close.stdout).expect("rejected close json should parse");
+    assert_eq!(rejected_json["status"], "pass");
+    assert_eq!(rejected_json["host_agent_telemetry"]["status"], "recorded");
+    assert_eq!(
+        rejected_json["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "failure"
+    );
+    assert_eq!(
+        rejected_json["host_agent_telemetry"]["feedback"]["recorded_score"],
+        35
+    );
+    assert_eq!(
+        rejected_json["host_agent_telemetry"]["feedback"]["safety_baseline"]["safety_gate"],
+        "hold"
+    );
+    assert_eq!(
+        rejected_json["host_agent_telemetry"]["feedback_outcome_inference"]["failure_markers"],
+        serde_json::json!(["rejected"])
+    );
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
 fn donor_ready_output_matches_semantic_parity_fixture() {
     let temp_root = unique_state_dir();
     let jsonl_path = format!("{temp_root}/issues.jsonl");
@@ -1600,6 +1881,92 @@ fn consume_bundle_check_exposes_shared_operator_contract_fields() {
     );
 
     let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn task_adaptive_preview_json_emits_receipt_and_fail_closed_blockers() {
+    let state_dir = unique_state_dir();
+    let valid_finding = serde_json::json!({
+        "finding_kind": "proof_gap",
+        "source_task_id": "task-a",
+        "summary": "verification evidence is missing",
+        "evidence_refs": ["receipt-b", "receipt-a"]
+    })
+    .to_string();
+
+    let preview = run_command_json(
+        &[
+            "task",
+            "adaptive-preview",
+            "--finding-json",
+            &valid_finding,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(preview["status"], "pass");
+    assert_eq!(preview["surface"], "vida task adaptive-preview");
+    assert_eq!(preview["dry_run"], true);
+    assert_eq!(preview["applied"], false);
+    assert_eq!(preview["planned_mutation_category"], "blocker_resolution");
+    assert_eq!(preview["planned_mutation_kind"], "spawn_blocker_task");
+    assert_eq!(preview["operator_truth"]["graph_state_opened"], false);
+    assert_eq!(preview["operator_truth"]["graph_state_mutated"], false);
+    assert_eq!(preview["operator_truth"]["preview_receipt_emitted"], true);
+
+    let receipt = &preview["preview_receipt"];
+    assert_eq!(
+        receipt["receipt_kind"],
+        "adaptive_replan_finding_preview_receipt"
+    );
+    assert_eq!(receipt["schema_version"], "1");
+    assert_eq!(receipt["source_task_id"], "task-a");
+    assert_eq!(receipt["finding_kind"], "proof_gap");
+    assert_eq!(receipt["planned_mutation_category"], "blocker_resolution");
+    assert_eq!(receipt["planned_mutation_kind"], "spawn_blocker_task");
+    assert_eq!(receipt["dry_run"], true);
+    assert_eq!(receipt["applied"], false);
+    assert_eq!(receipt["graph_state_opened"], false);
+    assert_eq!(receipt["graph_state_mutated"], false);
+    assert_eq!(
+        receipt["receipt_id"],
+        "adaptive-replan-preview:task-a:proof_gap:blocker_resolution:spawn_blocker_task:evidence=receipt-a+receipt-b"
+    );
+
+    let invalid_finding = serde_json::json!({
+        "finding_kind": "general_comment",
+        "source_task_id": "task-a",
+        "summary": "not an adaptive replanner finding"
+    })
+    .to_string();
+    let invalid = run_command_capture(
+        &[
+            "task",
+            "adaptive-preview",
+            "--finding-json",
+            &invalid_finding,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert!(
+        !invalid.status.success(),
+        "unsupported finding kind must fail closed"
+    );
+    let invalid_json: serde_json::Value =
+        serde_json::from_slice(&invalid.stdout).expect("invalid input json should parse");
+    assert_eq!(invalid_json["status"], "blocked");
+    assert_eq!(
+        invalid_json["blocker_codes"],
+        serde_json::json!(["invalid_adaptive_replan_finding_input"])
+    );
+    assert_eq!(invalid_json["field"], "finding_kind");
+    assert_eq!(
+        invalid_json["operator_truth"]["valid_input_does_not_mutate_task_graph"],
+        true
+    );
 }
 
 #[test]
