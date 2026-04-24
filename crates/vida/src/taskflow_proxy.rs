@@ -81,6 +81,35 @@ struct TaskflowSchedulerRejectedCandidate {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct TaskflowSchedulerReservationPreview {
+    reservation_id: String,
+    task_id: String,
+    task: GraphSummaryTaskRef,
+    launch_role: String,
+    launch_index: usize,
+    reservation_status: String,
+    reservation_persisted: bool,
+    execute_supported: bool,
+    execution_attempted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct TaskflowSchedulerDispatchReceiptPreview {
+    receipt_id: Option<String>,
+    receipt_status: String,
+    receipt_persisted: bool,
+    dispatch_surface: String,
+    dispatch_command: String,
+    dispatch_status: String,
+    execute_requested: bool,
+    execute_supported: bool,
+    execution_attempted: bool,
+    selected_task_ids: Vec<String>,
+    reservation_ids: Vec<String>,
+    blocker_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct TaskflowSchedulerDispatchPlan {
     status: String,
     surface: String,
@@ -101,6 +130,8 @@ struct TaskflowSchedulerDispatchPlan {
     selected_primary_task: Option<GraphSummaryTaskRef>,
     selected_parallel_tasks: Vec<GraphSummaryTaskRef>,
     selected_task_ids: Vec<String>,
+    reservations: Vec<TaskflowSchedulerReservationPreview>,
+    dispatch_receipt: TaskflowSchedulerDispatchReceiptPreview,
     rejected_candidates: Vec<TaskflowSchedulerRejectedCandidate>,
     scheduling: crate::state_store::TaskSchedulingProjection,
 }
@@ -176,6 +207,24 @@ fn scheduler_rejection_reasons_from_blocked_by(
             )
         })
         .collect()
+}
+
+fn scheduler_reservation_preview(
+    task: &GraphSummaryTaskRef,
+    launch_role: &str,
+    launch_index: usize,
+) -> TaskflowSchedulerReservationPreview {
+    TaskflowSchedulerReservationPreview {
+        reservation_id: format!("scheduler-preview-{launch_role}-{launch_index}-{}", task.id),
+        task_id: task.id.clone(),
+        task: task.clone(),
+        launch_role: launch_role.to_string(),
+        launch_index,
+        reservation_status: "preview_unpersisted".to_string(),
+        reservation_persisted: false,
+        execute_supported: false,
+        execution_attempted: false,
+    }
 }
 
 fn build_taskflow_scheduler_dispatch_plan(
@@ -310,11 +359,50 @@ fn build_taskflow_scheduler_dispatch_plan(
         .map(|task| task.id.clone())
         .collect::<Vec<_>>();
     selected_task_ids.extend(selected_parallel_tasks.iter().map(|task| task.id.clone()));
+    let mut reservations = Vec::new();
+    if let Some(task) = selected_primary_task.as_ref() {
+        reservations.push(scheduler_reservation_preview(task, "primary", 0));
+    }
+    reservations.extend(
+        selected_parallel_tasks
+            .iter()
+            .enumerate()
+            .map(|(index, task)| scheduler_reservation_preview(task, "parallel", index + 1)),
+    );
+    let reservation_ids = reservations
+        .iter()
+        .map(|reservation| reservation.reservation_id.clone())
+        .collect::<Vec<_>>();
+    let blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    let dispatch_receipt = TaskflowSchedulerDispatchReceiptPreview {
+        receipt_id: None,
+        receipt_status: if execute_requested {
+            "unsupported_not_persisted"
+        } else {
+            "preview_not_persisted"
+        }
+        .to_string(),
+        receipt_persisted: false,
+        dispatch_surface: "vida taskflow scheduler dispatch".to_string(),
+        dispatch_command: if execute_requested {
+            "vida taskflow scheduler dispatch --execute --json"
+        } else {
+            "vida taskflow scheduler dispatch --json"
+        }
+        .to_string(),
+        dispatch_status: status.clone(),
+        execute_requested,
+        execute_supported: false,
+        execution_attempted: false,
+        selected_task_ids: selected_task_ids.clone(),
+        reservation_ids,
+        blocker_codes: blocker_codes.clone(),
+    };
 
     TaskflowSchedulerDispatchPlan {
         status,
         surface: "vida taskflow scheduler dispatch".to_string(),
-        blocker_codes: crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes),
+        blocker_codes,
         next_actions,
         dry_run,
         execute_requested,
@@ -336,6 +424,8 @@ fn build_taskflow_scheduler_dispatch_plan(
         selected_primary_task,
         selected_parallel_tasks,
         selected_task_ids,
+        reservations,
+        dispatch_receipt,
         rejected_candidates,
         scheduling,
     }
@@ -2508,6 +2598,35 @@ mod tests {
         assert_eq!(plan.selected_task_ids, vec!["critical-ready", "parallel-a"]);
         assert_eq!(plan.selected_parallel_tasks.len(), 1);
         assert_eq!(plan.selected_parallel_tasks[0].id, "parallel-a");
+        assert_eq!(plan.reservations.len(), 2);
+        assert_eq!(plan.reservations[0].task_id, "critical-ready");
+        assert_eq!(plan.reservations[0].launch_role, "primary");
+        assert_eq!(plan.reservations[0].launch_index, 0);
+        assert_eq!(
+            plan.reservations[0].reservation_id,
+            "scheduler-preview-primary-0-critical-ready"
+        );
+        assert_eq!(plan.reservations[0].reservation_status, "preview_unpersisted");
+        assert!(!plan.reservations[0].reservation_persisted);
+        assert!(!plan.reservations[0].execution_attempted);
+        assert_eq!(plan.reservations[1].task_id, "parallel-a");
+        assert_eq!(plan.reservations[1].launch_role, "parallel");
+        assert_eq!(plan.reservations[1].launch_index, 1);
+        assert_eq!(plan.dispatch_receipt.receipt_id, None);
+        assert_eq!(plan.dispatch_receipt.receipt_status, "preview_not_persisted");
+        assert!(!plan.dispatch_receipt.receipt_persisted);
+        assert_eq!(plan.dispatch_receipt.dispatch_status, "pass");
+        assert_eq!(
+            plan.dispatch_receipt.selected_task_ids,
+            vec!["critical-ready", "parallel-a"]
+        );
+        assert_eq!(
+            plan.dispatch_receipt.reservation_ids,
+            vec![
+                "scheduler-preview-primary-0-critical-ready",
+                "scheduler-preview-parallel-1-parallel-a"
+            ]
+        );
         assert!(plan.rejected_candidates.iter().any(|candidate| {
             candidate.task.id == "parallel-b"
                 && candidate
@@ -2563,11 +2682,71 @@ mod tests {
         assert_eq!(plan.execution_status, "unsupported");
         assert!(!plan.dry_run);
         assert_eq!(plan.selected_task_ids, vec!["critical-ready"]);
+        assert_eq!(plan.reservations.len(), 1);
+        assert_eq!(plan.reservations[0].reservation_status, "preview_unpersisted");
+        assert!(!plan.reservations[0].reservation_persisted);
+        assert_eq!(
+            plan.dispatch_receipt.receipt_status,
+            "unsupported_not_persisted"
+        );
+        assert_eq!(plan.dispatch_receipt.dispatch_status, "blocked");
+        assert!(plan.dispatch_receipt.execute_requested);
+        assert!(!plan.dispatch_receipt.execute_supported);
+        assert!(!plan.dispatch_receipt.execution_attempted);
+        assert!(!plan.dispatch_receipt.receipt_persisted);
+        assert!(
+            plan.dispatch_receipt
+                .blocker_codes
+                .iter()
+                .any(|code| code == "unsupported_blocker_code")
+        );
         assert!(plan.next_actions.iter().any(|action| {
             action.contains("preview-first")
                 && action.contains("without `--execute`")
                 && action.contains("normal delegated runtime flow")
         }));
+    }
+
+    #[test]
+    fn scheduler_dispatch_plan_serializes_reservation_and_receipt_projection_fields() {
+        let primary = task("critical-ready", "task", "open", 1, &[], Vec::new());
+        let parallel = task("parallel-ready", "task", "open", 2, &[], Vec::new());
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("critical-ready".to_string()),
+            ready: vec![
+                scheduling_candidate(primary, true, false, true, Vec::new(), vec![]),
+                scheduling_candidate(parallel, true, true, false, Vec::new(), vec![]),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+
+        let plan = build_taskflow_scheduler_dispatch_plan(projection, 2, None, None, true, false);
+        let payload = serde_json::to_value(&plan).expect("scheduler plan should serialize");
+
+        assert_eq!(
+            payload["reservations"][0]["reservation_id"],
+            "scheduler-preview-primary-0-critical-ready"
+        );
+        assert_eq!(
+            payload["reservations"][1]["reservation_id"],
+            "scheduler-preview-parallel-1-parallel-ready"
+        );
+        assert_eq!(payload["reservations"][0]["reservation_persisted"], false);
+        assert_eq!(payload["dispatch_receipt"]["receipt_id"], serde_json::Value::Null);
+        assert_eq!(
+            payload["dispatch_receipt"]["receipt_status"],
+            "preview_not_persisted"
+        );
+        assert_eq!(payload["dispatch_receipt"]["receipt_persisted"], false);
+        assert_eq!(
+            payload["dispatch_receipt"]["reservation_ids"],
+            serde_json::json!([
+                "scheduler-preview-primary-0-critical-ready",
+                "scheduler-preview-parallel-1-parallel-ready"
+            ])
+        );
+        assert_eq!(payload["dispatch_receipt"]["execution_attempted"], false);
     }
 
     #[test]
