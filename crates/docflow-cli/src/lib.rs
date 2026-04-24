@@ -54,6 +54,11 @@ pub enum Command {
     Registry(RegistryScanArgs),
     RegistryScan(RegistryScanArgs),
     RegistryWrite(RegistryWriteArgs),
+    #[command(
+        about = "print agent bootstrap instructions or initialize a canonical markdown artifact",
+        long_about = "Print DocFlow agent bootstrap instructions or initialize a canonical markdown artifact.\n\nWithout positional arguments, `docflow init` prints the utility contract, safe first commands, read-first docs, and next actions for an agent.\nWith four positional arguments, `docflow init <markdown_file> <artifact_path> <artifact_type> <change_note>` creates a canonical markdown artifact with footer metadata and changelog linkage.",
+        after_help = "Examples:\n  docflow init\n  docflow init --json\n  docflow init docs/process/example.md process/example process_doc \"initialize docs artifact\"\n  docflow init docs/process/example.md process/example process_doc \"initialize docs artifact\" --json"
+    )]
     Init(InitArgs),
     MigrateLinks(MigrateLinksArgs),
     Move(MoveArgs),

@@ -9670,6 +9670,21 @@ fn docflow_proxy_help_is_runtime_specific() {
 }
 
 #[test]
+fn docflow_root_help_surfaces_init_agent_bootstrap_contract() {
+    let output = vida()
+        .args(["docflow", "--help"])
+        .output()
+        .expect("docflow root help should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("vida docflow init"));
+    assert!(stdout.contains("without positional args prints agent bootstrap instructions"));
+    assert!(stdout.contains("machine-readable JSON"));
+    assert!(stdout.contains("<markdown_file> <artifact_path> <artifact_type> <change_note>"));
+}
+
+#[test]
 fn taskflow_proxy_unsupported_top_level_subcommand_fails_closed_without_delegating_to_runtime() {
     let root = unique_state_dir();
     let script_path = format!("{root}/taskflow-proxy.sh");
@@ -11172,6 +11187,55 @@ fn docflow_proxy_runs_init_in_process_when_supported() {
         fs::read_to_string(format!("{root}/docs/process/new.md")).expect("markdown should exist");
     assert!(updated.contains("artifact_path: process/new"));
     assert!(updated.contains("# New Artifact"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_runs_init_agent_bootstrap_in_process_when_supported() {
+    let root = unique_state_dir();
+    scaffold_runtime_project_root(&root, "project");
+
+    let output = vida()
+        .args(["docflow", "init"])
+        .current_dir(&root)
+        .output()
+        .expect("docflow in-process init bootstrap should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("docflow-proxy:"));
+    assert!(stdout.contains("mode: agent_bootstrap"));
+    assert!(stdout.contains("AGENTS.sidecar.md"));
+    assert!(stdout.contains("docflow readiness-check --profile active-canon"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_runs_init_agent_bootstrap_json_in_process_when_supported() {
+    let root = unique_state_dir();
+    scaffold_runtime_project_root(&root, "project");
+
+    let output = vida()
+        .args(["docflow", "init", "--json"])
+        .current_dir(&root)
+        .output()
+        .expect("docflow in-process init bootstrap json should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let payload: serde_json::Value =
+        serde_json::from_str(&stdout).expect("docflow init --json should render JSON");
+    assert_eq!(
+        payload.get("mode").and_then(|value| value.as_str()),
+        Some("agent_bootstrap")
+    );
+    assert!(payload
+        .pointer("/agent_startup/safe_first_commands")
+        .and_then(|value| value.as_array())
+        .is_some());
+    assert!(payload.get("next_actions").is_some());
 
     fs::remove_dir_all(root).expect("temp root should be removed");
 }
