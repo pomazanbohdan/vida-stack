@@ -29,6 +29,22 @@ pub(crate) enum RenderMode {
     ColorEmoji,
 }
 
+#[derive(clap::ValueEnum, Debug, Clone, Copy, Default)]
+pub(crate) enum TaskHandoffStatusArg {
+    #[default]
+    Pass,
+    Blocked,
+}
+
+impl TaskHandoffStatusArg {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "vida",
@@ -181,6 +197,8 @@ pub(crate) enum TaskCommand {
     Update(TaskUpdateArgs),
     #[command(about = "inspect dirty git files against one task's owned paths")]
     OwnedStatus(TaskOwnedStatusArgs),
+    #[command(about = "record delegated agent handoff receipts for a task")]
+    Handoff(TaskHandoffArgs),
     Close(TaskCloseArgs),
     #[command(about = "split one oversized task into bounded child tasks")]
     Split(TaskSplitArgs),
@@ -348,6 +366,66 @@ pub(crate) struct TaskOwnedStatusArgs {
         help = "Explicit owned path override. Repeat for multiple files or directories."
     )]
     pub(crate) files: Vec<PathBuf>,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskHandoffArgs {
+    #[command(subcommand)]
+    pub(crate) command: TaskHandoffCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum TaskHandoffCommand {
+    #[command(about = "accept and persist one delegated agent handoff receipt")]
+    Accept(TaskHandoffAcceptArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskHandoffAcceptArgs {
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "agent",
+        help = "Delegated agent or carrier id that produced the handoff"
+    )]
+    pub(crate) agent: Option<String>,
+
+    #[arg(
+        long = "file",
+        help = "Changed file path reported by the handoff; repeat for multiple paths"
+    )]
+    pub(crate) files: Vec<PathBuf>,
+
+    #[arg(
+        long = "proof",
+        help = "Proof command reported by the handoff; repeat for multiple commands"
+    )]
+    pub(crate) proofs: Vec<String>,
+
+    #[arg(long = "status", value_enum, default_value_t = TaskHandoffStatusArg::Pass)]
+    pub(crate) status: TaskHandoffStatusArg,
+
+    #[arg(
+        long = "blocker",
+        visible_alias = "blocker-code",
+        help = "Blocker code for blocked handoffs; repeat for multiple blockers"
+    )]
+    pub(crate) blockers: Vec<String>,
+
+    #[arg(
+        long = "next-action",
+        help = "Operator next action for blocked or incomplete handoffs; repeat for multiple actions"
+    )]
+    pub(crate) next_actions: Vec<String>,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
@@ -1011,6 +1089,52 @@ mod tests {
         };
         assert!(close.stage_owned);
         assert!(!close.commit);
+    }
+
+    #[test]
+    fn task_handoff_accept_help_is_discoverable() {
+        let handoff_error = Cli::try_parse_from(["vida", "task", "handoff", "--help"])
+            .expect_err("help should render clap display error");
+        let handoff_help = handoff_error.to_string();
+        assert!(handoff_help.contains("accept"));
+
+        let accept_error = Cli::try_parse_from(["vida", "task", "handoff", "accept", "--help"])
+            .expect_err("help should render clap display error");
+        let accept_help = accept_error.to_string();
+        assert!(accept_help.contains("<TASK_ID>"));
+        assert!(accept_help.contains("--agent"));
+        assert!(accept_help.contains("--file"));
+        assert!(accept_help.contains("--proof"));
+        assert!(accept_help.contains("--status"));
+        assert!(accept_help.contains("--json"));
+
+        let parsed = Cli::try_parse_from([
+            "vida",
+            "task",
+            "handoff",
+            "accept",
+            "task-a",
+            "--agent",
+            "worker-1",
+            "--file",
+            "crates/vida/src/task_surface.rs",
+            "--proof",
+            "cargo test -p vida --bin vida task_handoff",
+            "--json",
+        ])
+        .expect("handoff accept should parse");
+        let Some(super::Command::Task(task_args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let TaskCommand::Handoff(handoff) = task_args.command else {
+            panic!("handoff command should parse");
+        };
+        let crate::TaskHandoffCommand::Accept(accept) = handoff.command;
+        assert_eq!(accept.task_id, "task-a");
+        assert_eq!(accept.agent.as_deref(), Some("worker-1"));
+        assert_eq!(accept.files.len(), 1);
+        assert_eq!(accept.proofs.len(), 1);
+        assert_eq!(accept.status.as_str(), "pass");
     }
 
     #[test]

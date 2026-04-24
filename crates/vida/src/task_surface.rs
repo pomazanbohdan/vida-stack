@@ -1863,6 +1863,19 @@ struct TaskOwnedStatusReceipt {
     stageable_files: Vec<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskHandoffAcceptReceipt {
+    status: String,
+    task_id: String,
+    agent_id: String,
+    accepted_at: String,
+    changed_files: Vec<String>,
+    proof_commands: Vec<String>,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    receipt_path: String,
+}
+
 fn task_close_automation_requested(command: &TaskCloseArgs) -> bool {
     command.release || command.install || command.commit || command.push || command.stage_owned
 }
@@ -2267,6 +2280,177 @@ fn task_owned_status_receipt(
     }
 }
 
+fn task_handoff_timestamp() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("rfc3339 timestamp should render")
+}
+
+fn task_handoff_receipt_filename_timestamp() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_nanos()
+        .to_string()
+}
+
+fn task_handoff_receipt_dir(project_root: &std::path::Path) -> std::path::PathBuf {
+    project_root
+        .join(".vida")
+        .join("receipts")
+        .join("task-handoffs")
+}
+
+fn sanitize_task_handoff_receipt_component(value: &str) -> String {
+    let mut sanitized = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('-');
+        }
+    }
+    let trimmed = sanitized.trim_matches('-');
+    if trimmed.is_empty() {
+        "task".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn task_handoff_receipt_path(
+    project_root: &std::path::Path,
+    task_id: &str,
+    filename_timestamp: &str,
+) -> std::path::PathBuf {
+    task_handoff_receipt_dir(project_root).join(format!(
+        "{}-{}.json",
+        sanitize_task_handoff_receipt_component(task_id),
+        filename_timestamp
+    ))
+}
+
+fn canonical_nonempty_strings(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut canonical = Vec::new();
+    for value in values {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !canonical.contains(&trimmed) {
+            canonical.push(trimmed);
+        }
+    }
+    canonical
+}
+
+fn blocked_task_handoff_accept_receipt(
+    task_id: &str,
+    agent_id: &str,
+    blocker_code: &str,
+    next_action: &str,
+) -> TaskHandoffAcceptReceipt {
+    TaskHandoffAcceptReceipt {
+        status: "blocked".to_string(),
+        task_id: task_id.to_string(),
+        agent_id: agent_id.to_string(),
+        accepted_at: task_handoff_timestamp(),
+        changed_files: Vec::new(),
+        proof_commands: Vec::new(),
+        blocker_codes: vec![blocker_code.to_string()],
+        next_actions: vec![next_action.to_string()],
+        receipt_path: "not_persisted".to_string(),
+    }
+}
+
+fn task_handoff_accept_receipt(
+    command: &TaskHandoffAcceptArgs,
+    receipt_path: &std::path::Path,
+    accepted_at: String,
+) -> TaskHandoffAcceptReceipt {
+    let changed_files = canonical_owned_paths(
+        command
+            .files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+    );
+    let proof_commands = canonical_nonempty_strings(command.proofs.clone());
+    let blocker_codes = canonical_nonempty_strings(command.blockers.clone());
+    let next_actions = canonical_nonempty_strings(command.next_actions.clone());
+    TaskHandoffAcceptReceipt {
+        status: command.status.as_str().to_string(),
+        task_id: command.task_id.trim().to_string(),
+        agent_id: command.agent.as_deref().unwrap_or("").trim().to_string(),
+        accepted_at,
+        changed_files,
+        proof_commands,
+        blocker_codes,
+        next_actions,
+        receipt_path: receipt_path.display().to_string(),
+    }
+}
+
+fn validate_task_handoff_accept_receipt(
+    receipt: &TaskHandoffAcceptReceipt,
+) -> Result<(), (&'static str, &'static str)> {
+    if receipt.agent_id.trim().is_empty() {
+        return Err((
+            "missing_agent_id",
+            "Pass `--agent <id>` with the delegated agent or carrier id.",
+        ));
+    }
+    if receipt.status == "blocked"
+        && receipt.blocker_codes.is_empty()
+        && receipt.proof_commands.is_empty()
+    {
+        return Err((
+            "blocked_handoff_requires_detail",
+            "Pass `--blocker <code>` or `--proof <command>` when accepting a blocked handoff.",
+        ));
+    }
+    Ok(())
+}
+
+fn persist_task_handoff_accept_receipt(
+    receipt: &TaskHandoffAcceptReceipt,
+    receipt_path: &std::path::Path,
+) -> Result<(), String> {
+    if let Some(parent) = receipt_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create task handoff receipt directory `{}`: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let rendered = serde_json::to_vec_pretty(receipt)
+        .map_err(|error| format!("failed to render task handoff receipt json: {error}"))?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(receipt_path)
+        .map_err(|error| {
+            format!(
+                "failed to create task handoff receipt `{}` without overwrite: {error}",
+                receipt_path.display()
+            )
+        })?;
+    use std::io::Write;
+    file.write_all(&rendered).map_err(|error| {
+        format!(
+            "failed to write task handoff receipt `{}`: {error}",
+            receipt_path.display()
+        )
+    })?;
+    file.write_all(b"\n").map_err(|error| {
+        format!(
+            "failed to finish task handoff receipt `{}`: {error}",
+            receipt_path.display()
+        )
+    })
+}
+
 fn dirty_paths_for_repo(repo_root: &std::path::Path) -> Result<Vec<String>, String> {
     let output = std::process::Command::new("git")
         .args(["status", "--porcelain"])
@@ -2331,7 +2515,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 | "move-children" | "tree" | "subtree" | "critical-path" | "next-display-id"
                 | "create" | "ensure" | "update" | "close" | "split" | "spawn-blocker" | "list"
                 | "adaptive-preview" | "show" | "import-jsonl" | "replace-jsonl" | "export-jsonl"
-                | "validate-graph" | "dep",
+                | "validate-graph" | "dep" | "handoff",
             ) => {
                 print_taskflow_proxy_help(Some("task"));
                 ExitCode::SUCCESS
@@ -2576,6 +2760,94 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+        TaskCommand::Handoff(command) => match command.command {
+            TaskHandoffCommand::Accept(command) => {
+                let state_dir = command
+                    .state_dir
+                    .clone()
+                    .unwrap_or_else(state_store::default_state_dir);
+                let project_root = project_root_for_task_state(&state_dir)
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let accepted_at = task_handoff_timestamp();
+                let receipt_path = task_handoff_receipt_path(
+                    &project_root,
+                    &command.task_id,
+                    &task_handoff_receipt_filename_timestamp(),
+                );
+                let mut receipt = task_handoff_accept_receipt(&command, &receipt_path, accepted_at);
+                match task_show_snapshot_first(state_dir, &command.task_id).await {
+                    Ok((_task, _metadata)) => {}
+                    Err(error) => {
+                        receipt = blocked_task_handoff_accept_receipt(
+                            &command.task_id,
+                            command.agent.as_deref().unwrap_or(""),
+                            "missing_task",
+                            "Create or import the task before accepting delegated handoff evidence.",
+                        );
+                        if command.json {
+                            crate::print_json_pretty(
+                                &serde_json::to_value(&receipt)
+                                    .expect("task handoff blocked receipt should serialize"),
+                            );
+                        } else {
+                            eprintln!("Failed to accept task handoff: {error}");
+                        }
+                        return ExitCode::from(1);
+                    }
+                }
+                if let Err((blocker_code, next_action)) =
+                    validate_task_handoff_accept_receipt(&receipt)
+                {
+                    receipt = blocked_task_handoff_accept_receipt(
+                        &command.task_id,
+                        command.agent.as_deref().unwrap_or(""),
+                        blocker_code,
+                        next_action,
+                    );
+                    if command.json {
+                        crate::print_json_pretty(
+                            &serde_json::to_value(&receipt)
+                                .expect("task handoff blocked receipt should serialize"),
+                        );
+                    } else {
+                        eprintln!("Failed to accept task handoff: {blocker_code}");
+                    }
+                    return ExitCode::from(1);
+                }
+                if let Err(error) = persist_task_handoff_accept_receipt(&receipt, &receipt_path) {
+                    let blocked = blocked_task_handoff_accept_receipt(
+                        &command.task_id,
+                        command.agent.as_deref().unwrap_or(""),
+                        "task_handoff_receipt_write_failed",
+                        "Resolve receipt directory permissions and rerun handoff acceptance.",
+                    );
+                    if command.json {
+                        let mut value = serde_json::to_value(&blocked)
+                            .expect("task handoff blocked receipt should serialize");
+                        value["write_error"] = serde_json::json!(error);
+                        crate::print_json_pretty(&value);
+                    } else {
+                        eprintln!("Failed to persist task handoff receipt: {error}");
+                    }
+                    return ExitCode::from(1);
+                }
+                if command.json {
+                    crate::print_json_pretty(
+                        &serde_json::to_value(&receipt)
+                            .expect("task handoff receipt should serialize"),
+                    );
+                } else {
+                    print_surface_line(command.render, "handoff", &receipt.status);
+                    print_surface_line(command.render, "receipt", &receipt.receipt_path);
+                }
+                if receipt.status == "pass" {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::from(1)
+                }
+            }
+        },
         TaskCommand::Progress(command) => {
             let state_dir = command
                 .state_dir
@@ -3182,9 +3454,11 @@ mod tests {
         canonical_json_string_array_entries, load_adaptive_preview_finding_json,
         normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
         parse_label_values, parse_optional_label_value, parse_split_child_specs,
-        task_close_automation_receipt, task_close_commit_file_strings,
-        task_close_host_agent_telemetry, task_close_uses_isolated_state_dir, task_create_title,
-        task_json_success_status, task_owned_status_receipt,
+        persist_task_handoff_accept_receipt, task_close_automation_receipt,
+        task_close_commit_file_strings, task_close_host_agent_telemetry,
+        task_close_uses_isolated_state_dir, task_create_title, task_handoff_accept_receipt,
+        task_handoff_receipt_path, task_json_success_status, task_owned_status_receipt,
+        validate_task_handoff_accept_receipt,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
@@ -3380,6 +3654,123 @@ mod tests {
         assert_eq!(git.status, "blocked");
         assert_eq!(git.blocker_codes, vec!["stage_owned_requires_commit"]);
         assert_eq!(git.explicit_files, vec!["crates/vida/src"]);
+    }
+
+    #[test]
+    fn task_handoff_accept_receipt_records_queryable_contents() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let receipt_path = task_handoff_receipt_path(harness.path(), "task/handoff", "123");
+        let receipt = task_handoff_accept_receipt(
+            &crate::TaskHandoffAcceptArgs {
+                task_id: "task/handoff".to_string(),
+                agent: Some("worker-1".to_string()),
+                files: vec![
+                    std::path::PathBuf::from("crates/vida/src/task_surface.rs"),
+                    std::path::PathBuf::from("crates/vida/src/task_surface.rs"),
+                ],
+                proofs: vec![
+                    " cargo test -p vida --bin vida task_handoff ".to_string(),
+                    "cargo check -p vida --bin vida".to_string(),
+                ],
+                status: crate::TaskHandoffStatusArg::Pass,
+                blockers: Vec::new(),
+                next_actions: Vec::new(),
+                state_dir: None,
+                render: crate::RenderMode::Plain,
+                json: true,
+            },
+            &receipt_path,
+            "2026-04-24T00:00:00Z".to_string(),
+        );
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.task_id, "task/handoff");
+        assert_eq!(receipt.agent_id, "worker-1");
+        assert_eq!(
+            receipt.changed_files,
+            vec!["crates/vida/src/task_surface.rs"]
+        );
+        assert_eq!(
+            receipt.proof_commands,
+            vec![
+                "cargo test -p vida --bin vida task_handoff",
+                "cargo check -p vida --bin vida"
+            ]
+        );
+        assert!(
+            receipt
+                .receipt_path
+                .ends_with(".vida/receipts/task-handoffs/task-handoff-123.json")
+        );
+        validate_task_handoff_accept_receipt(&receipt)
+            .expect("pass handoff with agent should validate");
+        persist_task_handoff_accept_receipt(&receipt, &receipt_path)
+            .expect("receipt should persist");
+        let persisted = fs::read_to_string(&receipt_path).expect("receipt should be readable");
+        let value: serde_json::Value =
+            serde_json::from_str(&persisted).expect("receipt json should parse");
+        assert_eq!(value["status"], "pass");
+        assert_eq!(value["task_id"], "task/handoff");
+        assert_eq!(value["agent_id"], "worker-1");
+        assert_eq!(
+            value["changed_files"],
+            serde_json::json!(["crates/vida/src/task_surface.rs"])
+        );
+        let overwrite_error = persist_task_handoff_accept_receipt(&receipt, &receipt_path)
+            .expect_err("receipt writer should not overwrite existing receipts");
+        assert!(overwrite_error.contains("without overwrite"));
+    }
+
+    #[test]
+    fn blocked_task_handoff_without_detail_fails_validation() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let receipt_path = task_handoff_receipt_path(harness.path(), "task-a", "123");
+        let receipt = task_handoff_accept_receipt(
+            &crate::TaskHandoffAcceptArgs {
+                task_id: "task-a".to_string(),
+                agent: Some("worker-1".to_string()),
+                files: Vec::new(),
+                proofs: Vec::new(),
+                status: crate::TaskHandoffStatusArg::Blocked,
+                blockers: Vec::new(),
+                next_actions: Vec::new(),
+                state_dir: None,
+                render: crate::RenderMode::Plain,
+                json: true,
+            },
+            &receipt_path,
+            "2026-04-24T00:00:00Z".to_string(),
+        );
+
+        let error = validate_task_handoff_accept_receipt(&receipt)
+            .expect_err("blocked handoff without blocker or proof should fail closed");
+        assert_eq!(error.0, "blocked_handoff_requires_detail");
+    }
+
+    #[test]
+    fn task_handoff_accept_without_agent_fails_validation() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let receipt_path = task_handoff_receipt_path(harness.path(), "task-a", "123");
+        let receipt = task_handoff_accept_receipt(
+            &crate::TaskHandoffAcceptArgs {
+                task_id: "task-a".to_string(),
+                agent: None,
+                files: vec![std::path::PathBuf::from("crates/vida/src/task_surface.rs")],
+                proofs: vec!["cargo check -p vida --bin vida".to_string()],
+                status: crate::TaskHandoffStatusArg::Pass,
+                blockers: Vec::new(),
+                next_actions: Vec::new(),
+                state_dir: None,
+                render: crate::RenderMode::Plain,
+                json: true,
+            },
+            &receipt_path,
+            "2026-04-24T00:00:00Z".to_string(),
+        );
+
+        let error =
+            validate_task_handoff_accept_receipt(&receipt).expect_err("missing agent should block");
+        assert_eq!(error.0, "missing_agent_id");
     }
 
     #[test]
