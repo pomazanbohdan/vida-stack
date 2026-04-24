@@ -189,6 +189,79 @@ fn canonical_close_status_from_reason(reason: &str) -> Option<(&'static str, &'s
     None
 }
 
+fn host_agent_ids(carrier_catalog: &[serde_json::Value]) -> Vec<String> {
+    carrier_catalog
+        .iter()
+        .filter_map(|row| row["role_id"].as_str())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn host_agent_id_exists(carrier_catalog: &[serde_json::Value], agent_id: &str) -> bool {
+    carrier_catalog
+        .iter()
+        .any(|row| row["role_id"].as_str() == Some(agent_id))
+}
+
+fn host_agent_id_for_tier(carrier_catalog: &[serde_json::Value], tier: &str) -> Option<String> {
+    carrier_catalog
+        .iter()
+        .find(|row| row["tier"].as_str() == Some(tier))
+        .and_then(|row| row["role_id"].as_str())
+        .map(ToString::to_string)
+}
+
+fn resolve_feedback_host_agent_id(
+    assignment: &serde_json::Value,
+    carrier_catalog: &[serde_json::Value],
+) -> Result<(String, String), serde_json::Value> {
+    let mut attempted = Vec::new();
+    for (source, candidate) in [
+        (
+            "selected_agent_id",
+            assignment["selected_agent_id"].as_str(),
+        ),
+        (
+            "selected_carrier_agent_id",
+            assignment["selected_carrier_agent_id"].as_str(),
+        ),
+        (
+            "selected_carrier_id",
+            assignment["selected_carrier_id"].as_str(),
+        ),
+        (
+            "selected_backend_id",
+            assignment["selected_backend_id"].as_str(),
+        ),
+        (
+            "activation_agent_type",
+            assignment["activation_agent_type"].as_str(),
+        ),
+        ("selected_tier", assignment["selected_tier"].as_str()),
+    ] {
+        let Some(candidate) = candidate.map(str::trim).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        attempted.push(serde_json::json!({
+            "source": source,
+            "candidate": candidate,
+        }));
+        if host_agent_id_exists(carrier_catalog, candidate) {
+            return Ok((candidate.to_string(), source.to_string()));
+        }
+        if let Some(role_id) = host_agent_id_for_tier(carrier_catalog, candidate) {
+            return Ok((role_id, format!("{source}.tier_match")));
+        }
+    }
+
+    Err(serde_json::json!({
+        "status": "blocked",
+        "reason": "selected_feedback_carrier_unavailable",
+        "attempted_candidates": attempted,
+        "available_host_agent_ids": host_agent_ids(carrier_catalog),
+    }))
+}
+
 pub(crate) fn maybe_record_task_close_host_agent_feedback(
     project_root: &std::path::Path,
     task: &serde_json::Value,
@@ -253,18 +326,20 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
         });
     }
 
-    let agent_id = assignment["selected_agent_id"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    if agent_id.is_empty() {
-        return serde_json::json!({
-            "status": "error",
-            "reason": "selected_agent_id_missing",
-            "task_class": task_class,
-            "runtime_role": runtime_role,
-        });
-    }
+    let (agent_id, feedback_selection_source) =
+        match resolve_feedback_host_agent_id(&assignment, &carrier_catalog) {
+            Ok(selection) => selection,
+            Err(blocked) => {
+                return serde_json::json!({
+                    "status": "blocked",
+                    "reason": "selected_feedback_carrier_unavailable",
+                    "task_class": task_class,
+                    "runtime_role": runtime_role,
+                    "assignment": assignment,
+                    "feedback_selection": blocked,
+                });
+            }
+        };
     if let Some((canonical_status, canonical_gate)) =
         canonical_close_status_from_reason(close_reason)
     {
@@ -302,6 +377,8 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
             "status": "recorded",
             "task_class": task_class,
             "runtime_role": runtime_role,
+            "feedback_agent_id": agent_id,
+            "feedback_selection_source": feedback_selection_source,
             "assignment": assignment,
             "feedback": view,
         }),
@@ -415,13 +492,13 @@ fn append_host_agent_feedback(
 
 #[cfg(test)]
 mod tests {
+    use crate::HOST_AGENT_OBSERVABILITY_STATE;
+    use crate::WORKER_SCORECARDS_STATE;
+    use crate::WORKER_STRATEGY_STATE;
     use crate::read_json_file_if_present;
     use crate::run;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
-    use crate::HOST_AGENT_OBSERVABILITY_STATE;
-    use crate::WORKER_SCORECARDS_STATE;
-    use crate::WORKER_STRATEGY_STATE;
     use std::process::ExitCode;
 
     #[test]
@@ -543,5 +620,68 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["score"], 81);
         assert_eq!(rows[0]["outcome"], "success");
+    }
+
+    #[test]
+    fn close_feedback_selection_maps_internal_backend_to_configured_codex_carrier() {
+        let assignment = serde_json::json!({
+            "selected_agent_id": "internal_subagents",
+            "selected_carrier_agent_id": "internal_subagents",
+            "selected_carrier_id": "internal_subagents",
+            "selected_backend_id": "internal_subagents",
+            "activation_agent_type": "internal_subagents",
+            "selected_tier": "middle",
+        });
+        let carrier_catalog = vec![
+            serde_json::json!({
+                "role_id": "junior",
+                "tier": "junior",
+            }),
+            serde_json::json!({
+                "role_id": "middle",
+                "tier": "middle",
+            }),
+        ];
+
+        let (agent_id, source) =
+            super::resolve_feedback_host_agent_id(&assignment, &carrier_catalog)
+                .expect("internal backend should resolve through selected_tier");
+
+        assert_eq!(agent_id, "middle");
+        assert_eq!(source, "selected_tier");
+    }
+
+    #[test]
+    fn close_feedback_selection_blocks_before_unknown_host_agent_execution() {
+        let assignment = serde_json::json!({
+            "selected_agent_id": "internal_subagents",
+            "selected_carrier_id": "internal_subagents",
+            "selected_backend_id": "internal_subagents",
+            "selected_tier": "senior",
+        });
+        let carrier_catalog = vec![serde_json::json!({
+            "role_id": "junior",
+            "tier": "junior",
+        })];
+
+        let blocked = super::resolve_feedback_host_agent_id(&assignment, &carrier_catalog)
+            .expect_err("unavailable backend should fail before append_host_agent_feedback");
+
+        assert_eq!(blocked["status"], "blocked");
+        assert_eq!(blocked["reason"], "selected_feedback_carrier_unavailable");
+        assert!(
+            blocked["available_host_agent_ids"]
+                .as_array()
+                .expect("available ids should render")
+                .iter()
+                .any(|value| value == "junior")
+        );
+        assert!(
+            blocked["attempted_candidates"]
+                .as_array()
+                .expect("attempted candidates should render")
+                .iter()
+                .any(|row| row["candidate"] == "internal_subagents")
+        );
     }
 }
