@@ -289,83 +289,88 @@ agent_system:
 #       quality_tier: high
 #       specialties: implementation,architecture,integration
 #   routing:
+#     # Public route fields in this template are limited to fields that are
+#     # either wired to runtime consumers or explicitly diagnostic-only.
+#     #
+#     # Wired route fields:
+#     #   executor_backend, fallback_executor_backend, fanout_executor_backends,
+#     #   profiles, budget_policy, max_budget_units, max_runtime_seconds,
+#     #   verification_gate, coach_required, coach_route_task_class,
+#     #   verification_route_task_class, independent_verification_required
+#     #
+#     # Diagnostic-only fields surfaced by route explain summaries:
+#     #   dispatch_required, graph_strategy, internal_escalation_trigger,
+#     #   write_scope
+#     #
+#     # Rejected unsupported knobs:
+#     #   coach_executor_backend, deterministic_first, external_first_required,
+#     #   local_execution_allowed, local_execution_preferred,
+#     #   max_cli_subagent_calls, max_coach_passes, max_fallback_hops,
+#     #   max_total_runtime_seconds, max_verification_passes, merge_policy,
+#     #   min_output_bytes, web_search_required
+#     #
+#     # Use max_runtime_seconds for route dispatch timeouts. The similarly named
+#     # max_total_runtime_seconds knob is intentionally rejected by
+#     # `vida taskflow validate-routing` until it has a concrete consumer.
 #     default:
-#       subagents: internal_subagents
-#       write_scope: none
-#       graph_strategy: deterministic_then_escalate
-#       deterministic_first: yes
+#       executor_backend: internal_subagents
+#       fallback_executor_backend: internal_subagents
+#       profiles:
+#         internal_subagents: internal_fast
 #       budget_policy: balanced
 #       max_budget_units: 4
-#       max_cli_subagent_calls: 5
-#       max_verification_passes: 1
-#       max_fallback_hops: 2
-#       max_total_runtime_seconds: 420
-#       verification_gate: subagent_return_contract
-#       dispatch_required: internal_first_when_eligible
-#       external_first_required: no
-#       local_execution_allowed: no
-#       local_execution_preferred: no
-#       cli_dispatch_required_if_delegating: no
-#       direct_internal_bypass_forbidden: no
-#       bridge_fallback_subagent: internal_subagents
-#       internal_escalation_trigger: write_scope_or_tie_break
-#       independent_verification_required: no
+#       max_runtime_seconds: 420
+#       dispatch_required: diagnostic_only_internal_first_when_eligible
+#       graph_strategy: diagnostic_only_deterministic_then_escalate
+#       write_scope: diagnostic_only_none
 #     research:
-#       subagents: internal_subagents
+#       executor_backend: internal_subagents
+#       fallback_executor_backend: internal_subagents
+#       fanout_executor_backends:
+#         - internal_subagents
 #       profiles:
 #         internal_subagents: internal_fast
-#       fanout_subagents: internal_subagents
-#       fanout_min_results: 1
-#       merge_policy: consensus_with_conflict_flag
-#       write_scope: none
-#       verification_gate: source_backed_summary
 #       max_runtime_seconds: 180
-#       min_output_bytes: 260
-#       dispatch_required: fanout_then_synthesize
-#       external_first_required: no
-#       web_search_required: yes
-#       bridge_fallback_subagent: internal_subagents
-#       internal_escalation_trigger: subagent_exhausted_or_quality_gap
+#       verification_gate: source_backed_summary
 #       verification_route_task_class: verification_ensemble
 #       independent_verification_required: yes
+#       dispatch_required: diagnostic_only_fanout_then_synthesize
+#       graph_strategy: diagnostic_only_research_summary
+#       internal_escalation_trigger: diagnostic_only_quality_gap
+#       write_scope: diagnostic_only_none
 #     implementation:
-#       subagents: internal_subagents
+#       executor_backend: internal_subagents
+#       fallback_executor_backend: internal_subagents
 #       profiles:
 #         internal_subagents: internal_fast
-#       write_scope: scoped_only
-#       verification_gate: targeted_verification
 #       max_runtime_seconds: 420
-#       dispatch_required: internal_first_write
-#       external_first_required: no
+#       verification_gate: targeted_verification
 #       coach_required: yes
 #       coach_route_task_class: coach
-#       bridge_fallback_subagent: internal_subagents
 #       verification_route_task_class: review_ensemble
 #       independent_verification_required: yes
+#       dispatch_required: diagnostic_only_internal_first_write
+#       graph_strategy: diagnostic_only_implementation_summary
+#       write_scope: diagnostic_only_scoped_only
 #     coach:
-#       subagents: internal_subagents
-#       fanout_subagents: internal_subagents
-#       fanout_min_results: 1
-#       merge_policy: unanimous_approve_rework_bias
-#       write_scope: none
-#       verification_gate: coach_review
+#       executor_backend: internal_subagents
+#       fallback_executor_backend: internal_subagents
+#       fanout_executor_backends:
+#         - internal_subagents
 #       max_runtime_seconds: 180
-#       min_output_bytes: 280
-#       dispatch_required: internal_first_review
-#       external_first_required: no
-#       bridge_fallback_subagent: internal_subagents
-#       internal_escalation_trigger: unresolved_coach_conflict
-#       independent_verification_required: no
+#       verification_gate: coach_review
+#       dispatch_required: diagnostic_only_internal_first_review
+#       graph_strategy: diagnostic_only_coach_summary
+#       internal_escalation_trigger: diagnostic_only_unresolved_conflict
+#       write_scope: diagnostic_only_none
 #     verification:
-#       subagents: internal_subagents
+#       executor_backend: internal_subagents
+#       fallback_executor_backend: internal_subagents
 #       profiles:
 #         internal_subagents: internal_review
-#       write_scope: none
-#       verification_gate: verification_summary
 #       max_runtime_seconds: 180
-#       min_output_bytes: 240
-#       dispatch_required: internal_first_review
-#       external_first_required: no
-#       bridge_fallback_subagent: internal_subagents
-#       internal_escalation_trigger: unresolved_verification_conflict
-#       independent_verification_required: no
+#       verification_gate: verification_summary
+#       dispatch_required: diagnostic_only_internal_first_review
+#       graph_strategy: diagnostic_only_verification_summary
+#       internal_escalation_trigger: diagnostic_only_unresolved_conflict
+#       write_scope: diagnostic_only_none

@@ -6,7 +6,7 @@ use crate::runtime_contract_vocab::{
 };
 use crate::{json_string, json_string_list};
 
-const NON_BEHAVIORAL_ROUTE_FIELDS: &[&str] = &[
+const REJECTED_NON_BEHAVIORAL_ROUTE_FIELDS: &[&str] = &[
     "coach_executor_backend",
     "deterministic_first",
     "external_first_required",
@@ -20,6 +20,13 @@ const NON_BEHAVIORAL_ROUTE_FIELDS: &[&str] = &[
     "merge_policy",
     "min_output_bytes",
     "web_search_required",
+];
+
+const DIAGNOSTIC_ONLY_ROUTE_FIELDS: &[&str] = &[
+    "dispatch_required",
+    "graph_strategy",
+    "internal_escalation_trigger",
+    "write_scope",
 ];
 
 fn legacy_dispatch_contract_lane<'a>(
@@ -177,11 +184,43 @@ fn route_field_is_configured(value: Option<&serde_json::Value>) -> bool {
 }
 
 fn route_non_behavioral_fields(route: &serde_json::Value) -> Vec<String> {
-    NON_BEHAVIORAL_ROUTE_FIELDS
+    REJECTED_NON_BEHAVIORAL_ROUTE_FIELDS
         .iter()
         .filter(|field| route_field_is_configured(route.get(**field)))
         .map(|field| field.to_string())
         .collect()
+}
+
+fn route_diagnostic_only_fields(route: &serde_json::Value) -> Vec<String> {
+    DIAGNOSTIC_ONLY_ROUTE_FIELDS
+        .iter()
+        .filter(|field| route_field_is_configured(route.get(**field)))
+        .map(|field| field.to_string())
+        .collect()
+}
+
+fn route_field_truth(route: &serde_json::Value) -> serde_json::Value {
+    let rejected = REJECTED_NON_BEHAVIORAL_ROUTE_FIELDS
+        .iter()
+        .filter(|field| route_field_is_configured(route.get(**field)))
+        .map(|field| {
+            serde_json::json!({
+                "field": field,
+                "truth": "rejected_no_runtime_consumer",
+                "effect": "validate-routing blocks the route until the field is removed or wired to a concrete consumer",
+            })
+        });
+    let diagnostic_only = DIAGNOSTIC_ONLY_ROUTE_FIELDS
+        .iter()
+        .filter(|field| route_field_is_configured(route.get(**field)))
+        .map(|field| {
+            serde_json::json!({
+                "field": field,
+                "truth": "diagnostic_only_no_execution_actuation",
+                "effect": "surface/explain metadata only; runtime execution selection does not change from this field",
+            })
+        });
+    serde_json::Value::Array(rejected.chain(diagnostic_only).collect())
 }
 
 pub(crate) fn runtime_assignment_from_route<'a>(
@@ -404,6 +443,10 @@ pub(crate) fn route_explain_payload(
     let selected_backend =
         route.and_then(|route| selected_backend_from_execution_plan_route(execution_plan, route));
     let non_behavioral_route_fields = route.map(route_non_behavioral_fields).unwrap_or_default();
+    let diagnostic_only_route_fields = route.map(route_diagnostic_only_fields).unwrap_or_default();
+    let route_field_truth = route
+        .map(route_field_truth)
+        .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
     let selection_source = backend_selection_source(
         selected_backend.as_deref(),
         None,
@@ -465,6 +508,9 @@ pub(crate) fn route_explain_payload(
         "readiness_blockers": [],
         "activation_agent_type": activation_agent_type,
         "non_behavioral_route_fields": non_behavioral_route_fields,
+        "rejected_route_fields": non_behavioral_route_fields,
+        "diagnostic_only_route_fields": diagnostic_only_route_fields,
+        "route_field_truth": route_field_truth,
     })
 }
 
@@ -889,16 +935,14 @@ mod tests {
                 .len(),
             2
         );
-        assert!(
-            payload["candidate_pool"]
-                .as_array()
-                .expect("candidate pool should render")
-                .iter()
-                .any(|row| {
-                    row["status"].as_str() == Some("rejected")
-                        && row["carrier_id"].as_str() == Some("junior")
-                })
-        );
+        assert!(payload["candidate_pool"]
+            .as_array()
+            .expect("candidate pool should render")
+            .iter()
+            .any(|row| {
+                row["status"].as_str() == Some("rejected")
+                    && row["carrier_id"].as_str() == Some("junior")
+            }));
         assert_eq!(
             payload["selection_source"].as_str(),
             Some("runtime_assignment")
@@ -934,11 +978,9 @@ mod tests {
         let route = &execution_plan["development_flow"]["implementation"];
         let payload = route_explain_payload(&execution_plan, "implementation", Some(route));
         assert_eq!(route_explain_status(&payload, Some(false)), "blocked");
-        assert!(
-            route_explain_blocker_codes(&payload, Some(false))
-                .iter()
-                .any(|code| code == "selected_backend_not_admissible_for_dispatch_target")
-        );
+        assert!(route_explain_blocker_codes(&payload, Some(false))
+            .iter()
+            .any(|code| code == "selected_backend_not_admissible_for_dispatch_target"));
     }
 
     #[test]
@@ -955,6 +997,9 @@ mod tests {
                     "executor_backend": "internal_subagents",
                     "analysis_executor_backend": "opencode_cli",
                     "analysis_fanout_executor_backends": ["hermes_cli", "opencode_cli"],
+                    "dispatch_required": "diagnostic_summary_only",
+                    "graph_strategy": "diagnostic_summary_only",
+                    "write_scope": "diagnostic_summary_only",
                     "max_cli_subagent_calls": 3
                 }
             }
@@ -971,17 +1016,37 @@ mod tests {
             payload["non_behavioral_route_fields"],
             serde_json::json!(["max_cli_subagent_calls"])
         );
+        assert_eq!(
+            payload["rejected_route_fields"],
+            serde_json::json!(["max_cli_subagent_calls"])
+        );
+        assert_eq!(
+            payload["diagnostic_only_route_fields"],
+            serde_json::json!(["dispatch_required", "graph_strategy", "write_scope"])
+        );
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("max_cli_subagent_calls")
+                    && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
+            }));
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("dispatch_required")
+                    && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
+            }));
         assert_eq!(route_explain_status(&payload, Some(true)), "blocked");
         let blockers = route_explain_blocker_codes(&payload, Some(true));
-        assert!(
-            blockers
-                .iter()
-                .any(|code| code == "model_selection_disabled")
-        );
-        assert!(
-            blockers
-                .iter()
-                .any(|code| code == "route_fields_not_behavioral")
-        );
+        assert!(blockers
+            .iter()
+            .any(|code| code == "model_selection_disabled"));
+        assert!(blockers
+            .iter()
+            .any(|code| code == "route_fields_not_behavioral"));
     }
 }
