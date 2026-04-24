@@ -235,6 +235,13 @@ fn scheduler_rejection_reasons_from_blocked_by(
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SchedulerRuntimeGateBlockerSignals {
+    blocker_codes: Vec<String>,
+    open_delegated_cycle: bool,
+    active_reservation: bool,
+}
+
 fn scheduler_reservation_preview(
     task: &GraphSummaryTaskRef,
     launch_role: &str,
@@ -278,6 +285,107 @@ fn scheduler_reservation_preview(
         receipt_id: None,
         receipt_path: None,
         preview_only_reason,
+    }
+}
+
+fn scheduler_execute_runtime_gate_blocker_codes(
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> SchedulerRuntimeGateBlockerSignals {
+    let mut blocker_codes = Vec::new();
+    let mut open_delegated_cycle = false;
+    let mut active_reservation = false;
+
+    if recovery_holds_active_bound_run(recovery) {
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::OpenDelegatedCycle,
+        ) {
+            open_delegated_cycle = true;
+            blocker_codes.push(code);
+        }
+    }
+
+    if let Some(dispatch) = dispatch {
+        if matches!(dispatch.dispatch_status.as_str(), "executing")
+            || dispatch.lane_status == "lane_running"
+        {
+            active_reservation = true;
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::ExecutionPreparationGateBlocked,
+            ) {
+                blocker_codes.push(code);
+            }
+        }
+        blocker_codes.extend(authoritative_dispatch_blocker_codes(Some(dispatch)));
+    }
+
+    SchedulerRuntimeGateBlockerSignals {
+        blocker_codes: crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes),
+        open_delegated_cycle,
+        active_reservation,
+    }
+}
+
+fn apply_scheduler_execute_runtime_gate_blockers(
+    plan: &mut TaskflowSchedulerDispatchPlan,
+    signals: &SchedulerRuntimeGateBlockerSignals,
+) {
+    if signals.blocker_codes.is_empty() {
+        return;
+    }
+
+    let blocker_codes = &signals.blocker_codes;
+    if blocker_codes.is_empty() {
+        return;
+    }
+
+    let execution_status = blocker_codes
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "scheduler_execute_blocked".to_string());
+    let is_noop_projection = plan.selected_task_ids.is_empty() && plan.execute_requested;
+
+    for blocker in blocker_codes {
+        if !plan.blocker_codes.iter().any(|value| value == blocker) {
+            plan.blocker_codes.push(blocker.clone());
+        }
+        if !plan
+            .dispatch_receipt
+            .blocker_codes
+            .iter()
+            .any(|value| value == blocker)
+        {
+            plan.dispatch_receipt.blocker_codes.push(blocker.clone());
+        }
+    }
+
+    plan.status = "blocked".to_string();
+    if !is_noop_projection {
+        plan.execution_status = execution_status.clone();
+        plan.dispatch_receipt.execute_status = execution_status.clone();
+        plan.dispatch_receipt.preview_only_reason = Some(execution_status);
+        plan.dispatch_receipt.dispatch_status = "blocked".to_string();
+        plan.dispatch_receipt.execution_blocker_codes = blocker_codes.to_vec();
+        plan.execute_supported = true;
+        plan.execution_attempted = false;
+        for reservation in &mut plan.reservations {
+            reservation.preview_only_reason = Some(plan.dispatch_receipt.execute_status.clone());
+        }
+    }
+    if signals.open_delegated_cycle {
+        plan.next_actions.push(
+            "Resolve the open delegated-cycle gate before scheduler execute by inspecting `vida taskflow recovery latest --json` and the active continuation state.".to_string(),
+        );
+    }
+    if signals.active_reservation {
+        plan.next_actions.push(
+            "An active scheduler reservation is already running; resume or close it with `vida taskflow consume continue --json` before creating new execution reservations.".to_string(),
+        );
+    }
+    if !signals.open_delegated_cycle && !signals.active_reservation {
+        plan.next_actions.push(
+            "Resolve scheduler dispatch blockers and retry after `vida taskflow recovery latest --json` reports a clear gate.".to_string(),
+        );
     }
 }
 
@@ -2304,8 +2412,38 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         dry_run || !execute_requested,
         execute_requested,
     );
+    let recovery = if execute_requested && !dry_run {
+        Some(match store.latest_run_graph_recovery_summary().await {
+            Ok(summary) => summary,
+            Err(error) => {
+                eprintln!("Failed to read latest recovery summary: {error}");
+                return ExitCode::from(1);
+            }
+        })
+    } else {
+        None
+    };
+    let dispatch = if execute_requested && !dry_run {
+        Some(
+            match store.latest_run_graph_dispatch_receipt_summary().await {
+                Ok(summary) => summary,
+                Err(error) => {
+                    eprintln!("Failed to read latest dispatch receipt summary: {error}");
+                    return ExitCode::from(1);
+                }
+            },
+        )
+    } else {
+        None
+    };
+
+    let runtime_gate_blockers = scheduler_execute_runtime_gate_blocker_codes(
+        recovery.as_ref().and_then(|summary| summary.as_ref()),
+        dispatch.as_ref().and_then(|summary| summary.as_ref()),
+    );
+
     drop(store);
-    if execute_requested && !dry_run {
+    if execute_requested && !dry_run && runtime_gate_blockers.blocker_codes.is_empty() {
         if let Err(error) = persist_scheduler_execute_receipt(&mut plan, &state_dir) {
             plan.status = "blocked".to_string();
             plan.execution_status = "scheduler_execute_receipt_persistence_failed".to_string();
@@ -2315,6 +2453,8 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
                 .push("scheduler_execute_receipt_persistence_failed".to_string());
             plan.next_actions.push(error);
         }
+    } else if execute_requested && !dry_run {
+        apply_scheduler_execute_runtime_gate_blockers(&mut plan, &runtime_gate_blockers);
     }
 
     if as_json {
@@ -4715,6 +4855,165 @@ mod tests {
         assert!(blocker_codes
             .iter()
             .any(|code| code == "pending_review_clean_evidence"));
+    }
+
+    #[test]
+    fn scheduler_execute_runtime_gate_blockers_include_recovery_and_running_dispatch() {
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-1".to_string(),
+            task_id: "task-1".to_string(),
+            active_node: "worker".to_string(),
+            lifecycle_stage: "worker_active".to_string(),
+            resume_node: None,
+            resume_status: "running".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            policy_gate: "none".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: true,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "worker".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "delegated_lane_active".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                lifecycle_stage: "worker_active".to_string(),
+            },
+        };
+        let dispatch = crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: "run-1".to_string(),
+            dispatch_target: "worker".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            blocker_code: None,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_last_target: None,
+            dispatch_surface: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            selected_backend: None,
+            exception_path_receipt_id: None,
+            supersedes_receipt_id: None,
+            recorded_at: "2026-04-24T00:00:00Z".to_string(),
+            activation_runtime_role: None,
+            activation_agent_type: None,
+            activation_evidence: serde_json::Value::Null,
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+        };
+        let blocker_codes =
+            super::scheduler_execute_runtime_gate_blocker_codes(Some(&recovery), Some(&dispatch));
+
+        assert_eq!(blocker_codes.blocker_codes.len(), 2);
+        assert!(blocker_codes
+            .blocker_codes
+            .iter()
+            .any(|code| code == "open_delegated_cycle"));
+        assert!(blocker_codes
+            .blocker_codes
+            .iter()
+            .any(|code| code == "execution_preparation_gate_blocked"));
+    }
+
+    #[test]
+    fn scheduler_execute_runtime_gate_blockers_apply_blocked_authoritative_dispatch() {
+        let dispatch = crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: "run-1".to_string(),
+            dispatch_target: "worker".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_blockers: vec!["pending_lane_evidence".to_string()],
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_last_target: None,
+            dispatch_surface: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            selected_backend: None,
+            exception_path_receipt_id: None,
+            supersedes_receipt_id: None,
+            recorded_at: "2026-04-24T00:00:00Z".to_string(),
+            activation_runtime_role: None,
+            activation_agent_type: None,
+            activation_evidence: serde_json::Value::Null,
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+        };
+
+        let blocker_codes =
+            super::scheduler_execute_runtime_gate_blocker_codes(None, Some(&dispatch));
+
+        assert_eq!(blocker_codes.blocker_codes.len(), 2);
+        assert!(blocker_codes
+            .blocker_codes
+            .iter()
+            .any(|code| code == "timeout_without_takeover_authority"));
+        assert!(blocker_codes
+            .blocker_codes
+            .iter()
+            .any(|code| code == "pending_lane_evidence"));
+    }
+
+    #[test]
+    fn scheduler_execute_runtime_gate_blockers_mark_execute_projection_blocked() {
+        let projection = crate::state_store::TaskSchedulingProjection {
+            current_task_id: Some("critical-ready".to_string()),
+            ready: vec![scheduling_candidate(
+                sample_task("critical-ready"),
+                true,
+                false,
+                true,
+                Vec::new(),
+                Vec::new(),
+            )],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+        let mut plan = super::build_taskflow_scheduler_dispatch_plan(
+            projection, 1, None, None, None, state_dir, false, true,
+        );
+
+        super::apply_scheduler_execute_runtime_gate_blockers(
+            &mut plan,
+            &super::SchedulerRuntimeGateBlockerSignals {
+                blocker_codes: vec!["open_delegated_cycle".to_string()],
+                open_delegated_cycle: true,
+                active_reservation: false,
+            },
+        );
+
+        assert_eq!(plan.status, "blocked");
+        assert_eq!(plan.execution_status, "open_delegated_cycle");
+        assert_eq!(plan.dispatch_receipt.dispatch_status, "blocked");
+        assert_eq!(plan.dispatch_receipt.execute_status, "open_delegated_cycle");
+        assert!(plan.next_actions.iter().any(|action| action
+            .contains("Resolve the open delegated-cycle gate before scheduler execute")));
     }
 
     fn sample_task(task_id: &str) -> crate::state_store::TaskRecord {
