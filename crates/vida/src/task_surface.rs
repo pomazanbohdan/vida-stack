@@ -738,38 +738,53 @@ fn print_adaptive_replan_finding_input_error(
     }
 }
 
+fn parse_adaptive_preview_finding_json_text(
+    finding_text: &str,
+    field: Option<&str>,
+) -> Result<serde_json::Value, AdaptiveReplanFindingInputError> {
+    match serde_json::from_str::<serde_json::Value>(finding_text) {
+        Ok(value) => Ok(value),
+        Err(error) => Err(adaptive_replan_finding_input_error(
+            format!("finding input must be valid JSON: {error}"),
+            field,
+        )),
+    }
+}
+
+fn load_adaptive_preview_finding_json(
+    finding_json: Option<&str>,
+    finding_file: Option<&std::path::Path>,
+) -> Result<serde_json::Value, AdaptiveReplanFindingInputError> {
+    match (finding_json, finding_file) {
+        (Some(_), Some(_)) => Err(adaptive_replan_finding_input_error(
+            "Use only one finding source: --finding-json <json> or --finding-file <path>",
+            None,
+        )),
+        (Some(value), None) => parse_adaptive_preview_finding_json_text(value, None),
+        (None, Some(path)) => {
+            let value = std::fs::read_to_string(path).map_err(|error| {
+                adaptive_replan_finding_input_error(
+                    format!("Failed to read finding file `{}`: {error}", path.display()),
+                    Some("finding_file"),
+                )
+            })?;
+            parse_adaptive_preview_finding_json_text(&value, Some("finding_file"))
+        }
+        (None, None) => Err(adaptive_replan_finding_input_error(
+            "Provide --finding-json <json> or --finding-file <path>",
+            None,
+        )),
+    }
+}
+
 async fn run_task_adaptive_preview(command: TaskAdaptivePreviewArgs) -> ExitCode {
-    let finding_text = match (
+    let finding_json = match load_adaptive_preview_finding_json(
         command.finding_json.as_deref(),
         command.finding_file.as_deref(),
     ) {
-        (Some(_), Some(_)) => {
-            eprintln!(
-                "Use only one finding source: --finding-json <json> or --finding-file <path>"
-            );
-            return ExitCode::from(2);
-        }
-        (Some(value), None) => value.to_string(),
-        (None, Some(path)) => match std::fs::read_to_string(path) {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("Failed to read finding file `{}`: {error}", path.display());
-                return ExitCode::from(2);
-            }
-        },
-        (None, None) => {
-            eprintln!("Provide --finding-json <json> or --finding-file <path>");
-            return ExitCode::from(2);
-        }
-    };
-    let finding_json = match serde_json::from_str::<serde_json::Value>(&finding_text) {
         Ok(value) => value,
         Err(error) => {
-            let parse_error = adaptive_replan_finding_input_error(
-                format!("finding input must be valid JSON: {error}"),
-                None,
-            );
-            print_adaptive_replan_finding_input_error(&parse_error, command.json);
+            print_adaptive_replan_finding_input_error(&error, command.json);
             return ExitCode::from(2);
         }
     };
@@ -2486,9 +2501,10 @@ mod tests {
     use super::{
         ADAPTIVE_REPLAN_FINDING_KINDS, build_adaptive_replan_finding_preview,
         build_spawn_blocker_preview, build_split_mutation_preview,
-        canonical_json_string_array_entries, normalize_task_json_contract_arrays,
-        parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
-        parse_split_child_specs, task_json_success_status,
+        canonical_json_string_array_entries, load_adaptive_preview_finding_json,
+        normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
+        parse_label_values, parse_optional_label_value, parse_split_child_specs,
+        task_json_success_status,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
@@ -2789,6 +2805,92 @@ mod tests {
                 }),
             })),
             ExitCode::SUCCESS
+        );
+    }
+
+    #[test]
+    fn task_adaptive_preview_command_accepts_finding_file_without_state_store() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let finding_path = harness.path().join("adaptive-finding.json");
+        fs::write(
+            &finding_path,
+            serde_json::json!({
+                "finding_kind": "proof_gap",
+                "source_task_id": "task-a",
+                "summary": "proof artifact missing",
+                "evidence_refs": ["receipt-b", "receipt-a"]
+            })
+            .to_string(),
+        )
+        .expect("finding file should write");
+
+        let loaded = load_adaptive_preview_finding_json(None, Some(finding_path.as_path()))
+            .expect("finding file input should load");
+        let preview = build_adaptive_replan_finding_preview(&loaded, "vida task adaptive-preview")
+            .expect("finding file input should preview");
+        assert_eq!(preview.planned_mutation_category, "blocker_resolution");
+        assert_eq!(preview.planned_mutation_kind, "spawn_blocker_task");
+        assert_eq!(
+            preview.preview_receipt.receipt_id,
+            "adaptive-replan-preview:task-a:proof_gap:blocker_resolution:spawn_blocker_task:evidence=receipt-a+receipt-b"
+        );
+        assert_eq!(preview.operator_truth["preview_receipt_emitted"], true);
+        assert_eq!(preview.operator_truth["graph_state_mutated"], false);
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        assert_eq!(
+            runtime.block_on(super::run_task(crate::TaskArgs {
+                command: crate::TaskCommand::AdaptivePreview(crate::TaskAdaptivePreviewArgs {
+                    finding_json: None,
+                    finding_file: Some(finding_path),
+                    render: crate::RenderMode::Plain,
+                    json: true,
+                }),
+            })),
+            ExitCode::SUCCESS
+        );
+    }
+
+    #[test]
+    fn adaptive_preview_finding_file_input_fails_closed_for_missing_or_invalid_file() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let missing_path = harness.path().join("missing-finding.json");
+        let missing_error = load_adaptive_preview_finding_json(None, Some(missing_path.as_path()))
+            .expect_err("missing finding file should fail closed");
+        assert_eq!(missing_error.status, "blocked");
+        assert_eq!(missing_error.field.as_deref(), Some("finding_file"));
+        assert_eq!(
+            missing_error.blocker_codes,
+            vec!["invalid_adaptive_replan_finding_input".to_string()]
+        );
+        assert_eq!(
+            missing_error.operator_truth["valid_input_does_not_mutate_task_graph"],
+            true
+        );
+
+        let invalid_path = harness.path().join("invalid-finding.json");
+        fs::write(&invalid_path, "{not-json").expect("invalid finding file should write");
+        let invalid_error = load_adaptive_preview_finding_json(None, Some(invalid_path.as_path()))
+            .expect_err("invalid finding file should fail closed");
+        assert_eq!(invalid_error.status, "blocked");
+        assert_eq!(invalid_error.field.as_deref(), Some("finding_file"));
+        assert_eq!(
+            invalid_error.blocker_codes,
+            vec!["invalid_adaptive_replan_finding_input".to_string()]
+        );
+        assert!(invalid_error.reason.contains("valid JSON"));
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        assert_eq!(
+            runtime.block_on(super::run_task(crate::TaskArgs {
+                command: crate::TaskCommand::AdaptivePreview(crate::TaskAdaptivePreviewArgs {
+                    finding_json: None,
+                    finding_file: Some(missing_path),
+                    render: crate::RenderMode::Plain,
+                    json: true,
+                }),
+            })),
+            ExitCode::from(2)
         );
     }
 
