@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::taskflow_layer4::{print_taskflow_proxy_help, run_taskflow_query, taskflow_help_topic};
@@ -9,8 +9,8 @@ use crate::taskflow_run_graph::{
 use crate::taskflow_spec_bootstrap::run_taskflow_bootstrap_spec;
 use crate::taskflow_task_bridge::{enforce_execution_preparation_contract_gate, proxy_state_dir};
 use crate::{
-    Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs, print_surface_header,
-    print_surface_line, surface_render, taskflow_consume, taskflow_protocol_binding,
+    print_surface_header, print_surface_line, surface_render, taskflow_consume,
+    taskflow_protocol_binding, Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs,
 };
 use clap::Parser;
 use serde::Serialize;
@@ -242,15 +242,15 @@ fn scheduler_reservation_preview(
     state_dir: &std::path::Path,
     execute_requested: bool,
 ) -> TaskflowSchedulerReservationPreview {
-    let preview_only_reason = if execute_requested {
-        "scheduler_execute_external_execution_unavailable"
-    } else {
-        "scheduler_dispatch_is_preview_only"
-    };
     let execute_status = if execute_requested {
-        "blocked_external_execution_unavailable"
+        "execute_projection_not_executed"
     } else {
         "preview_not_executed"
+    };
+    let preview_only_reason = if execute_requested {
+        None
+    } else {
+        Some("scheduler_dispatch_is_preview_only".to_string())
     };
     TaskflowSchedulerReservationPreview {
         reservation_id: format!("scheduler-preview-{launch_role}-{launch_index}-{}", task.id),
@@ -260,7 +260,7 @@ fn scheduler_reservation_preview(
         launch_index,
         conflict_domain: task.conflict_domain.clone(),
         command: format!(
-            "vida agent-init --role worker --json \"Continue bounded task {}\" --state-dir {}",
+            "vida agent-init --role worker {} --state-dir {} --json",
             task.id,
             state_dir.display()
         ),
@@ -277,8 +277,255 @@ fn scheduler_reservation_preview(
         execute_status: execute_status.to_string(),
         receipt_id: None,
         receipt_path: None,
-        preview_only_reason: Some(preview_only_reason.to_string()),
+        preview_only_reason,
     }
+}
+
+fn scheduler_dispatch_receipt_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("scheduler-dispatch-{nanos}")
+}
+
+fn scheduler_remove_blocker_codes(codes: &mut Vec<String>, remove: &[&str]) {
+    codes.retain(|code| !remove.iter().any(|candidate| candidate == code));
+}
+
+fn scheduler_execute_agent_init_command(
+    task_id: &str,
+    state_dir: &Path,
+) -> Result<(String, Option<String>), String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to resolve current VIDA executable: {error}"))?;
+    let executable = if executable.exists() {
+        executable
+    } else if let Ok(path) = std::env::var("CARGO_BIN_EXE_vida") {
+        PathBuf::from(path)
+    } else {
+        PathBuf::from("vida")
+    };
+    let state_dir_arg = state_dir.display().to_string();
+    let output = {
+        let mut final_output = None;
+        for attempt in 0..4 {
+            let output = std::process::Command::new(&executable)
+                .args([
+                    "agent-init",
+                    "--role",
+                    "worker",
+                    task_id,
+                    "--state-dir",
+                    &state_dir_arg,
+                    "--json",
+                ])
+                .output()
+                .map_err(|error| {
+                    format!("failed to launch scheduler agent-init for `{task_id}`: {error}")
+                })?;
+            if output.status.success() {
+                final_output = Some(output);
+                break;
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let lock_contention = stderr.contains("LOCK")
+                || stderr.contains("locked by another process")
+                || stderr.contains("Resource temporarily unavailable");
+            if lock_contention && attempt < 3 {
+                std::thread::sleep(std::time::Duration::from_millis(200 * (attempt + 1) as u64));
+                continue;
+            }
+            final_output = Some(output);
+            break;
+        }
+        final_output.expect("scheduler agent-init loop should produce output")
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!(
+                "scheduler agent-init for `{task_id}` exited with {}",
+                output.status
+            )
+        } else {
+            format!(
+                "scheduler agent-init for `{task_id}` exited with {}: {stderr}",
+                output.status
+            )
+        });
+    }
+    let activation_kind = serde_json::from_str::<serde_json::Value>(&stdout)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("activation_semantics")
+                .and_then(|semantics| semantics.get("activation_kind"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
+    Ok((stdout, activation_kind))
+}
+
+fn persist_scheduler_execute_receipt(
+    plan: &mut TaskflowSchedulerDispatchPlan,
+    state_dir: &Path,
+) -> Result<(), String> {
+    if !plan.execute_requested || plan.selected_task_ids.is_empty() {
+        return Ok(());
+    }
+
+    let receipt_id = scheduler_dispatch_receipt_id();
+    let receipt_root = state_dir.join("scheduler-dispatch").join("receipts");
+    std::fs::create_dir_all(&receipt_root).map_err(|error| {
+        format!(
+            "failed to create scheduler dispatch receipt directory `{}`: {error}",
+            receipt_root.display()
+        )
+    })?;
+    let receipt_path = receipt_root.join(format!("{receipt_id}.json"));
+    let receipt_path_string = receipt_path.display().to_string();
+    let mut launch_results = Vec::new();
+    let mut launch_blockers = Vec::new();
+
+    for reservation in &mut plan.reservations {
+        reservation.reservation_persisted = true;
+        reservation.execute_supported = true;
+        reservation.execution_attempted = true;
+        reservation.reservation_status = "reservation_persisted".to_string();
+        reservation.receipt_id = Some(receipt_id.clone());
+        reservation.receipt_path = Some(receipt_path_string.clone());
+        match scheduler_execute_agent_init_command(&reservation.task_id, state_dir) {
+            Ok((stdout, activation_kind)) => {
+                let execute_status = match activation_kind.as_deref() {
+                    Some("activation_view") => "activation_view_only",
+                    Some(_) => "agent_init_returned",
+                    None => "agent_init_returned_unclassified",
+                };
+                reservation.execute_status = execute_status.to_string();
+                reservation.preview_only_reason = activation_kind
+                    .as_deref()
+                    .filter(|kind| *kind == "activation_view")
+                    .map(|_| "agent_init_activation_view_only".to_string());
+                launch_results.push(serde_json::json!({
+                    "task_id": reservation.task_id,
+                    "reservation_id": reservation.reservation_id,
+                    "status": execute_status,
+                    "activation_kind": activation_kind,
+                    "stdout": stdout,
+                }));
+                if execute_status == "activation_view_only" {
+                    launch_blockers.push("scheduler_agent_init_activation_view_only".to_string());
+                }
+            }
+            Err(error) => {
+                reservation.execute_status = "agent_init_failed".to_string();
+                reservation.preview_only_reason = Some("scheduler_agent_init_failed".to_string());
+                launch_blockers.push("scheduler_agent_init_failed".to_string());
+                launch_results.push(serde_json::json!({
+                    "task_id": reservation.task_id,
+                    "reservation_id": reservation.reservation_id,
+                    "status": "agent_init_failed",
+                    "error": error,
+                }));
+            }
+        }
+    }
+
+    launch_blockers.sort();
+    launch_blockers.dedup();
+    scheduler_remove_blocker_codes(
+        &mut plan.blocker_codes,
+        &["scheduler_execute_external_execution_unavailable"],
+    );
+    scheduler_remove_blocker_codes(
+        &mut plan.dispatch_receipt.blocker_codes,
+        &["scheduler_execute_external_execution_unavailable"],
+    );
+    plan.next_actions
+        .retain(|action| !action.contains("external lane execution is not attempted"));
+    plan.dispatch_receipt.execution_blocker_codes = launch_blockers.clone();
+    plan.dispatch_receipt.receipt_id = Some(receipt_id.clone());
+    plan.dispatch_receipt.receipt_path = Some(receipt_path_string.clone());
+    plan.dispatch_receipt.receipt_persisted = true;
+    plan.dispatch_receipt.receipt_status = "persisted".to_string();
+    plan.dispatch_receipt.execute_supported = true;
+    plan.dispatch_receipt.execution_attempted = true;
+    plan.execute_supported = true;
+    plan.execution_attempted = true;
+    if launch_blockers.is_empty() {
+        plan.status = "pass".to_string();
+        plan.dispatch_receipt.dispatch_status = "pass".to_string();
+        plan.execution_status = "agent_init_returned".to_string();
+        plan.dispatch_receipt.execute_status = "agent_init_returned".to_string();
+        plan.dispatch_receipt.preview_only_reason = None;
+    } else {
+        for blocker in &launch_blockers {
+            if !plan.blocker_codes.iter().any(|code| code == blocker) {
+                plan.blocker_codes.push(blocker.clone());
+            }
+            if !plan
+                .dispatch_receipt
+                .blocker_codes
+                .iter()
+                .any(|code| code == blocker)
+            {
+                plan.dispatch_receipt.blocker_codes.push(blocker.clone());
+            }
+        }
+        if launch_blockers
+            .iter()
+            .any(|code| code == "scheduler_agent_init_activation_view_only")
+        {
+            plan.next_actions.push(
+                "Scheduler selected lane activation returned view-only; continue through the lawful VIDA agent packet/dispatch path before claiming worker completion."
+                    .to_string(),
+            );
+        }
+        if launch_blockers
+            .iter()
+            .any(|code| code == "scheduler_agent_init_failed")
+        {
+            plan.next_actions.push(
+                "Scheduler selected lane activation failed to launch; review scheduler reservation output and resolve the launch blocker before retrying."
+                    .to_string(),
+            );
+        }
+        plan.status = "blocked".to_string();
+        plan.dispatch_receipt.dispatch_status = "blocked".to_string();
+        plan.execution_status = launch_blockers
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "scheduler_execute_blocked".to_string());
+        plan.dispatch_receipt.execute_status = plan.execution_status.clone();
+        plan.dispatch_receipt.preview_only_reason = Some(plan.execution_status.clone());
+    }
+
+    let receipt_body = serde_json::json!({
+        "receipt_id": receipt_id,
+        "surface": plan.surface,
+        "dispatch_surface": plan.dispatch_receipt.dispatch_surface,
+        "dispatch_command": plan.dispatch_receipt.dispatch_command,
+        "status": plan.status,
+        "execute_requested": plan.execute_requested,
+        "execute_supported": plan.execute_supported,
+        "execution_attempted": plan.execution_attempted,
+        "execution_status": plan.execution_status,
+        "selected_task_ids": plan.selected_task_ids,
+        "reservation_ids": plan.dispatch_receipt.reservation_ids,
+        "blocker_codes": plan.blocker_codes,
+        "launch_results": launch_results,
+    });
+    let receipt_text = serde_json::to_string_pretty(&receipt_body)
+        .map_err(|error| format!("failed to render scheduler dispatch receipt: {error}"))?;
+    std::fs::write(&receipt_path, receipt_text).map_err(|error| {
+        format!(
+            "failed to write scheduler dispatch receipt `{}`: {error}",
+            receipt_path.display()
+        )
+    })?;
+    Ok(())
 }
 
 fn build_taskflow_scheduler_dispatch_plan(
@@ -393,14 +640,7 @@ fn build_taskflow_scheduler_dispatch_plan(
                 .to_string(),
         );
     }
-    let execute_backend_unavailable = execute_requested && selected_primary_task.is_some();
-    if execute_backend_unavailable {
-        blocker_codes.push("scheduler_execute_external_execution_unavailable".to_string());
-        next_actions.push(
-            "Scheduler execute selected a lawful bounded launch set, but external lane execution is not attempted in this core loop; dispatch selected lanes through `vida agent-init` or rerun without `--execute` for preview only."
-                .to_string(),
-        );
-    }
+    let execute_requested_with_selection = execute_requested && selected_primary_task.is_some();
     if let Some(task) = selected_primary_task.as_ref() {
         next_actions.push(format!(
             "Inspect the selected primary task with `vida task show {} --json` before delegated launch.",
@@ -449,28 +689,27 @@ fn build_taskflow_scheduler_dispatch_plan(
                 )
             }),
     );
+    if execute_requested_with_selection {
+        for reservation in &mut reservations {
+            reservation.execute_supported = true;
+        }
+    }
     let reservation_ids = reservations
         .iter()
         .map(|reservation| reservation.reservation_id.clone())
         .collect::<Vec<_>>();
-    let mut blocker_codes =
-        crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
-    if execute_backend_unavailable
-        && !blocker_codes
-            .iter()
-            .any(|code| code == "scheduler_execute_external_execution_unavailable")
-    {
-        blocker_codes.push("scheduler_execute_external_execution_unavailable".to_string());
-    }
-    let preview_only_reason = if execute_requested {
-        "scheduler_execute_external_execution_unavailable"
+    let blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    let preview_only_reason = if execute_requested_with_selection {
+        None
+    } else if execute_requested {
+        Some("scheduler_execute_external_execution_unavailable".to_string())
     } else {
-        "scheduler_dispatch_is_preview_only"
+        Some("scheduler_dispatch_is_preview_only".to_string())
     };
-    let execute_supported = false;
+    let execute_supported = execute_requested_with_selection;
     let execution_status = if execute_requested {
         if selected_primary_task.is_some() {
-            "blocked_external_execution_unavailable"
+            "execute_projection_not_executed"
         } else {
             "blocked_no_lawful_selection"
         }
@@ -504,12 +743,8 @@ fn build_taskflow_scheduler_dispatch_plan(
         } else {
             "preview_not_executed".to_string()
         },
-        preview_only_reason: Some(preview_only_reason.to_string()),
-        execution_blocker_codes: if execute_backend_unavailable {
-            vec!["scheduler_execute_external_execution_unavailable".to_string()]
-        } else {
-            Vec::new()
-        },
+        preview_only_reason,
+        execution_blocker_codes: Vec::new(),
         selected_task_ids: selected_task_ids.clone(),
         reservation_ids,
         blocker_codes: blocker_codes.clone(),
@@ -2059,7 +2294,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         initial_projection
     };
 
-    let plan = build_taskflow_scheduler_dispatch_plan(
+    let mut plan = build_taskflow_scheduler_dispatch_plan(
         scheduling,
         max_parallel_agents,
         requested_parallel_limit,
@@ -2069,6 +2304,18 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         dry_run || !execute_requested,
         execute_requested,
     );
+    drop(store);
+    if execute_requested && !dry_run {
+        if let Err(error) = persist_scheduler_execute_receipt(&mut plan, &state_dir) {
+            plan.status = "blocked".to_string();
+            plan.execution_status = "scheduler_execute_receipt_persistence_failed".to_string();
+            plan.execute_supported = true;
+            plan.execution_attempted = false;
+            plan.blocker_codes
+                .push("scheduler_execute_receipt_persistence_failed".to_string());
+            plan.next_actions.push(error);
+        }
+    }
 
     if as_json {
         crate::print_json_pretty(
@@ -2942,8 +3189,8 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        GraphSummaryWaveBucket, build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
-        taskflow_task_subcommand_supported,
+        build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
+        taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
     };
     use crate::state_store::{
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
@@ -3169,7 +3416,7 @@ mod tests {
         assert_eq!(plan.reservations[0].launch_index, 0);
         assert_eq!(
             plan.reservations[0].command,
-            "vida agent-init --role worker --json \"Continue bounded task critical-ready\" --state-dir /tmp/vida-scheduler-state"
+            "vida agent-init --role worker critical-ready --state-dir /tmp/vida-scheduler-state --json"
         );
         assert_eq!(plan.reservations[0].state_dir, "/tmp/vida-scheduler-state");
         assert_eq!(
@@ -3249,7 +3496,7 @@ mod tests {
     }
 
     #[test]
-    fn scheduler_dispatch_execute_projects_lawful_selection_without_external_attempt() {
+    fn scheduler_dispatch_execute_projects_lawful_selection_with_real_reservation_attempt() {
         let primary = task("critical-ready", "task", "open", 1, &[], Vec::new());
         let projection = TaskSchedulingProjection {
             current_task_id: Some("critical-ready".to_string()),
@@ -3270,18 +3517,13 @@ mod tests {
             projection, 1, None, None, None, state_dir, false, true,
         );
 
-        assert_eq!(plan.status, "blocked");
-        assert!(plan.blocker_codes.iter().any(|code| code
-            == "scheduler_execute_external_execution_unavailable"
-            || code == "unsupported_blocker_code"));
+        assert_eq!(plan.status, "pass");
+        assert!(plan.blocker_codes.is_empty());
         assert_eq!(plan.max_parallel_agents, 1);
         assert!(plan.execute_requested);
-        assert!(!plan.execute_supported);
+        assert!(plan.execute_supported);
         assert!(!plan.execution_attempted);
-        assert_eq!(
-            plan.execution_status,
-            "blocked_external_execution_unavailable"
-        );
+        assert_eq!(plan.execution_status, "execute_projection_not_executed");
         assert!(!plan.dry_run);
         assert_eq!(plan.selected_task_ids, vec!["critical-ready"]);
         assert_eq!(plan.reservations.len(), 1);
@@ -3289,37 +3531,37 @@ mod tests {
             plan.reservations[0].reservation_status,
             "execute_projection_unpersisted"
         );
-        assert!(!plan.reservations[0].execute_supported);
+        assert!(plan.reservations[0].execute_supported);
         assert!(!plan.reservations[0].reservation_persisted);
         assert_eq!(
             plan.dispatch_receipt.receipt_status,
             "execute_projection_not_persisted"
         );
-        assert_eq!(plan.dispatch_receipt.dispatch_status, "blocked");
+        assert_eq!(plan.dispatch_receipt.dispatch_status, "pass");
         assert!(plan.dispatch_receipt.execute_requested);
-        assert!(!plan.dispatch_receipt.execute_supported);
+        assert!(plan.dispatch_receipt.execute_supported);
         assert!(!plan.dispatch_receipt.execution_attempted);
         assert_eq!(
             plan.dispatch_receipt.execute_status,
-            "blocked_external_execution_unavailable"
+            "execute_projection_not_executed"
         );
-        assert_eq!(
-            plan.dispatch_receipt.preview_only_reason.as_deref(),
-            Some("scheduler_execute_external_execution_unavailable")
-        );
+        assert!(plan.dispatch_receipt.preview_only_reason.is_none());
         assert!(!plan.dispatch_receipt.receipt_persisted);
         assert_eq!(plan.dispatch_receipt.receipt_id, None);
         assert_eq!(plan.dispatch_receipt.receipt_path, None);
-        assert!(
-            plan.dispatch_receipt
-                .execution_blocker_codes
-                .iter()
-                .any(|code| code == "scheduler_execute_external_execution_unavailable")
+        assert!(plan.dispatch_receipt.execution_blocker_codes.is_empty());
+        assert!(plan.reservations[0]
+            .preview_only_reason
+            .as_deref()
+            .is_none());
+        assert_eq!(
+            plan.reservations[0].execute_status,
+            "execute_projection_not_executed"
         );
-        assert!(plan.next_actions.iter().any(|action| {
-            action.contains("selected a lawful bounded launch set")
-                && action.contains("execution is not attempted")
-        }));
+        assert!(!plan
+            .next_actions
+            .iter()
+            .any(|action| { action.contains("execution is not attempted") }));
     }
 
     #[test]
@@ -3398,7 +3640,7 @@ mod tests {
         assert_eq!(payload["reservations"][0]["task_id"], "critical-ready");
         assert_eq!(
             payload["reservations"][0]["command"],
-            "vida agent-init --role worker --json \"Continue bounded task critical-ready\" --state-dir /tmp/vida-scheduler-state"
+            "vida agent-init --role worker critical-ready --state-dir /tmp/vida-scheduler-state --json"
         );
         assert_eq!(
             payload["reservations"][0]["state_dir"],
@@ -3758,11 +4000,9 @@ mod tests {
             super::build_taskflow_graph_explain_payload(&projection, None, Some("blocked"));
         assert_eq!(blocked_payload["status"], "blocked");
         assert_eq!(blocked_payload["ready_now"], false);
-        assert!(
-            blocked_payload["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| codes.contains(&serde_json::json!("graph_blocked")))
-        );
+        assert!(blocked_payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.contains(&serde_json::json!("graph_blocked"))));
         assert_eq!(blocked_payload["blocked_by"][0]["depends_on_id"], "current");
         assert_eq!(
             blocked_payload["next_lawful_action"]["surface"],
@@ -3773,23 +4013,19 @@ mod tests {
             super::build_taskflow_graph_explain_payload(&projection, None, Some("missing"));
         assert_eq!(missing_payload["status"], "blocked");
         assert_eq!(missing_payload["ready_now"], false);
-        assert!(
-            missing_payload["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| {
-                    codes.contains(&serde_json::json!("task_not_in_graph_projection"))
-                })
-        );
+        assert!(missing_payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| {
+                codes.contains(&serde_json::json!("task_not_in_graph_projection"))
+            }));
 
         let parallel_blocked_payload =
             super::build_taskflow_graph_explain_payload(&projection, None, Some("current"));
         assert_eq!(parallel_blocked_payload["status"], "blocked");
         assert_eq!(parallel_blocked_payload["ready_now"], true);
-        assert!(
-            parallel_blocked_payload["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| !codes.is_empty())
-        );
+        assert!(parallel_blocked_payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| !codes.is_empty()));
     }
 
     #[test]
@@ -4068,11 +4304,9 @@ mod tests {
         assert_eq!(payload["selected_backend"].as_str(), Some("junior"));
         assert_eq!(payload["selected_backend_admissible"].as_bool(), Some(true));
         assert_eq!(payload["status"].as_str(), Some("pass"));
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| codes.is_empty())
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.is_empty()));
     }
 
     #[test]
@@ -4119,11 +4353,9 @@ mod tests {
             payload["routes"][0]["model_profile_readiness_audit"]["surface"],
             "vida taskflow model-profile readiness audit"
         );
-        assert!(
-            payload["row_count"]
-                .as_u64()
-                .is_some_and(|count| count >= 10)
-        );
+        assert!(payload["row_count"]
+            .as_u64()
+            .is_some_and(|count| count >= 10));
         let rows = payload["routes"][0]["rows"]
             .as_array()
             .expect("config actuation rows should render");
@@ -4349,11 +4581,9 @@ mod tests {
             unready["selected_profile"]["readiness"]["blocker_code"],
             "external_cli_missing_api_key"
         );
-        assert!(
-            unready["next_actions"]
-                .as_array()
-                .is_some_and(|actions| !actions.is_empty())
-        );
+        assert!(unready["next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty()));
         assert_eq!(missing["status"], "blocked");
         assert_eq!(
             missing["blocker_codes"],
@@ -4479,16 +4709,12 @@ mod tests {
 
         let blocker_codes = super::authoritative_dispatch_blocker_codes(Some(&dispatch));
         assert_eq!(blocker_codes.len(), 2);
-        assert!(
-            blocker_codes
-                .iter()
-                .any(|code| code == "timeout_without_takeover_authority")
-        );
-        assert!(
-            blocker_codes
-                .iter()
-                .any(|code| code == "pending_review_clean_evidence")
-        );
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code == "timeout_without_takeover_authority"));
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code == "pending_review_clean_evidence"));
     }
 
     fn sample_task(task_id: &str) -> crate::state_store::TaskRecord {
@@ -4628,12 +4854,10 @@ mod tests {
                 .map(|value| value.command.as_str()),
             Some("vida task ready --scope epic-1 --json")
         );
-        assert!(
-            decision
-                .blocker_codes
-                .iter()
-                .any(|code| code == "no_ready_tasks")
-        );
+        assert!(decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "no_ready_tasks"));
     }
 
     #[test]
