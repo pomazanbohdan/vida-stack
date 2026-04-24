@@ -1515,7 +1515,11 @@ fn build_taskflow_graph_explain_payload(
         })
     };
 
-    let status = if candidate_missing { "blocked" } else { "pass" };
+    let status = if candidate_missing || !blocker_codes.is_empty() || !ready_now {
+        "blocked"
+    } else {
+        "pass"
+    };
     serde_json::json!({
         "surface": "vida taskflow graph explain",
         "status": status,
@@ -2563,7 +2567,14 @@ mod tests {
         let projection = TaskSchedulingProjection {
             current_task_id: Some("current".to_string()),
             ready: vec![
-                scheduling_candidate(current, true, false, true, Vec::new(), vec![]),
+                scheduling_candidate(
+                    current,
+                    true,
+                    false,
+                    true,
+                    Vec::new(),
+                    vec!["parallel_conflict"],
+                ),
                 scheduling_candidate(sibling.clone(), true, true, false, Vec::new(), vec![]),
             ],
             blocked: vec![scheduling_candidate(
@@ -2591,13 +2602,34 @@ mod tests {
 
         let blocked_payload =
             super::build_taskflow_graph_explain_payload(&projection, None, Some("blocked"));
-        assert_eq!(blocked_payload["status"], "pass");
+        assert_eq!(blocked_payload["status"], "blocked");
         assert_eq!(blocked_payload["ready_now"], false);
+        assert!(blocked_payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.contains(&serde_json::json!("graph_blocked"))));
         assert_eq!(blocked_payload["blocked_by"][0]["depends_on_id"], "current");
         assert_eq!(
             blocked_payload["next_lawful_action"]["surface"],
             "vida task deps"
         );
+
+        let missing_payload =
+            super::build_taskflow_graph_explain_payload(&projection, None, Some("missing"));
+        assert_eq!(missing_payload["status"], "blocked");
+        assert_eq!(missing_payload["ready_now"], false);
+        assert!(missing_payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| {
+                codes.contains(&serde_json::json!("task_not_in_graph_projection"))
+            }));
+
+        let parallel_blocked_payload =
+            super::build_taskflow_graph_explain_payload(&projection, None, Some("current"));
+        assert_eq!(parallel_blocked_payload["status"], "blocked");
+        assert_eq!(parallel_blocked_payload["ready_now"], true);
+        assert!(parallel_blocked_payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| !codes.is_empty()));
     }
 
     #[test]
