@@ -242,6 +242,47 @@ fn project_root_for_task_state(state_dir: &std::path::Path) -> Option<std::path:
         .or_else(|| crate::resolve_runtime_project_root().ok())
 }
 
+fn task_close_uses_isolated_state_dir(
+    state_dir: &std::path::Path,
+    explicit_state_dir: bool,
+) -> bool {
+    explicit_state_dir
+        && crate::taskflow_task_bridge::infer_project_root_from_state_root(state_dir).is_none()
+}
+
+fn task_close_host_agent_telemetry(
+    state_dir: &std::path::Path,
+    explicit_state_dir: bool,
+    project_root: Option<&std::path::Path>,
+    task_value: &serde_json::Value,
+    close_reason: &str,
+    feedback_source: &str,
+) -> serde_json::Value {
+    if task_close_uses_isolated_state_dir(state_dir, explicit_state_dir) {
+        return serde_json::json!({
+            "status": "skipped",
+            "reason": "isolated_state_dir",
+            "state_dir": state_dir.display().to_string(),
+            "feedback_store": "not_recorded",
+        });
+    }
+
+    match project_root {
+        Some(project_root) => {
+            crate::agent_feedback_surface::maybe_record_task_close_host_agent_feedback(
+                project_root,
+                task_value,
+                close_reason,
+                feedback_source,
+            )
+        }
+        None => serde_json::json!({
+            "status": "skipped",
+            "reason": "project_root_unavailable",
+        }),
+    }
+}
+
 fn resolve_optional_text_arg(
     label: &str,
     direct: Option<&str>,
@@ -2498,13 +2539,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
         }
         TaskCommand::AdaptivePreview(command) => run_task_adaptive_preview(command).await,
         TaskCommand::Close(command) => {
+            let explicit_state_dir = command.state_dir.is_some();
             let state_dir = command
                 .state_dir
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
             let project_root = project_root_for_task_state(&state_dir);
             let feedback_source = command.source.as_deref().unwrap_or("vida task close");
-            match StateStore::open_existing(state_dir).await {
+            match StateStore::open_existing(state_dir.clone()).await {
                 Ok(store) => match store.close_task(&command.task_id, &command.reason).await {
                     Ok(task) => {
                         if let Err(code) =
@@ -2518,20 +2560,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                         let task_value = serde_json::to_value(&task)
                             .expect("task close payload should serialize");
-                        let telemetry = match project_root.as_deref() {
-                            Some(project_root) => {
-                                crate::agent_feedback_surface::maybe_record_task_close_host_agent_feedback(
-                                    project_root,
-                                    &task_value,
-                                    &command.reason,
-                                    feedback_source,
-                                )
-                            }
-                            None => serde_json::json!({
-                                "status": "skipped",
-                                "reason": "project_root_unavailable",
-                            }),
-                        };
+                        let telemetry = task_close_host_agent_telemetry(
+                            &state_dir,
+                            explicit_state_dir,
+                            project_root.as_deref(),
+                            &task_value,
+                            &command.reason,
+                            feedback_source,
+                        );
                         let automation = if task_close_automation_requested(&command) {
                             Some(task_close_automation_receipt(
                                 &command,
@@ -2893,7 +2929,8 @@ mod tests {
         canonical_json_string_array_entries, load_adaptive_preview_finding_json,
         normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
         parse_label_values, parse_optional_label_value, parse_split_child_specs,
-        task_close_automation_receipt, task_json_success_status,
+        task_close_automation_receipt, task_close_host_agent_telemetry,
+        task_close_uses_isolated_state_dir, task_json_success_status,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
@@ -2928,6 +2965,70 @@ mod tests {
             })
             .await
             .expect("task should create");
+    }
+
+    #[test]
+    fn task_close_feedback_skips_isolated_explicit_state_dir() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let project_root = harness.path().join("project");
+        fs::create_dir_all(project_root.join(".vida/state"))
+            .expect("project state directory should initialize");
+        fs::write(project_root.join("vida.config.yaml"), "project: test\n")
+            .expect("project marker should write");
+        let isolated_state_dir = harness.path().join("isolated-state");
+        let task_value = serde_json::json!({
+            "id": "audit-p1-task-close-state-dir-feedback-isolation",
+            "status": "closed",
+        });
+
+        assert!(task_close_uses_isolated_state_dir(
+            &isolated_state_dir,
+            true
+        ));
+        let telemetry = task_close_host_agent_telemetry(
+            &isolated_state_dir,
+            true,
+            Some(&project_root),
+            &task_value,
+            "closed with isolated temp state",
+            "vida task close",
+        );
+
+        assert_eq!(telemetry["status"], "skipped");
+        assert_eq!(telemetry["reason"], "isolated_state_dir");
+        assert_eq!(
+            telemetry["state_dir"],
+            isolated_state_dir.display().to_string()
+        );
+        assert_eq!(telemetry["feedback_store"], "not_recorded");
+        assert!(
+            !project_root
+                .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
+                .exists()
+        );
+        assert!(!project_root.join(crate::WORKER_STRATEGY_STATE).exists());
+    }
+
+    #[test]
+    fn task_close_feedback_keeps_project_state_dir_admissible() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let project_root = harness.path();
+        fs::write(project_root.join("vida.config.yaml"), "project: test\n")
+            .expect("project marker should write");
+        fs::write(project_root.join("AGENTS.md"), "test project\n")
+            .expect("agents marker should write");
+        fs::create_dir_all(project_root.join(".vida/config"))
+            .expect("config marker directory should initialize");
+        fs::create_dir_all(project_root.join(".vida/db"))
+            .expect("db marker directory should initialize");
+        fs::create_dir_all(project_root.join(".vida/project"))
+            .expect("project marker directory should initialize");
+        let project_state_dir = project_root.join(crate::state_store::default_state_dir());
+
+        assert!(!task_close_uses_isolated_state_dir(
+            &project_state_dir,
+            true
+        ));
     }
 
     #[test]
