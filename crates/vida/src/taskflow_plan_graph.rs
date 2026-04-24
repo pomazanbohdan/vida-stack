@@ -191,9 +191,15 @@ pub(crate) async fn run_taskflow_plan(args: &[String]) -> ExitCode {
 }
 
 fn print_plan_help() {
-    println!(
-        "TaskFlow PlanGraph surfaces\n\n  vida taskflow plan generate --source-file <path> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] [--require-context] --json\n  vida taskflow plan generate --source-text <text> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] [--require-context] --json\n  vida taskflow plan materialize <draft.json> --dry-run --json\n  vida taskflow plan materialize <draft.json> --json"
-    );
+    println!("{}", plan_help_text());
+}
+
+fn plan_help_text() -> &'static str {
+    "TaskFlow PlanGraph surfaces\n\n  vida taskflow plan generate --source-file <path> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] [--require-context] --json\n  vida taskflow plan generate --source-text <text> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] [--require-context] --json\n  vida taskflow plan materialize <draft.json> --dry-run --json\n  vida taskflow plan materialize <draft.json> --json"
+}
+
+fn plan_generate_usage() -> &'static str {
+    "usage: vida taskflow plan generate --source-file <path>|--source-text <text> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] [--require-context] [--parent-id <id>] [--output <path>] [--json]"
 }
 
 fn parse_generate_options(args: &[String]) -> Result<PlanGenerateOptions, String> {
@@ -203,15 +209,19 @@ fn parse_generate_options(args: &[String]) -> Result<PlanGenerateOptions, String
         match args[index].as_str() {
             "--source-file" => {
                 index += 1;
-                options.source_file = Some(PathBuf::from(required_value(args, index, "--source-file")?));
+                options.source_file =
+                    Some(PathBuf::from(required_value(args, index, "--source-file")?));
             }
             "--source-text" => {
                 index += 1;
-                options.source_text = Some(required_value(args, index, "--source-text")?.to_string());
+                options.source_text =
+                    Some(required_value(args, index, "--source-text")?.to_string());
             }
             "--spec-ref" => {
                 index += 1;
-                options.spec_refs.push(required_value(args, index, "--spec-ref")?.to_string());
+                options
+                    .spec_refs
+                    .push(required_value(args, index, "--spec-ref")?.to_string());
             }
             "--backlog-ref" => {
                 index += 1;
@@ -228,7 +238,8 @@ fn parse_generate_options(args: &[String]) -> Result<PlanGenerateOptions, String
             "--require-context" => options.require_context = true,
             "--task-prefix" => {
                 index += 1;
-                options.task_prefix = Some(required_value(args, index, "--task-prefix")?.to_string());
+                options.task_prefix =
+                    Some(required_value(args, index, "--task-prefix")?.to_string());
             }
             "--parent-id" => {
                 index += 1;
@@ -239,7 +250,7 @@ fn parse_generate_options(args: &[String]) -> Result<PlanGenerateOptions, String
                 options.output = Some(PathBuf::from(required_value(args, index, "--output")?));
             }
             "--json" => options.json = true,
-            "--help" | "-h" => return Err("usage: vida taskflow plan generate --source-file <path>|--source-text <text> --task-prefix <prefix> [--spec-ref <ref>] [--backlog-ref <ref>] [--context-ref <ref>] [--require-context] [--parent-id <id>] [--output <path>] [--json]".to_string()),
+            "--help" | "-h" => return Err(plan_generate_usage().to_string()),
             other => return Err(format!("unknown plan generate argument `{other}`")),
         }
         index += 1;
@@ -2046,6 +2057,42 @@ fn stable_hash_hex(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plan_help_text_surfaces_context_requirement_flags() {
+        let help = plan_help_text();
+
+        assert!(help.contains("vida taskflow plan generate --source-file <path>"));
+        assert!(help.contains("vida taskflow plan generate --source-text <text>"));
+        for flag in [
+            "--require-context",
+            "--spec-ref <ref>",
+            "--backlog-ref <ref>",
+            "--context-ref <ref>",
+        ] {
+            assert!(help.contains(flag), "plan help should mention {flag}");
+        }
+    }
+
+    #[test]
+    fn plan_generate_usage_surfaces_context_requirement_flags() {
+        let usage = parse_generate_options(&[
+            "vida".to_string(),
+            "generate".to_string(),
+            "--help".to_string(),
+        ])
+        .expect_err("generate help should return usage text");
+
+        assert!(usage.contains("usage: vida taskflow plan generate"));
+        for flag in [
+            "--require-context",
+            "--spec-ref <ref>",
+            "--backlog-ref <ref>",
+            "--context-ref <ref>",
+        ] {
+            assert!(usage.contains(flag), "generate usage should mention {flag}");
+        }
+    }
 
     #[test]
     fn plan_generate_is_deterministic_for_same_input() {
