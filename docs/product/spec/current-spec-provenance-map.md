@@ -213,6 +213,8 @@ Companion rule:
    Sources: user-provided external static audit on 2026-04-23; validated code-path evidence in `crates/vida/src/{carrier_runtime_projection,runtime_assignment_builder,runtime_assignment_policy,runtime_lane_summary,taskflow_routing,development_flow_orchestration,runtime_dispatch_state,runtime_dispatch_execution,status_surface_external_cli,status_surface_host_agents,taskflow_consume_bundle,init_surfaces}.rs`; current config in `vida.config.yaml`; and adjacent active design docs `carrier-model-profile-selection-runtime-design.md`, `implementation-backend-admissibility-and-selection-truth-design.md`, `external-cli-carrier-hardening-design.md`, and `reconcile-qwen-cli-carrier-drift-design.md`
 39. [task-graph-adaptive-planner-design.md](task-graph-adaptive-planner-design.md)
    Sources: user-provided external static audit on task planning, replanning, task creation, dependencies, parallelism, and adaptive execution on 2026-04-23; current graph/scheduler law in `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`; execution preparation law in `docs/product/spec/execution-preparation-and-developer-handoff-model.md`; operating-loop law in `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`; kernel scope in `docs/product/spec/partial-development-kernel-model.md`; and current owner code in `crates/vida/src/{state_store_task_graph,state_store_task_store,state_store_task_models,task_surface,taskflow_proxy,taskflow_layer4}.rs`
+40. [model-provider-price-catalog-lifecycle-design.md](model-provider-price-catalog-lifecycle-design.md)
+   Sources: user task `audit-p0-model-price-design-spec` on 2026-04-24; current config evidence in `vida.config.yaml` for `agent_system.pricing.vendor_basis`, `agent_system.model_selection`, carrier/backend `model_profiles`, and profile-level `normalized_cost_units`; validated status/query/runtime evidence in `crates/vida/src/{runtime_assignment_builder,status_surface_external_cli,taskflow_routing,runtime_dispatch_state,root_command_router}.rs`; and adjacent owner-law docs `docs/product/spec/{project-activation-and-configurator-model,status-families-and-query-surface-model,carrier-model-profile-selection-runtime-design,unified-hybrid-runtime-selection-policy-design,implementation-backend-admissibility-and-selection-truth-design}.md`
 
 ## Routing Pointers
 
@@ -263,5 +265,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-provenance-map.md
 created_at: '2026-03-16T09:05:00+02:00'
-updated_at: 2026-04-23T11:29:17.904904415Z
+updated_at: 2026-04-24T16:11:52.331479239Z
 changelog_ref: current-spec-provenance-map.changelog.jsonl
