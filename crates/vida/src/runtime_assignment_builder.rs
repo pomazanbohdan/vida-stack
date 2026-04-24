@@ -494,6 +494,25 @@ fn profile_task_classes(role: &serde_json::Value, profile: &serde_json::Value) -
     }
 }
 
+fn non_empty_string_field<'a>(value: &'a serde_json::Value) -> Option<&'a str> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn candidate_metadata_source_path(role_id: &str, profile_id: &str, field: &str) -> Option<String> {
+    if role_id.is_empty() || profile_id.is_empty() {
+        return None;
+    }
+    if field.trim().is_empty() {
+        return None;
+    }
+    Some(format!(
+        "carrier_runtime.roles[{role_id}].model_profiles.{profile_id}.{field}"
+    ))
+}
+
 fn profile_supports_runtime_role(
     role: &serde_json::Value,
     profile: &serde_json::Value,
@@ -526,6 +545,88 @@ fn profile_readiness_status(profile: &serde_json::Value) -> String {
         return "blocked".to_string();
     }
     "ready".to_string()
+}
+
+fn pricing_metadata_for_profile(
+    compiled_bundle: &serde_json::Value,
+    role_id: &str,
+    profile_id: &str,
+    profile: &serde_json::Value,
+    provider: Option<&str>,
+) -> (serde_json::Value, Option<String>) {
+    if let Some(pricing) = profile.get("pricing").filter(|value| !value.is_null()) {
+        return (
+            pricing.clone(),
+            candidate_metadata_source_path(role_id, profile_id, "pricing"),
+        );
+    }
+    if let Some(provider) = provider {
+        let provider_pricing = json_lookup(
+            &compiled_bundle["agent_system"]["pricing"]["providers"],
+            &[provider],
+        );
+        if provider_pricing.is_some() {
+            return (
+                provider_pricing.cloned().unwrap_or(serde_json::Value::Null),
+                Some(format!("agent_system.pricing.providers[{provider}]")),
+            );
+        }
+    }
+    if let Some(default_pricing) = json_lookup(
+        &compiled_bundle["agent_system"]["pricing"],
+        &["model_profile_defaults", "pricing"],
+    ) {
+        return (
+            default_pricing.clone(),
+            Some("agent_system.pricing.model_profile_defaults.pricing".to_string()),
+        );
+    }
+    (serde_json::Value::Null, None)
+}
+
+fn pricing_freshness_status_and_reject_reasons(
+    pricing: &serde_json::Value,
+) -> (serde_json::Value, String, Vec<String>) {
+    let freshness = pricing
+        .get("freshness")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let freshness_status = if freshness.is_null() {
+        "missing".to_string()
+    } else if freshness.get("max_age_days").is_none() {
+        "missing".to_string()
+    } else if freshness
+        .get("max_age_days")
+        .and_then(serde_json::Value::as_u64)
+        == Some(0)
+    {
+        "stale".to_string()
+    } else {
+        "ready".to_string()
+    };
+    let required = freshness
+        .get("required")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let enforced = freshness
+        .get("enforced")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let diagnostic_only = freshness
+        .get("diagnostic_only")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let should_enforce = (required || enforced) && !diagnostic_only;
+    let reasons = if should_enforce {
+        match freshness_status.as_str() {
+            "missing" => vec!["model_price_freshness_policy_incomplete".to_string()],
+            "stale" => vec!["model_price_freshness_stale".to_string()],
+            _ => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    (freshness, freshness_status, reasons)
 }
 
 fn external_cli_readiness_verdict_for_candidate(
@@ -578,11 +679,40 @@ fn reasoning_control_mode(profile: &serde_json::Value) -> Option<&'static str> {
     }
 }
 
+fn first_rejected_metadata_reason(rejected_candidates: &[serde_json::Value]) -> Option<String> {
+    let metadata_reasons = [
+        "selected_model_profile_id_missing",
+        "selected_model_ref_missing",
+        "selected_rate_missing",
+        "model_price_freshness_policy_incomplete",
+        "model_price_freshness_stale",
+    ];
+    rejected_candidates.iter().find_map(|candidate| {
+        candidate["reasons"].as_array().and_then(|reasons| {
+            reasons
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .find(|reason| metadata_reasons.contains(reason))
+                .map(|reason| reason.to_string())
+        })
+    })
+}
+
 #[derive(Clone)]
 struct ProfileCandidate {
     role: serde_json::Value,
     profile: serde_json::Value,
+    model_profile_id_source_path: Option<String>,
+    model_ref_source_path: Option<String>,
+    rate_source_path: Option<String>,
+    rate_present: bool,
     rate: u64,
+    pricing: serde_json::Value,
+    pricing_source_path: Option<String>,
+    pricing_freshness: serde_json::Value,
+    pricing_freshness_source_path: Option<String>,
+    pricing_freshness_status: String,
+    pricing_rejection_reasons: Vec<String>,
     effective_score: u64,
     lifecycle_state: String,
     quality_rank: u8,
@@ -876,11 +1006,51 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
             crate::model_profile_contract::model_profiles_from_json_row(role)
                 .into_iter()
                 .map(move |profile| {
-                    let rate = profile["normalized_cost_units"]
-                        .as_u64()
-                        .or_else(|| role["normalized_cost_units"].as_u64())
-                        .or_else(|| role["rate"].as_u64())
-                        .unwrap_or(0);
+                    let profile_id = non_empty_string_field(&profile["profile_id"])
+                        .map(str::to_string)
+                        .unwrap_or_default();
+                    let raw_rate = profile
+                        .get("normalized_cost_units")
+                        .or_else(|| role.get("normalized_cost_units"))
+                        .or_else(|| role.get("rate"));
+                    let rate = json_u64(raw_rate).unwrap_or(0);
+                    let rate_present = json_u64(raw_rate).is_some();
+                    let rate_source_path = if profile.get("normalized_cost_units").is_some() {
+                        candidate_metadata_source_path(
+                            role_id,
+                            &profile_id,
+                            "normalized_cost_units",
+                        )
+                    } else if role.get("normalized_cost_units").is_some() {
+                        Some(format!(
+                            "carrier_runtime.roles[{role_id}].normalized_cost_units"
+                        ))
+                    } else if role.get("rate").is_some() {
+                        Some(format!("carrier_runtime.roles[{role_id}].rate"))
+                    } else {
+                        None
+                    };
+                    let provider = profile["provider"]
+                        .as_str()
+                        .or_else(|| role["model_provider"].as_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty());
+                    let (pricing, pricing_source_path) = pricing_metadata_for_profile(
+                        compiled_bundle,
+                        role_id,
+                        &profile_id,
+                        &profile,
+                        provider,
+                    );
+                    let (pricing_freshness, pricing_freshness_status, pricing_rejection_reasons) =
+                        pricing_freshness_status_and_reject_reasons(&pricing);
+                    let pricing_freshness_source_path = pricing_source_path
+                        .as_ref()
+                        .map(|path| format!("{path}.freshness"));
+                    let model_profile_id_source_path =
+                        candidate_metadata_source_path(role_id, &profile_id, "profile_id");
+                    let model_ref_source_path =
+                        candidate_metadata_source_path(role_id, &profile_id, "model_ref");
                     let reasoning_effort = profile["reasoning_effort"]
                         .as_str()
                         .or_else(|| role["model_reasoning_effort"].as_str())
@@ -908,7 +1078,17 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
                         supports_task_class: profile_supports_task_class(
                             role, &profile, task_class,
                         ),
+                        model_profile_id_source_path,
+                        model_ref_source_path,
+                        rate_present,
+                        rate_source_path,
                         rate,
+                        pricing,
+                        pricing_source_path,
+                        pricing_freshness,
+                        pricing_freshness_source_path,
+                        pricing_freshness_status,
+                        pricing_rejection_reasons,
                         effective_score,
                         lifecycle_state: lifecycle_state.clone(),
                         quality_rank: quality_tier_rank(quality_tier),
@@ -943,6 +1123,60 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
 
     candidates.retain(|candidate| {
         let mut reasons = Vec::new();
+        let mut metadata_source_paths = serde_json::Map::new();
+        let profile_id = candidate.profile["profile_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let model_ref = candidate.profile["model_ref"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+
+        if profile_id.is_none() {
+            reasons.push("selected_model_profile_id_missing".to_string());
+            if let Some(path) = candidate.model_profile_id_source_path.as_ref() {
+                metadata_source_paths.insert(
+                    "selected_model_profile_id".to_string(),
+                    serde_json::Value::String(path.clone()),
+                );
+            }
+        }
+        if model_ref.is_none() {
+            reasons.push("selected_model_ref_missing".to_string());
+            if let Some(path) = candidate.model_ref_source_path.as_ref() {
+                metadata_source_paths.insert(
+                    "selected_model_ref".to_string(),
+                    serde_json::Value::String(path.clone()),
+                );
+            }
+        }
+        if !candidate.rate_present {
+            reasons.push("selected_rate_missing".to_string());
+            if let Some(path) = candidate.rate_source_path.as_ref() {
+                metadata_source_paths.insert(
+                    "selected_rate".to_string(),
+                    serde_json::Value::String(path.clone()),
+                );
+            }
+        }
+        if !candidate.pricing_rejection_reasons.is_empty()
+            || candidate.pricing_freshness_status != "ready"
+        {
+            if let Some(path) = candidate.pricing_source_path.as_ref() {
+                metadata_source_paths.insert(
+                    "selected_pricing".to_string(),
+                    serde_json::Value::String(path.clone()),
+                );
+            }
+            if let Some(path) = candidate.pricing_freshness_source_path.as_ref() {
+                metadata_source_paths.insert(
+                    "selected_pricing_freshness".to_string(),
+                    serde_json::Value::String(path.clone()),
+                );
+            }
+            reasons.extend(candidate.pricing_rejection_reasons.clone());
+        }
         if !candidate.supports_runtime_role {
             reasons.push("runtime_role_not_supported".to_string());
         }
@@ -1013,6 +1247,14 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
                     row.insert("external_backend_readiness".to_string(), readiness);
                 }
             }
+            if let Some(row) = rejected_candidate.as_object_mut() {
+                if !metadata_source_paths.is_empty() {
+                    row.insert(
+                        "selection_source_paths".to_string(),
+                        serde_json::Value::Object(metadata_source_paths),
+                    );
+                }
+            }
             rejected_candidates.push(rejected_candidate);
             false
         }
@@ -1062,9 +1304,11 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
     }
 
     let Some(selected_candidate) = candidates.first() else {
+        let reason = first_rejected_metadata_reason(&rejected_candidates)
+            .unwrap_or_else(|| "no_carrier_satisfies_runtime_role_or_task_class".to_string());
         return serde_json::json!({
             "enabled": false,
-            "reason": "no_carrier_satisfies_runtime_role_or_task_class",
+            "reason": reason,
             "task_class": task_class,
             "runtime_role": execution_runtime_role,
             "conversation_role": conversation_role,
@@ -1097,6 +1341,7 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
     let tier = selected_role["tier"].as_str().unwrap_or_default();
     let rate = selected_candidate.rate;
     let selected_over_budget = selected_candidate.over_budget(max_budget_units);
+    let selected_rate_source_path = selected_candidate.rate_source_path.clone();
     let budget_verdict = if !enforce_max_budget_units || max_budget_units.is_none() {
         "not_enforced"
     } else if selected_over_budget && budget_policy == "strict" && allow_over_budget_escalation {
@@ -1173,6 +1418,14 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         "selected_speed_tier": selected_profile["speed_tier"],
         "selected_model_profile_readiness_status": selected_candidate.readiness_status,
         "selected_external_backend_readiness": selected_candidate.external_backend_readiness,
+        "pricing_readiness": serde_json::json!({
+            "pricing": selected_candidate.pricing,
+            "pricing_source_path": selected_candidate.pricing_source_path,
+            "pricing_freshness": selected_candidate.pricing_freshness,
+            "pricing_freshness_source_path": selected_candidate.pricing_freshness_source_path,
+            "pricing_freshness_status": selected_candidate.pricing_freshness_status,
+            "pricing_rejection_reasons": selected_candidate.pricing_rejection_reasons,
+        }),
         "tier_default_runtime_role": selected_role["default_runtime_role"],
         "reasoning_band": selected_role["reasoning_band"],
         "model": selected_profile["model_ref"],
@@ -1201,23 +1454,38 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
                 "selection_strategy_sort"
             ]),
         );
-        map.insert(
-            "selection_source_paths".to_string(),
-            serde_json::json!({
-                "selected_carrier_id": format!("carrier_runtime.roles[{selected_role_id}].role_id"),
-                "selected_backend_id": format!("carrier_runtime.roles[{selected_role_id}].role_id"),
-                "selected_carrier_tier": format!("carrier_runtime.roles[{selected_role_id}].tier"),
-                "selected_model_profile_id": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.profile_id"),
-                "selected_model_ref": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.model_ref"),
-                "selected_reasoning_effort": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.reasoning_effort"),
-                "selection_strategy": "carrier_runtime.model_selection.default_strategy",
-                "selection_rule": "carrier_runtime.model_selection.selection_rule",
-                "candidate_scope": "model_selection.candidate_scope",
+        let mut selection_source_paths = serde_json::json!({
+            "selected_carrier_id": format!("carrier_runtime.roles[{selected_role_id}].role_id"),
+            "selected_backend_id": format!("carrier_runtime.roles[{selected_role_id}].role_id"),
+            "selected_carrier_tier": format!("carrier_runtime.roles[{selected_role_id}].tier"),
+            "selected_model_profile_id": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.profile_id"),
+            "selected_model_ref": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.model_ref"),
+            "selected_rate": selected_rate_source_path,
+            "selected_reasoning_effort": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.reasoning_effort"),
+            "selection_strategy": "carrier_runtime.model_selection.default_strategy",
+            "selection_rule": "carrier_runtime.model_selection.selection_rule",
+            "candidate_scope": "model_selection.candidate_scope",
                 "budget_policy": budget_policy_source_path.clone(),
                 "max_budget_units": max_budget_units_source_path.clone(),
                 "selected_route_profile_mapping": selected_route_profile_mapping_source_path.clone(),
-            }),
-        );
+            "selected_pricing": selected_candidate
+                .pricing_source_path
+                .clone()
+                .unwrap_or_default(),
+            "selected_pricing_freshness": selected_candidate
+                .pricing_freshness_source_path
+                .clone()
+                .unwrap_or_default(),
+        });
+        if let Some(selection_source_paths_map) = selection_source_paths.as_object_mut() {
+            if selected_candidate.pricing_source_path.is_none() {
+                selection_source_paths_map.remove("selected_pricing");
+            }
+            if selected_candidate.pricing_freshness_source_path.is_none() {
+                selection_source_paths_map.remove("selected_pricing_freshness");
+            }
+        }
+        map.insert("selection_source_paths".to_string(), selection_source_paths);
         map.insert(
             "selection_override_reasons".to_string(),
             serde_json::Value::Array(selection_override_reasons),
@@ -1475,6 +1743,295 @@ mod tests {
     }
 
     #[test]
+    fn missing_model_ref_rejects_candidate_and_fails_closed() {
+        let compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "junior",
+            "tier": "junior",
+            "rate": 4,
+            "normalized_cost_units": 4,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "reasoning_band": "low",
+            "default_model_profile": "developer",
+            "model_profiles": {
+                "developer": {
+                    "profile_id": "developer",
+                    "model_ref": "",
+                    "provider": "openai",
+                    "reasoning_effort": "low",
+                    "normalized_cost_units": 4,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(assignment["reason"], "selected_model_ref_missing");
+        assert_eq!(assignment["selected_carrier_id"].is_null(), true);
+        assert_eq!(
+            assignment["rejected_candidates"]
+                .as_array()
+                .expect("rejected candidates should render")
+                .iter()
+                .next()
+                .and_then(|row| row["selection_source_paths"]["selected_model_ref"].as_str())
+                .unwrap_or_default(),
+            "carrier_runtime.roles[junior].model_profiles.developer.model_ref"
+        );
+    }
+
+    #[test]
+    fn missing_model_profile_id_rejects_candidate_and_fails_closed() {
+        let compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "junior",
+            "tier": "junior",
+            "rate": 4,
+            "normalized_cost_units": 4,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "reasoning_band": "low",
+            "default_model_profile": "developer",
+            "model_profiles": {
+                "developer": {
+                    "profile_id": "",
+                    "model_ref": "gpt-5.4",
+                    "provider": "openai",
+                    "reasoning_effort": "low",
+                    "normalized_cost_units": 4,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(assignment["reason"], "selected_model_profile_id_missing");
+        assert_eq!(assignment["selected_carrier_id"].is_null(), true);
+        assert_eq!(
+            assignment["rejected_candidates"]
+                .as_array()
+                .expect("rejected candidates should render")
+                .iter()
+                .next()
+                .and_then(|row| row["reasons"][0].as_str())
+                .unwrap_or_default(),
+            "selected_model_profile_id_missing"
+        );
+    }
+
+    #[test]
+    fn missing_rate_metadata_rejects_candidate_and_fails_closed() {
+        let compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "junior",
+            "tier": "junior",
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "reasoning_band": "low",
+            "default_model_profile": "developer",
+            "model_profiles": {
+                "developer": {
+                    "profile_id": "developer",
+                    "model_ref": "gpt-5.4",
+                    "provider": "openai",
+                    "reasoning_effort": "low",
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(assignment["reason"], "selected_rate_missing");
+        assert_eq!(
+            assignment["rejected_candidates"]
+                .as_array()
+                .expect("rejected candidates should render")
+                .iter()
+                .next()
+                .and_then(|row| row["selection_source_paths"]["selected_rate"].as_str())
+                .unwrap_or_default(),
+            ""
+        );
+    }
+
+    #[test]
+    fn enforced_pricing_staleness_is_blocking_and_actionable() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "junior",
+            "tier": "junior",
+            "rate": 4,
+            "normalized_cost_units": 4,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "reasoning_band": "low",
+            "default_model_profile": "developer",
+            "model_profiles": {
+                "developer": {
+                    "profile_id": "developer",
+                    "model_ref": "gpt-5.4",
+                    "provider": "openai",
+                    "reasoning_effort": "low",
+                    "normalized_cost_units": 4,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "pricing": {
+                "providers": {
+                    "openai": {
+                        "freshness": {
+                            "required": true,
+                            "max_age_days": 0,
+                            "enforced": true
+                        }
+                    }
+                }
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(assignment["reason"], "model_price_freshness_stale");
+        assert_eq!(
+            assignment["rejected_candidates"]
+                .as_array()
+                .expect("rejected candidates should render")
+                .iter()
+                .next()
+                .and_then(|row| row["selection_source_paths"]["selected_pricing"].as_str())
+                .unwrap_or_default(),
+            "agent_system.pricing.providers[openai]"
+        );
+        assert_eq!(
+            assignment["rejected_candidates"]
+                .as_array()
+                .expect("rejected candidates should render")
+                .iter()
+                .next()
+                .and_then(
+                    |row| row["selection_source_paths"]["selected_pricing_freshness"].as_str()
+                )
+                .unwrap_or_default(),
+            "agent_system.pricing.providers[openai].freshness"
+        );
+    }
+
+    #[test]
+    fn diagnostic_pricing_staleness_does_not_block_selection_but_is_visible() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "junior",
+            "tier": "junior",
+            "rate": 4,
+            "normalized_cost_units": 4,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "reasoning_band": "low",
+            "default_model_profile": "developer",
+            "model_profiles": {
+                "developer": {
+                    "profile_id": "developer",
+                    "model_ref": "gpt-5.4",
+                    "provider": "openai",
+                    "reasoning_effort": "low",
+                    "normalized_cost_units": 4,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "pricing": {
+                "providers": {
+                    "openai": {
+                        "freshness": {
+                            "required": true,
+                            "max_age_days": 0,
+                            "diagnostic_only": true
+                        }
+                    }
+                }
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "junior");
+        assert_eq!(
+            assignment["pricing_readiness"]["pricing_freshness_status"],
+            "stale"
+        );
+        assert_eq!(
+            assignment["selection_source_paths"]["selected_pricing"],
+            "agent_system.pricing.providers[openai]"
+        );
+        assert_eq!(
+            assignment["selection_source_paths"]["selected_pricing_freshness"],
+            "agent_system.pricing.providers[openai].freshness"
+        );
+    }
+
+    #[test]
     fn enforced_budget_rejects_over_budget_candidates() {
         let mut compiled_bundle = compiled_bundle_with_roles(vec![
             serde_json::json!({
@@ -1574,6 +2131,51 @@ mod tests {
                         .flatten()
                         .any(|reason| reason.as_str() == Some("over_budget"))
             }));
+    }
+
+    #[test]
+    fn selected_candidate_surface_includes_rate_source_path() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "junior",
+            "tier": "junior",
+            "rate": 4,
+            "normalized_cost_units": 4,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "reasoning_band": "low",
+            "default_model_profile": "codex_gpt54_low_write",
+            "model_profiles": {
+                "codex_gpt54_low_write": {
+                    "profile_id": "codex_gpt54_low_write",
+                    "model_ref": "gpt-5.4",
+                    "provider": "openai",
+                    "reasoning_effort": "low",
+                    "normalized_cost_units": 4,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+        compiled_bundle["carrier_runtime"]["model_selection"]["default_strategy"] =
+            serde_json::json!("free_first_with_quality_floor");
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(
+            assignment["selection_source_paths"]["selected_rate"],
+            "carrier_runtime.roles[junior].model_profiles.codex_gpt54_low_write.normalized_cost_units"
+        );
     }
 
     #[test]

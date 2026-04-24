@@ -813,9 +813,10 @@ pub(crate) fn build_dev_team_readiness(
     let contract_doc = crate::yaml_string(crate::yaml_lookup(dev_team, &["contract_doc"]));
     let source_paths = dev_team_source_paths(config_path, contract_doc.as_deref());
     let carrier_catalog = carrier_catalog_by_id(activation_bundle);
+    let pricing_catalog = &activation_bundle["agent_system"]["pricing"];
 
     let mut blockers = Vec::new();
-    let roles = dev_team_roles(dev_team, &carrier_catalog, &mut blockers);
+    let roles = dev_team_roles(dev_team, &carrier_catalog, pricing_catalog, &mut blockers);
     let flows = dev_team_flows(dev_team, &roles, &mut blockers);
     let sequence = default_dev_team_sequence(&flows);
 
@@ -879,6 +880,7 @@ fn carrier_catalog_by_id(
 fn dev_team_roles(
     dev_team: &serde_yaml::Value,
     carrier_catalog: &BTreeMap<String, serde_json::Value>,
+    pricing_catalog: &serde_json::Value,
     blockers: &mut Vec<String>,
 ) -> Vec<serde_json::Value> {
     let mut roles = Vec::new();
@@ -906,6 +908,10 @@ fn dev_team_roles(
         if default_carrier.as_deref().unwrap_or_default().is_empty() {
             blockers.push(format!("missing_default_carrier:{role_id}"));
         }
+        let default_model = crate::yaml_string(crate::yaml_lookup(role_entry, &["default_model"]));
+        if default_model.as_deref().unwrap_or_default().is_empty() {
+            blockers.push(format!("missing_default_model:{role_id}"));
+        }
         let handoff_next_role =
             crate::yaml_string(crate::yaml_lookup(role_entry, &["handoff", "next_role"]));
         let required_outputs = crate::yaml_string_list(crate::yaml_lookup(
@@ -924,13 +930,20 @@ fn dev_team_roles(
         if default_carrier.is_some() && carrier.is_none() {
             blockers.push(format!("unknown_default_carrier:{role_id}"));
         }
+        let selected_model = dev_team_selected_model_projection(
+            role_id,
+            default_model.as_deref(),
+            carrier,
+            pricing_catalog,
+            blockers,
+        );
 
         roles.push(serde_json::json!({
             "role_id": role_id,
             "runtime_role": runtime_role,
             "task_classes": task_classes,
             "default_carrier": default_carrier,
-            "default_model": crate::yaml_string(crate::yaml_lookup(role_entry, &["default_model"])),
+            "default_model": default_model,
             "default_model_reasoning_effort": crate::yaml_string(
                 crate::yaml_lookup(role_entry, &["default_model_reasoning_effort"])
             ),
@@ -952,6 +965,7 @@ fn dev_team_roles(
                     false,
                 ),
             },
+            "selected_model": selected_model,
             "selected_carrier": carrier.cloned().map(|carrier| {
                 serde_json::json!({
                     "carrier_id": carrier["role_id"],
@@ -974,6 +988,279 @@ fn dev_team_roles(
             .cmp(right["role_id"].as_str().unwrap_or_default())
     });
     roles
+}
+
+fn dev_team_selected_model_projection(
+    role_id: &str,
+    default_model: Option<&str>,
+    carrier: Option<&serde_json::Value>,
+    pricing_catalog: &serde_json::Value,
+    blockers: &mut Vec<String>,
+) -> serde_json::Value {
+    let Some(carrier) = carrier else {
+        return serde_json::Value::Null;
+    };
+    let carrier_id = carrier
+        .get("role_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let default_model = default_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let mut model_profile_id = serde_json::Value::Null;
+    let mut model_profile_id_source_path = serde_json::Value::Null;
+    let model_ref: serde_json::Value;
+    let mut model_ref_source_path = serde_json::Value::Null;
+    let model_provider: serde_json::Value;
+    let model_reasoning_effort: serde_json::Value;
+    let mut selected_rate = serde_json::Value::Null;
+    let mut selected_rate_source_path = serde_json::Value::Null;
+
+    let mut selected_profile = None::<(String, &serde_json::Value)>;
+    if let Some(profiles) = carrier["model_profiles"].as_object() {
+        if let Some(default_model) = default_model {
+            if let Some(profile) = profiles.get(default_model) {
+                selected_profile = Some((default_model.to_string(), profile));
+            } else {
+                for (profile_id, profile_row) in profiles {
+                    if profile_row
+                        .get("model_ref")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|value| value == default_model)
+                    {
+                        selected_profile = Some((profile_id.to_string(), profile_row));
+                        break;
+                    }
+                }
+            }
+        }
+        if selected_profile.is_none() {
+            if let Some(default_model_profile) = carrier["default_model_profile"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+            {
+                if let Some(profile_row) = profiles.get(default_model_profile) {
+                    selected_profile = Some((default_model_profile.to_string(), profile_row));
+                }
+            }
+        }
+        if selected_profile.is_none() {
+            if profiles.len() == 1 {
+                if let Some((profile_id, profile_row)) = profiles.iter().next() {
+                    selected_profile = Some((profile_id.to_string(), profile_row));
+                }
+            } else if default_model.is_some() {
+                blockers.push(format!("selected_model_profile_missing:{role_id}"));
+            }
+        }
+
+        if let Some((profile_id, profile_row)) = selected_profile.as_ref() {
+            model_profile_id = serde_json::Value::String(profile_id.clone());
+            model_profile_id_source_path = serde_json::Value::String(format!(
+                "carrier_runtime.roles[{carrier_id}].model_profiles.{profile_id}.profile_id"
+            ));
+            model_ref = profile_row
+                .get("model_ref")
+                .cloned()
+                .or_else(|| carrier.get("model").cloned())
+                .unwrap_or(serde_json::Value::Null);
+            if model_ref.is_null() {
+                blockers.push(format!("selected_model_ref_missing:{role_id}"));
+            } else {
+                if profile_row.get("model_ref").is_some() {
+                    model_ref_source_path = serde_json::Value::String(format!(
+                        "carrier_runtime.roles[{carrier_id}].model_profiles.{profile_id}.model_ref"
+                    ));
+                } else {
+                    model_ref_source_path = serde_json::Value::String(format!(
+                        "carrier_runtime.roles[{carrier_id}].model"
+                    ));
+                }
+            }
+            model_provider = profile_row
+                .get("provider")
+                .cloned()
+                .or_else(|| carrier.get("model_provider").cloned())
+                .unwrap_or(serde_json::Value::Null);
+            model_reasoning_effort = profile_row
+                .get("reasoning_effort")
+                .cloned()
+                .or_else(|| carrier.get("model_reasoning_effort").cloned())
+                .unwrap_or(serde_json::Value::Null);
+            if let Some(profile_rate) = profile_row.get("normalized_cost_units") {
+                selected_rate = profile_rate.clone();
+                selected_rate_source_path = serde_json::Value::String(format!(
+                    "carrier_runtime.roles[{carrier_id}].model_profiles.{profile_id}.normalized_cost_units"
+                ));
+            } else if let Some(profile_rate) = profile_row.get("rate") {
+                selected_rate = profile_rate.clone();
+                selected_rate_source_path = serde_json::Value::String(format!(
+                    "carrier_runtime.roles[{carrier_id}].model_profiles.{profile_id}.rate"
+                ));
+            } else if let Some(carrier_rate) = carrier.get("normalized_cost_units") {
+                selected_rate = carrier_rate.clone();
+                selected_rate_source_path = serde_json::Value::String(format!(
+                    "carrier_runtime.roles[{carrier_id}].normalized_cost_units"
+                ));
+            } else if let Some(carrier_rate) = carrier.get("rate") {
+                selected_rate = carrier_rate.clone();
+                selected_rate_source_path =
+                    serde_json::Value::String(format!("carrier_runtime.roles[{carrier_id}].rate"));
+            }
+            if selected_rate.is_null() {
+                blockers.push(format!("selected_rate_missing:{role_id}"));
+            }
+        } else {
+            model_ref = carrier
+                .get("model")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            if model_ref.is_null() {
+                blockers.push(format!("selected_model_ref_missing:{role_id}"));
+            } else {
+                model_ref_source_path =
+                    serde_json::Value::String(format!("carrier_runtime.roles[{carrier_id}].model"));
+            }
+            model_provider = carrier
+                .get("model_provider")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            model_reasoning_effort = carrier
+                .get("model_reasoning_effort")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            selected_rate = carrier
+                .get("normalized_cost_units")
+                .or_else(|| carrier.get("rate"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            if selected_rate.is_null() {
+                blockers.push(format!("selected_rate_missing:{role_id}"));
+            } else {
+                if carrier.get("normalized_cost_units").is_some() {
+                    selected_rate_source_path = serde_json::Value::String(format!(
+                        "carrier_runtime.roles[{carrier_id}].normalized_cost_units"
+                    ));
+                } else {
+                    selected_rate_source_path = serde_json::Value::String(format!(
+                        "carrier_runtime.roles[{carrier_id}].rate"
+                    ));
+                }
+            }
+        }
+    } else {
+        model_ref = carrier
+            .get("model")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        if model_ref.is_null() {
+            blockers.push(format!("selected_model_ref_missing:{role_id}"));
+        } else {
+            model_ref_source_path =
+                serde_json::Value::String(format!("carrier_runtime.roles[{carrier_id}].model"));
+        }
+        model_provider = carrier
+            .get("model_provider")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        model_reasoning_effort = carrier
+            .get("model_reasoning_effort")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        selected_rate = carrier
+            .get("normalized_cost_units")
+            .or_else(|| carrier.get("rate"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        if selected_rate.is_null() {
+            blockers.push(format!("selected_rate_missing:{role_id}"));
+        } else {
+            if carrier.get("normalized_cost_units").is_some() {
+                selected_rate_source_path = serde_json::Value::String(format!(
+                    "carrier_runtime.roles[{carrier_id}].normalized_cost_units"
+                ));
+            } else {
+                selected_rate_source_path =
+                    serde_json::Value::String(format!("carrier_runtime.roles[{carrier_id}].rate"));
+            }
+        }
+    }
+
+    let pricing = pricing_metadata_for_profile(
+        selected_profile
+            .as_ref()
+            .map(|(profile_id, _)| carrier["model_profiles"][profile_id].as_object())
+            .and_then(|value| value),
+        model_provider.as_str().and_then(|provider| {
+            pricing_catalog
+                .get("providers")
+                .and_then(|providers| providers.get(provider))
+        }),
+        pricing_catalog,
+    )
+    .unwrap_or(serde_json::Value::Null);
+    let pricing_freshness = pricing
+        .get("freshness")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let pricing_freshness_status = if pricing_freshness.is_null() {
+        serde_json::json!("missing")
+    } else if pricing_freshness
+        .get("required")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+        && pricing_freshness.get("max_age_days").is_none()
+    {
+        blockers.push(format!("model_price_freshness_policy_incomplete:{role_id}"));
+        serde_json::json!("missing")
+    } else if pricing_freshness
+        .get("required")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+        && pricing_freshness
+            .get("max_age_days")
+            .and_then(serde_json::Value::as_u64)
+            == Some(0)
+    {
+        blockers.push(format!("model_price_freshness_stale:{role_id}"));
+        serde_json::json!("stale")
+    } else {
+        serde_json::json!("ready")
+    };
+
+    serde_json::json!({
+        "carrier_id": carrier.get("role_id").cloned().unwrap_or(serde_json::Value::Null),
+        "model_profile_id": model_profile_id,
+        "model_profile_id_source_path": model_profile_id_source_path,
+        "model_ref": model_ref,
+        "model_ref_source_path": model_ref_source_path,
+        "model_provider": model_provider,
+        "model_reasoning_effort": model_reasoning_effort,
+        "selected_rate": selected_rate,
+        "selected_rate_source_path": selected_rate_source_path,
+        "pricing": pricing,
+        "pricing_freshness": pricing_freshness,
+        "pricing_freshness_status": pricing_freshness_status,
+    })
+}
+
+fn pricing_metadata_for_profile(
+    profile_row: Option<&serde_json::Map<String, serde_json::Value>>,
+    provider_pricing: Option<&serde_json::Value>,
+    pricing_catalog: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    if let Some(profile_row) = profile_row {
+        if let Some(pricing) = profile_row.get("pricing") {
+            return Some(pricing.clone());
+        }
+    }
+    if let Some(pricing) = provider_pricing {
+        return Some(pricing.clone());
+    }
+    pricing_catalog
+        .get("model_profile_defaults")
+        .and_then(|defaults| defaults.get("pricing"))
+        .cloned()
 }
 
 fn dev_team_flows(
@@ -1339,6 +1626,205 @@ dev_team:
         assert_eq!(
             readiness["source_paths"][1],
             "docs/process/team-development-and-orchestration-protocol.md"
+        );
+    }
+
+    #[test]
+    fn build_dev_team_readiness_reports_selected_model_pricing_metadata() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+dev_team:
+  enabled: true
+  contract_doc: docs/process/team-development-and-orchestration-protocol.md
+  roles:
+    developer:
+      runtime_role: worker
+      task_classes: [implementation, delivery_task]
+      default_carrier: junior
+      default_model: codex_gpt54_low_write
+      default_model_reasoning_effort: low
+      cost_policy:
+        budget_units: 1
+        fallback_carrier: middle
+        selection_rule: cheapest_eligible_write_carrier
+      handoff:
+        next_role: coach
+        required_outputs: [changed_files]
+        fail_closed_on_missing_handoff: true
+  flows:
+    default_delivery:
+      enabled: true
+      sequential: true
+      allow_parallel_handoffs: false
+      steps: [developer]
+        "#,
+        )
+        .expect("config should write");
+        let readiness = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &serde_json::json!({
+                "carrier_runtime": {
+                    "roles": [
+                        {
+                            "role_id": "junior",
+                            "model": "gpt-5.4",
+                            "model_provider": "openai",
+                            "model_reasoning_effort": "low",
+                            "normalized_cost_units": 1,
+                            "rate": 1,
+                            "runtime_roles": ["worker"],
+                            "task_classes": ["implementation"],
+                            "model_profiles": {
+                                "codex_gpt54_low_write": {
+                                    "provider": "openai",
+                                    "model_ref": "gpt-5.4",
+                                    "reasoning_effort": "low",
+                                    "normalized_cost_units": 1,
+                                    "pricing": {
+                                        "price_source_kind": "provider_catalog",
+                                        "source_paths": [
+                                            "docs/process/codex-agent-configuration-guide.md"
+                                        ],
+                                        "freshness": {
+                                            "required": false,
+                                            "max_age_days": 30,
+                                            "stale_price_policy": "diagnostic_only_use_normalized_cost_units",
+                                            "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+                                            "diagnostic_only": true,
+                                            "enforced": false
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                },
+                "agent_system": {
+                    "pricing": {
+                        "model_profile_defaults": {
+                            "pricing": {
+                                "price_source_kind": "provider_catalog",
+                                "source_paths": [
+                                    "docs/process/codex-agent-configuration-guide.md"
+                                ],
+                                "freshness": {
+                                    "required": true,
+                                    "max_age_days": 14,
+                                    "stale_price_policy": "diagnostic_only_use_normalized_cost_units",
+                                    "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+                                    "diagnostic_only": true,
+                                    "enforced": false
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+        );
+
+        assert_eq!(readiness["status"], "ready");
+        assert_eq!(
+            readiness["roles"][0]["selected_model"]["model_profile_id"],
+            "codex_gpt54_low_write"
+        );
+        assert_eq!(readiness["roles"][0]["selected_model"]["selected_rate"], 1);
+        assert_eq!(
+            readiness["roles"][0]["selected_model"]["selected_rate_source_path"],
+            "carrier_runtime.roles[junior].model_profiles.codex_gpt54_low_write.normalized_cost_units"
+        );
+        assert_eq!(
+            readiness["roles"][0]["selected_model"]["pricing"]["price_source_kind"],
+            "provider_catalog"
+        );
+        assert_eq!(
+            readiness["roles"][0]["selected_model"]["pricing_freshness"]["required"],
+            false
+        );
+        assert_eq!(
+            readiness["roles"][0]["selected_model"]["pricing_freshness_status"],
+            "ready"
+        );
+    }
+
+    #[test]
+    fn build_dev_team_readiness_blocks_price_freshness_incomplete() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+dev_team:
+  enabled: true
+  roles:
+    developer:
+      runtime_role: worker
+      task_classes: [implementation, delivery_task]
+      default_carrier: junior
+      default_model: codex_gpt54_low_write
+      cost_policy:
+        budget_units: 1
+      handoff:
+        next_role: coach
+        required_outputs: [changed_files]
+  flows:
+    default_delivery:
+      enabled: true
+      sequential: true
+      allow_parallel_handoffs: false
+      steps: [developer]
+        "#,
+        )
+        .expect("config should write");
+        let readiness = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &serde_json::json!({
+                "carrier_runtime": {
+                    "roles": [
+                        {
+                            "role_id": "junior",
+                            "model": "gpt-5.4",
+                            "model_provider": "openai",
+                            "model_reasoning_effort": "low",
+                            "normalized_cost_units": 1,
+                            "rate": 1,
+                            "runtime_roles": ["worker"],
+                            "task_classes": ["implementation"],
+                            "model_profiles": {
+                                "codex_gpt54_low_write": {
+                                    "provider": "openai",
+                                    "model_ref": "gpt-5.4",
+                                    "reasoning_effort": "low",
+                                    "normalized_cost_units": 1,
+                                    "pricing": {
+                                        "price_source_kind": "provider_catalog",
+                                        "source_paths": ["docs/process/codex-agent-configuration-guide.md"],
+                                        "freshness": {
+                                            "required": true,
+                                            "stale_price_policy": "diagnostic_only_use_normalized_cost_units",
+                                            "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+                                            "diagnostic_only": true,
+                                            "enforced": false
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            }),
+        );
+        assert_eq!(readiness["status"], "blocked");
+        assert!(readiness["blockers"]
+            .as_array()
+            .expect("readiness blockers should be array")
+            .iter()
+            .any(|entry| entry == "model_price_freshness_policy_incomplete:developer"));
+        assert_eq!(
+            readiness["roles"][0]["selected_model"]["pricing_freshness_status"],
+            "missing"
         );
     }
 
