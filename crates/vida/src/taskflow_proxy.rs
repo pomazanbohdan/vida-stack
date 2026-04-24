@@ -9,8 +9,8 @@ use crate::taskflow_run_graph::{
 use crate::taskflow_spec_bootstrap::run_taskflow_bootstrap_spec;
 use crate::taskflow_task_bridge::{enforce_execution_preparation_contract_gate, proxy_state_dir};
 use crate::{
-    print_surface_header, print_surface_line, surface_render, taskflow_consume,
-    taskflow_protocol_binding, Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs,
+    Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs, print_surface_header,
+    print_surface_line, surface_render, taskflow_consume, taskflow_protocol_binding,
 };
 use clap::Parser;
 use serde::Serialize;
@@ -23,6 +23,7 @@ struct GraphSummaryTaskRef {
     status: String,
     priority: u32,
     issue_type: String,
+    conflict_domain: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -72,9 +73,11 @@ struct TaskflowNextDecision {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct TaskflowSchedulerRejectedCandidate {
+    task_id: String,
     task: GraphSummaryTaskRef,
     ready_now: bool,
     active_critical_path: bool,
+    conflict_domain: Option<String>,
     reasons: Vec<String>,
     blocked_by: Vec<crate::state_store::TaskDependencyStatus>,
     parallel_blockers: Vec<String>,
@@ -87,15 +90,23 @@ struct TaskflowSchedulerReservationPreview {
     task: GraphSummaryTaskRef,
     launch_role: String,
     launch_index: usize,
+    conflict_domain: Option<String>,
+    command: String,
+    state_dir: String,
     reservation_status: String,
     reservation_persisted: bool,
     execute_supported: bool,
     execution_attempted: bool,
+    execute_status: String,
+    receipt_id: Option<String>,
+    receipt_path: Option<String>,
+    preview_only_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct TaskflowSchedulerDispatchReceiptPreview {
     receipt_id: Option<String>,
+    receipt_path: Option<String>,
     receipt_status: String,
     receipt_persisted: bool,
     dispatch_surface: String,
@@ -104,6 +115,9 @@ struct TaskflowSchedulerDispatchReceiptPreview {
     execute_requested: bool,
     execute_supported: bool,
     execution_attempted: bool,
+    execute_status: String,
+    preview_only_reason: Option<String>,
+    execution_blocker_codes: Vec<String>,
     selected_task_ids: Vec<String>,
     reservation_ids: Vec<String>,
     blocker_codes: Vec<String>,
@@ -120,6 +134,8 @@ struct TaskflowSchedulerDispatchPlan {
     execute_supported: bool,
     execution_attempted: bool,
     execution_status: String,
+    configured_max_parallel_agents: u64,
+    requested_parallel_limit: Option<u64>,
     scope_task_id: Option<String>,
     requested_current_task_id: Option<String>,
     selected_current_task_id: Option<String>,
@@ -144,6 +160,7 @@ fn graph_summary_task_ref(task: &crate::state_store::TaskRecord) -> GraphSummary
         status: task.status.clone(),
         priority: task.priority,
         issue_type: task.issue_type.clone(),
+        conflict_domain: task.execution_semantics.conflict_domain.clone(),
     }
 }
 
@@ -191,6 +208,15 @@ fn normalize_scheduler_max_parallel_agents(activation_bundle: &serde_json::Value
         .unwrap_or(1)
 }
 
+fn scheduler_effective_parallel_limit(configured: u64, requested: Option<u64>) -> u64 {
+    let configured = configured.max(1);
+    requested
+        .filter(|value| *value > 0)
+        .map(|value| configured.min(value))
+        .unwrap_or(configured)
+        .max(1)
+}
+
 fn scheduler_rejection_reasons_from_blocked_by(
     blocked_by: &[crate::state_store::TaskDependencyStatus],
 ) -> Vec<String> {
@@ -213,28 +239,63 @@ fn scheduler_reservation_preview(
     task: &GraphSummaryTaskRef,
     launch_role: &str,
     launch_index: usize,
+    state_dir: &std::path::Path,
+    execute_requested: bool,
 ) -> TaskflowSchedulerReservationPreview {
+    let preview_only_reason = if execute_requested {
+        "scheduler_execute_external_execution_unavailable"
+    } else {
+        "scheduler_dispatch_is_preview_only"
+    };
+    let execute_status = if execute_requested {
+        "blocked_external_execution_unavailable"
+    } else {
+        "preview_not_executed"
+    };
     TaskflowSchedulerReservationPreview {
         reservation_id: format!("scheduler-preview-{launch_role}-{launch_index}-{}", task.id),
         task_id: task.id.clone(),
         task: task.clone(),
         launch_role: launch_role.to_string(),
         launch_index,
-        reservation_status: "preview_unpersisted".to_string(),
+        conflict_domain: task.conflict_domain.clone(),
+        command: format!(
+            "vida agent-init --role worker --json \"Continue bounded task {}\" --state-dir {}",
+            task.id,
+            state_dir.display()
+        ),
+        state_dir: state_dir.display().to_string(),
+        reservation_status: if execute_requested {
+            "execute_projection_unpersisted"
+        } else {
+            "preview_unpersisted"
+        }
+        .to_string(),
         reservation_persisted: false,
         execute_supported: false,
         execution_attempted: false,
+        execute_status: execute_status.to_string(),
+        receipt_id: None,
+        receipt_path: None,
+        preview_only_reason: Some(preview_only_reason.to_string()),
     }
 }
 
 fn build_taskflow_scheduler_dispatch_plan(
     scheduling: crate::state_store::TaskSchedulingProjection,
     max_parallel_agents: u64,
+    requested_parallel_limit: Option<u64>,
     scope_task_id: Option<&str>,
     requested_current_task_id: Option<&str>,
+    state_dir: &std::path::Path,
     dry_run: bool,
     execute_requested: bool,
 ) -> TaskflowSchedulerDispatchPlan {
+    let configured_max_parallel_agents = max_parallel_agents.max(1);
+    let effective_parallel_limit = scheduler_effective_parallel_limit(
+        configured_max_parallel_agents,
+        requested_parallel_limit,
+    );
     let selected_current_candidate = if let Some(task_id) = requested_current_task_id {
         scheduling
             .ready
@@ -266,7 +327,7 @@ fn build_taskflow_scheduler_dispatch_plan(
 
     let selected_primary_task =
         selected_current_candidate.map(|candidate| graph_summary_task_ref(&candidate.task));
-    let parallel_capacity = max_parallel_agents.saturating_sub(1) as usize;
+    let parallel_capacity = effective_parallel_limit.saturating_sub(1) as usize;
     let mut selected_parallel_tasks = Vec::new();
     let mut rejected_candidates = Vec::new();
     let mut remaining_parallel_capacity = parallel_capacity;
@@ -284,11 +345,16 @@ fn build_taskflow_scheduler_dispatch_plan(
 
         let reasons = if candidate.ready_parallel_safe {
             vec!["max_parallel_agents_cap_reached".to_string()]
+        } else if candidate.parallel_blockers.is_empty() {
+            vec!["max_parallel_agents_cap_reached".to_string()]
         } else {
             candidate.parallel_blockers.clone()
         };
+        let task = graph_summary_task_ref(&candidate.task);
         rejected_candidates.push(TaskflowSchedulerRejectedCandidate {
-            task: graph_summary_task_ref(&candidate.task),
+            task_id: task.id.clone(),
+            conflict_domain: task.conflict_domain.clone(),
+            task,
             ready_now: candidate.ready_now,
             active_critical_path: candidate.active_critical_path,
             reasons,
@@ -298,8 +364,11 @@ fn build_taskflow_scheduler_dispatch_plan(
     }
 
     for candidate in &scheduling.blocked {
+        let task = graph_summary_task_ref(&candidate.task);
         rejected_candidates.push(TaskflowSchedulerRejectedCandidate {
-            task: graph_summary_task_ref(&candidate.task),
+            task_id: task.id.clone(),
+            conflict_domain: task.conflict_domain.clone(),
+            task,
             ready_now: candidate.ready_now,
             active_critical_path: candidate.active_critical_path,
             reasons: scheduler_rejection_reasons_from_blocked_by(&candidate.blocked_by),
@@ -324,14 +393,11 @@ fn build_taskflow_scheduler_dispatch_plan(
                 .to_string(),
         );
     }
-    if execute_requested {
-        if let Some(code) = crate::contract_profile_adapter::blocker_code(
-            crate::release1_contracts::BlockerCode::Unsupported,
-        ) {
-            blocker_codes.push(code);
-        }
+    let execute_backend_unavailable = execute_requested && selected_primary_task.is_some();
+    if execute_backend_unavailable {
+        blocker_codes.push("scheduler_execute_external_execution_unavailable".to_string());
         next_actions.push(
-            "This wave is preview-first. Re-run `vida taskflow scheduler dispatch --json` without `--execute` and launch the selected bounded unit through normal delegated runtime flow."
+            "Scheduler execute selected a lawful bounded launch set, but external lane execution is not attempted in this core loop; dispatch selected lanes through `vida agent-init` or rerun without `--execute` for preview only."
                 .to_string(),
         );
     }
@@ -361,23 +427,62 @@ fn build_taskflow_scheduler_dispatch_plan(
     selected_task_ids.extend(selected_parallel_tasks.iter().map(|task| task.id.clone()));
     let mut reservations = Vec::new();
     if let Some(task) = selected_primary_task.as_ref() {
-        reservations.push(scheduler_reservation_preview(task, "primary", 0));
+        reservations.push(scheduler_reservation_preview(
+            task,
+            "primary",
+            0,
+            state_dir,
+            execute_requested,
+        ));
     }
     reservations.extend(
         selected_parallel_tasks
             .iter()
             .enumerate()
-            .map(|(index, task)| scheduler_reservation_preview(task, "parallel", index + 1)),
+            .map(|(index, task)| {
+                scheduler_reservation_preview(
+                    task,
+                    "parallel",
+                    index + 1,
+                    state_dir,
+                    execute_requested,
+                )
+            }),
     );
     let reservation_ids = reservations
         .iter()
         .map(|reservation| reservation.reservation_id.clone())
         .collect::<Vec<_>>();
-    let blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    let mut blocker_codes =
+        crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    if execute_backend_unavailable
+        && !blocker_codes
+            .iter()
+            .any(|code| code == "scheduler_execute_external_execution_unavailable")
+    {
+        blocker_codes.push("scheduler_execute_external_execution_unavailable".to_string());
+    }
+    let preview_only_reason = if execute_requested {
+        "scheduler_execute_external_execution_unavailable"
+    } else {
+        "scheduler_dispatch_is_preview_only"
+    };
+    let execute_supported = false;
+    let execution_status = if execute_requested {
+        if selected_primary_task.is_some() {
+            "blocked_external_execution_unavailable"
+        } else {
+            "blocked_no_lawful_selection"
+        }
+    } else {
+        "preview"
+    }
+    .to_string();
     let dispatch_receipt = TaskflowSchedulerDispatchReceiptPreview {
         receipt_id: None,
+        receipt_path: None,
         receipt_status: if execute_requested {
-            "unsupported_not_persisted"
+            "execute_projection_not_persisted"
         } else {
             "preview_not_persisted"
         }
@@ -392,8 +497,19 @@ fn build_taskflow_scheduler_dispatch_plan(
         .to_string(),
         dispatch_status: status.clone(),
         execute_requested,
-        execute_supported: false,
+        execute_supported,
         execution_attempted: false,
+        execute_status: if execute_requested {
+            execution_status.clone()
+        } else {
+            "preview_not_executed".to_string()
+        },
+        preview_only_reason: Some(preview_only_reason.to_string()),
+        execution_blocker_codes: if execute_backend_unavailable {
+            vec!["scheduler_execute_external_execution_unavailable".to_string()]
+        } else {
+            Vec::new()
+        },
         selected_task_ids: selected_task_ids.clone(),
         reservation_ids,
         blocker_codes: blocker_codes.clone(),
@@ -406,19 +522,16 @@ fn build_taskflow_scheduler_dispatch_plan(
         next_actions,
         dry_run,
         execute_requested,
-        execute_supported: false,
+        execute_supported,
         execution_attempted: false,
-        execution_status: if execute_requested {
-            "unsupported"
-        } else {
-            "preview"
-        }
-        .to_string(),
+        execution_status,
+        configured_max_parallel_agents,
+        requested_parallel_limit,
         scope_task_id: scope_task_id.map(str::to_string),
         requested_current_task_id: requested_current_task_id.map(str::to_string),
         selected_current_task_id,
         selection_source,
-        max_parallel_agents,
+        max_parallel_agents: effective_parallel_limit,
         ready_count: scheduling.ready.len(),
         blocked_count: scheduling.blocked.len(),
         selected_primary_task,
@@ -1128,7 +1241,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             }
         };
 
-    let store = match crate::task_surface::open_read_only_task_store(state_dir).await {
+    let store = match crate::task_surface::open_read_only_task_store(state_dir.clone()).await {
         Ok(store) => Some(store),
         Err(error) => {
             let message = error.to_string();
@@ -1782,7 +1895,7 @@ async fn run_taskflow_graph_surface(args: &[String]) -> ExitCode {
 }
 
 async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
-    let usage = "Usage: vida taskflow scheduler dispatch [--scope <task-id>] [--current-task-id <task-id>] [--state-dir <path>] [--dry-run] [--execute] [--json]";
+    let usage = "Usage: vida taskflow scheduler dispatch [--scope <task-id>] [--current-task-id <task-id>] [--state-dir <path>] [--limit <n>] [--dry-run] [--execute] [--json]";
     if matches!(
         args,
         [head, flag] if head == "scheduler" && matches!(flag.as_str(), "--help" | "-h")
@@ -1813,6 +1926,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
     let mut as_json = false;
     let mut dry_run = false;
     let mut execute_requested = false;
+    let mut requested_parallel_limit = None::<u64>;
 
     let mut index = 2usize;
     while let Some(arg) = args.get(index) {
@@ -1839,6 +1953,22 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
                     return ExitCode::from(2);
                 };
                 state_dir = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--limit" | "--max-parallel-agents" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("{usage}");
+                    return ExitCode::from(2);
+                };
+                let Ok(parsed) = value.parse::<u64>() else {
+                    eprintln!("{usage}");
+                    return ExitCode::from(2);
+                };
+                if parsed == 0 {
+                    eprintln!("{usage}");
+                    return ExitCode::from(2);
+                }
+                requested_parallel_limit = Some(parsed);
                 index += 2;
             }
             "--json" => {
@@ -1872,7 +2002,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let store = match crate::task_surface::open_read_only_task_store(state_dir).await {
+    let store = match crate::task_surface::open_read_only_task_store(state_dir.clone()).await {
         Ok(store) => store,
         Err(error) => {
             eprintln!("Failed to open authoritative state store: {error}");
@@ -1932,8 +2062,10 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
     let plan = build_taskflow_scheduler_dispatch_plan(
         scheduling,
         max_parallel_agents,
+        requested_parallel_limit,
         scope_task_id.as_deref(),
         current_task_id.as_deref(),
+        &state_dir,
         dry_run || !execute_requested,
         execute_requested,
     );
@@ -2692,8 +2824,14 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
             let mut audit =
                 model_profile_readiness_audit_payload_for_route(&dispatch_target, &route);
             if let Some(object) = audit.as_object_mut() {
-                object.insert("run_id".to_string(), serde_json::Value::String(context.run_id));
-                object.insert("task_id".to_string(), serde_json::Value::String(context.task_id));
+                object.insert(
+                    "run_id".to_string(),
+                    serde_json::Value::String(context.run_id),
+                );
+                object.insert(
+                    "task_id".to_string(),
+                    serde_json::Value::String(context.task_id),
+                );
             }
             audit
         }
@@ -2804,8 +2942,8 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
-        taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
+        GraphSummaryWaveBucket, build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
+        taskflow_task_subcommand_supported,
     };
     use crate::state_store::{
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
@@ -3004,7 +3142,10 @@ mod tests {
             parallel_candidates_after_current: vec![sibling_a.clone(), sibling_b.clone()],
         };
 
-        let plan = build_taskflow_scheduler_dispatch_plan(projection, 2, None, None, true, false);
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+        let plan = build_taskflow_scheduler_dispatch_plan(
+            projection, 2, None, None, None, state_dir, true, false,
+        );
 
         assert_eq!(plan.status, "pass");
         assert_eq!(plan.max_parallel_agents, 2);
@@ -3027,6 +3168,22 @@ mod tests {
         assert_eq!(plan.reservations[0].launch_role, "primary");
         assert_eq!(plan.reservations[0].launch_index, 0);
         assert_eq!(
+            plan.reservations[0].command,
+            "vida agent-init --role worker --json \"Continue bounded task critical-ready\" --state-dir /tmp/vida-scheduler-state"
+        );
+        assert_eq!(plan.reservations[0].state_dir, "/tmp/vida-scheduler-state");
+        assert_eq!(
+            plan.reservations[0].conflict_domain.as_deref(),
+            Some("critical")
+        );
+        assert_eq!(plan.reservations[0].execute_status, "preview_not_executed");
+        assert_eq!(plan.reservations[0].receipt_id, None);
+        assert_eq!(plan.reservations[0].receipt_path, None);
+        assert_eq!(
+            plan.reservations[0].preview_only_reason.as_deref(),
+            Some("scheduler_dispatch_is_preview_only")
+        );
+        assert_eq!(
             plan.reservations[0].reservation_id,
             "scheduler-preview-primary-0-critical-ready"
         );
@@ -3039,11 +3196,21 @@ mod tests {
         assert_eq!(plan.reservations[1].task_id, "parallel-a");
         assert_eq!(plan.reservations[1].launch_role, "parallel");
         assert_eq!(plan.reservations[1].launch_index, 1);
+        assert_eq!(
+            plan.reservations[1].conflict_domain.as_deref(),
+            Some("parallel-a")
+        );
         assert_eq!(plan.dispatch_receipt.receipt_id, None);
+        assert_eq!(plan.dispatch_receipt.receipt_path, None);
         assert_eq!(
             plan.dispatch_receipt.receipt_status,
             "preview_not_persisted"
         );
+        assert_eq!(
+            plan.dispatch_receipt.preview_only_reason.as_deref(),
+            Some("scheduler_dispatch_is_preview_only")
+        );
+        assert_eq!(plan.dispatch_receipt.execute_status, "preview_not_executed");
         assert!(!plan.dispatch_receipt.receipt_persisted);
         assert_eq!(plan.dispatch_receipt.dispatch_status, "pass");
         assert_eq!(
@@ -3073,6 +3240,7 @@ mod tests {
         }));
         assert!(plan.rejected_candidates.iter().any(|candidate| {
             candidate.task.id == "blocked"
+                && candidate.task_id == "blocked"
                 && candidate
                     .reasons
                     .iter()
@@ -3081,7 +3249,7 @@ mod tests {
     }
 
     #[test]
-    fn scheduler_dispatch_plan_fails_closed_when_execute_is_requested() {
+    fn scheduler_dispatch_execute_projects_lawful_selection_without_external_attempt() {
         let primary = task("critical-ready", "task", "open", 1, &[], Vec::new());
         let projection = TaskSchedulingProjection {
             current_task_id: Some("critical-ready".to_string()),
@@ -3097,44 +3265,109 @@ mod tests {
             parallel_candidates_after_current: Vec::new(),
         };
 
-        let plan = build_taskflow_scheduler_dispatch_plan(projection, 1, None, None, false, true);
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+        let plan = build_taskflow_scheduler_dispatch_plan(
+            projection, 1, None, None, None, state_dir, false, true,
+        );
 
         assert_eq!(plan.status, "blocked");
-        assert!(plan
-            .blocker_codes
-            .iter()
-            .any(|code| code == "unsupported_blocker_code"));
+        assert!(plan.blocker_codes.iter().any(|code| code
+            == "scheduler_execute_external_execution_unavailable"
+            || code == "unsupported_blocker_code"));
         assert_eq!(plan.max_parallel_agents, 1);
         assert!(plan.execute_requested);
         assert!(!plan.execute_supported);
         assert!(!plan.execution_attempted);
-        assert_eq!(plan.execution_status, "unsupported");
+        assert_eq!(
+            plan.execution_status,
+            "blocked_external_execution_unavailable"
+        );
         assert!(!plan.dry_run);
         assert_eq!(plan.selected_task_ids, vec!["critical-ready"]);
         assert_eq!(plan.reservations.len(), 1);
         assert_eq!(
             plan.reservations[0].reservation_status,
-            "preview_unpersisted"
+            "execute_projection_unpersisted"
         );
+        assert!(!plan.reservations[0].execute_supported);
         assert!(!plan.reservations[0].reservation_persisted);
         assert_eq!(
             plan.dispatch_receipt.receipt_status,
-            "unsupported_not_persisted"
+            "execute_projection_not_persisted"
         );
         assert_eq!(plan.dispatch_receipt.dispatch_status, "blocked");
         assert!(plan.dispatch_receipt.execute_requested);
         assert!(!plan.dispatch_receipt.execute_supported);
         assert!(!plan.dispatch_receipt.execution_attempted);
+        assert_eq!(
+            plan.dispatch_receipt.execute_status,
+            "blocked_external_execution_unavailable"
+        );
+        assert_eq!(
+            plan.dispatch_receipt.preview_only_reason.as_deref(),
+            Some("scheduler_execute_external_execution_unavailable")
+        );
         assert!(!plan.dispatch_receipt.receipt_persisted);
-        assert!(plan
-            .dispatch_receipt
-            .blocker_codes
-            .iter()
-            .any(|code| code == "unsupported_blocker_code"));
+        assert_eq!(plan.dispatch_receipt.receipt_id, None);
+        assert_eq!(plan.dispatch_receipt.receipt_path, None);
+        assert!(
+            plan.dispatch_receipt
+                .execution_blocker_codes
+                .iter()
+                .any(|code| code == "scheduler_execute_external_execution_unavailable")
+        );
         assert!(plan.next_actions.iter().any(|action| {
-            action.contains("preview-first")
-                && action.contains("without `--execute`")
-                && action.contains("normal delegated runtime flow")
+            action.contains("selected a lawful bounded launch set")
+                && action.contains("execution is not attempted")
+        }));
+    }
+
+    #[test]
+    fn scheduler_dispatch_plan_respects_requested_parallel_limit_under_configured_cap() {
+        let mut primary = task("primary", "task", "open", 1, &[], Vec::new());
+        primary.execution_semantics.execution_mode = Some("parallel_safe".to_string());
+        primary.execution_semantics.order_bucket = Some("wave-a".to_string());
+        primary.execution_semantics.parallel_group = Some("docs".to_string());
+        primary.execution_semantics.conflict_domain = Some("primary".to_string());
+
+        let mut parallel = task("parallel", "task", "open", 2, &[], Vec::new());
+        parallel.execution_semantics.execution_mode = Some("parallel_safe".to_string());
+        parallel.execution_semantics.order_bucket = Some("wave-a".to_string());
+        parallel.execution_semantics.parallel_group = Some("docs".to_string());
+        parallel.execution_semantics.conflict_domain = Some("parallel".to_string());
+
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("primary".to_string()),
+            ready: vec![
+                scheduling_candidate(primary, true, true, true, Vec::new(), vec![]),
+                scheduling_candidate(parallel, true, true, false, Vec::new(), vec![]),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+        let plan = build_taskflow_scheduler_dispatch_plan(
+            projection,
+            4,
+            Some(1),
+            None,
+            None,
+            state_dir,
+            true,
+            false,
+        );
+
+        assert_eq!(plan.configured_max_parallel_agents, 4);
+        assert_eq!(plan.requested_parallel_limit, Some(1));
+        assert_eq!(plan.max_parallel_agents, 1);
+        assert_eq!(plan.selected_task_ids, vec!["primary"]);
+        assert!(plan.rejected_candidates.iter().any(|candidate| {
+            candidate.task_id == "parallel"
+                && candidate
+                    .reasons
+                    .iter()
+                    .any(|reason| reason == "max_parallel_agents_cap_reached")
         }));
     }
 
@@ -3152,12 +3385,40 @@ mod tests {
             parallel_candidates_after_current: Vec::new(),
         };
 
-        let plan = build_taskflow_scheduler_dispatch_plan(projection, 2, None, None, true, false);
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+        let plan = build_taskflow_scheduler_dispatch_plan(
+            projection, 2, None, None, None, state_dir, true, false,
+        );
         let payload = serde_json::to_value(&plan).expect("scheduler plan should serialize");
 
         assert_eq!(
             payload["reservations"][0]["reservation_id"],
             "scheduler-preview-primary-0-critical-ready"
+        );
+        assert_eq!(payload["reservations"][0]["task_id"], "critical-ready");
+        assert_eq!(
+            payload["reservations"][0]["command"],
+            "vida agent-init --role worker --json \"Continue bounded task critical-ready\" --state-dir /tmp/vida-scheduler-state"
+        );
+        assert_eq!(
+            payload["reservations"][0]["state_dir"],
+            "/tmp/vida-scheduler-state"
+        );
+        assert_eq!(
+            payload["reservations"][0]["execute_status"],
+            "preview_not_executed"
+        );
+        assert_eq!(
+            payload["reservations"][0]["preview_only_reason"],
+            "scheduler_dispatch_is_preview_only"
+        );
+        assert_eq!(
+            payload["reservations"][0]["receipt_id"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            payload["reservations"][0]["receipt_path"],
+            serde_json::Value::Null
         );
         assert_eq!(
             payload["reservations"][1]["reservation_id"],
@@ -3169,10 +3430,22 @@ mod tests {
             serde_json::Value::Null
         );
         assert_eq!(
+            payload["dispatch_receipt"]["receipt_path"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
             payload["dispatch_receipt"]["receipt_status"],
             "preview_not_persisted"
         );
         assert_eq!(payload["dispatch_receipt"]["receipt_persisted"], false);
+        assert_eq!(
+            payload["dispatch_receipt"]["execute_status"],
+            "preview_not_executed"
+        );
+        assert_eq!(
+            payload["dispatch_receipt"]["preview_only_reason"],
+            "scheduler_dispatch_is_preview_only"
+        );
         assert_eq!(
             payload["dispatch_receipt"]["reservation_ids"],
             serde_json::json!([
@@ -3181,6 +3454,246 @@ mod tests {
             ])
         );
         assert_eq!(payload["dispatch_receipt"]["execution_attempted"], false);
+    }
+
+    #[test]
+    fn scheduler_dispatch_plan_documents_cap_one_and_two_selection() {
+        let mut primary = task("critical-ready", "task", "open", 1, &[], Vec::new());
+        primary.execution_semantics.conflict_domain = Some("critical".to_string());
+        let mut parallel_a = task("parallel-a", "task", "open", 2, &[], Vec::new());
+        parallel_a.execution_semantics.conflict_domain = Some("parallel-a".to_string());
+        let mut parallel_b = task("parallel-b", "task", "open", 3, &[], Vec::new());
+        parallel_b.execution_semantics.conflict_domain = Some("parallel-b".to_string());
+
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("critical-ready".to_string()),
+            ready: vec![
+                scheduling_candidate(primary, true, false, true, Vec::new(), vec![]),
+                scheduling_candidate(parallel_a, true, true, false, Vec::new(), vec![]),
+                scheduling_candidate(parallel_b, true, true, false, Vec::new(), vec![]),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+
+        let cap_one = build_taskflow_scheduler_dispatch_plan(
+            projection.clone(),
+            1,
+            None,
+            None,
+            None,
+            state_dir,
+            true,
+            false,
+        );
+        assert_eq!(cap_one.selected_task_ids, vec!["critical-ready"]);
+        assert!(cap_one.selected_parallel_tasks.is_empty());
+        assert!(cap_one.rejected_candidates.iter().any(|candidate| {
+            candidate.task_id == "parallel-a"
+                && candidate.ready_now
+                && candidate.conflict_domain.as_deref() == Some("parallel-a")
+                && candidate
+                    .reasons
+                    .iter()
+                    .any(|reason| reason == "max_parallel_agents_cap_reached")
+        }));
+
+        let cap_two = build_taskflow_scheduler_dispatch_plan(
+            projection, 2, None, None, None, state_dir, true, false,
+        );
+        assert_eq!(
+            cap_two.selected_task_ids,
+            vec!["critical-ready", "parallel-a"]
+        );
+        assert_eq!(cap_two.selected_parallel_tasks.len(), 1);
+        assert!(cap_two.rejected_candidates.iter().any(|candidate| {
+            candidate.task_id == "parallel-b"
+                && candidate
+                    .reasons
+                    .iter()
+                    .any(|reason| reason == "max_parallel_agents_cap_reached")
+        }));
+    }
+
+    #[test]
+    fn scheduler_dispatch_plan_documents_conflict_domain_exclusion() {
+        let mut current = task("current", "task", "open", 1, &[], Vec::new());
+        current.execution_semantics.conflict_domain = Some("shared-docs".to_string());
+        let mut conflicting = task("conflicting", "task", "open", 2, &[], Vec::new());
+        conflicting.execution_semantics.conflict_domain = Some("shared-docs".to_string());
+        let mut safe = task("safe-parallel", "task", "open", 3, &[], Vec::new());
+        safe.execution_semantics.conflict_domain = Some("safe-docs".to_string());
+
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("current".to_string()),
+            ready: vec![
+                scheduling_candidate(current, true, false, true, Vec::new(), vec![]),
+                scheduling_candidate(
+                    conflicting,
+                    true,
+                    false,
+                    false,
+                    Vec::new(),
+                    vec!["conflict_domain_already_selected:shared-docs"],
+                ),
+                scheduling_candidate(safe, true, true, false, Vec::new(), vec![]),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+
+        let plan = build_taskflow_scheduler_dispatch_plan(
+            projection, 2, None, None, None, state_dir, true, false,
+        );
+
+        assert_eq!(plan.selected_task_ids, vec!["current", "safe-parallel"]);
+        assert!(plan.rejected_candidates.iter().any(|candidate| {
+            candidate.task_id == "conflicting"
+                && candidate.ready_now
+                && candidate.conflict_domain.as_deref() == Some("shared-docs")
+                && candidate
+                    .parallel_blockers
+                    .iter()
+                    .any(|reason| reason == "conflict_domain_already_selected:shared-docs")
+                && candidate
+                    .reasons
+                    .iter()
+                    .any(|reason| reason == "conflict_domain_already_selected:shared-docs")
+        }));
+    }
+
+    #[test]
+    fn scheduler_dispatch_plan_prefers_critical_path_over_ready_order() {
+        let mut fallback = task("ready-first", "task", "open", 1, &[], Vec::new());
+        fallback.execution_semantics.order_bucket = Some("wave-2".to_string());
+        fallback.execution_semantics.conflict_domain = Some("fallback".to_string());
+        let mut critical = task("critical-second", "task", "open", 2, &[], Vec::new());
+        critical.execution_semantics.order_bucket = Some("wave-1".to_string());
+        critical.execution_semantics.conflict_domain = Some("critical".to_string());
+
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("critical-second".to_string()),
+            ready: vec![
+                scheduling_candidate(fallback, true, true, false, Vec::new(), vec![]),
+                scheduling_candidate(critical, true, false, true, Vec::new(), vec![]),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+
+        let plan = build_taskflow_scheduler_dispatch_plan(
+            projection, 1, None, None, None, state_dir, true, false,
+        );
+
+        assert_eq!(plan.selection_source, "critical_path_ready_head");
+        assert_eq!(plan.selected_task_ids, vec!["critical-second"]);
+        assert_eq!(
+            plan.selected_primary_task
+                .as_ref()
+                .and_then(|task| task.conflict_domain.as_deref()),
+            Some("critical")
+        );
+    }
+
+    #[test]
+    fn scheduler_dispatch_plan_preserves_order_bucket_projection_boundary() {
+        let mut current = task("wave-1-current", "task", "open", 1, &[], Vec::new());
+        current.execution_semantics.order_bucket = Some("wave-1".to_string());
+        current.execution_semantics.conflict_domain = Some("current".to_string());
+        let mut same_bucket = task("wave-1-parallel", "task", "open", 2, &[], Vec::new());
+        same_bucket.execution_semantics.order_bucket = Some("wave-1".to_string());
+        same_bucket.execution_semantics.conflict_domain = Some("same-bucket".to_string());
+        let mut later_bucket = task("wave-2-held", "task", "open", 3, &[], Vec::new());
+        later_bucket.execution_semantics.order_bucket = Some("wave-2".to_string());
+        later_bucket.execution_semantics.conflict_domain = Some("later-bucket".to_string());
+
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("wave-1-current".to_string()),
+            ready: vec![
+                scheduling_candidate(current, true, false, true, Vec::new(), vec![]),
+                scheduling_candidate(same_bucket, true, true, false, Vec::new(), vec![]),
+                scheduling_candidate(
+                    later_bucket,
+                    true,
+                    false,
+                    false,
+                    Vec::new(),
+                    vec!["order_bucket_not_current:wave-2"],
+                ),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+
+        let plan = build_taskflow_scheduler_dispatch_plan(
+            projection, 3, None, None, None, state_dir, true, false,
+        );
+
+        assert_eq!(
+            plan.selected_task_ids,
+            vec!["wave-1-current", "wave-1-parallel"]
+        );
+        assert!(plan.rejected_candidates.iter().any(|candidate| {
+            candidate.task_id == "wave-2-held"
+                && candidate.ready_now
+                && candidate.conflict_domain.as_deref() == Some("later-bucket")
+                && candidate
+                    .reasons
+                    .iter()
+                    .any(|reason| reason == "order_bucket_not_current:wave-2")
+        }));
+    }
+
+    #[test]
+    fn scheduler_dispatch_plan_keeps_starvation_candidates_visible_for_rotation() {
+        let primary = task("primary", "task", "open", 1, &[], Vec::new());
+        let old_waiting = task("old-waiting", "task", "open", 2, &[], Vec::new());
+        let still_waiting = task("still-waiting", "task", "open", 3, &[], Vec::new());
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("primary".to_string()),
+            ready: vec![
+                scheduling_candidate(primary, true, false, true, Vec::new(), vec![]),
+                scheduling_candidate(old_waiting, true, true, false, Vec::new(), vec![]),
+                scheduling_candidate(still_waiting, true, true, false, Vec::new(), vec![]),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+
+        let requested = build_taskflow_scheduler_dispatch_plan(
+            projection,
+            1,
+            None,
+            None,
+            Some("old-waiting"),
+            state_dir,
+            true,
+            false,
+        );
+
+        assert_eq!(requested.selection_source, "requested_current_task");
+        assert_eq!(requested.selected_task_ids, vec!["old-waiting"]);
+        assert!(requested.rejected_candidates.iter().any(|candidate| {
+            candidate.task_id == "primary"
+                && candidate.active_critical_path
+                && candidate
+                    .reasons
+                    .iter()
+                    .any(|reason| reason == "max_parallel_agents_cap_reached")
+        }));
+        assert!(requested.rejected_candidates.iter().any(|candidate| {
+            candidate.task_id == "still-waiting"
+                && candidate.ready_now
+                && candidate
+                    .reasons
+                    .iter()
+                    .any(|reason| reason == "max_parallel_agents_cap_reached")
+        }));
     }
 
     #[test]
@@ -3245,9 +3758,11 @@ mod tests {
             super::build_taskflow_graph_explain_payload(&projection, None, Some("blocked"));
         assert_eq!(blocked_payload["status"], "blocked");
         assert_eq!(blocked_payload["ready_now"], false);
-        assert!(blocked_payload["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| codes.contains(&serde_json::json!("graph_blocked"))));
+        assert!(
+            blocked_payload["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| codes.contains(&serde_json::json!("graph_blocked")))
+        );
         assert_eq!(blocked_payload["blocked_by"][0]["depends_on_id"], "current");
         assert_eq!(
             blocked_payload["next_lawful_action"]["surface"],
@@ -3258,19 +3773,23 @@ mod tests {
             super::build_taskflow_graph_explain_payload(&projection, None, Some("missing"));
         assert_eq!(missing_payload["status"], "blocked");
         assert_eq!(missing_payload["ready_now"], false);
-        assert!(missing_payload["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| {
-                codes.contains(&serde_json::json!("task_not_in_graph_projection"))
-            }));
+        assert!(
+            missing_payload["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| {
+                    codes.contains(&serde_json::json!("task_not_in_graph_projection"))
+                })
+        );
 
         let parallel_blocked_payload =
             super::build_taskflow_graph_explain_payload(&projection, None, Some("current"));
         assert_eq!(parallel_blocked_payload["status"], "blocked");
         assert_eq!(parallel_blocked_payload["ready_now"], true);
-        assert!(parallel_blocked_payload["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| !codes.is_empty()));
+        assert!(
+            parallel_blocked_payload["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| !codes.is_empty())
+        );
     }
 
     #[test]
@@ -3494,7 +4013,9 @@ mod tests {
         );
         assert_eq!(
             normalized["next_actions"],
-            serde_json::json!(["inspect route diagnostic blockers with `vida taskflow route explain --json` or `vida taskflow validate-routing --json`"])
+            serde_json::json!([
+                "inspect route diagnostic blockers with `vida taskflow route explain --json` or `vida taskflow validate-routing --json`"
+            ])
         );
         assert_eq!(normalized["shared_fields"]["status"], normalized["status"]);
         assert_eq!(
@@ -3547,9 +4068,11 @@ mod tests {
         assert_eq!(payload["selected_backend"].as_str(), Some("junior"));
         assert_eq!(payload["selected_backend_admissible"].as_bool(), Some(true));
         assert_eq!(payload["status"].as_str(), Some("pass"));
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| codes.is_empty()));
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| codes.is_empty())
+        );
     }
 
     #[test]
@@ -3596,9 +4119,11 @@ mod tests {
             payload["routes"][0]["model_profile_readiness_audit"]["surface"],
             "vida taskflow model-profile readiness audit"
         );
-        assert!(payload["row_count"]
-            .as_u64()
-            .is_some_and(|count| count >= 10));
+        assert!(
+            payload["row_count"]
+                .as_u64()
+                .is_some_and(|count| count >= 10)
+        );
         let rows = payload["routes"][0]["rows"]
             .as_array()
             .expect("config actuation rows should render");
@@ -3824,9 +4349,11 @@ mod tests {
             unready["selected_profile"]["readiness"]["blocker_code"],
             "external_cli_missing_api_key"
         );
-        assert!(unready["next_actions"]
-            .as_array()
-            .is_some_and(|actions| !actions.is_empty()));
+        assert!(
+            unready["next_actions"]
+                .as_array()
+                .is_some_and(|actions| !actions.is_empty())
+        );
         assert_eq!(missing["status"], "blocked");
         assert_eq!(
             missing["blocker_codes"],
@@ -3952,12 +4479,16 @@ mod tests {
 
         let blocker_codes = super::authoritative_dispatch_blocker_codes(Some(&dispatch));
         assert_eq!(blocker_codes.len(), 2);
-        assert!(blocker_codes
-            .iter()
-            .any(|code| code == "timeout_without_takeover_authority"));
-        assert!(blocker_codes
-            .iter()
-            .any(|code| code == "pending_review_clean_evidence"));
+        assert!(
+            blocker_codes
+                .iter()
+                .any(|code| code == "timeout_without_takeover_authority")
+        );
+        assert!(
+            blocker_codes
+                .iter()
+                .any(|code| code == "pending_review_clean_evidence")
+        );
     }
 
     fn sample_task(task_id: &str) -> crate::state_store::TaskRecord {
@@ -4097,10 +4628,12 @@ mod tests {
                 .map(|value| value.command.as_str()),
             Some("vida task ready --scope epic-1 --json")
         );
-        assert!(decision
-            .blocker_codes
-            .iter()
-            .any(|code| code == "no_ready_tasks"));
+        assert!(
+            decision
+                .blocker_codes
+                .iter()
+                .any(|code| code == "no_ready_tasks")
+        );
     }
 
     #[test]
