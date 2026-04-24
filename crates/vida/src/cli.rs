@@ -138,6 +138,10 @@ pub(crate) enum TaskCommand {
     Split(TaskSplitArgs),
     #[command(about = "create a blocker/dependency task linked to one blocked source task")]
     SpawnBlocker(TaskSpawnBlockerArgs),
+    #[command(
+        about = "preview adaptive replanner finding classification without mutating graph state"
+    )]
+    AdaptivePreview(TaskAdaptivePreviewArgs),
     Deps(TaskDepsArgs),
     ReverseDeps(TaskDepsArgs),
     Blocked(TaskBlockedArgs),
@@ -515,6 +519,21 @@ pub(crate) struct TaskSpawnBlockerArgs {
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskAdaptivePreviewArgs {
+    #[arg(long = "finding-json")]
+    pub(crate) finding_json: Option<String>,
+
+    #[arg(long = "finding-file")]
+    pub(crate) finding_file: Option<PathBuf>,
 
     #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
     pub(crate) render: RenderMode,

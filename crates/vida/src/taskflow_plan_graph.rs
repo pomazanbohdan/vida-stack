@@ -19,9 +19,44 @@ pub(crate) struct TaskPlanGraphDraft {
     pub parent_id: Option<String>,
     pub generated_by: String,
     pub deterministic: bool,
+    #[serde(default = "default_input_contract")]
+    pub input_contract: TaskPlanInputContract,
     pub nodes: Vec<TaskPlanNodeDraft>,
     pub edges: Vec<TaskPlanEdgeDraft>,
     pub validation: TaskPlanValidation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct TaskPlanInputContract {
+    pub status: String,
+    pub sources: Vec<TaskPlanInputSource>,
+    pub missing_context: Vec<String>,
+    pub operator_truth: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct TaskPlanInputSource {
+    pub source_type: String,
+    pub reference: String,
+    pub status: String,
+    pub evidence: String,
+}
+
+fn default_input_contract() -> TaskPlanInputContract {
+    TaskPlanInputContract {
+        status: "legacy_missing".to_string(),
+        sources: Vec::new(),
+        missing_context: vec![
+            "input_contract_missing_from_legacy_draft".to_string(),
+            "spec_reference_missing".to_string(),
+            "backlog_reference_missing".to_string(),
+            "context_reference_missing".to_string(),
+        ],
+        operator_truth: vec![
+            "planner_input_contract_missing_from_legacy_draft_requires_operator_confirmation"
+                .to_string(),
+        ],
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -316,6 +351,8 @@ fn generate_plan_graph_draft(options: &PlanGenerateOptions) -> Result<TaskPlanGr
     }
     let source_hash = stable_hash_hex(&normalized_source);
     let analysis = analyze_plan_source(&normalized_source);
+    let input_contract =
+        build_input_contract(&source_kind, source_ref.as_deref(), &normalized_source);
     let nodes = build_nodes(&task_prefix, options.parent_id.clone(), &analysis);
     let edges = build_edges(&nodes, &analysis.work_items);
     let mut draft = TaskPlanGraphDraft {
@@ -327,6 +364,7 @@ fn generate_plan_graph_draft(options: &PlanGenerateOptions) -> Result<TaskPlanGr
         parent_id: options.parent_id.clone(),
         generated_by: "vida taskflow plan generate".to_string(),
         deterministic: true,
+        input_contract,
         nodes,
         edges,
         validation: TaskPlanValidation {
@@ -337,6 +375,105 @@ fn generate_plan_graph_draft(options: &PlanGenerateOptions) -> Result<TaskPlanGr
     };
     draft.validation = validate_generated_draft(&draft);
     Ok(draft)
+}
+
+fn build_input_contract(
+    source_kind: &str,
+    source_ref: Option<&str>,
+    normalized_source: &str,
+) -> TaskPlanInputContract {
+    let mut sources = vec![TaskPlanInputSource {
+        source_type: "primary_source".to_string(),
+        reference: source_ref.unwrap_or(source_kind).to_string(),
+        status: "provided".to_string(),
+        evidence: format!("source_kind={source_kind}"),
+    }];
+    let repo_paths = extract_repo_paths(normalized_source);
+    let spec_refs = repo_paths
+        .iter()
+        .filter(|path| path.starts_with("docs/product/spec/") || path.contains("/spec/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    for reference in &spec_refs {
+        sources.push(TaskPlanInputSource {
+            source_type: "spec_reference".to_string(),
+            reference: reference.clone(),
+            status: "provided".to_string(),
+            evidence: "source_text_repo_path".to_string(),
+        });
+    }
+    let context_refs = repo_paths
+        .iter()
+        .filter(|path| !spec_refs.iter().any(|spec| spec == *path))
+        .cloned()
+        .collect::<Vec<_>>();
+    for reference in &context_refs {
+        sources.push(TaskPlanInputSource {
+            source_type: "context_reference".to_string(),
+            reference: reference.clone(),
+            status: "provided".to_string(),
+            evidence: "source_text_repo_path".to_string(),
+        });
+    }
+    let backlog_refs = extract_backlog_references(normalized_source);
+    for reference in &backlog_refs {
+        sources.push(TaskPlanInputSource {
+            source_type: "backlog_reference".to_string(),
+            reference: reference.clone(),
+            status: "provided".to_string(),
+            evidence: "source_text_task_reference".to_string(),
+        });
+    }
+
+    let mut missing_context = Vec::new();
+    if spec_refs.is_empty() {
+        missing_context.push("spec_reference_missing".to_string());
+    }
+    if backlog_refs.is_empty() {
+        missing_context.push("backlog_reference_missing".to_string());
+    }
+    if context_refs.is_empty() {
+        missing_context.push("context_reference_missing".to_string());
+    }
+    let status = if missing_context.is_empty() {
+        "complete".to_string()
+    } else {
+        "partial".to_string()
+    };
+    let mut operator_truth = vec![
+        "planner_input_contract_foundation_only".to_string(),
+        "plan_generation_must_not_treat_missing_context_as_production_grade_evidence".to_string(),
+    ];
+    operator_truth.extend(
+        missing_context
+            .iter()
+            .map(|missing| format!("{missing}_requires_operator_confirmation")),
+    );
+    TaskPlanInputContract {
+        status,
+        sources,
+        missing_context,
+        operator_truth,
+    }
+}
+
+fn extract_backlog_references(normalized_source: &str) -> Vec<String> {
+    let mut refs = normalized_source
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.'))
+        .map(|token| {
+            token.trim_matches(|ch: char| ch == '.' || ch == ',' || ch == ';' || ch == ':')
+        })
+        .filter(|token| {
+            token.starts_with("vida-")
+                || token.starts_with("audit-")
+                || token.starts_with("feature-")
+                || token.starts_with("task-")
+        })
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    refs.sort();
+    refs.dedup();
+    refs
 }
 
 fn analyze_plan_source(normalized_source: &str) -> PlanSourceAnalysis {
@@ -1866,11 +2003,9 @@ mod tests {
         });
         let validation = validate_draft(&draft, &[]);
         assert_eq!(validation.status, "blocked");
-        assert!(
-            validation
-                .blocker_codes
-                .contains(&"missing_dependency".to_string())
-        );
+        assert!(validation
+            .blocker_codes
+            .contains(&"missing_dependency".to_string()));
     }
 
     #[test]
@@ -1902,11 +2037,9 @@ mod tests {
             draft.nodes[1].owned_paths,
             vec!["crates/vida/src/state_store_task_models.rs".to_string()]
         );
-        assert!(
-            draft.nodes[2]
-                .owned_paths
-                .contains(&"crates/vida/src/taskflow_consume_bundle.rs".to_string())
-        );
+        assert!(draft.nodes[2]
+            .owned_paths
+            .contains(&"crates/vida/src/taskflow_consume_bundle.rs".to_string()));
         assert_eq!(draft.edges[0].task_id, draft.nodes[1].task_id);
         assert_eq!(draft.edges[0].depends_on_id, draft.nodes[0].task_id);
         assert_eq!(draft.edges[1].task_id, draft.nodes[2].task_id);
@@ -1947,22 +2080,18 @@ mod tests {
 
         assert_eq!(draft.validation.status, "valid");
         assert!(draft.nodes.len() >= 4);
-        assert!(
-            draft
-                .nodes
-                .iter()
-                .any(|node| node.title.contains("Wire task state and schema surfaces"))
-        );
+        assert!(draft
+            .nodes
+            .iter()
+            .any(|node| node.title.contains("Wire task state and schema surfaces")));
         assert!(draft.nodes.iter().any(|node| {
             node.title
                 .contains("Wire runtime and orchestration surfaces")
         }));
-        assert!(
-            draft
-                .nodes
-                .iter()
-                .any(|node| node.title.starts_with("Prove "))
-        );
+        assert!(draft
+            .nodes
+            .iter()
+            .any(|node| node.title.starts_with("Prove ")));
         assert_eq!(draft.edges.len(), draft.nodes.len() - 1);
     }
 
@@ -1979,12 +2108,10 @@ mod tests {
         .expect("draft should generate");
 
         assert_eq!(draft.validation.status, "valid");
-        assert!(
-            draft
-                .nodes
-                .iter()
-                .all(|node| node.evidence_confidence == "low")
-        );
+        assert!(draft
+            .nodes
+            .iter()
+            .all(|node| node.evidence_confidence == "low"));
         assert!(draft.nodes.iter().all(|node| {
             node.operator_truth
                 .iter()
@@ -2002,6 +2129,85 @@ mod tests {
                     == "low_confidence_proof_targets_template_guess_requires_operator_confirmation"
             })
         }));
+    }
+
+    #[test]
+    fn plan_generate_input_contract_reports_provided_spec_backlog_and_context_refs() {
+        let draft = generate_plan_graph_draft(&PlanGenerateOptions {
+            source_file: None,
+            source_text: Some(
+                "Implement audit-p1-planner-context-input-contract-remediation using \
+                 docs/product/spec/current-spec-map.md and \
+                 crates/vida/src/taskflow_plan_graph.rs"
+                    .to_string(),
+            ),
+            task_prefix: Some("feature-planner".to_string()),
+            parent_id: None,
+            output: None,
+            json: true,
+        })
+        .expect("draft should generate");
+
+        assert_eq!(draft.input_contract.status, "complete");
+        assert!(draft.input_contract.missing_context.is_empty());
+        assert!(draft.input_contract.sources.iter().any(|source| {
+            source.source_type == "primary_source"
+                && source.reference == "text"
+                && source.status == "provided"
+        }));
+        assert!(draft.input_contract.sources.iter().any(|source| {
+            source.source_type == "spec_reference"
+                && source.reference == "docs/product/spec/current-spec-map.md"
+                && source.status == "provided"
+        }));
+        assert!(draft.input_contract.sources.iter().any(|source| {
+            source.source_type == "context_reference"
+                && source.reference == "crates/vida/src/taskflow_plan_graph.rs"
+                && source.status == "provided"
+        }));
+        assert!(draft.input_contract.sources.iter().any(|source| {
+            source.source_type == "backlog_reference"
+                && source.reference == "audit-p1-planner-context-input-contract-remediation"
+                && source.status == "provided"
+        }));
+        assert!(draft
+            .input_contract
+            .operator_truth
+            .contains(&"planner_input_contract_foundation_only".to_string()));
+    }
+
+    #[test]
+    fn plan_generate_input_contract_marks_missing_context_refs() {
+        let draft = generate_plan_graph_draft(&PlanGenerateOptions {
+            source_file: None,
+            source_text: Some("Implement planner".to_string()),
+            task_prefix: Some("feature-planner".to_string()),
+            parent_id: None,
+            output: None,
+            json: true,
+        })
+        .expect("draft should generate");
+
+        assert_eq!(draft.input_contract.status, "partial");
+        assert!(draft.input_contract.sources.iter().any(|source| {
+            source.source_type == "primary_source"
+                && source.reference == "text"
+                && source.status == "provided"
+        }));
+        for missing in [
+            "spec_reference_missing",
+            "backlog_reference_missing",
+            "context_reference_missing",
+        ] {
+            assert!(draft
+                .input_contract
+                .missing_context
+                .contains(&missing.to_string()));
+            assert!(draft
+                .input_contract
+                .operator_truth
+                .contains(&format!("{missing}_requires_operator_confirmation")));
+        }
     }
 
     #[test]
@@ -2071,11 +2277,9 @@ mod tests {
         let validation = validate_draft(&draft, &[]);
 
         assert_eq!(validation.status, "blocked");
-        assert!(
-            validation
-                .blocker_codes
-                .contains(&"cyclic_dependency".to_string())
-        );
+        assert!(validation
+            .blocker_codes
+            .contains(&"cyclic_dependency".to_string()));
     }
 
     #[tokio::test]
@@ -2215,18 +2419,16 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert!(receipt.created_task_ids.is_empty());
-        assert!(
-            receipt
-                .validation
-                .blocker_codes
-                .contains(&"existing_task_conflict".to_string())
-        );
+        assert!(receipt
+            .validation
+            .blocker_codes
+            .contains(&"existing_task_conflict".to_string()));
         let _ = std::fs::remove_dir_all(state_dir);
     }
 
     #[tokio::test]
-    async fn dry_run_receipt_blocks_legacy_description_embedded_metadata_without_structured_metadata()
-     {
+    async fn dry_run_receipt_blocks_legacy_description_embedded_metadata_without_structured_metadata(
+    ) {
         let state_dir = test_state_dir("legacy-description-metadata-blocked");
         let store = StateStore::open(state_dir.clone())
             .await
@@ -2278,19 +2480,15 @@ mod tests {
         assert_eq!(receipt.status, "blocked");
         assert!(receipt.created_task_ids.is_empty());
         assert!(receipt.skipped_existing_task_ids.is_empty());
-        assert!(
-            receipt
-                .validation
-                .blocker_codes
-                .contains(&"existing_task_conflict".to_string())
-        );
-        assert!(
-            receipt
-                .validation
-                .issues
-                .iter()
-                .any(|issue| issue.contains("conflicts with PlanGraph draft: description differs"))
-        );
+        assert!(receipt
+            .validation
+            .blocker_codes
+            .contains(&"existing_task_conflict".to_string()));
+        assert!(receipt
+            .validation
+            .issues
+            .iter()
+            .any(|issue| issue.contains("conflicts with PlanGraph draft: description differs")));
         assert!(receipt.validation.issues.iter().any(|issue| {
             issue.contains("conflicts with PlanGraph draft: planner metadata differs")
         }));
@@ -2331,22 +2529,18 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert!(receipt.created_task_ids.is_empty());
-        assert!(
-            receipt
-                .validation
-                .blocker_codes
-                .contains(&"cyclic_dependency".to_string())
-        );
+        assert!(receipt
+            .validation
+            .blocker_codes
+            .contains(&"cyclic_dependency".to_string()));
         let store = StateStore::open_existing(state_dir.clone())
             .await
             .expect("state store should open");
-        assert!(
-            store
-                .list_tasks(None, true)
-                .await
-                .expect("tasks should list")
-                .is_empty()
-        );
+        assert!(store
+            .list_tasks(None, true)
+            .await
+            .expect("tasks should list")
+            .is_empty());
         let _ = std::fs::remove_dir_all(state_dir);
     }
 

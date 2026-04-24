@@ -407,6 +407,19 @@ pub(crate) struct AdaptiveReplanFindingInputError {
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct AdaptiveReplanFindingPreview {
+    status: String,
+    surface: String,
+    dry_run: bool,
+    applied: bool,
+    planned_mutation_category: String,
+    planned_mutation_kind: String,
+    source_task_id: String,
+    finding: AdaptiveReplanFindingInput,
+    operator_truth: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 struct TaskMutationResult {
     status: String,
     surface: String,
@@ -560,6 +573,138 @@ pub(crate) fn parse_adaptive_replan_finding_input(
         evidence_refs: optional_json_string_list(input, "evidence_refs")?,
         operator_truth: adaptive_replan_finding_input_operator_truth(),
     })
+}
+
+fn adaptive_replan_preview_operator_truth() -> serde_json::Value {
+    serde_json::json!({
+        "surface": "vida task adaptive-preview",
+        "schema_version": "1",
+        "preview_only": true,
+        "finding_json_parsed": true,
+        "planned_mutation_category_only": true,
+        "graph_state_opened": false,
+        "graph_state_mutated": false,
+        "adaptive_mutation_execution_loop_implemented": false,
+        "adaptive_mutation_execution_loop_truth": "not_implemented_in_this_slice",
+    })
+}
+
+fn planned_mutation_for_finding_kind(finding_kind: &str) -> (&'static str, &'static str) {
+    match finding_kind {
+        "verification_finding" | "proof_gap" => ("blocker_resolution", "spawn_blocker_task"),
+        "scope_drift" => ("scope_replan", "replan_scope_review"),
+        "oversized_task" => ("task_decomposition", "split_task"),
+        _ => ("unsupported", "blocked"),
+    }
+}
+
+fn build_adaptive_replan_finding_preview(
+    finding_json: &serde_json::Value,
+    surface: &str,
+) -> Result<AdaptiveReplanFindingPreview, AdaptiveReplanFindingInputError> {
+    let finding = parse_adaptive_replan_finding_input(finding_json)?;
+    let (planned_mutation_category, planned_mutation_kind) =
+        planned_mutation_for_finding_kind(&finding.finding_kind);
+    Ok(AdaptiveReplanFindingPreview {
+        status: task_json_success_status().to_string(),
+        surface: surface.to_string(),
+        dry_run: true,
+        applied: false,
+        planned_mutation_category: planned_mutation_category.to_string(),
+        planned_mutation_kind: planned_mutation_kind.to_string(),
+        source_task_id: finding.source_task_id.clone(),
+        finding,
+        operator_truth: adaptive_replan_preview_operator_truth(),
+    })
+}
+
+fn print_adaptive_replan_finding_preview(
+    render: RenderMode,
+    result: &AdaptiveReplanFindingPreview,
+    as_json: bool,
+) {
+    if as_json {
+        let payload = serde_json::to_value(result)
+            .expect("adaptive replan finding preview should serialize to json");
+        crate::print_json_pretty(&payload);
+        return;
+    }
+    print_surface_header(render, &result.surface);
+    print_surface_line(render, "status", &result.status);
+    print_surface_line(
+        render,
+        "planned_mutation_category",
+        &result.planned_mutation_category,
+    );
+    print_surface_line(
+        render,
+        "planned_mutation_kind",
+        &result.planned_mutation_kind,
+    );
+    print_surface_line(render, "source_task_id", &result.source_task_id);
+    print_surface_line(render, "dry_run", "true");
+    print_surface_line(render, "applied", "false");
+    print_surface_line(render, "graph_state_mutated", "false");
+}
+
+fn print_adaptive_replan_finding_input_error(
+    error: &AdaptiveReplanFindingInputError,
+    as_json: bool,
+) {
+    if as_json {
+        let payload = serde_json::to_value(error)
+            .expect("adaptive replan finding input error should serialize to json");
+        crate::print_json_pretty(&payload);
+    } else {
+        eprintln!("{}", error.reason);
+    }
+}
+
+async fn run_task_adaptive_preview(command: TaskAdaptivePreviewArgs) -> ExitCode {
+    let finding_text = match (
+        command.finding_json.as_deref(),
+        command.finding_file.as_deref(),
+    ) {
+        (Some(_), Some(_)) => {
+            eprintln!(
+                "Use only one finding source: --finding-json <json> or --finding-file <path>"
+            );
+            return ExitCode::from(2);
+        }
+        (Some(value), None) => value.to_string(),
+        (None, Some(path)) => match std::fs::read_to_string(path) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("Failed to read finding file `{}`: {error}", path.display());
+                return ExitCode::from(2);
+            }
+        },
+        (None, None) => {
+            eprintln!("Provide --finding-json <json> or --finding-file <path>");
+            return ExitCode::from(2);
+        }
+    };
+    let finding_json = match serde_json::from_str::<serde_json::Value>(&finding_text) {
+        Ok(value) => value,
+        Err(error) => {
+            let parse_error = adaptive_replan_finding_input_error(
+                format!("finding input must be valid JSON: {error}"),
+                None,
+            );
+            print_adaptive_replan_finding_input_error(&parse_error, command.json);
+            return ExitCode::from(2);
+        }
+    };
+    match build_adaptive_replan_finding_preview(&finding_json, "vida task adaptive-preview") {
+        Ok(result) => {
+            print_adaptive_replan_finding_preview(command.render, &result, command.json);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            print_adaptive_replan_finding_input_error(&error, command.json);
+            ExitCode::from(2)
+        }
+    }
 }
 
 fn graph_mutation_receipt_id(
@@ -1529,8 +1674,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 "ready" | "deps" | "reverse-deps" | "blocked" | "children" | "reparent-children"
                 | "move-children" | "tree" | "subtree" | "critical-path" | "next-display-id"
                 | "create" | "ensure" | "update" | "close" | "split" | "spawn-blocker" | "list"
-                | "show" | "import-jsonl" | "replace-jsonl" | "export-jsonl" | "validate-graph"
-                | "dep",
+                | "adaptive-preview" | "show" | "import-jsonl" | "replace-jsonl" | "export-jsonl"
+                | "validate-graph" | "dep",
             ) => {
                 print_taskflow_proxy_help(Some("task"));
                 ExitCode::SUCCESS
@@ -1908,6 +2053,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
         TaskCommand::SpawnBlocker(command) => {
             run_task_spawn_blocker_like(command, "vida task spawn-blocker").await
         }
+        TaskCommand::AdaptivePreview(command) => run_task_adaptive_preview(command).await,
         TaskCommand::Close(command) => {
             let state_dir = command
                 .state_dir
@@ -2260,10 +2406,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
+        ADAPTIVE_REPLAN_FINDING_KINDS, build_adaptive_replan_finding_preview,
         build_spawn_blocker_preview, build_split_mutation_preview,
         canonical_json_string_array_entries, normalize_task_json_contract_arrays,
         parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
-        parse_split_child_specs, task_json_success_status, ADAPTIVE_REPLAN_FINDING_KINDS,
+        parse_split_child_specs, task_json_success_status,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
@@ -2393,10 +2540,12 @@ mod tests {
             vec!["invalid_adaptive_replan_finding_input".to_string()]
         );
         assert_eq!(error.field.as_deref(), Some("finding_kind"));
-        assert!(error
-            .supported_finding_kinds
-            .iter()
-            .any(|kind| kind == "verification_finding"));
+        assert!(
+            error
+                .supported_finding_kinds
+                .iter()
+                .any(|kind| kind == "verification_finding")
+        );
         assert_eq!(error.operator_truth["parsing_and_validation_only"], true);
     }
 
@@ -2420,6 +2569,94 @@ mod tests {
         .expect_err("blank evidence ref should fail closed");
         assert_eq!(invalid_evidence.field.as_deref(), Some("evidence_refs"));
         assert!(invalid_evidence.reason.contains("entries"));
+    }
+
+    #[test]
+    fn adaptive_replan_finding_preview_maps_supported_kinds_without_mutation() {
+        let cases = [
+            (
+                "verification_finding",
+                "blocker_resolution",
+                "spawn_blocker_task",
+            ),
+            ("proof_gap", "blocker_resolution", "spawn_blocker_task"),
+            ("scope_drift", "scope_replan", "replan_scope_review"),
+            ("oversized_task", "task_decomposition", "split_task"),
+        ];
+
+        for (finding_kind, expected_category, expected_kind) in cases {
+            let preview = build_adaptive_replan_finding_preview(
+                &serde_json::json!({
+                    "finding_kind": finding_kind,
+                    "source_task_id": "task-a",
+                    "summary": "bounded adaptive replanner input",
+                    "evidence_refs": ["receipt-a", "receipt-a", "receipt-b"]
+                }),
+                "vida task adaptive-preview",
+            )
+            .expect("supported finding kind should preview");
+
+            assert_eq!(preview.status, task_json_success_status());
+            assert_eq!(preview.planned_mutation_category, expected_category);
+            assert_eq!(preview.planned_mutation_kind, expected_kind);
+            assert_eq!(preview.source_task_id, "task-a");
+            assert!(preview.dry_run);
+            assert!(!preview.applied);
+            assert_eq!(
+                preview.finding.evidence_refs,
+                vec!["receipt-a", "receipt-b"]
+            );
+            assert_eq!(preview.operator_truth["graph_state_opened"], false);
+            assert_eq!(preview.operator_truth["graph_state_mutated"], false);
+            assert_eq!(
+                preview.operator_truth["adaptive_mutation_execution_loop_implemented"],
+                false
+            );
+        }
+    }
+
+    #[test]
+    fn adaptive_replan_finding_preview_rejects_invalid_input() {
+        let error = build_adaptive_replan_finding_preview(
+            &serde_json::json!({
+                "finding_kind": "general_comment",
+                "source_task_id": "task-a",
+                "summary": "not actionable"
+            }),
+            "vida task adaptive-preview",
+        )
+        .expect_err("unsupported finding kind should fail closed");
+
+        assert_eq!(error.status, "blocked");
+        assert_eq!(error.field.as_deref(), Some("finding_kind"));
+        assert_eq!(
+            error.blocker_codes,
+            vec!["invalid_adaptive_replan_finding_input".to_string()]
+        );
+    }
+
+    #[test]
+    fn task_adaptive_preview_command_accepts_inline_json_without_state_store() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        assert_eq!(
+            runtime.block_on(super::run_task(crate::TaskArgs {
+                command: crate::TaskCommand::AdaptivePreview(crate::TaskAdaptivePreviewArgs {
+                    finding_json: Some(
+                        serde_json::json!({
+                            "finding_kind": "oversized_task",
+                            "source_task_id": "task-a",
+                            "summary": "task is too broad"
+                        })
+                        .to_string(),
+                    ),
+                    finding_file: None,
+                    render: crate::RenderMode::Plain,
+                    json: true,
+                }),
+            })),
+            ExitCode::SUCCESS
+        );
     }
 
     #[test]

@@ -114,21 +114,8 @@ pub(crate) async fn run_agent_feedback(args: super::AgentFeedbackArgs) -> ExitCo
 }
 
 fn infer_feedback_outcome_from_close_reason(reason: &str) -> &'static str {
-    let normalized = reason.to_ascii_lowercase();
-    let inferred = if !super::contains_keywords(
-        &normalized,
-        &[
-            "fail".to_string(),
-            "failed".to_string(),
-            "blocked".to_string(),
-            "abort".to_string(),
-            "abandon".to_string(),
-            "rejected".to_string(),
-            "rollback".to_string(),
-        ],
-    )
-    .is_empty()
-    {
+    let normalized = normalized_close_reason_for_feedback(reason);
+    let inferred = if !feedback_failure_markers(&normalized).is_empty() {
         "failure"
     } else if !super::contains_keywords(
         &normalized,
@@ -146,6 +133,61 @@ fn infer_feedback_outcome_from_close_reason(reason: &str) -> &'static str {
         "success"
     };
     canonical_feedback_outcome(inferred).expect("inferred feedback outcome must be canonical")
+}
+
+fn normalized_close_reason_for_feedback(reason: &str) -> String {
+    reason
+        .to_ascii_lowercase()
+        .replace("fail-closed", "contract_guard_closed")
+        .replace("fail closed", "contract_guard_closed")
+        .replace("fail_closed", "contract_guard_closed")
+}
+
+fn feedback_failure_markers(normalized_reason: &str) -> Vec<String> {
+    super::contains_keywords(
+        normalized_reason,
+        &[
+            "fail".to_string(),
+            "failed".to_string(),
+            "blocked".to_string(),
+            "abort".to_string(),
+            "abandon".to_string(),
+            "rejected".to_string(),
+            "rollback".to_string(),
+        ],
+    )
+}
+
+fn feedback_success_markers(normalized_reason: &str) -> Vec<String> {
+    super::contains_keywords(
+        normalized_reason,
+        &[
+            "tests passed".to_string(),
+            "test passed".to_string(),
+            "proof commands passed".to_string(),
+            "proof passed".to_string(),
+            "green".to_string(),
+        ],
+    )
+}
+
+fn close_feedback_outcome_inference(reason: &str, outcome: &str, score: u64) -> serde_json::Value {
+    let normalized = normalized_close_reason_for_feedback(reason);
+    serde_json::json!({
+        "outcome": outcome,
+        "score": score,
+        "failure_markers": feedback_failure_markers(&normalized),
+        "success_markers": feedback_success_markers(&normalized),
+        "ignored_contract_language": if reason.to_ascii_lowercase().contains("fail-closed")
+            || reason.to_ascii_lowercase().contains("fail closed")
+            || reason.to_ascii_lowercase().contains("fail_closed")
+        {
+            serde_json::json!(["fail-closed"])
+        } else {
+            serde_json::json!([])
+        },
+        "rule": "fail-closed contract language is not failure evidence; explicit failure markers still score as failure",
+    })
 }
 
 fn default_feedback_score(outcome: &str, task_class: &str) -> u64 {
@@ -355,6 +397,7 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
     }
     let outcome = infer_feedback_outcome_from_close_reason(close_reason);
     let score = default_feedback_score(outcome, &task_class);
+    let outcome_inference = close_feedback_outcome_inference(close_reason, outcome, score);
     let input = super::HostAgentFeedbackInput {
         agent_id: &agent_id,
         score,
@@ -380,6 +423,7 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
             "feedback_agent_id": agent_id,
             "feedback_selection_source": feedback_selection_source,
             "assignment": assignment,
+            "feedback_outcome_inference": outcome_inference,
             "feedback": view,
         }),
         Err(error) => serde_json::json!({
@@ -492,13 +536,13 @@ fn append_host_agent_feedback(
 
 #[cfg(test)]
 mod tests {
-    use crate::HOST_AGENT_OBSERVABILITY_STATE;
-    use crate::WORKER_SCORECARDS_STATE;
-    use crate::WORKER_STRATEGY_STATE;
     use crate::read_json_file_if_present;
     use crate::run;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
+    use crate::HOST_AGENT_OBSERVABILITY_STATE;
+    use crate::WORKER_SCORECARDS_STATE;
+    use crate::WORKER_STRATEGY_STATE;
     use std::process::ExitCode;
 
     #[test]
@@ -669,19 +713,49 @@ mod tests {
 
         assert_eq!(blocked["status"], "blocked");
         assert_eq!(blocked["reason"], "selected_feedback_carrier_unavailable");
-        assert!(
-            blocked["available_host_agent_ids"]
-                .as_array()
-                .expect("available ids should render")
-                .iter()
-                .any(|value| value == "junior")
+        assert!(blocked["available_host_agent_ids"]
+            .as_array()
+            .expect("available ids should render")
+            .iter()
+            .any(|value| value == "junior"));
+        assert!(blocked["attempted_candidates"]
+            .as_array()
+            .expect("attempted candidates should render")
+            .iter()
+            .any(|row| row["candidate"] == "internal_subagents"));
+    }
+
+    #[test]
+    fn close_feedback_inference_does_not_treat_fail_closed_contract_language_as_failure() {
+        let reason = "Added execution-preparation artifact registry contract foundation with owner/id/path/status validation and fail-closed checks; taskflow_artifacts tests passed.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "architecture");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 90);
+        assert_eq!(inference["outcome"], "success");
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert_eq!(
+            inference["success_markers"],
+            serde_json::json!(["tests passed"])
         );
-        assert!(
-            blocked["attempted_candidates"]
-                .as_array()
-                .expect("attempted candidates should render")
-                .iter()
-                .any(|row| row["candidate"] == "internal_subagents")
+        assert_eq!(
+            inference["ignored_contract_language"],
+            serde_json::json!(["fail-closed"])
         );
+    }
+
+    #[test]
+    fn close_feedback_inference_still_scores_explicit_failed_reason_as_failure() {
+        let reason = "Validation failed after proof commands.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "architecture");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "failure");
+        assert_eq!(score, 35);
+        assert_eq!(inference["outcome"], "failure");
+        assert_eq!(inference["failure_markers"], serde_json::json!(["failed"]));
     }
 }
