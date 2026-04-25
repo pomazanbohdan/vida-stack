@@ -2,8 +2,13 @@ use super::*;
 use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
 
-const AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT: usize = 80;
-const AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS: u64 = 25;
+const AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS: u64 = 25;
+const AUTHORITATIVE_DATASTORE_LOCK_MAX_WAIT_MS: u64 = 30_000;
+const AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT: usize = (AUTHORITATIVE_DATASTORE_LOCK_MAX_WAIT_MS
+    / AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS)
+    as usize;
+const AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT: usize = AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT;
+const AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS: u64 = AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS;
 const READ_ONLY_OPEN_RETRY_COUNT: usize = 800;
 const READ_ONLY_OPEN_RETRY_DELAY_MS: u64 = 25;
 
@@ -102,16 +107,25 @@ impl StateStore {
         Ok(())
     }
 
-    pub async fn open(root: PathBuf) -> Result<Self, StateStoreError> {
-        fs::create_dir_all(&root)?;
-        let _guard = AuthoritativeOpenGuard::acquire(&root).await?;
-
-        for attempt in 0..80 {
-            match Self::open_once(root.clone()).await {
+    async fn open_with_authoritative_lock_retry<F, Fut>(
+        root: PathBuf,
+        mut open_once: F,
+    ) -> Result<Self, StateStoreError>
+    where
+        F: FnMut(PathBuf) -> Fut,
+        Fut: std::future::Future<Output = Result<Self, StateStoreError>>,
+    {
+        for attempt in 0..AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT {
+            match open_once(root.clone()).await {
                 Ok(store) => return Ok(store),
-                Err(StateStoreError::Db(error)) if attempt < 79 => {
+                Err(StateStoreError::Db(error))
+                    if attempt + 1 < AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT =>
+                {
                     if Self::message_is_lock_contention(&error.to_string()) {
-                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS,
+                        ))
+                        .await;
                         continue;
                     }
                     return Err(StateStoreError::Db(error));
@@ -120,7 +134,13 @@ impl StateStore {
             }
         }
 
-        Self::open_once(root).await
+        open_once(root).await
+    }
+
+    pub async fn open(root: PathBuf) -> Result<Self, StateStoreError> {
+        fs::create_dir_all(&root)?;
+        let _guard = AuthoritativeOpenGuard::acquire(&root).await?;
+        Self::open_with_authoritative_lock_retry(root, Self::open_once).await
     }
 
     pub async fn open_existing(root: PathBuf) -> Result<Self, StateStoreError> {
@@ -128,22 +148,7 @@ impl StateStore {
             return Err(StateStoreError::MissingStateDir(root));
         }
         let _guard = AuthoritativeOpenGuard::acquire(&root).await?;
-
-        for attempt in 0..80 {
-            match Self::open_existing_once(root.clone()).await {
-                Ok(store) => return Ok(store),
-                Err(StateStoreError::Db(error)) if attempt < 79 => {
-                    if Self::message_is_lock_contention(&error.to_string()) {
-                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                        continue;
-                    }
-                    return Err(StateStoreError::Db(error));
-                }
-                Err(error) => return Err(error),
-            }
-        }
-
-        Self::open_existing_once(root).await
+        Self::open_with_authoritative_lock_retry(root, Self::open_existing_once).await
     }
 
     pub async fn open_existing_read_only(root: PathBuf) -> Result<Self, StateStoreError> {

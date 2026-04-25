@@ -14929,21 +14929,25 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
             {
                 return Ok(result);
             }
-            let store = StateStore::open_existing(state_root.to_path_buf())
-                .await
-                .map_err(|error| {
-                    format!(
-                        "Failed to reopen authoritative state store for activation view: {error}"
+            let activation_view = {
+                let store = StateStore::open_existing(state_root.to_path_buf())
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "Failed to reopen authoritative state store for activation view: {error}"
+                        )
+                    })?;
+                let activation_view =
+                    crate::init_surfaces::render_agent_init_packet_activation_with_store(
+                        &store,
+                        &project_root,
+                        dispatch_packet_path,
+                        false,
                     )
-                })?;
-            let activation_view =
-                crate::init_surfaces::render_agent_init_packet_activation_with_store(
-                    &store,
-                    &project_root,
-                    dispatch_packet_path,
-                    false,
-                )
-                .await?;
+                    .await?;
+                drop(store);
+                activation_view
+            };
             Ok(agent_lane_dispatch_result(
                 activation_view,
                 dispatch_packet_path,

@@ -14,6 +14,7 @@ use crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload;
 
 const DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS: u64 = 10;
 const COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS: u64 = 30;
+const LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS: u64 = 30;
 
 async fn best_effort_record_agent_init_dispatch_timeout_receipt(
     state_root: &Path,
@@ -1414,189 +1415,240 @@ pub(crate) async fn run_boot(args: BootArgs) -> ExitCode {
     )
     .await
     {
-        Ok(Ok(store)) => match store.seed_framework_instruction_bundle().await {
-            Ok(()) => match store.backend_summary().await {
-                Ok(summary) => match store.source_tree_summary().await {
-                    Ok(source_tree) => match store
-                        .ingest_instruction_source_tree(&normalize_root_arg(
-                            &instruction_source_root,
-                        ))
-                        .await
-                    {
-                        Ok(ingest) => {
-                            print_surface_header(render, "vida boot scaffold ready");
-                            print_surface_line(render, "authoritative state store", &summary);
-                            match store.state_spine_summary().await {
-                                Ok(state_spine) => print_surface_line(
-                                    render,
-                                    "authoritative state spine",
-                                    &format!(
-                                        "initialized (state-v{}, {} entity surfaces, mutation root {})",
-                                        state_spine.state_schema_version,
-                                        state_spine.entity_surface_count,
-                                        state_spine.authoritative_mutation_root
-                                    ),
-                                ),
-                                Err(error) => {
-                                    eprintln!(
-                                        "Failed to read authoritative state spine summary: {error}"
-                                    );
-                                    return ExitCode::from(1);
-                                }
-                            }
-                            print_surface_line(render, "framework instruction bundle", "seeded");
-                            print_surface_line(render, "instruction source tree", &source_tree);
-                            print_surface_line(render, "instruction ingest", &ingest.as_display());
-                            match store.evaluate_boot_compatibility().await {
-                                Ok(compatibility) => {
-                                    print_surface_line(
-                                        render,
-                                        "boot compatibility",
-                                        &format!(
-                                            "{} ({})",
-                                            compatibility.classification, compatibility.next_step
-                                        ),
-                                    );
-                                    if crate::release1_contracts::canonical_compatibility_class_str(
-                                        &compatibility.classification,
-                                    ) != Some(
-                                        crate::release1_contracts::CompatibilityClass::BackwardCompatible
-                                            .as_str(),
-                                    ) {
-                                        eprintln!(
-                                            "Boot compatibility check failed: {}",
-                                            compatibility.reasons.join(", ")
-                                        );
-                                        return ExitCode::from(1);
-                                    }
-                                }
-                                Err(error) => {
-                                    eprintln!("Failed to evaluate boot compatibility: {error}");
-                                    return ExitCode::from(1);
-                                }
-                            }
-                            match store.evaluate_migration_preflight().await {
-                                Ok(migration) => {
-                                    print_surface_line(
-                                        render,
-                                        "migration preflight",
-                                        &format!(
-                                            "{} / {} ({})",
-                                            migration.compatibility_classification,
-                                            migration.migration_state,
-                                            migration.next_step
-                                        ),
-                                    );
-                                    if !migration.blockers.is_empty() {
-                                        eprintln!(
-                                            "Migration preflight failed: {}",
-                                            migration.blockers.join(", ")
-                                        );
-                                        return ExitCode::from(1);
-                                    }
-                                }
-                                Err(error) => {
-                                    eprintln!("Failed to evaluate migration preflight: {error}");
-                                    return ExitCode::from(1);
-                                }
-                            }
-                            match store.migration_receipt_summary().await {
-                                Ok(summary) => {
-                                    print_surface_line(
-                                        render,
-                                        "migration receipts",
-                                        &summary.as_display(),
-                                    );
-                                }
-                                Err(error) => {
-                                    eprintln!("Failed to read migration receipt summary: {error}");
-                                    return ExitCode::from(1);
-                                }
-                            }
-                            match store.active_instruction_root().await {
-                                Ok(root_artifact_id) => match store
-                                    .resolve_effective_instruction_bundle(&root_artifact_id)
-                                    .await
-                                {
-                                    Ok(bundle) => {
-                                        print_surface_line(
-                                            render,
-                                            "effective instruction bundle",
-                                            &bundle.mandatory_chain_order.join(" -> "),
-                                        );
-                                        print_surface_line(
-                                            render,
-                                            "effective instruction bundle receipt",
-                                            &bundle.receipt_id,
-                                        );
-                                    }
-                                    Err(error) => {
-                                        eprintln!(
-                                            "Failed to resolve effective instruction bundle: {error}"
-                                        );
-                                        return ExitCode::from(1);
-                                    }
-                                },
-                                Err(error) => {
-                                    eprintln!("Failed to read active instruction root: {error}");
-                                    return ExitCode::from(1);
-                                }
-                            }
-                            match store
-                                .ingest_framework_memory_source_tree(&normalize_root_arg(
-                                    &framework_memory_source_root,
+        Ok(Ok(store)) => {
+            let state_root = store.root().to_path_buf();
+            let exit_code = async {
+                match store.seed_framework_instruction_bundle().await {
+                    Ok(()) => match store.backend_summary().await {
+                        Ok(summary) => match store.source_tree_summary().await {
+                            Ok(source_tree) => match store
+                                .ingest_instruction_source_tree(&normalize_root_arg(
+                                    &instruction_source_root,
                                 ))
                                 .await
                             {
-                                Ok(framework_ingest) => {
-                                    if let Err(error) =
-                                        sync_launcher_activation_snapshot(&store).await
-                                    {
-                                        eprintln!(
-                                            "Failed to persist launcher activation snapshot: {error}"
-                                        );
-                                        return ExitCode::from(1);
+                                Ok(ingest) => {
+                                    print_surface_header(render, "vida boot scaffold ready");
+                                    print_surface_line(render, "authoritative state store", &summary);
+                                    match store.state_spine_summary().await {
+                                        Ok(state_spine) => print_surface_line(
+                                            render,
+                                            "authoritative state spine",
+                                            &format!(
+                                                "initialized (state-v{}, {} entity surfaces, mutation root {})",
+                                                state_spine.state_schema_version,
+                                                state_spine.entity_surface_count,
+                                                state_spine.authoritative_mutation_root
+                                            ),
+                                        ),
+                                        Err(error) => {
+                                            eprintln!(
+                                                "Failed to read authoritative state spine summary: {error}"
+                                            );
+                                            return ExitCode::from(1);
+                                        }
                                     }
                                     print_surface_line(
                                         render,
-                                        "framework memory ingest",
-                                        &framework_ingest.as_display(),
+                                        "framework instruction bundle",
+                                        "seeded",
                                     );
                                     print_surface_line(
                                         render,
-                                        "state dir",
-                                        &store.root().display().to_string(),
+                                        "instruction source tree",
+                                        &source_tree,
                                     );
-                                    ExitCode::SUCCESS
+                                    print_surface_line(
+                                        render,
+                                        "instruction ingest",
+                                        &ingest.as_display(),
+                                    );
+                                    match store.evaluate_boot_compatibility().await {
+                                        Ok(compatibility) => {
+                                            print_surface_line(
+                                                render,
+                                                "boot compatibility",
+                                                &format!(
+                                                    "{} ({})",
+                                                    compatibility.classification,
+                                                    compatibility.next_step
+                                                ),
+                                            );
+                                            if crate::release1_contracts::canonical_compatibility_class_str(
+                                                &compatibility.classification,
+                                            ) != Some(
+                                                crate::release1_contracts::CompatibilityClass::BackwardCompatible
+                                                    .as_str(),
+                                            ) {
+                                                eprintln!(
+                                                    "Boot compatibility check failed: {}",
+                                                    compatibility.reasons.join(", ")
+                                                );
+                                                return ExitCode::from(1);
+                                            }
+                                        }
+                                        Err(error) => {
+                                            eprintln!(
+                                                "Failed to evaluate boot compatibility: {error}"
+                                            );
+                                            return ExitCode::from(1);
+                                        }
+                                    }
+                                    match store.evaluate_migration_preflight().await {
+                                        Ok(migration) => {
+                                            print_surface_line(
+                                                render,
+                                                "migration preflight",
+                                                &format!(
+                                                    "{} / {} ({})",
+                                                    migration.compatibility_classification,
+                                                    migration.migration_state,
+                                                    migration.next_step
+                                                ),
+                                            );
+                                            if !migration.blockers.is_empty() {
+                                                eprintln!(
+                                                    "Migration preflight failed: {}",
+                                                    migration.blockers.join(", ")
+                                                );
+                                                return ExitCode::from(1);
+                                            }
+                                        }
+                                        Err(error) => {
+                                            eprintln!(
+                                                "Failed to evaluate migration preflight: {error}"
+                                            );
+                                            return ExitCode::from(1);
+                                        }
+                                    }
+                                    match store.migration_receipt_summary().await {
+                                        Ok(summary) => {
+                                            print_surface_line(
+                                                render,
+                                                "migration receipts",
+                                                &summary.as_display(),
+                                            );
+                                        }
+                                        Err(error) => {
+                                            eprintln!(
+                                                "Failed to read migration receipt summary: {error}"
+                                            );
+                                            return ExitCode::from(1);
+                                        }
+                                    }
+                                    match store.active_instruction_root().await {
+                                        Ok(root_artifact_id) => match store
+                                            .resolve_effective_instruction_bundle(&root_artifact_id)
+                                            .await
+                                        {
+                                            Ok(bundle) => {
+                                                print_surface_line(
+                                                    render,
+                                                    "effective instruction bundle",
+                                                    &bundle.mandatory_chain_order.join(" -> "),
+                                                );
+                                                print_surface_line(
+                                                    render,
+                                                    "effective instruction bundle receipt",
+                                                    &bundle.receipt_id,
+                                                );
+                                            }
+                                            Err(error) => {
+                                                eprintln!(
+                                                    "Failed to resolve effective instruction bundle: {error}"
+                                                );
+                                                return ExitCode::from(1);
+                                            }
+                                        },
+                                        Err(error) => {
+                                            eprintln!(
+                                                "Failed to read active instruction root: {error}"
+                                            );
+                                            return ExitCode::from(1);
+                                        }
+                                    }
+                                    match store
+                                        .ingest_framework_memory_source_tree(&normalize_root_arg(
+                                            &framework_memory_source_root,
+                                        ))
+                                        .await
+                                    {
+                                        Ok(framework_ingest) => {
+                                            if let Err(error) =
+                                                sync_launcher_activation_snapshot(&store).await
+                                            {
+                                                eprintln!(
+                                                    "Failed to persist launcher activation snapshot: {error}"
+                                                );
+                                                return ExitCode::from(1);
+                                            }
+                                            print_surface_line(
+                                                render,
+                                                "framework memory ingest",
+                                                &framework_ingest.as_display(),
+                                            );
+                                            print_surface_line(
+                                                render,
+                                                "state dir",
+                                                &store.root().display().to_string(),
+                                            );
+                                            ExitCode::SUCCESS
+                                        }
+                                        Err(error) => {
+                                            eprintln!(
+                                                "Failed to ingest framework memory source tree: {error}"
+                                            );
+                                            ExitCode::from(1)
+                                        }
+                                    }
                                 }
                                 Err(error) => {
-                                    eprintln!(
-                                        "Failed to ingest framework memory source tree: {error}"
-                                    );
+                                    eprintln!("Failed to ingest instruction source tree: {error}");
                                     ExitCode::from(1)
                                 }
+                            },
+                            Err(error) => {
+                                eprintln!("Failed to read source tree metadata: {error}");
+                                ExitCode::from(1)
                             }
-                        }
+                        },
                         Err(error) => {
-                            eprintln!("Failed to ingest instruction source tree: {error}");
+                            eprintln!("Failed to read storage metadata: {error}");
                             ExitCode::from(1)
                         }
                     },
                     Err(error) => {
-                        eprintln!("Failed to read source tree metadata: {error}");
+                        eprintln!("Failed to seed framework instruction bundle: {error}");
                         ExitCode::from(1)
                     }
-                },
-                Err(error) => {
-                    eprintln!("Failed to read storage metadata: {error}");
-                    ExitCode::from(1)
                 }
-            },
-            Err(error) => {
-                eprintln!("Failed to seed framework instruction bundle: {error}");
-                ExitCode::from(1)
             }
-        },
+            .await;
+            drop(store);
+            if exit_code == ExitCode::SUCCESS {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+                    StateStore::open_existing(state_root),
+                )
+                .await
+                {
+                    Ok(Ok(reopened_store)) => drop(reopened_store),
+                    Ok(Err(error)) => {
+                        eprintln!(
+                            "Failed to verify authoritative state store release after `vida boot`: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "Timed out verifying authoritative state store release after `vida boot` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+                        );
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+            exit_code
+        }
         Ok(Err(error)) => {
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
@@ -1626,7 +1678,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
     {
         Ok(Ok(store)) => {
             match tokio::time::timeout(
-                std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+                std::time::Duration::from_secs(LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS),
                 ensure_launcher_bootstrap(
                     &store,
                     &instruction_source_root,
@@ -1642,7 +1694,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                 }
                 Err(_) => {
                     eprintln!(
-                        "Timed out ensuring launcher bootstrap for `vida orchestrator-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+                        "Timed out ensuring launcher bootstrap for `vida orchestrator-init` after {LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS}s"
                     );
                     return ExitCode::from(1);
                 }
@@ -1882,6 +1934,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
     .await
     {
         Ok(Ok(store)) => {
+            let store_state_root = store.root().to_path_buf();
             let bundle = match tokio::time::timeout(
                 std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
                 build_taskflow_consume_bundle_payload(&store),
@@ -2045,15 +2098,15 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
             }
 
             if args.execute_dispatch {
-                if packet_arg_count == 0 {
-                    eprintln!(
-                        "Agent init execute-dispatch requires either `--dispatch-packet` or `--downstream-packet`."
-                    );
-                    return ExitCode::from(2);
-                }
+                let dispatch_setup = {
+                    if packet_arg_count == 0 {
+                        eprintln!(
+                            "Agent init execute-dispatch requires either `--dispatch-packet` or `--downstream-packet`."
+                        );
+                        return ExitCode::from(2);
+                    }
 
-                let mut resume_inputs =
-                    match super::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
+                    let resume_inputs = match super::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
                         &store,
                         None,
                         args.dispatch_packet.as_deref(),
@@ -2067,8 +2120,10 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
-                let state_root = store.root().to_path_buf();
+                    (store_state_root.clone(), resume_inputs)
+                };
                 drop(store);
+                let (state_root, mut resume_inputs) = dispatch_setup;
                 let dispatch_handoff_timeout_seconds =
                     super::dispatch_handoff_timeout_seconds_for_state_root(
                         &state_root,
@@ -2167,6 +2222,8 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     ExitCode::SUCCESS
                 };
             }
+
+            drop(store);
 
             if args.json {
                 println!(

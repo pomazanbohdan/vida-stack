@@ -1062,8 +1062,7 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         || args.reasoning_language.is_some()
         || args.documentation_language.is_some()
         || args.todo_protocol_language.is_some();
-    let mut activation_store: Option<super::StateStore> = None;
-    if activation_mutation_requested {
+    let activation_store = if activation_mutation_requested {
         let state_dir = args
             .state_dir
             .clone()
@@ -1077,15 +1076,15 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
                 }
             };
         match open_project_activation_store(state_dir.clone()).await {
-            Ok(store) => {
-                activation_store = Some(store);
-            }
+            Ok(store) => Some(store),
             Err(error) => {
                 eprintln!("Project activation failed closed before mutation: {error}");
                 return ExitCode::from(1);
             }
         }
-    }
+    } else {
+        None
+    };
     if activation_pending && activation_mutation_requested {
         let missing_inputs = missing_required_activation_inputs(&pre_activation_view, &args);
         if !missing_inputs.is_empty() {
@@ -1209,12 +1208,8 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
             return ExitCode::from(1);
         }
     };
-    let mut activation_truth_sync = None;
-    if activation_mutation_requested {
-        let store = activation_store
-            .as_ref()
-            .expect("activation store should be initialized before activation mutation");
-        match super::sync_launcher_activation_snapshot(store).await {
+    let activation_truth_sync = if let Some(store) = activation_store {
+        let activation_truth_sync = match super::sync_launcher_activation_snapshot(&store).await {
             Ok(snapshot) => {
                 let read_back = match store.read_launcher_activation_snapshot().await {
                     Ok(current) => current,
@@ -1243,12 +1238,12 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
                     );
                     return ExitCode::from(1);
                 }
-                activation_truth_sync = Some(serde_json::json!({
+                serde_json::json!({
                     "source": snapshot.source,
                     "source_config_path": snapshot.source_config_path,
                     "source_config_digest": snapshot.source_config_digest,
                     "read_back_verified": true,
-                }));
+                })
             }
             Err(error) => {
                 eprintln!(
@@ -1256,8 +1251,12 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
                 );
                 return ExitCode::from(1);
             }
-        }
-    }
+        };
+        drop(store);
+        Some(activation_truth_sync)
+    } else {
+        None
+    };
 
     let mut view = build_project_activator_view(&project_root);
     if let Some(path) = activation_receipt_path.as_deref() {
