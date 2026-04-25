@@ -1033,6 +1033,23 @@ fn root_help_succeeds() {
 }
 
 #[test]
+fn root_version_succeeds() {
+    let output = vida()
+        .arg("--version")
+        .output()
+        .expect("root version should run");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), format!("vida {}", env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
 fn protocol_view_accepts_multiple_targets_in_json_mode() {
     let output = vida()
         .args([

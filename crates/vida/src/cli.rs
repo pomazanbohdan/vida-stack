@@ -52,6 +52,7 @@ impl TaskHandoffStatusArg {
 #[derive(Parser, Debug)]
 #[command(
     name = "vida",
+    version = env!("CARGO_PKG_VERSION"),
     disable_help_subcommand = true,
     about = "VIDA Binary Foundation",
     long_about = "VIDA Binary Foundation\n\nTaskFlow remains execution authority; DocFlow remains the documentation/readiness surface. Root `lane` and `approval` are family-owned operator surfaces over the delegated runtime law.",
