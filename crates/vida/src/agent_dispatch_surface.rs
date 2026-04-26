@@ -516,10 +516,15 @@ fn build_agent_dispatch_next_preview_standard(
     let unsafe_ready_candidates = blocked_candidates
         .iter()
         .any(|candidate| candidate.ready_now && !candidate.ready_parallel_safe);
-    if effective_max_parallel_agents > 1 && unsafe_ready_candidates {
+    if effective_max_parallel_agents > 1 && unsafe_ready_candidates && selected_lanes.is_empty() {
         blocker_codes.push("ambiguous_unsafe_parallel_candidates".to_string());
         next_actions.push(
             "Some ready candidates are not parallel-safe; reduce to `--lanes 1` or fix execution semantics/conflicts before multi-lane dispatch."
+                .to_string(),
+        );
+    } else if effective_max_parallel_agents > 1 && unsafe_ready_candidates {
+        next_actions.push(
+            "Some ready candidates are not parallel-safe; they remain blocked candidates and are not selected for this preview."
                 .to_string(),
         );
     }
@@ -1441,7 +1446,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_dispatch_next_preview_blocks_unsafe_parallel_candidates() {
+    fn agent_dispatch_next_preview_selects_primary_and_reports_unsafe_parallel_candidates() {
         let projection = TaskSchedulingProjection {
             current_task_id: Some("task-a".to_string()),
             ready: vec![
@@ -1467,13 +1472,14 @@ mod tests {
             false,
         );
 
-        assert_eq!(preview.status, "blocked");
+        assert_eq!(preview.status, "pass");
         assert_eq!(preview.lanes_selected, 1);
-        assert_eq!(
-            preview.blocker_codes,
-            vec!["ambiguous_unsafe_parallel_candidates"]
-        );
+        assert!(preview.blocker_codes.is_empty());
         assert_eq!(preview.blocked_candidates[0].task_id, "task-b");
+        assert!(preview
+            .next_actions
+            .iter()
+            .any(|action| action.contains("remain blocked candidates and are not selected")));
     }
 
     #[test]
