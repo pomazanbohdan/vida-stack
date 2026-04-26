@@ -9,7 +9,7 @@ use surrealdb::engine::local::{Db, SurrealKv};
 use tokio::runtime::Runtime;
 
 fn vida() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_vida"))
+    vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
 }
 
 fn unique_state_dir() -> String {
@@ -67,7 +67,9 @@ fn run_and_assert_success(args: &[&str], state_dir: &str) -> String {
     });
     assert!(
         output.status.success(),
-        "stderr: {}",
+        "args: {args:?}\nstatus: {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -75,7 +77,7 @@ fn run_and_assert_success(args: &[&str], state_dir: &str) -> String {
 
 fn run_command_capture(args: &[&str], state_dir: &str) -> std::process::Output {
     run_with_state_lock_retry(|| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_vida"));
+        let mut command = vida();
         command.args(args).env("VIDA_STATE_DIR", state_dir);
         command
     })
@@ -231,15 +233,6 @@ fn normalize_json_fixture(value: &str) -> String {
 
 const STATE_LOCK_RETRY_LIMIT: usize = 600;
 
-fn retry_backoff_delay(attempt: usize) -> Duration {
-    Duration::from_millis(match attempt {
-        0..=4 => 10,
-        5..=9 => 25,
-        10..=19 => 50,
-        _ => 100,
-    })
-}
-
 fn is_state_lock_error(output: &std::process::Output) -> bool {
     let stderr = String::from_utf8_lossy(&output.stderr);
     stderr.contains("LOCK is already locked")
@@ -250,23 +243,12 @@ fn run_with_state_lock_retry<F>(mut builder: F) -> std::process::Output
 where
     F: FnMut() -> Command,
 {
-    let mut last = None;
-    for attempt in 0..STATE_LOCK_RETRY_LIMIT {
-        match builder().output() {
-            Ok(output) if output.status.success() || !is_state_lock_error(&output) => {
-                return output;
-            }
-            Ok(output) => {
-                last = Some(output);
-            }
-            Err(error) if error.raw_os_error() == Some(26) => {
-                // transient busy signal, fall through to retry
-            }
-            Err(error) => panic!("command should run: {error}"),
-        }
-        thread::sleep(retry_backoff_delay(attempt));
-    }
-    last.expect("state lock retry should capture at least one output")
+    vida_test_support::command_output_with_retry_errors(
+        &mut builder,
+        STATE_LOCK_RETRY_LIMIT,
+        |output| !output.status.success() && is_state_lock_error(output),
+        |error| error.raw_os_error() == Some(26),
+    )
 }
 
 fn assert_json_status_pass(output: &str) {

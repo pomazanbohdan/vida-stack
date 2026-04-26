@@ -1,5 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -204,4 +205,32 @@ where
         attempts,
         should_retry,
     )
+}
+
+pub fn command_output_with_retry_errors<F, P, E>(
+    mut build: F,
+    attempts: usize,
+    mut should_retry_output: P,
+    mut should_retry_error: E,
+) -> Output
+where
+    F: FnMut() -> Command,
+    P: FnMut(&Output) -> bool,
+    E: FnMut(&io::Error) -> bool,
+{
+    let mut last = None;
+    let mut delay_ms = 1;
+    for _ in 0..attempts {
+        match build().output() {
+            Ok(output) if !should_retry_output(&output) => return output,
+            Ok(output) => {
+                last = Some(output);
+            }
+            Err(error) if should_retry_error(&error) => {}
+            Err(error) => panic!("bounded command should run: {error}"),
+        }
+        thread::sleep(Duration::from_millis(delay_ms));
+        delay_ms = (delay_ms * 2).min(100);
+    }
+    last.expect("retry helper should capture at least one output")
 }
