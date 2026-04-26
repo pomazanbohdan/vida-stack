@@ -12,6 +12,8 @@ use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::types::SurrealValue;
 use surrealdb::Surreal;
 
+mod support;
+
 const SNAPSHOT_OVERWRITE_HELPER_STATE_DIR_ENV: &str =
     "VIDA_BOOT_SMOKE_SNAPSHOT_OVERWRITE_STATE_DIR";
 const SNAPSHOT_OVERWRITE_HELPER_SOURCE_ENV: &str = "VIDA_BOOT_SMOKE_SNAPSHOT_OVERWRITE_SOURCE";
@@ -108,10 +110,7 @@ fn atomic_write_file(path: &str, body: &str) {
 }
 
 fn vida() -> Command {
-    let mut command = Command::new("timeout");
-    command.args(["-k", "5s", "120s"]);
-    command.arg(env!("CARGO_BIN_EXE_vida"));
-    command
+    support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
 }
 
 fn installed_vida() -> (String, Command) {
@@ -983,18 +982,7 @@ fn run_with_state_lock_retry<F>(mut op: F) -> std::process::Output
 where
     F: FnMut() -> std::process::Output,
 {
-    let mut last = None;
-    let mut delay_ms = 1;
-    for _ in 0..600 {
-        let output = op();
-        if output.status.success() || !is_state_lock_error(&output) {
-            return output;
-        }
-        last = Some(output);
-        thread::sleep(Duration::from_millis(delay_ms));
-        delay_ms = (delay_ms * 2).min(100);
-    }
-    last.expect("state lock retry should capture at least one output")
+    support::retry_with_backoff(&mut op, 600, |output| is_state_lock_error(output))
 }
 
 fn run_command_with_state_lock_retry<F>(mut build: F) -> std::process::Output
@@ -3062,7 +3050,7 @@ fn agent_init_parallel_role_views_do_not_surface_eagain_lock_failures() {
         let state_dir = state_dir.clone();
         handles.push(thread::spawn(move || {
             barrier.wait();
-            Command::new(env!("CARGO_BIN_EXE_vida"))
+            vida()
                 .args(["agent-init", "--role", "worker", "--json"])
                 .current_dir(&project_root)
                 .env_remove("VIDA_ROOT")
@@ -5355,7 +5343,7 @@ fn consume_final_fails_closed_without_lane_bundle_fallback_when_runtime_bundle_b
     scaffold_runtime_project_root(&project_root, "project");
 
     let output = run_command_with_state_lock_retry(|| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_vida"));
+        let mut command = vida();
         command
             .args(["taskflow", "consume", "final", "probe closure", "--json"])
             .current_dir(&project_root)
@@ -11202,7 +11190,7 @@ agent_system:
     );
     sync_protocol_binding(&state_dir);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_vida"))
+    let output = vida()
         .args([
             "taskflow",
             "consume",
