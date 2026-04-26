@@ -179,8 +179,15 @@ fn render_host_runtime_agent_toml(
     template_contents: Option<&str>,
 ) -> Option<String> {
     row["role_id"].as_str()?;
-    let model = row["model"].as_str().unwrap_or("gpt-5.4");
-    let reasoning_effort = row["model_reasoning_effort"].as_str().unwrap_or("medium");
+    let model = row["model"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let reasoning_effort = row["model_reasoning_effort"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("medium");
     let sandbox_mode = row["sandbox_mode"].as_str().unwrap_or("workspace-write");
     let developer_instructions_override = row["developer_instructions"]
         .as_str()
@@ -456,6 +463,36 @@ pub(crate) fn overlay_host_runtime_agent_catalog(
             })
     });
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn host_runtime_agent_toml_requires_configured_model() {
+        let row = serde_json::json!({
+            "role_id": "worker",
+            "model_reasoning_effort": "low",
+            "sandbox_mode": "workspace-write"
+        });
+
+        assert!(super::render_host_runtime_agent_toml("Codex", &row, None).is_none());
+    }
+
+    #[test]
+    fn host_runtime_agent_toml_renders_configured_model_without_builtin_default() {
+        let row = serde_json::json!({
+            "role_id": "worker",
+            "model": "configured-model",
+            "model_reasoning_effort": "low",
+            "sandbox_mode": "workspace-write"
+        });
+
+        let rendered = super::render_host_runtime_agent_toml("Codex", &row, None)
+            .expect("configured model should render");
+
+        assert!(rendered.contains("model = \"configured-model\""));
+        assert!(rendered.contains("model_reasoning_effort = \"low\""));
+    }
 }
 
 pub(crate) fn host_runtime_entry_carrier_catalog(

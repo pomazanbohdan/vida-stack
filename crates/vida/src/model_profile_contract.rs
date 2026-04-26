@@ -57,12 +57,6 @@ fn default_provider_from_model_ref(model_ref: &str) -> Option<String> {
             return Some(provider.to_string());
         }
     }
-    if trimmed.starts_with("gpt-") || trimmed.starts_with("o") {
-        return Some("openai".to_string());
-    }
-    if trimmed.starts_with("internal_") {
-        return Some("internal".to_string());
-    }
     None
 }
 
@@ -522,7 +516,7 @@ task_classes: [implementation]
         );
 
         assert_eq!(projection["model"], "gpt-5.4");
-        assert_eq!(projection["model_provider"], "openai");
+        assert_eq!(projection["model_provider"], serde_json::Value::Null);
         assert_eq!(projection["model_reasoning_effort"], "low");
         assert!(projection["default_model_profile"].as_str().is_some());
         assert_eq!(
@@ -532,6 +526,24 @@ task_classes: [implementation]
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn yaml_legacy_projection_uses_provider_only_when_configured() {
+        let owner: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+model: configured-model
+provider: configured-provider
+model_reasoning_effort: low
+"#,
+        )
+        .expect("yaml should parse");
+
+        let projection =
+            super::normalize_profile_projection_from_yaml("junior", &owner, None, &[], &[]);
+
+        assert_eq!(projection["model"], "configured-model");
+        assert_eq!(projection["model_provider"], "configured-provider");
     }
 
     #[test]
