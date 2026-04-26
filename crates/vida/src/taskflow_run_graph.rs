@@ -7,13 +7,14 @@ use crate::{
     },
     print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
     state_store::{
-        RunGraphContinuationBinding, RunGraphDispatchReceipt, RunGraphStatus, StateStore,
-        StateStoreError,
+        RunGraphContinuationBinding, RunGraphDispatchContext, RunGraphDispatchReceipt,
+        RunGraphStatus, StateStore, StateStoreError,
     },
     taskflow_layer4::print_taskflow_proxy_help,
     taskflow_task_bridge::proxy_state_dir,
     RenderMode, RuntimeConsumptionLaneSelection,
 };
+use std::collections::BTreeSet;
 use std::process::ExitCode;
 use time::format_description::well_known::Rfc3339;
 
@@ -3008,6 +3009,221 @@ async fn try_existing_design_backed_implementation_override(
     Ok(())
 }
 
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub(crate) struct RunGraphPacketBackedExecutionGate {
+    pub(crate) status: String,
+    pub(crate) supported: bool,
+    pub(crate) blocker_codes: Vec<String>,
+    pub(crate) next_actions: Vec<String>,
+    pub(crate) selected_task_id: Option<String>,
+    pub(crate) run_id: Option<String>,
+    pub(crate) dispatch_packet_path: Option<String>,
+    pub(crate) request_text_present: bool,
+}
+
+impl RunGraphPacketBackedExecutionGate {
+    fn blocked(
+        status: &str,
+        selected_task_id: Option<&str>,
+        run_id: Option<&str>,
+        blocker_codes: Vec<&str>,
+    ) -> Self {
+        let blocker_codes = blocker_codes
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        Self {
+            status: status.to_string(),
+            supported: false,
+            blocker_codes,
+            next_actions: vec![
+                "Verify selected task, run-graph status, dispatch context, explicit continuation binding, request text, and dispatch packet lineage before enabling packet-backed execute."
+                    .to_string(),
+            ],
+            selected_task_id: selected_task_id.map(str::to_string),
+            run_id: run_id.map(str::to_string),
+            dispatch_packet_path: None,
+            request_text_present: false,
+        }
+    }
+
+    fn ready(selected_task_id: &str, run_id: &str, dispatch_packet_path: &str) -> Self {
+        Self {
+            status: "packet_ready".to_string(),
+            supported: true,
+            blocker_codes: Vec::new(),
+            next_actions: Vec::new(),
+            selected_task_id: Some(selected_task_id.to_string()),
+            run_id: Some(run_id.to_string()),
+            dispatch_packet_path: Some(dispatch_packet_path.to_string()),
+            request_text_present: true,
+        }
+    }
+}
+
+fn run_graph_packet_gate_binding_task_id(binding: &RunGraphContinuationBinding) -> Option<&str> {
+    binding
+        .active_bounded_unit
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn terminal_completed_without_next_unit_for_packet_gate(status: &RunGraphStatus) -> bool {
+    status.status == "completed"
+        && status.lifecycle_stage == "closure_complete"
+        && status
+            .next_node
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+}
+
+pub(crate) fn evaluate_run_graph_packet_backed_execution_gate(
+    selected_task_id: Option<&str>,
+    status: Option<&RunGraphStatus>,
+    context: Option<&RunGraphDispatchContext>,
+    binding: Option<&RunGraphContinuationBinding>,
+    receipt: Option<&RunGraphDispatchReceipt>,
+) -> RunGraphPacketBackedExecutionGate {
+    let Some(selected_task_id) = selected_task_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return RunGraphPacketBackedExecutionGate::blocked(
+            "blocked_task_run_mapping_mismatch",
+            None,
+            None,
+            vec!["scheduler_packet_execute_requires_single_selected_task"],
+        );
+    };
+    let Some(status) = status else {
+        return RunGraphPacketBackedExecutionGate::blocked(
+            "blocked_lineage_preconditions_not_verified",
+            Some(selected_task_id),
+            None,
+            vec!["missing_run_graph_status"],
+        );
+    };
+    if status.run_id.trim().is_empty()
+        || status.task_id.trim().is_empty()
+        || status.task_id != selected_task_id
+    {
+        return RunGraphPacketBackedExecutionGate::blocked(
+            "blocked_task_run_mapping_mismatch",
+            Some(selected_task_id),
+            Some(status.run_id.as_str()),
+            vec!["blocked_task_run_mapping_mismatch"],
+        );
+    }
+    if terminal_completed_without_next_unit_for_packet_gate(status) {
+        return RunGraphPacketBackedExecutionGate::blocked(
+            "blocked_lineage_preconditions_not_verified",
+            Some(selected_task_id),
+            Some(status.run_id.as_str()),
+            vec!["terminal_run_graph_status_without_next_unit"],
+        );
+    }
+
+    let Some(context) = context else {
+        return RunGraphPacketBackedExecutionGate::blocked(
+            "blocked_lineage_preconditions_not_verified",
+            Some(selected_task_id),
+            Some(status.run_id.as_str()),
+            vec!["missing_run_graph_dispatch_context"],
+        );
+    };
+    if context.run_id != status.run_id
+        || context.task_id != selected_task_id
+        || context.request_text.trim().is_empty()
+        || !context.role_selection.is_object()
+    {
+        return RunGraphPacketBackedExecutionGate::blocked(
+            "blocked_lineage_preconditions_not_verified",
+            Some(selected_task_id),
+            Some(status.run_id.as_str()),
+            vec!["invalid_run_graph_dispatch_context"],
+        );
+    }
+
+    let Some(binding) = binding else {
+        return RunGraphPacketBackedExecutionGate::blocked(
+            "blocked_lineage_preconditions_not_verified",
+            Some(selected_task_id),
+            Some(status.run_id.as_str()),
+            vec!["missing_run_graph_continuation_binding"],
+        );
+    };
+    if binding.run_id != status.run_id
+        || binding.task_id != selected_task_id
+        || binding.status != "bound"
+        || binding.binding_source != "explicit_continuation_bind_task"
+        || binding
+            .active_bounded_unit
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            != Some("task_graph_task")
+        || run_graph_packet_gate_binding_task_id(binding) != Some(selected_task_id)
+        || binding.why_this_unit.trim().is_empty()
+        || binding.sequential_vs_parallel_posture.trim().is_empty()
+    {
+        return RunGraphPacketBackedExecutionGate::blocked(
+            "blocked_task_run_mapping_mismatch",
+            Some(selected_task_id),
+            Some(status.run_id.as_str()),
+            vec!["blocked_task_run_mapping_mismatch"],
+        );
+    }
+
+    let Some(receipt) = receipt else {
+        return RunGraphPacketBackedExecutionGate::blocked(
+            "blocked_lineage_preconditions_not_verified",
+            Some(selected_task_id),
+            Some(status.run_id.as_str()),
+            vec!["missing_run_graph_dispatch_receipt"],
+        );
+    };
+    let Some(dispatch_packet_path) = receipt
+        .dispatch_packet_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return RunGraphPacketBackedExecutionGate::blocked(
+            "blocked_lineage_preconditions_not_verified",
+            Some(selected_task_id),
+            Some(status.run_id.as_str()),
+            vec!["missing_dispatch_packet_path"],
+        );
+    };
+    if receipt.run_id != status.run_id
+        || receipt
+            .blocker_code
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+        || !receipt.downstream_dispatch_blockers.is_empty()
+    {
+        return RunGraphPacketBackedExecutionGate::blocked(
+            "blocked_lineage_preconditions_not_verified",
+            Some(selected_task_id),
+            Some(status.run_id.as_str()),
+            vec!["invalid_run_graph_dispatch_receipt"],
+        );
+    }
+
+    RunGraphPacketBackedExecutionGate::ready(
+        selected_task_id,
+        status.run_id.as_str(),
+        dispatch_packet_path,
+    )
+}
+
 pub(crate) fn approval_delegation_transition_kind(status: &RunGraphStatus) -> Option<&'static str> {
     let route_bound_implementation =
         status.task_class == "implementation" && status.route_task_class == "implementation";
@@ -4391,6 +4607,148 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn packet_gate_status(task_id: &str) -> RunGraphStatus {
+        let mut status = default_run_graph_status(task_id, "implementation", "implementation");
+        status.run_id = task_id.to_string();
+        status.task_id = task_id.to_string();
+        status.status = "running".to_string();
+        status.next_node = Some("implementer".to_string());
+        status.lifecycle_stage = "implementation_dispatch_ready".to_string();
+        status.resume_target = "dispatch.implementer".to_string();
+        status.recovery_ready = true;
+        status
+    }
+
+    fn packet_gate_context(task_id: &str) -> RunGraphDispatchContext {
+        RunGraphDispatchContext {
+            run_id: task_id.to_string(),
+            task_id: task_id.to_string(),
+            request_text: "Implement one bounded packet-backed scheduler task.".to_string(),
+            role_selection: serde_json::json!({"selected_role": "worker"}),
+            recorded_at: "2026-04-24T00:00:00Z".to_string(),
+        }
+    }
+
+    fn packet_gate_binding(task_id: &str) -> RunGraphContinuationBinding {
+        RunGraphContinuationBinding {
+            run_id: task_id.to_string(),
+            task_id: task_id.to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": task_id,
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "packet-backed scheduler execute test".to_string(),
+            primary_path: "crates/vida/src/taskflow_proxy.rs".to_string(),
+            sequential_vs_parallel_posture: "sequential".to_string(),
+            request_text: Some("Implement one bounded packet-backed scheduler task.".to_string()),
+            recorded_at: "2026-04-24T00:00:00Z".to_string(),
+        }
+    }
+
+    fn packet_gate_receipt(task_id: &str) -> RunGraphDispatchReceipt {
+        RunGraphDispatchReceipt {
+            run_id: task_id.to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_ready".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some(
+                "vida agent-init --execute-dispatch /tmp/packet.json".to_string(),
+            ),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("codex".to_string()),
+            recorded_at: "2026-04-24T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn packet_backed_execute_gate_blocks_without_lineage() {
+        let gate = evaluate_run_graph_packet_backed_execution_gate(
+            Some("sched-primary"),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert!(!gate.supported);
+        assert_eq!(gate.status, "blocked_lineage_preconditions_not_verified");
+        assert!(gate
+            .blocker_codes
+            .iter()
+            .any(|code| code == "missing_run_graph_status"));
+    }
+
+    #[test]
+    fn packet_backed_execute_gate_admits_verified_packet_ready_tuple() {
+        let status = packet_gate_status("sched-primary");
+        let context = packet_gate_context("sched-primary");
+        let binding = packet_gate_binding("sched-primary");
+        let receipt = packet_gate_receipt("sched-primary");
+
+        let gate = evaluate_run_graph_packet_backed_execution_gate(
+            Some("sched-primary"),
+            Some(&status),
+            Some(&context),
+            Some(&binding),
+            Some(&receipt),
+        );
+
+        assert!(gate.supported);
+        assert_eq!(gate.status, "packet_ready");
+        assert_eq!(gate.run_id.as_deref(), Some("sched-primary"));
+        assert_eq!(
+            gate.dispatch_packet_path.as_deref(),
+            Some("/tmp/packet.json")
+        );
+        assert!(gate.blocker_codes.is_empty());
+    }
+
+    #[test]
+    fn packet_backed_execute_gate_rejects_mismatched_task_run_mapping() {
+        let mut status = packet_gate_status("other-task");
+        status.task_id = "other-task".to_string();
+        let context = packet_gate_context("other-task");
+        let binding = packet_gate_binding("other-task");
+        let receipt = packet_gate_receipt("other-task");
+
+        let gate = evaluate_run_graph_packet_backed_execution_gate(
+            Some("sched-primary"),
+            Some(&status),
+            Some(&context),
+            Some(&binding),
+            Some(&receipt),
+        );
+
+        assert!(!gate.supported);
+        assert_eq!(gate.status, "blocked_task_run_mapping_mismatch");
+        assert!(gate
+            .blocker_codes
+            .iter()
+            .any(|code| code == "blocked_task_run_mapping_mismatch"));
+    }
     use crate::build_compiled_agent_extension_bundle_for_root;
     use crate::launcher_activation_snapshot::config_file_digest;
     use crate::launcher_activation_snapshot::pack_router_keywords_json;

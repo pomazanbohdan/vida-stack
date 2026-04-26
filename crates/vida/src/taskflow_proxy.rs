@@ -131,6 +131,8 @@ pub(crate) struct TaskflowSchedulerDispatchReceiptPreview {
     worker_completion_claimed: bool,
     packet_backed_execution_supported: bool,
     packet_backed_execution_status: String,
+    packet_backed_execution_gate:
+        Option<crate::taskflow_run_graph::RunGraphPacketBackedExecutionGate>,
     preview_only_reason: Option<String>,
     execution_blocker_codes: Vec<String>,
     selected_task_ids: Vec<String>,
@@ -157,6 +159,8 @@ pub(crate) struct TaskflowSchedulerDispatchPlan {
     pub(crate) worker_completion_claimed: bool,
     pub(crate) packet_backed_execution_supported: bool,
     pub(crate) packet_backed_execution_status: String,
+    pub(crate) packet_backed_execution_gate:
+        Option<crate::taskflow_run_graph::RunGraphPacketBackedExecutionGate>,
     pub(crate) configured_max_parallel_agents: u64,
     pub(crate) requested_parallel_limit: Option<u64>,
     pub(crate) scope_task_id: Option<String>,
@@ -551,6 +555,64 @@ fn explicit_task_graph_continuation_task_id(
         })
 }
 
+async fn build_scheduler_packet_backed_execution_gate(
+    store: &crate::state_store::StateStore,
+    plan: &TaskflowSchedulerDispatchPlan,
+) -> Result<crate::taskflow_run_graph::RunGraphPacketBackedExecutionGate, String> {
+    let selected_task_id = if plan.selected_task_ids.len() == 1 {
+        plan.selected_task_ids.first().map(String::as_str)
+    } else {
+        None
+    };
+    let Some(selected_task_id) = selected_task_id else {
+        return Ok(
+            crate::taskflow_run_graph::evaluate_run_graph_packet_backed_execution_gate(
+                None, None, None, None, None,
+            ),
+        );
+    };
+    let status = match store.run_graph_status(selected_task_id).await {
+        Ok(status) => Some(status),
+        Err(_) => None,
+    };
+    let context = match status.as_ref() {
+        Some(status) => store
+            .run_graph_dispatch_context(&status.run_id)
+            .await
+            .map_err(|error| {
+                format!("Failed to read scheduler packet-backed dispatch context: {error}")
+            })?,
+        None => None,
+    };
+    let binding = match status.as_ref() {
+        Some(status) => store
+            .run_graph_continuation_binding(&status.run_id)
+            .await
+            .map_err(|error| {
+                format!("Failed to read scheduler packet-backed continuation binding: {error}")
+            })?,
+        None => None,
+    };
+    let receipt = match status.as_ref() {
+        Some(status) => store
+            .run_graph_dispatch_receipt(&status.run_id)
+            .await
+            .map_err(|error| {
+                format!("Failed to read scheduler packet-backed dispatch receipt: {error}")
+            })?,
+        None => None,
+    };
+    Ok(
+        crate::taskflow_run_graph::evaluate_run_graph_packet_backed_execution_gate(
+            Some(selected_task_id),
+            status.as_ref(),
+            context.as_ref(),
+            binding.as_ref(),
+            receipt.as_ref(),
+        ),
+    )
+}
+
 fn scheduler_agent_init_activation_result_status(
     activation_kind: Option<&str>,
 ) -> (&'static str, &'static str, &'static str) {
@@ -611,11 +673,24 @@ async fn persist_scheduler_execute_receipt(
         return Ok(());
     }
 
-    plan.packet_backed_execution_supported = false;
-    plan.packet_backed_execution_status = "blocked_lineage_preconditions_not_verified".to_string();
-    plan.dispatch_receipt.packet_backed_execution_supported = false;
-    plan.dispatch_receipt.packet_backed_execution_status =
-        plan.packet_backed_execution_status.clone();
+    let gate = plan
+        .packet_backed_execution_gate
+        .clone()
+        .unwrap_or_else(|| {
+            crate::taskflow_run_graph::evaluate_run_graph_packet_backed_execution_gate(
+                plan.selected_task_ids.first().map(String::as_str),
+                None,
+                None,
+                None,
+                None,
+            )
+        });
+    plan.packet_backed_execution_supported = gate.supported;
+    plan.packet_backed_execution_status = gate.status.clone();
+    plan.dispatch_receipt.packet_backed_execution_supported = gate.supported;
+    plan.dispatch_receipt.packet_backed_execution_status = gate.status.clone();
+    plan.dispatch_receipt.packet_backed_execution_gate = Some(gate.clone());
+    plan.packet_backed_execution_gate = Some(gate);
     plan.next_actions.push(
         "Packet-backed scheduler execute is blocked until run-graph lineage, continuation binding, and task/run mapping preconditions are verified; current execute path records scheduler reservations and activation evidence only."
             .to_string(),
@@ -859,6 +934,7 @@ async fn persist_scheduler_execute_receipt(
         "worker_completion_claimed": plan.worker_completion_claimed,
         "packet_backed_execution_supported": plan.packet_backed_execution_supported,
         "packet_backed_execution_status": plan.packet_backed_execution_status,
+        "packet_backed_execution_gate": plan.packet_backed_execution_gate,
         "selected_task_ids": plan.selected_task_ids,
         "reservation_ids": plan.dispatch_receipt.reservation_ids,
         "blocker_codes": plan.blocker_codes,
@@ -1120,6 +1196,7 @@ fn build_taskflow_scheduler_dispatch_plan(
         } else {
             "preview_not_requested".to_string()
         },
+        packet_backed_execution_gate: None,
         preview_only_reason,
         execution_blocker_codes: Vec::new(),
         selected_task_ids: selected_task_ids.clone(),
@@ -1158,6 +1235,7 @@ fn build_taskflow_scheduler_dispatch_plan(
         } else {
             "preview_not_requested".to_string()
         },
+        packet_backed_execution_gate: None,
         configured_max_parallel_agents,
         requested_parallel_limit,
         scope_task_id: scope_task_id.map(str::to_string),
@@ -2978,6 +3056,22 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         recovery.as_ref().and_then(|summary| summary.as_ref()),
         dispatch.as_ref().and_then(|summary| summary.as_ref()),
     );
+    if execute_requested && !dry_run {
+        match build_scheduler_packet_backed_execution_gate(&store, &plan).await {
+            Ok(gate) => {
+                plan.packet_backed_execution_supported = gate.supported;
+                plan.packet_backed_execution_status = gate.status.clone();
+                plan.dispatch_receipt.packet_backed_execution_supported = gate.supported;
+                plan.dispatch_receipt.packet_backed_execution_status = gate.status.clone();
+                plan.dispatch_receipt.packet_backed_execution_gate = Some(gate.clone());
+                plan.packet_backed_execution_gate = Some(gate);
+            }
+            Err(error) => {
+                eprintln!("Failed to evaluate scheduler packet-backed execution gate: {error}");
+                return ExitCode::from(1);
+            }
+        }
+    }
 
     drop(store);
     if execute_requested && !dry_run && runtime_gate_blockers.blocker_codes.is_empty() {
@@ -4403,6 +4497,16 @@ mod tests {
         assert_eq!(plan.dispatch_receipt.receipt_id, None);
         assert_eq!(plan.dispatch_receipt.receipt_path, None);
         assert!(plan.dispatch_receipt.execution_blocker_codes.is_empty());
+        assert!(!plan.packet_backed_execution_supported);
+        assert_eq!(
+            plan.packet_backed_execution_status,
+            "blocked_lineage_preconditions_not_verified"
+        );
+        assert!(!plan.dispatch_receipt.packet_backed_execution_supported);
+        assert_eq!(
+            plan.dispatch_receipt.packet_backed_execution_status,
+            "blocked_lineage_preconditions_not_verified"
+        );
         assert!(plan.reservations[0]
             .preview_only_reason
             .as_deref()
