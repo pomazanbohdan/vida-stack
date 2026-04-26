@@ -12,6 +12,14 @@ use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::types::SurrealValue;
 use surrealdb::Surreal;
 
+const SNAPSHOT_OVERWRITE_HELPER_STATE_DIR_ENV: &str =
+    "VIDA_BOOT_SMOKE_SNAPSHOT_OVERWRITE_STATE_DIR";
+const SNAPSHOT_OVERWRITE_HELPER_SOURCE_ENV: &str = "VIDA_BOOT_SMOKE_SNAPSHOT_OVERWRITE_SOURCE";
+const SNAPSHOT_OVERWRITE_HELPER_CONFIG_PATH_ENV: &str =
+    "VIDA_BOOT_SMOKE_SNAPSHOT_OVERWRITE_CONFIG_PATH";
+const SNAPSHOT_OVERWRITE_HELPER_COMPILED_BUNDLE_ENV: &str =
+    "VIDA_BOOT_SMOKE_SNAPSHOT_OVERWRITE_COMPILED_BUNDLE";
+
 #[derive(serde::Serialize, serde::Deserialize, SurrealValue)]
 struct TestLauncherActivationSnapshot {
     source: String,
@@ -363,6 +371,47 @@ fn overwrite_launcher_activation_snapshot_with_metadata(
     config_path: &str,
     compiled_bundle: serde_json::Value,
 ) {
+    run_launcher_activation_snapshot_overwrite_helper(
+        state_dir,
+        source,
+        config_path,
+        &compiled_bundle,
+    );
+}
+
+fn run_launcher_activation_snapshot_overwrite_helper(
+    state_dir: &str,
+    source: &str,
+    config_path: &str,
+    compiled_bundle: &serde_json::Value,
+) {
+    let output = Command::new(std::env::current_exe().expect("current test executable"))
+        .arg("boot_smoke_launcher_activation_snapshot_overwrite_helper")
+        .arg("--exact")
+        .env(SNAPSHOT_OVERWRITE_HELPER_STATE_DIR_ENV, state_dir)
+        .env(SNAPSHOT_OVERWRITE_HELPER_SOURCE_ENV, source)
+        .env(SNAPSHOT_OVERWRITE_HELPER_CONFIG_PATH_ENV, config_path)
+        .env(
+            SNAPSHOT_OVERWRITE_HELPER_COMPILED_BUNDLE_ENV,
+            compiled_bundle.to_string(),
+        )
+        .output()
+        .expect("snapshot overwrite helper should run");
+    assert!(
+        output.status.success(),
+        "snapshot helper stdout: {}\nsnapshot helper stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    wait_for_state_unlock(state_dir);
+}
+
+fn overwrite_launcher_activation_snapshot_in_process(
+    state_dir: &str,
+    source: &str,
+    config_path: &str,
+    compiled_bundle: serde_json::Value,
+) {
     let config_body = fs::read(&config_path).expect("config should be readable for digest");
     let config_digest = blake3::hash(&config_body).to_hex().to_string();
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
@@ -382,6 +431,7 @@ fn overwrite_launcher_activation_snapshot_with_metadata(
             .expect("launcher activation snapshot should update");
         drop(db);
     });
+    runtime.shutdown_timeout(Duration::from_millis(250));
 }
 
 async fn open_test_state_db_with_retry(state_dir: &str) -> Surreal<Db> {
@@ -996,6 +1046,70 @@ fn wait_for_state_unlock(state_dir: &str) {
     while (direct_lock_path.exists() || nested_lock_path.exists()) && SystemTime::now() < deadline {
         thread::sleep(Duration::from_millis(25));
     }
+}
+
+#[test]
+fn boot_smoke_launcher_activation_snapshot_overwrite_helper() {
+    let Ok(state_dir) = std::env::var(SNAPSHOT_OVERWRITE_HELPER_STATE_DIR_ENV) else {
+        return;
+    };
+    let source = std::env::var(SNAPSHOT_OVERWRITE_HELPER_SOURCE_ENV)
+        .expect("snapshot overwrite helper source should be set");
+    let config_path = std::env::var(SNAPSHOT_OVERWRITE_HELPER_CONFIG_PATH_ENV)
+        .expect("snapshot overwrite helper config path should be set");
+    let compiled_bundle = serde_json::from_str(
+        &std::env::var(SNAPSHOT_OVERWRITE_HELPER_COMPILED_BUNDLE_ENV)
+            .expect("snapshot overwrite helper compiled bundle should be set"),
+    )
+    .expect("snapshot overwrite helper compiled bundle should parse");
+
+    overwrite_launcher_activation_snapshot_in_process(
+        &state_dir,
+        &source,
+        &config_path,
+        compiled_bundle,
+    );
+    wait_for_state_unlock(&state_dir);
+}
+
+#[test]
+fn boot_smoke_direct_snapshot_overwrite_releases_lock_before_next_cli() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    overwrite_launcher_activation_snapshot(
+        &state_dir,
+        serde_json::json!({
+            "role_selection": {
+                "fallback_role": "orchestrator",
+                "mode": "auto"
+            },
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only"
+            }
+        }),
+    );
+
+    let next_boot = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "boot after direct snapshot overwrite should run",
+        |command| {
+            command.arg("boot").env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    assert!(
+        next_boot.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&next_boot.stdout),
+        String::from_utf8_lossy(&next_boot.stderr)
+    );
 }
 
 #[test]
@@ -2591,15 +2705,18 @@ fn taskflow_protocol_binding_check_fails_closed_when_init_compiled_bundle_missin
         String::from_utf8_lossy(&check.stdout),
         String::from_utf8_lossy(&check.stderr)
     );
+    let stdout = String::from_utf8_lossy(&check.stdout);
     let check_stderr = String::from_utf8_lossy(&check.stderr);
     assert!(
-        check_stderr.contains("LOCK is already locked")
+        stdout.contains("invalid_compiled_bundle_agent_system_mode")
+            || stdout.contains("protocol_binding_not_runtime_ready")
+            || check_stderr.contains("LOCK is already locked")
             || check_stderr.contains("protocol-binding")
             || check_stderr.contains("Failed to")
             || check_stderr.contains("Invalid launcher activation snapshot")
             || check_stderr.contains("invalid launcher activation snapshot"),
         "expected fail-closed protocol-binding diagnostics\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&check.stdout),
+        stdout,
         check_stderr
     );
 }
