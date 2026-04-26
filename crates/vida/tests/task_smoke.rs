@@ -4,8 +4,8 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, SurrealKv};
+use surrealdb::Surreal;
 use tokio::runtime::Runtime;
 
 fn vida() -> Command {
@@ -460,12 +460,10 @@ fn taskflow_plan_generate_require_context_blocks_missing_cli_refs() {
     );
 
     assert_eq!(parsed["validation"]["status"], "blocked");
-    assert!(
-        parsed["validation"]["blocker_codes"]
-            .as_array()
-            .expect("blocker_codes should be an array")
-            .contains(&serde_json::json!("missing_plan_context"))
-    );
+    assert!(parsed["validation"]["blocker_codes"]
+        .as_array()
+        .expect("blocker_codes should be an array")
+        .contains(&serde_json::json!("missing_plan_context")));
     assert_eq!(parsed["input_contract"]["status"], "partial");
     assert_eq!(
         require_string_array(
@@ -507,39 +505,31 @@ fn taskflow_plan_generate_require_context_passes_with_cli_refs() {
 
     assert_eq!(parsed["validation"]["status"], "valid");
     assert_eq!(parsed["input_contract"]["status"], "complete");
-    assert!(
-        parsed["input_contract"]["missing_context"]
-            .as_array()
-            .expect("missing_context should be an array")
-            .is_empty()
-    );
-    assert!(
-        parsed["input_contract"]["sources"]
-            .as_array()
-            .expect("sources should be an array")
-            .iter()
-            .any(|source| source["source_type"] == "spec_reference"
-                && source["reference"] == "docs/product/spec/current-spec-map.md"
-                && source["evidence"] == "cli_spec_ref")
-    );
-    assert!(
-        parsed["input_contract"]["sources"]
-            .as_array()
-            .expect("sources should be an array")
-            .iter()
-            .any(|source| source["source_type"] == "backlog_reference"
-                && source["reference"] == "audit-p1-plan-generate-require-context-cli-smoke"
-                && source["evidence"] == "cli_backlog_ref")
-    );
-    assert!(
-        parsed["input_contract"]["sources"]
-            .as_array()
-            .expect("sources should be an array")
-            .iter()
-            .any(|source| source["source_type"] == "context_reference"
-                && source["reference"] == "crates/vida/tests/task_smoke.rs"
-                && source["evidence"] == "cli_context_ref")
-    );
+    assert!(parsed["input_contract"]["missing_context"]
+        .as_array()
+        .expect("missing_context should be an array")
+        .is_empty());
+    assert!(parsed["input_contract"]["sources"]
+        .as_array()
+        .expect("sources should be an array")
+        .iter()
+        .any(|source| source["source_type"] == "spec_reference"
+            && source["reference"] == "docs/product/spec/current-spec-map.md"
+            && source["evidence"] == "cli_spec_ref"));
+    assert!(parsed["input_contract"]["sources"]
+        .as_array()
+        .expect("sources should be an array")
+        .iter()
+        .any(|source| source["source_type"] == "backlog_reference"
+            && source["reference"] == "audit-p1-plan-generate-require-context-cli-smoke"
+            && source["evidence"] == "cli_backlog_ref"));
+    assert!(parsed["input_contract"]["sources"]
+        .as_array()
+        .expect("sources should be an array")
+        .iter()
+        .any(|source| source["source_type"] == "context_reference"
+            && source["reference"] == "crates/vida/tests/task_smoke.rs"
+            && source["evidence"] == "cli_context_ref"));
     let _ = fs::remove_dir_all(state_dir);
 }
 
@@ -1307,10 +1297,7 @@ fn task_close_feedback_outcome_inference_handles_rejected_context_and_rejected_f
             "feedback-concrete-rejected-failure",
             "Concrete rejected failure",
         ),
-        (
-            "feedback-coverage-meta-language",
-            "Coverage meta language",
-        ),
+        ("feedback-coverage-meta-language", "Coverage meta language"),
     ] {
         let create = run_with_state_lock_retry(|| {
             let mut command = vida();
@@ -1383,7 +1370,8 @@ fn task_close_feedback_outcome_inference_handles_rejected_context_and_rejected_f
         serde_json::json!([])
     );
     assert!(
-        positive_json["host_agent_telemetry"]["feedback_outcome_inference"]["ignored_meta_language"]
+        positive_json["host_agent_telemetry"]["feedback_outcome_inference"]
+            ["ignored_meta_language"]
             .as_array()
             .expect("ignored meta language should render")
             .iter()
@@ -1429,8 +1417,8 @@ fn task_close_feedback_outcome_inference_handles_rejected_context_and_rejected_f
         coverage_json["host_agent_telemetry"]["feedback_outcome_inference"]["failure_markers"],
         serde_json::json!([])
     );
-    let ignored_coverage_meta = coverage_json["host_agent_telemetry"]
-        ["feedback_outcome_inference"]["ignored_meta_language"]
+    let ignored_coverage_meta = coverage_json["host_agent_telemetry"]["feedback_outcome_inference"]
+        ["ignored_meta_language"]
         .as_array()
         .expect("ignored meta language should render");
     assert!(ignored_coverage_meta
@@ -1488,6 +1476,123 @@ fn task_close_feedback_outcome_inference_handles_rejected_context_and_rejected_f
 }
 
 #[test]
+fn task_close_feedback_outcome_inference_treats_failed_subprocess_diagnostics_as_context_when_tests_passed(
+) {
+    let project_root = unique_state_dir();
+    fs::create_dir_all(&project_root).expect("project root should exist");
+    let state_dir = format!("{project_root}/.vida/data/state");
+
+    let init = vida()
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("init should run");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let activator = vida()
+        .args([
+            "project-activator",
+            "--project-id",
+            "feedback-subprocess-diagnostics",
+            "--project-name",
+            "Feedback Subprocess Diagnostics",
+            "--language",
+            "english",
+            "--host-cli-system",
+            "codex",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("project activator should run");
+    assert!(
+        activator.status.success(),
+        "{}",
+        String::from_utf8_lossy(&activator.stderr)
+    );
+
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            "feedback-subprocess-diagnostics-context",
+            "Feedback subprocess diagnostics context",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--priority",
+            "1",
+            "--labels",
+            "verification",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let close = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "task",
+                "close",
+                "feedback-subprocess-diagnostics-context",
+                "--reason",
+                "Added regression proof so explanatory failed subprocess status/stdout/stderr records stay diagnostic context while bounded tests passed.",
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        close.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&close.stdout),
+        String::from_utf8_lossy(&close.stderr)
+    );
+    let close_json: serde_json::Value =
+        serde_json::from_slice(&close.stdout).expect("close json should parse");
+    assert_eq!(close_json["status"], "pass");
+    assert_eq!(close_json["host_agent_telemetry"]["status"], "recorded");
+    assert_eq!(
+        close_json["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(
+        close_json["host_agent_telemetry"]["feedback_outcome_inference"]["failure_markers"],
+        serde_json::json!([])
+    );
+    let success_markers = close_json["host_agent_telemetry"]["feedback_outcome_inference"]
+        ["success_markers"]
+        .as_array()
+        .expect("success markers should render");
+    assert!(success_markers
+        .iter()
+        .any(|marker| marker == "tests passed"));
+    let ignored_meta = close_json["host_agent_telemetry"]["feedback_outcome_inference"]
+        ["ignored_meta_language"]
+        .as_array()
+        .expect("ignored meta language should render");
+    assert!(ignored_meta
+        .iter()
+        .any(|phrase| phrase == "failed subprocess status/stdout/stderr"));
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
 fn donor_ready_output_matches_semantic_parity_fixture() {
     let temp_root = unique_state_dir();
     let jsonl_path = format!("{temp_root}/issues.jsonl");
@@ -1507,6 +1612,146 @@ fn donor_ready_output_matches_semantic_parity_fixture() {
     );
 
     let _ = fs::remove_dir_all(&temp_root);
+}
+
+#[test]
+fn task_close_json_surfaces_canonical_feedback_blockers_without_masking_successful_audit_closes() {
+    let project_root = unique_state_dir();
+    fs::create_dir_all(&project_root).expect("project root should exist");
+    let state_dir = format!("{project_root}/.vida/data/state");
+
+    let init = vida()
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("init should run");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let activator = vida()
+        .args([
+            "project-activator",
+            "--project-id",
+            "feedback-canonical-close-status",
+            "--project-name",
+            "Feedback Canonical Close Status",
+            "--language",
+            "english",
+            "--host-cli-system",
+            "codex",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("project activator should run");
+    assert!(
+        activator.status.success(),
+        "{}",
+        String::from_utf8_lossy(&activator.stderr)
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            "feedback-audit-language-close",
+            "Feedback audit language close",
+            "--status",
+            "in_progress",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            "feedback-blocked-close",
+            "Feedback blocked close",
+            "--status",
+            "in_progress",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let audit_close = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "task",
+                "close",
+                "feedback-audit-language-close",
+                "--reason",
+                "Added model-profile readiness audit payload with selected overrides, rejected alternatives, and readiness blockers; model_profile_readiness_audit tests passed.",
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        audit_close.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&audit_close.stdout),
+        String::from_utf8_lossy(&audit_close.stderr)
+    );
+    let audit_json: serde_json::Value =
+        serde_json::from_slice(&audit_close.stdout).expect("audit close json should parse");
+    assert_eq!(audit_json["status"], "pass");
+    assert_eq!(audit_json["task"]["status"], "closed");
+    assert_eq!(audit_json["host_agent_telemetry"]["status"], "recorded");
+    assert_eq!(
+        audit_json["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+
+    let blocked_close = run_command_capture(
+        &[
+            "task",
+            "close",
+            "feedback-blocked-close",
+            "--reason",
+            "Task remains blocked pending operator evidence.",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !blocked_close.status.success(),
+        "blocked canonical close should not hide under pass"
+    );
+    let blocked_json: serde_json::Value =
+        serde_json::from_slice(&blocked_close.stdout).expect("blocked close json should parse");
+    assert_eq!(blocked_json["status"], "blocked");
+    assert_eq!(blocked_json["task"]["status"], "closed");
+    assert_eq!(blocked_json["host_agent_telemetry"]["status"], "skipped");
+    assert_eq!(
+        blocked_json["host_agent_telemetry"]["reason"],
+        "feedback_deferred_for_canonical_close_status"
+    );
+    assert_eq!(
+        blocked_json["blocker_codes"],
+        serde_json::json!([
+            "close_feedback_canonical_status_blocked",
+            "canonical_gate_blocked"
+        ])
+    );
+    assert!(blocked_json["next_actions"][0]
+        .as_str()
+        .expect("next action should render")
+        .contains("Resolve the blocked condition"));
+
+    let _ = fs::remove_dir_all(project_root);
 }
 
 #[test]
@@ -2029,16 +2274,14 @@ fn status_json_blocks_external_cli_when_sandbox_active_and_network_unreachable()
         preflight["blocker_code"],
         "external_cli_network_access_unavailable_under_sandbox"
     );
-    assert!(
-        preflight["next_actions"]
-            .as_array()
-            .expect("next actions should be array")
-            .iter()
-            .any(|row| row
-                .as_str()
-                .unwrap_or_default()
-                .contains("Allow network access"))
-    );
+    assert!(preflight["next_actions"]
+        .as_array()
+        .expect("next actions should be array")
+        .iter()
+        .any(|row| row
+            .as_str()
+            .unwrap_or_default()
+            .contains("Allow network access")));
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
@@ -2530,13 +2773,11 @@ fn consume_final_blocks_when_execution_preparation_is_required_without_handoff_e
             "required execution_preparation lane must block without evidence/handoff packet"
         );
         assert_eq!(parsed["operator_contracts"]["status"], "blocked");
-        assert!(
-            parsed["blocker_codes"]
-                .as_array()
-                .expect("blocker_codes should be an array")
-                .iter()
-                .any(|value| value.as_str() == Some("closure_admission_block"))
-        );
+        assert!(parsed["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should be an array")
+            .iter()
+            .any(|value| value.as_str() == Some("closure_admission_block")));
         assert_eq!(
             parsed["payload"]["dispatch_receipt"]["blocker_code"],
             "pending_execution_preparation_evidence"
@@ -2980,7 +3221,8 @@ fn cross_surface_protocol_binding_parity() {
         "consume dispatch run_id",
     );
     let consume_artifact_run_id = require_json_string(
-        &consume_json["operator_contracts"]["artifact_refs"]["latest_run_graph_dispatch_receipt_id"],
+        &consume_json["operator_contracts"]["artifact_refs"]
+            ["latest_run_graph_dispatch_receipt_id"],
         "consume artifact refs latest run graph dispatch receipt id",
     );
 
