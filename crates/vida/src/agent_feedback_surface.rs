@@ -283,7 +283,7 @@ fn default_feedback_score(outcome: &str, task_class: &str) -> u64 {
 }
 
 fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
-    ignored_feedback_phrases(
+    let mut ignored = ignored_feedback_phrases(
         reason,
         &[
             "close feedback derivation",
@@ -319,7 +319,55 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "approval required coverage",
             "pending approval coverage",
         ],
-    )
+    );
+    ignored.extend(ignored_canonical_close_meta_segments(reason));
+    ignored.sort();
+    ignored.dedup();
+    ignored
+}
+
+fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
+    let blocker_keywords = ["blocked", "blocker", "approval_wait", "awaiting_approval"];
+    let meta_keywords = [
+        "fixed",
+        "proofs:",
+        "proof:",
+        "returns",
+        "return",
+        "preserves",
+        "preserve",
+        "mirrors",
+        "mirror",
+        "diagnostic context",
+        "diagnostic",
+        "canonical",
+        "artifact/status/blocker/action",
+        "cargo ",
+        "installed vida ",
+        "vida task next",
+    ];
+
+    reason
+        .split(['.', ';'])
+        .filter_map(|segment| {
+            let trimmed = segment.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let normalized = trimmed.to_ascii_lowercase();
+            let has_blocker_keyword = blocker_keywords
+                .iter()
+                .any(|keyword| normalized.contains(keyword));
+            let has_meta_keyword = meta_keywords
+                .iter()
+                .any(|keyword| normalized.contains(keyword));
+            if has_blocker_keyword && has_meta_keyword {
+                Some(normalized)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn canonical_close_status_from_reason(reason: &str) -> Option<(&'static str, &'static str)> {
@@ -1067,6 +1115,22 @@ mod tests {
     }
 
     #[test]
+    fn canonical_close_status_ignores_blocker_code_and_proof_meta_language() {
+        let reason = "Fixed task next run-graph gate: next now blocks ready-head dispatch when latest run-graph state is held, returns canonical latest_run_graph_status_blocked, preserves ready-head only as diagnostic context, and mirrors artifact/status/blocker/action fields across shared and operator contract output. Proofs: cargo test -p vida taskflow_next_decision_blocks_ready_head_when_latest_run_graph_is_blocked -- --quiet --test-threads=1; cargo test -p vida taskflow_next_decision -- --quiet --test-threads=1; cargo fmt --check; cargo build -p vida --release; installed vida task next --json returns blocked with recovery action.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let ignored = super::ignored_canonical_close_meta_language(reason);
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase.contains("latest_run_graph_status_blocked")));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase.contains("diagnostic context")));
+        assert!(ignored.iter().any(|phrase| phrase
+            .contains("installed vida task next --json returns blocked with recovery action")));
+    }
+
+    #[test]
     fn close_feedback_inference_ignores_blocked_fix_description_meta_language() {
         let reason = "Fixed false canonical close feedback derivation: classifier strips audit and fix-description phrases before keyword matching while preserving concrete blocked reason detection. Task close JSON now exposes deferred canonical-close telemetry as actionable blocked output only when the close reason is genuinely blocked. Proofs: canonical_close_status_ignores_readiness_blockers_audit_language, canonical_close_status_ignores_fix_description_meta_blocked_phrases, canonical_close_status_preserves_concrete_blocked_reasons, task_close_feedback_blocker_summary_surfaces_deferred_canonical_close, cargo fmt --check.";
         let outcome = super::infer_feedback_outcome_from_close_reason(reason);
@@ -1090,6 +1154,33 @@ mod tests {
             .iter()
             .any(|phrase| phrase == "actionable blocked output"));
         assert!(ignored.iter().any(|phrase| phrase == "genuinely blocked"));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_blocker_code_and_proof_meta_language() {
+        let reason = "Fixed task next run-graph gate: next now blocks ready-head dispatch when latest run-graph state is held, returns canonical latest_run_graph_status_blocked, preserves ready-head only as diagnostic context, and mirrors artifact/status/blocker/action fields across shared and operator contract output. Proofs: cargo test -p vida taskflow_next_decision_blocks_ready_head_when_latest_run_graph_is_blocked -- --quiet --test-threads=1; cargo test -p vida taskflow_next_decision -- --quiet --test-threads=1; cargo fmt --check; cargo build -p vida --release; installed vida task next --json returns blocked with recovery action.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["outcome"], "success");
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        let ignored = inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render");
+        assert!(ignored.iter().any(|phrase| phrase
+            .as_str()
+            .is_some_and(|value| value.contains("latest_run_graph_status_blocked"))));
+        assert!(ignored.iter().any(|phrase| phrase
+            .as_str()
+            .is_some_and(|value| value.contains("diagnostic context"))));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase.as_str().is_some_and(|value| value.contains(
+                "installed vida task next --json returns blocked with recovery action"
+            ))));
     }
 
     #[test]

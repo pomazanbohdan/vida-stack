@@ -170,6 +170,15 @@ fn recovery_holds_active_bound_run(
     recovery.is_some_and(|summary| summary.delegation_gate.delegated_cycle_open)
 }
 
+fn latest_run_graph_status_blocks_normal_continuation(
+    status: Option<&crate::state_store::RunGraphStatus>,
+) -> bool {
+    status.is_some_and(|status| {
+        let normalized = status.status.trim().to_ascii_lowercase();
+        normalized == "blocked" || normalized == "lane_blocked" || normalized.ends_with("_blocked")
+    })
+}
+
 fn authoritative_dispatch_blocker_codes(
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
 ) -> Vec<String> {
@@ -1027,11 +1036,15 @@ fn build_taskflow_next_decision(
     explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
 ) -> TaskflowNextDecision {
     let ready_head = ready_head.map(graph_summary_task_ref);
+    let latest_run_graph_status_blocked =
+        latest_run_graph_status_blocks_normal_continuation(latest_run_graph_status);
     let completed_without_explicit_next_unit =
         terminal_completed_without_next_unit(latest_run_graph_status)
             && !explicit_task_binding_matches_status(explicit_binding, latest_run_graph_status);
     let admissibility_gate = if recovery_holds_active_bound_run {
         "delegated_cycle_runtime_gate".to_string()
+    } else if latest_run_graph_status_blocked {
+        "latest_run_graph_status_blocked".to_string()
     } else if completed_without_explicit_next_unit {
         "completed_without_explicit_next_bounded_unit".to_string()
     } else if ready_head.is_some() {
@@ -1043,7 +1056,9 @@ fn build_taskflow_next_decision(
     let mut next_actions = Vec::<String>::new();
     let candidate_task_context = TaskflowNextCandidateContext {
         ready_head: ready_head.clone(),
-        admissible_now: !(recovery_holds_active_bound_run || completed_without_explicit_next_unit),
+        admissible_now: !(recovery_holds_active_bound_run
+            || latest_run_graph_status_blocked
+            || completed_without_explicit_next_unit),
         admissibility_gate,
     };
 
@@ -1130,6 +1145,41 @@ fn build_taskflow_next_decision(
                     summary: "The latest run is closure_complete with no explicit admissible continuation binding, so `vida taskflow next` must fail closed.".to_string(),
                     blocker_codes: blocker_codes.clone(),
                     blocking_surface: Some("vida taskflow continuation bind".to_string()),
+                }),
+                Some(next_action),
+            )
+        } else if latest_run_graph_status_blocked {
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::LatestRunGraphStatusBlocked,
+            ) {
+                blocker_codes.push(code);
+            }
+            blocker_codes.extend(authoritative_dispatch_blocker_codes(dispatch));
+            let run_id = latest_run_graph_status
+                .map(|status| status.run_id.as_str())
+                .unwrap_or("<run-id>");
+            let next_action = TaskflowNextAction {
+                command: format!("vida taskflow recovery status {run_id} --json"),
+                surface: "vida taskflow recovery status".to_string(),
+                reason: "the latest run graph is blocked, so backlog ready-head work is not lawful until recovery truth is resolved".to_string(),
+            };
+            next_actions.push(format!(
+                "Inspect the blocked run-graph recovery state with `{}` before considering backlog ready-head work.",
+                next_action.command
+            ));
+            next_actions.push(
+                "After resolving the blocker, refresh continuation evidence with `vida taskflow consume continue --json` or bind the next bounded unit explicitly."
+                    .to_string(),
+            );
+            (
+                Some(next_action.command.clone()),
+                Some(next_action.surface.clone()),
+                None,
+                Some(TaskflowNextWhyNotNow {
+                    category: "latest_run_graph_status_blocked".to_string(),
+                    summary: "The latest run graph is blocked, so `vida taskflow next` must not present a ready backlog task as dispatchable.".to_string(),
+                    blocker_codes: blocker_codes.clone(),
+                    blocking_surface: Some("vida taskflow recovery status".to_string()),
                 }),
                 Some(next_action),
             )
@@ -1241,6 +1291,38 @@ fn build_taskflow_next_decision(
         why_not_now,
         next_action,
     }
+}
+
+fn taskflow_next_operator_contracts(
+    decision: &TaskflowNextDecision,
+    latest_run_graph: Option<&crate::state_store::RunGraphStatus>,
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> (serde_json::Value, serde_json::Value, serde_json::Value) {
+    let artifact_refs = serde_json::json!({
+        "surface": "vida taskflow next",
+        "latest_run_graph_run_id": latest_run_graph.map(|status| status.run_id.as_str()),
+        "recovery_run_id": recovery.map(|summary| summary.run_id.as_str()),
+        "dispatch_run_id": dispatch.map(|summary| summary.run_id.as_str()),
+    });
+    let shared_fields = serde_json::json!({
+        "status": decision.status,
+        "blocker_codes": decision.blocker_codes,
+        "next_actions": decision.next_actions,
+        "artifact_refs": artifact_refs,
+    });
+    let operator_contracts = serde_json::json!({
+        "contract_id": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.contract_id,
+        "schema_version": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.schema_version,
+        "status": shared_fields["status"],
+        "trace_id": serde_json::Value::Null,
+        "workflow_class": serde_json::Value::Null,
+        "risk_tier": serde_json::Value::Null,
+        "blocker_codes": shared_fields["blocker_codes"],
+        "next_actions": shared_fields["next_actions"],
+        "artifact_refs": shared_fields["artifact_refs"],
+    });
+    (shared_fields, operator_contracts, artifact_refs)
 }
 
 fn task_wave_label(
@@ -1753,9 +1835,16 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         latest_run_graph.as_ref(),
         explicit_binding.as_ref(),
     );
+    let (shared_fields, operator_contracts, artifact_refs) = taskflow_next_operator_contracts(
+        &decision,
+        latest_run_graph.as_ref(),
+        recovery.as_ref(),
+        dispatch.as_ref(),
+    );
     let payload = serde_json::json!({
         "surface": "vida taskflow next",
         "status": decision.status,
+        "artifact_refs": artifact_refs,
         "blocker_codes": decision.blocker_codes,
         "why_not_now": decision.why_not_now,
         "next_action": decision.next_action,
@@ -1772,6 +1861,8 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         "gate": gate,
         "dispatch": dispatch,
         "runtime_consumption": runtime_consumption,
+        "shared_fields": shared_fields,
+        "operator_contracts": operator_contracts,
     });
 
     if as_json {
@@ -5393,6 +5484,89 @@ mod tests {
                 .as_ref()
                 .map(|value| value.command.as_str()),
             Some("vida taskflow recovery latest --json")
+        );
+    }
+
+    #[test]
+    fn taskflow_next_decision_blocks_ready_head_when_latest_run_graph_is_blocked() {
+        let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-blocked",
+            "task-blocked",
+            "analysis",
+        );
+        latest_status.status = "blocked".to_string();
+        latest_status.lifecycle_stage = "analysis_blocked".to_string();
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("ready-head")),
+            false,
+            true,
+            Some("final"),
+            None,
+            None,
+            Some(&latest_status),
+            None,
+        );
+
+        assert_eq!(decision.status, "blocked");
+        assert!(decision.primary_ready_task.is_none());
+        assert_eq!(
+            decision
+                .candidate_task_context
+                .ready_head
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("ready-head")
+        );
+        assert!(!decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "latest_run_graph_status_blocked"
+        );
+        assert_eq!(
+            decision
+                .why_not_now
+                .as_ref()
+                .map(|value| value.category.as_str()),
+            Some("latest_run_graph_status_blocked")
+        );
+        assert!(decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "latest_run_graph_status_blocked"));
+        assert_eq!(
+            decision
+                .next_action
+                .as_ref()
+                .map(|value| value.command.as_str()),
+            Some("vida taskflow recovery status run-blocked --json")
+        );
+
+        let (shared_fields, operator_contracts, artifact_refs) =
+            super::taskflow_next_operator_contracts(&decision, Some(&latest_status), None, None);
+        assert_eq!(shared_fields["status"], serde_json::json!(decision.status));
+        assert_eq!(artifact_refs["surface"], "vida taskflow next");
+        assert_eq!(shared_fields["artifact_refs"], artifact_refs);
+        assert_eq!(
+            shared_fields["blocker_codes"],
+            serde_json::json!(decision.blocker_codes.clone())
+        );
+        assert_eq!(
+            shared_fields["next_actions"],
+            serde_json::json!(decision.next_actions.clone())
+        );
+        assert_eq!(operator_contracts["status"], shared_fields["status"]);
+        assert_eq!(
+            operator_contracts["blocker_codes"],
+            shared_fields["blocker_codes"]
+        );
+        assert_eq!(
+            operator_contracts["next_actions"],
+            shared_fields["next_actions"]
+        );
+        assert_eq!(
+            operator_contracts["artifact_refs"],
+            shared_fields["artifact_refs"]
         );
     }
 
