@@ -50,8 +50,7 @@ pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTEN
     &str = "Refresh the latest run-graph dispatch receipt summary before rerunning consume-final.";
 pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER: &str =
     "run_graph_latest_dispatch_receipt_checkpoint_leakage";
-pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION: &str =
-    "Refresh the latest checkpoint evidence before rerunning consume-final so the latest status and checkpoint rows share the same run_id.";
+pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION: &str = "Refresh the latest checkpoint evidence before rerunning consume-final so the latest status and checkpoint rows share the same run_id.";
 
 pub(crate) fn latest_admissible_retrieval_trust_signal(
     runtime_consumption: &RuntimeConsumptionSummary,
@@ -378,6 +377,121 @@ pub(crate) fn latest_recorded_final_runtime_consumption_snapshot_path(
     })
 }
 
+pub(crate) fn latest_terminal_consume_continue_snapshot_run_id(
+    state_root: &Path,
+) -> Result<Option<String>, String> {
+    let snapshot_dir = state_root.join("runtime-consumption");
+    latest_runtime_consumption_snapshot_matching(&snapshot_dir, |file_name, snapshot| {
+        if !file_name.starts_with("final-") {
+            return None;
+        }
+        if snapshot.get("surface").and_then(serde_json::Value::as_str)
+            != Some("vida taskflow consume continue")
+        {
+            return None;
+        }
+        if snapshot.get("status").and_then(serde_json::Value::as_str) != Some("pass") {
+            return None;
+        }
+        let top_level_next_actions_empty = snapshot
+            .get("next_actions")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|actions| actions.is_empty());
+        let operator_next_actions_empty = snapshot
+            .get("operator_contracts")
+            .and_then(|contracts| contracts.get("next_actions"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|actions| actions.is_empty());
+        let blockers_empty = snapshot
+            .get("blocker_codes")
+            .and_then(serde_json::Value::as_array)
+            .is_none_or(|blockers| blockers.is_empty());
+        if !(top_level_next_actions_empty && operator_next_actions_empty && blockers_empty) {
+            return None;
+        }
+        snapshot
+            .get("source_run_id")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                snapshot
+                    .get("artifact_refs")
+                    .and_then(|refs| refs.get("latest_run_graph_dispatch_receipt_id"))
+                    .and_then(serde_json::Value::as_str)
+            })
+            .or_else(|| {
+                snapshot
+                    .get("operator_contracts")
+                    .and_then(|contracts| contracts.get("artifact_refs"))
+                    .and_then(|refs| refs.get("latest_run_graph_dispatch_receipt_id"))
+                    .and_then(serde_json::Value::as_str)
+            })
+            .or_else(|| {
+                snapshot
+                    .get("dispatch_receipt")
+                    .and_then(|receipt| receipt.get("run_id"))
+                    .and_then(serde_json::Value::as_str)
+            })
+            .map(str::trim)
+            .filter(|run_id| !run_id.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn latest_runtime_consumption_snapshot_matching<F, T>(
+    snapshot_dir: &Path,
+    mut include: F,
+) -> Result<Option<T>, String>
+where
+    F: FnMut(&str, &serde_json::Value) -> Option<T>,
+{
+    if !snapshot_dir.exists() {
+        return Ok(None);
+    }
+
+    let mut latest_valid: Option<(SystemTime, T)> = None;
+    for entry in std::fs::read_dir(snapshot_dir)
+        .map_err(|error| format!("Failed to read runtime-consumption directory: {error}"))?
+    {
+        let entry = entry
+            .map_err(|error| format!("Failed to inspect runtime-consumption entry: {error}"))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !file_name.starts_with("final-") {
+            continue;
+        }
+
+        let payload = match std::fs::read_to_string(&path) {
+            Ok(payload) => payload,
+            Err(_) => continue,
+        };
+        let snapshot = match serde_json::from_str::<serde_json::Value>(&payload) {
+            Ok(snapshot) => snapshot,
+            Err(_) => continue,
+        };
+        let Some(value) = include(file_name, &snapshot) else {
+            continue;
+        };
+
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        match &latest_valid {
+            Some((latest_modified, _)) if modified <= *latest_modified => {}
+            _ => latest_valid = Some((modified, value)),
+        }
+    }
+
+    Ok(latest_valid.map(|(_, value)| value))
+}
+
 fn latest_runtime_consumption_snapshot_path_matching<F>(
     snapshot_dir: &Path,
     mut include: F,
@@ -439,6 +553,7 @@ mod tests {
     use super::{
         apply_runtime_consumption_final_dispatch_receipt_blocker,
         latest_admissible_retrieval_trust_signal, latest_final_runtime_consumption_snapshot_path,
+        latest_terminal_consume_continue_snapshot_run_id,
         runtime_consumption_final_dispatch_receipt_blocker_code,
         runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result,
         runtime_consumption_snapshot_has_release_admission_evidence, RuntimeConsumptionSummary,
@@ -724,6 +839,71 @@ mod tests {
             .expect("latest admissible final snapshot should resolve")
             .expect("one admissible final snapshot should be available");
         assert_eq!(selected, admissible_path.display().to_string());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn latest_terminal_consume_continue_snapshot_run_id_prefers_newest_terminal_continue() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-terminal-consume-continue-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let runtime_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
+
+        let blocked_path = runtime_dir.join("final-blocked-continue.json");
+        fs::write(
+            &blocked_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume continue",
+                "status": "blocked",
+                "blocker_codes": ["still_blocked"],
+                "next_actions": ["retry"],
+                "operator_contracts": {
+                    "status": "blocked",
+                    "blocker_codes": ["still_blocked"],
+                    "next_actions": ["retry"],
+                    "artifact_refs": {
+                        "latest_run_graph_dispatch_receipt_id": "run-blocked"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("blocked continue snapshot should be writable");
+
+        thread::sleep(Duration::from_millis(5));
+
+        let terminal_path = runtime_dir.join("final-terminal-continue.json");
+        fs::write(
+            &terminal_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume continue",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "operator_contracts": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {
+                        "latest_run_graph_dispatch_receipt_id": "run-terminal"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("terminal continue snapshot should be writable");
+
+        let run_id = latest_terminal_consume_continue_snapshot_run_id(&root)
+            .expect("terminal continue lookup should succeed")
+            .expect("terminal continue run id should resolve");
+        assert_eq!(run_id, "run-terminal");
 
         let _ = fs::remove_dir_all(root);
     }

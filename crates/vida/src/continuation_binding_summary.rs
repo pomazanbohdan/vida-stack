@@ -41,10 +41,14 @@ fn run_graph_status_is_blocked(value: &str) -> bool {
 fn active_exception_takeover_evidence_matches_status(
     status: &crate::state_store::RunGraphStatus,
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    terminal_continue_run_id: Option<&str>,
 ) -> bool {
     let Some(dispatch) = dispatch else {
         return false;
     };
+    if terminal_continue_run_id == Some(status.run_id.as_str()) {
+        return false;
+    }
     dispatch.run_id == status.run_id
         && dispatch.lane_status == "lane_exception_takeover"
         && dispatch
@@ -72,7 +76,7 @@ fn active_exception_takeover_binding_matches_status(
         && binding.task_id == status.task_id
         && binding.binding_source == "consume_continue_after_downstream_chain"
         && binding_kind == Some("run_graph_task")
-        && active_exception_takeover_evidence_matches_status(status, dispatch)
+        && active_exception_takeover_evidence_matches_status(status, dispatch, None)
 }
 
 fn active_exception_takeover_binding_summary_json(
@@ -166,6 +170,7 @@ pub(crate) fn build_continuation_binding_summary(
     latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
     latest_run_graph_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    terminal_consume_continue_run_id: Option<&str>,
     evidence_ambiguous: bool,
 ) -> serde_json::Value {
     let active_run_id = latest_run_graph_status.map(|status| status.run_id.as_str());
@@ -235,7 +240,8 @@ pub(crate) fn build_continuation_binding_summary(
                     binding,
                     status,
                     latest_run_graph_dispatch_receipt,
-                ) {
+                ) && terminal_consume_continue_run_id != Some(status.run_id.as_str())
+                {
                     return active_exception_takeover_binding_summary_json(
                         binding,
                         status,
@@ -247,6 +253,7 @@ pub(crate) fn build_continuation_binding_summary(
             if active_exception_takeover_evidence_matches_status(
                 status,
                 latest_run_graph_dispatch_receipt,
+                terminal_consume_continue_run_id,
             ) {
                 return active_exception_takeover_status_summary_json(
                     status,
@@ -640,8 +647,14 @@ mod tests {
             },
         };
 
-        let summary =
-            build_continuation_binding_summary(None, Some(&status), Some(&recovery), None, false);
+        let summary = build_continuation_binding_summary(
+            None,
+            Some(&status),
+            Some(&recovery),
+            None,
+            None,
+            false,
+        );
 
         assert_eq!(summary["status"], "bound");
         assert_eq!(
@@ -671,7 +684,8 @@ mod tests {
         status.status = "blocked".to_string();
         status.lifecycle_stage = "implementation_blocked".to_string();
 
-        let summary = build_continuation_binding_summary(None, Some(&status), None, None, false);
+        let summary =
+            build_continuation_binding_summary(None, Some(&status), None, None, None, false);
 
         assert_eq!(summary["status"], "ambiguous");
         assert_eq!(summary["continuation_allowed"], false);
@@ -732,6 +746,7 @@ mod tests {
             Some(&status),
             None,
             Some(&dispatch),
+            None,
             false,
         );
 
@@ -782,6 +797,7 @@ mod tests {
             Some(&status),
             None,
             Some(&dispatch),
+            None,
             false,
         );
 
@@ -796,6 +812,44 @@ mod tests {
             "runtime-audit-state-store-init-lock-timeout"
         );
         assert_eq!(summary["active_exception_takeover"], true);
+    }
+
+    #[test]
+    fn blocked_latest_run_graph_status_retires_exception_takeover_after_terminal_continue() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-audit-state-store-init-lock-timeout",
+            "runtime-audit-state-store-init-lock-timeout",
+            "analysis",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+        let dispatch = exception_takeover_dispatch("runtime-audit-state-store-init-lock-timeout");
+
+        let summary = build_continuation_binding_summary(
+            None,
+            Some(&status),
+            None,
+            Some(&dispatch),
+            Some("runtime-audit-state-store-init-lock-timeout"),
+            false,
+        );
+
+        assert_eq!(summary["status"], "ambiguous");
+        assert_eq!(
+            summary["ambiguity_reason"],
+            "latest_run_graph_status_blocked"
+        );
+        assert_ne!(
+            summary["binding_source"],
+            "latest_run_graph_exception_takeover_dispatch"
+        );
+        assert!(!summary["next_actions"]
+            .as_array()
+            .expect("next actions should be present")
+            .iter()
+            .any(|action| action.as_str().is_some_and(|value| value.contains(
+                "consume continue --run-id runtime-audit-state-store-init-lock-timeout"
+            ))));
     }
 
     #[test]
@@ -827,8 +881,14 @@ mod tests {
             recorded_at: "2026-04-26T10:00:00Z".to_string(),
         };
 
-        let summary =
-            build_continuation_binding_summary(Some(&binding), Some(&status), None, None, false);
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            None,
+            None,
+            false,
+        );
 
         assert_eq!(summary["status"], "ambiguous");
         assert_eq!(summary["continuation_allowed"], false);
@@ -851,7 +911,8 @@ mod tests {
         status.status = "completed".to_string();
         status.lifecycle_stage = "closure_complete".to_string();
 
-        let summary = build_continuation_binding_summary(None, Some(&status), None, None, false);
+        let summary =
+            build_continuation_binding_summary(None, Some(&status), None, None, None, false);
 
         assert_eq!(summary["status"], "ambiguous");
         assert_eq!(
@@ -888,8 +949,14 @@ mod tests {
             recorded_at: "2026-04-10T10:00:00Z".to_string(),
         };
 
-        let summary =
-            build_continuation_binding_summary(Some(&binding), Some(&status), None, None, false);
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            None,
+            None,
+            false,
+        );
 
         assert_eq!(summary["binding_source"], "explicit_continuation_bind");
         assert_eq!(summary["why_this_unit"], "explicit");
@@ -925,8 +992,14 @@ mod tests {
             recorded_at: "2026-04-13T10:00:00Z".to_string(),
         };
 
-        let summary =
-            build_continuation_binding_summary(Some(&binding), Some(&status), None, None, false);
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            None,
+            None,
+            false,
+        );
 
         assert_eq!(summary["status"], "bound");
         assert_eq!(summary["binding_source"], "explicit_continuation_bind_task");
@@ -970,6 +1043,7 @@ mod tests {
             Some(&status),
             None,
             None,
+            None,
             false,
         );
 
@@ -1010,8 +1084,14 @@ mod tests {
             recorded_at: "2026-04-16T09:00:00Z".to_string(),
         };
 
-        let summary =
-            build_continuation_binding_summary(Some(&binding), Some(&status), None, None, false);
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            None,
+            None,
+            false,
+        );
 
         assert_eq!(summary["status"], "bound");
         assert_eq!(summary["binding_source"], "explicit_continuation_bind_task");
@@ -1034,7 +1114,8 @@ mod tests {
         status.status = "running".to_string();
         status.lifecycle_stage = "implementer_active".to_string();
 
-        let summary = build_continuation_binding_summary(None, Some(&status), None, None, false);
+        let summary =
+            build_continuation_binding_summary(None, Some(&status), None, None, None, false);
         let taskflow_candidates = taskflow_active_candidates_from_tasks(&[task_record(
             "audit-p1-current-task",
             "in_progress",
@@ -1081,7 +1162,8 @@ mod tests {
         status.status = "running".to_string();
         status.lifecycle_stage = "implementer_active".to_string();
 
-        let summary = build_continuation_binding_summary(None, Some(&status), None, None, false);
+        let summary =
+            build_continuation_binding_summary(None, Some(&status), None, None, None, false);
         let taskflow_candidates =
             taskflow_active_candidates_from_tasks(&[task_record("task-1", "in_progress")]);
         let summary = add_taskflow_active_work_truth(summary, taskflow_candidates);

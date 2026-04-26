@@ -284,6 +284,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         latest_run_graph_status.as_ref(),
                         latest_run_graph_recovery.as_ref(),
                         latest_run_graph_dispatch_receipt.as_ref(),
+                        crate::latest_terminal_consume_continue_snapshot_run_id(store.root())
+                            .ok()
+                            .flatten()
+                            .as_deref(),
                         latest_run_graph_snapshot_inconsistent
                             || latest_run_graph_dispatch_receipt_signal_ambiguous
                             || latest_run_graph_dispatch_receipt_summary_inconsistent

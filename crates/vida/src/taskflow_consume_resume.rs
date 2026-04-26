@@ -2634,6 +2634,10 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
             Some(&status),
             latest_run_graph_recovery.as_ref(),
             latest_run_graph_dispatch_receipt.as_ref(),
+            crate::latest_terminal_consume_continue_snapshot_run_id(store.root())
+                .ok()
+                .flatten()
+                .as_deref(),
             continuation_binding_evidence_ambiguous,
         );
     let terminal_completed_run =
@@ -3832,7 +3836,6 @@ pub(crate) async fn run_taskflow_consume_advance_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
         blocked_external_dispatch_artifact_mismatched_as_internal_activation,
         build_failure_control_evidence, canonical_resume_dispatch_status,
         canonical_resume_lane_status, canonical_resume_string_array_entries,
@@ -3853,6 +3856,7 @@ mod tests {
         runtime_consumption_snapshot_has_failure_control_evidence,
         should_refresh_resumed_downstream_preview, sync_run_graph_after_retry_artifact,
         validate_run_graph_resume_state, validate_run_graph_resume_state_for_downstream_packet,
+        DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
     use crate::state_store::{CreateTaskRequest, TaskExecutionSemantics};
@@ -3897,15 +3901,13 @@ mod tests {
             payload["state_access"]["lock_diagnostics"]["lock_file_size"].as_u64(),
             Some(0)
         );
-        assert!(
-            payload["next_actions"]
-                .as_array()
-                .expect("next actions")
-                .iter()
-                .any(|action| action
-                    .as_str()
-                    .is_some_and(|value| value.contains("do not delete datastore LOCK files")))
-        );
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .iter()
+            .any(|action| action
+                .as_str()
+                .is_some_and(|value| value.contains("do not delete datastore LOCK files"))));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -4051,16 +4053,12 @@ mod tests {
 
         let blocker_codes = runtime_consumption_resume_receipt_blocker_codes(&receipt);
 
-        assert!(
-            blocker_codes
-                .iter()
-                .any(|code| code == "timeout_without_takeover_authority")
-        );
-        assert!(
-            blocker_codes
-                .iter()
-                .any(|code| code == "pending_review_clean_evidence")
-        );
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code == "timeout_without_takeover_authority"));
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code == "pending_review_clean_evidence"));
     }
 
     #[test]
@@ -4103,16 +4101,12 @@ mod tests {
             ],
         );
 
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("vida taskflow recovery latest --json"))
-        );
-        assert!(
-            !next_actions
-                .iter()
-                .any(|action| action.contains("clean review evidence"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow recovery latest --json")));
+        assert!(!next_actions
+            .iter()
+            .any(|action| action.contains("clean review evidence")));
     }
 
     #[test]
@@ -4152,11 +4146,9 @@ mod tests {
             &["pending_review_clean_evidence".to_string()],
         );
 
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("clean review evidence"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("clean review evidence")));
     }
 
     #[test]
@@ -5212,12 +5204,10 @@ agent_system:
         assert_eq!(inputs.dispatch_receipt.dispatch_status, "executed");
         assert!(!inputs.dispatch_receipt.downstream_dispatch_ready);
         assert!(inputs.dispatch_receipt.downstream_dispatch_target.is_none());
-        assert!(
-            inputs
-                .dispatch_receipt
-                .downstream_dispatch_active_target
-                .is_none()
-        );
+        assert!(inputs
+            .dispatch_receipt
+            .downstream_dispatch_active_target
+            .is_none());
         assert_eq!(
             inputs
                 .dispatch_receipt
@@ -5313,12 +5303,10 @@ agent_system:
             normalized_result["blocker_code"],
             "internal_activation_view_only"
         );
-        assert!(
-            normalized_result["provider_error"]
-                .as_str()
-                .expect("provider error should render")
-                .contains("timed out after 39s")
-        );
+        assert!(normalized_result["provider_error"]
+            .as_str()
+            .expect("provider error should render")
+            .contains("timed out after 39s"));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -5405,8 +5393,8 @@ agent_system:
     }
 
     #[test]
-    fn normalize_stale_in_flight_dispatch_receipt_keeps_legacy_internal_execution_inside_host_window()
-     {
+    fn normalize_stale_in_flight_dispatch_receipt_keeps_legacy_internal_execution_inside_host_window(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -5584,12 +5572,10 @@ agent_system:
             normalized_result["blocker_code"],
             "internal_activation_view_only"
         );
-        assert!(
-            normalized_result["provider_error"]
-                .as_str()
-                .expect("provider error should render")
-                .contains("timed out after 17s")
-        );
+        assert!(normalized_result["provider_error"]
+            .as_str()
+            .expect("provider error should render")
+            .contains("timed out after 17s"));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -5687,8 +5673,8 @@ agent_system:
     }
 
     #[test]
-    fn normalize_stale_in_flight_dispatch_receipt_reclassifies_downstream_carrier_mismatch_immediately()
-     {
+    fn normalize_stale_in_flight_dispatch_receipt_reclassifies_downstream_carrier_mismatch_immediately(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6055,8 +6041,8 @@ agent_system:
     }
 
     #[test]
-    fn normalize_stale_receipt_keeps_generic_timeout_when_external_evidence_overrides_internal_packet_hint()
-     {
+    fn normalize_stale_receipt_keeps_generic_timeout_when_external_evidence_overrides_internal_packet_hint(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6658,8 +6644,8 @@ agent_system:
     }
 
     #[test]
-    fn resume_from_persisted_final_snapshot_rejects_final_snapshot_without_failure_control_evidence()
-     {
+    fn resume_from_persisted_final_snapshot_rejects_final_snapshot_without_failure_control_evidence(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6715,16 +6701,14 @@ agent_system:
         assert!(!runtime_consumption_snapshot_has_failure_control_evidence(
             &snapshot_json
         ));
-        assert!(
-            !resume_from_persisted_final_snapshot(&store).expect("runtime consumption summary")
-        );
+        assert!(!resume_from_persisted_final_snapshot(&store).expect("runtime consumption summary"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn validate_run_graph_resume_state_accepts_persisted_receipt_lineage_when_summary_rows_are_missing()
-     {
+    async fn validate_run_graph_resume_state_accepts_persisted_receipt_lineage_when_summary_rows_are_missing(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6901,8 +6885,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn validate_run_graph_resume_state_for_downstream_packet_accepts_receipt_backed_packet_ready()
-     {
+    async fn validate_run_graph_resume_state_for_downstream_packet_accepts_receipt_backed_packet_ready(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6982,8 +6966,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_runtime_consumption_resume_inputs_accepts_runtime_style_downstream_packet_ready_without_result_path()
-     {
+    async fn resolve_runtime_consumption_resume_inputs_accepts_runtime_style_downstream_packet_ready_without_result_path(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7112,8 +7096,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_runtime_consumption_resume_inputs_sanitizes_inherited_upstream_exception_evidence_from_ready_downstream_packet()
-     {
+    async fn resolve_runtime_consumption_resume_inputs_sanitizes_inherited_upstream_exception_evidence_from_ready_downstream_packet(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7239,20 +7223,18 @@ agent_system:
         assert_eq!(resolved.dispatch_receipt.dispatch_target, "closure");
         assert_eq!(resolved.dispatch_receipt.dispatch_status, "packet_ready");
         assert_eq!(resolved.dispatch_receipt.lane_status, "packet_ready");
-        assert!(
-            resolved
-                .dispatch_receipt
-                .exception_path_receipt_id
-                .is_none()
-        );
+        assert!(resolved
+            .dispatch_receipt
+            .exception_path_receipt_id
+            .is_none());
         assert!(resolved.dispatch_receipt.supersedes_receipt_id.is_none());
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn completed_closure_bound_run_prefers_lawful_closure_packet_over_stale_blocked_coach_lineage()
-     {
+    async fn completed_closure_bound_run_prefers_lawful_closure_packet_over_stale_blocked_coach_lineage(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7475,8 +7457,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_runtime_consumption_resume_inputs_for_completed_closure_bound_run_prefers_lawful_closure_packet_over_stale_blocked_coach_lineage()
-     {
+    async fn resolve_runtime_consumption_resume_inputs_for_completed_closure_bound_run_prefers_lawful_closure_packet_over_stale_blocked_coach_lineage(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7719,8 +7701,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_runtime_consumption_resume_inputs_heals_task_close_reconcile_stale_active_result_lineage_to_closure()
-     {
+    async fn resolve_runtime_consumption_resume_inputs_heals_task_close_reconcile_stale_active_result_lineage_to_closure(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -8040,8 +8022,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_runtime_consumption_resume_inputs_for_run_id_ignores_stale_downstream_result_for_internal_activation_view_only_retry_receipt()
-     {
+    async fn resolve_runtime_consumption_resume_inputs_for_run_id_ignores_stale_downstream_result_for_internal_activation_view_only_retry_receipt(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -8432,8 +8414,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn rewrite_retry_dispatch_packet_replaces_downstream_timeout_receipt_with_canonical_packet()
-     {
+    async fn rewrite_retry_dispatch_packet_replaces_downstream_timeout_receipt_with_canonical_packet(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -8588,8 +8570,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn rewrite_retry_dispatch_packet_does_not_rotate_internal_activation_view_only_without_effective_retry_gate()
-     {
+    async fn rewrite_retry_dispatch_packet_does_not_rotate_internal_activation_view_only_without_effective_retry_gate(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -8717,8 +8699,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn rewrite_retry_dispatch_packet_rotates_internal_activation_view_only_when_effective_retry_gate_is_satisfied()
-     {
+    async fn rewrite_retry_dispatch_packet_rotates_internal_activation_view_only_when_effective_retry_gate_is_satisfied(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -9270,8 +9252,8 @@ agent_system:
     }
 
     #[test]
-    fn prepare_explicit_resume_retry_artifact_keeps_internal_activation_view_only_blocked_without_rebind()
-     {
+    fn prepare_explicit_resume_retry_artifact_keeps_internal_activation_view_only_blocked_without_rebind(
+    ) {
         let root = std::env::temp_dir().join(format!(
             "vida-internal-activation-no-rebind-{}",
             SystemTime::now()
@@ -9693,8 +9675,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_resume_inputs_without_run_id_recovers_missing_first_receipt_for_active_implementer_run()
-     {
+    async fn resolve_resume_inputs_without_run_id_recovers_missing_first_receipt_for_active_implementer_run(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10030,8 +10012,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_resume_inputs_prefers_active_downstream_result_over_stale_ready_packet_for_coach_active_run()
-     {
+    async fn resolve_resume_inputs_prefers_active_downstream_result_over_stale_ready_packet_for_coach_active_run(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10250,8 +10232,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_resume_inputs_for_completed_closure_bound_run_rejects_stale_active_and_ready_downstream_coach_lineage()
-     {
+    async fn resolve_resume_inputs_for_completed_closure_bound_run_rejects_stale_active_and_ready_downstream_coach_lineage(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10457,8 +10439,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_resume_inputs_without_run_id_fails_closed_for_ambiguous_completed_run_with_active_downstream_result()
-     {
+    async fn resolve_resume_inputs_without_run_id_fails_closed_for_ambiguous_completed_run_with_active_downstream_result(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10628,8 +10610,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_runtime_consumption_resume_inputs_for_run_id_fails_closed_when_explicit_task_graph_binding_mismatches_dispatch_packet_lineage()
-     {
+    async fn resolve_runtime_consumption_resume_inputs_for_run_id_fails_closed_when_explicit_task_graph_binding_mismatches_dispatch_packet_lineage(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10822,8 +10804,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_runtime_consumption_resume_inputs_for_run_id_fails_closed_when_explicit_task_graph_binding_mismatches_persisted_status()
-     {
+    async fn resolve_runtime_consumption_resume_inputs_for_run_id_fails_closed_when_explicit_task_graph_binding_mismatches_persisted_status(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10941,8 +10923,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_runtime_consumption_resume_inputs_without_run_id_fails_closed_on_cross_run_explicit_task_binding()
-     {
+    async fn resolve_runtime_consumption_resume_inputs_without_run_id_fails_closed_on_cross_run_explicit_task_binding(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -11022,8 +11004,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_runtime_consumption_resume_inputs_for_run_id_allows_matching_explicit_task_graph_binding_lineage()
-     {
+    async fn resolve_runtime_consumption_resume_inputs_for_run_id_allows_matching_explicit_task_graph_binding_lineage(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -11224,18 +11206,16 @@ agent_system:
             replay_lineage.source_dispatch_packet_path.as_deref(),
             Some(packet_path.display().to_string().as_str())
         );
-        assert!(
-            replay_lineage
-                .origin_checkpoint_ref
-                .starts_with(&format!("{run_id}:execution_cursor:none"))
-        );
+        assert!(replay_lineage
+            .origin_checkpoint_ref
+            .starts_with(&format!("{run_id}:execution_cursor:none")));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn runtime_consumption_resume_blocker_code_uses_explicit_run_receipt_lineage_when_run_id_is_requested()
-     {
+    async fn runtime_consumption_resume_blocker_code_uses_explicit_run_receipt_lineage_when_run_id_is_requested(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -11390,8 +11370,8 @@ agent_system:
     }
 
     #[test]
-    fn normalize_runtime_dispatch_packet_derives_owned_paths_for_legacy_implementer_delivery_packet()
-     {
+    fn normalize_runtime_dispatch_packet_derives_owned_paths_for_legacy_implementer_delivery_packet(
+    ) {
         let mut packet = serde_json::json!({
             "packet_template_kind": "delivery_task_packet",
             "dispatch_target": "implementer",
@@ -12282,12 +12262,10 @@ agent_system:
         assert!(reconciled);
         assert_eq!(receipt.dispatch_status, "executed");
         assert_eq!(receipt.lane_status, "lane_completed");
-        assert!(
-            receipt
-                .dispatch_result_path
-                .as_deref()
-                .is_some_and(|path| !path.trim().is_empty())
-        );
+        assert!(receipt
+            .dispatch_result_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty()));
         assert!(receipt.blocker_code.is_none());
         assert!(receipt.exception_path_receipt_id.is_none());
         assert_eq!(
@@ -12450,8 +12428,8 @@ agent_system:
     }
 
     #[test]
-    fn prefer_ready_downstream_packet_over_active_result_returns_false_for_same_target_blocked_active_result()
-     {
+    fn prefer_ready_downstream_packet_over_active_result_returns_false_for_same_target_blocked_active_result(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -12516,8 +12494,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_runtime_consumption_resume_inputs_for_completed_closure_bound_run_prefers_same_target_blocked_active_result_over_stale_ready_packet()
-     {
+    async fn resolve_runtime_consumption_resume_inputs_for_completed_closure_bound_run_prefers_same_target_blocked_active_result_over_stale_ready_packet(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())

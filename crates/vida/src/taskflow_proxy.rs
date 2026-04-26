@@ -1028,6 +1028,7 @@ fn explicit_task_binding_matches_status(
 fn active_exception_takeover_evidence_matches_status(
     status: Option<&crate::state_store::RunGraphStatus>,
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    terminal_continue_run_id: Option<&str>,
 ) -> bool {
     let Some(status) = status else {
         return false;
@@ -1035,6 +1036,9 @@ fn active_exception_takeover_evidence_matches_status(
     let Some(dispatch) = dispatch else {
         return false;
     };
+    if terminal_continue_run_id == Some(status.run_id.as_str()) {
+        return false;
+    }
     dispatch.run_id == status.run_id
         && dispatch.lane_status == "lane_exception_takeover"
         && dispatch
@@ -1068,7 +1072,7 @@ fn active_exception_takeover_binding_matches_status(
         && binding.task_id == status.task_id
         && binding.binding_source == "consume_continue_after_downstream_chain"
         && binding_kind == Some("run_graph_task")
-        && active_exception_takeover_evidence_matches_status(Some(status), dispatch)
+        && active_exception_takeover_evidence_matches_status(Some(status), dispatch, None)
 }
 
 fn build_taskflow_next_decision(
@@ -1080,6 +1084,7 @@ fn build_taskflow_next_decision(
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
     explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
+    terminal_consume_continue_run_id: Option<&str>,
 ) -> TaskflowNextDecision {
     let ready_head = ready_head.map(graph_summary_task_ref);
     let latest_run_graph_status_blocked =
@@ -1089,10 +1094,17 @@ fn build_taskflow_next_decision(
         latest_run_graph_status,
         dispatch,
     );
-    let active_exception_takeover_evidence =
-        active_exception_takeover_evidence_matches_status(latest_run_graph_status, dispatch);
-    let latest_run_graph_status_blocks_admission =
-        latest_run_graph_status_blocked && !active_exception_takeover_evidence;
+    let active_exception_takeover_evidence = active_exception_takeover_evidence_matches_status(
+        latest_run_graph_status,
+        dispatch,
+        terminal_consume_continue_run_id,
+    );
+    let terminal_consume_continue_without_next_unit = latest_run_graph_status
+        .zip(terminal_consume_continue_run_id)
+        .is_some_and(|(status, run_id)| status.run_id == run_id);
+    let latest_run_graph_status_blocks_admission = latest_run_graph_status_blocked
+        && !active_exception_takeover_evidence
+        && !terminal_consume_continue_without_next_unit;
     let completed_without_explicit_next_unit =
         terminal_completed_without_next_unit(latest_run_graph_status)
             && !explicit_task_binding_matches_status(explicit_binding, latest_run_graph_status);
@@ -1100,6 +1112,8 @@ fn build_taskflow_next_decision(
         "delegated_cycle_runtime_gate".to_string()
     } else if active_exception_takeover_evidence {
         "active_exception_takeover_continuation".to_string()
+    } else if terminal_consume_continue_without_next_unit {
+        "terminal_continue_snapshot_without_next_bounded_unit".to_string()
     } else if latest_run_graph_status_blocks_admission {
         "latest_run_graph_status_blocked".to_string()
     } else if completed_without_explicit_next_unit {
@@ -1116,6 +1130,7 @@ fn build_taskflow_next_decision(
         admissible_now: !(recovery_holds_active_bound_run
             || active_exception_takeover_binding
             || (active_exception_takeover_evidence && latest_run_graph_status_blocked)
+            || terminal_consume_continue_without_next_unit
             || latest_run_graph_status_blocks_admission
             || completed_without_explicit_next_unit),
         admissibility_gate,
@@ -1193,6 +1208,34 @@ fn build_taskflow_next_decision(
                 Some(next_action.surface.clone()),
                 None,
                 None,
+                Some(next_action),
+            )
+        } else if terminal_consume_continue_without_next_unit {
+            let run_id = latest_run_graph_status
+                .map(|status| status.run_id.as_str())
+                .unwrap_or("<run-id>");
+            let next_action = TaskflowNextAction {
+                command: format!(
+                    "vida taskflow continuation bind {run_id} --task-id <task-id> --json"
+                ),
+                surface: "vida taskflow continuation bind".to_string(),
+                reason: "the latest consume-continue snapshot already completed with no further actions, so the same run must not be continued again without an explicit next bounded unit".to_string(),
+            };
+            blocker_codes.push("terminal_continue_snapshot_without_next_bounded_unit".to_string());
+            next_actions.push(format!(
+                "Do not repeat `vida taskflow consume continue --run-id {run_id} --json`; bind the next bounded unit explicitly with `{}` or reconcile the stale run-graph state.",
+                next_action.command
+            ));
+            (
+                Some(next_action.command.clone()),
+                Some(next_action.surface.clone()),
+                None,
+                Some(TaskflowNextWhyNotNow {
+                    category: "terminal_continue_snapshot_without_next_bounded_unit".to_string(),
+                    summary: "The latest consume-continue snapshot completed with no next actions while the run graph still references the same blocked run, so `vida taskflow next` must fail closed instead of self-looping or admitting backlog ready-head work.".to_string(),
+                    blocker_codes: blocker_codes.clone(),
+                    blocking_surface: Some("vida taskflow continuation bind".to_string()),
+                }),
                 Some(next_action),
             )
         } else if completed_without_explicit_next_unit {
@@ -1913,6 +1956,10 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         dispatch.as_ref(),
         latest_run_graph.as_ref(),
         explicit_binding.as_ref(),
+        crate::latest_terminal_consume_continue_snapshot_run_id(&state_dir)
+            .ok()
+            .flatten()
+            .as_deref(),
     );
     let (shared_fields, operator_contracts, artifact_refs) = taskflow_next_operator_contracts(
         &decision,
@@ -5575,6 +5622,7 @@ mod tests {
             Some(&dispatch),
             None,
             None,
+            None,
         );
 
         assert_eq!(decision.status, "blocked");
@@ -5626,6 +5674,7 @@ mod tests {
             None,
             None,
             Some(&latest_status),
+            None,
             None,
         );
 
@@ -5728,6 +5777,7 @@ mod tests {
             Some(&dispatch),
             Some(&latest_status),
             Some(&stale_binding),
+            None,
         );
 
         assert_eq!(decision.status, "pass");
@@ -5764,6 +5814,68 @@ mod tests {
     }
 
     #[test]
+    fn taskflow_next_decision_stops_exception_takeover_self_loop_after_terminal_continue() {
+        let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-audit-state-store-init-lock-timeout",
+            "runtime-audit-state-store-init-lock-timeout",
+            "analysis",
+        );
+        latest_status.status = "blocked".to_string();
+        latest_status.lifecycle_stage = "analysis_blocked".to_string();
+        let dispatch = exception_takeover_dispatch("runtime-audit-state-store-init-lock-timeout");
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("ready-head")),
+            false,
+            true,
+            Some("final"),
+            None,
+            Some(&dispatch),
+            Some(&latest_status),
+            None,
+            Some("runtime-audit-state-store-init-lock-timeout"),
+        );
+
+        assert_eq!(decision.status, "blocked");
+        assert!(decision.primary_ready_task.is_none());
+        assert_eq!(
+            decision
+                .candidate_task_context
+                .ready_head
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("ready-head")
+        );
+        assert!(!decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "terminal_continue_snapshot_without_next_bounded_unit"
+        );
+        assert_eq!(
+            decision
+                .why_not_now
+                .as_ref()
+                .map(|value| value.category.as_str()),
+            Some("terminal_continue_snapshot_without_next_bounded_unit")
+        );
+        assert_ne!(
+            decision
+                .next_action
+                .as_ref()
+                .map(|value| value.command.as_str()),
+            Some("vida taskflow consume continue --run-id runtime-audit-state-store-init-lock-timeout --json")
+        );
+        assert_eq!(
+            decision.recommended_surface.as_deref(),
+            Some("vida taskflow continuation bind")
+        );
+        assert!(decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit"));
+    }
+
+    #[test]
     fn taskflow_next_decision_reports_no_ready_task_with_explicit_next_action() {
         let decision = super::build_taskflow_next_decision(
             None,
@@ -5771,6 +5883,7 @@ mod tests {
             false,
             None,
             Some("epic-1"),
+            None,
             None,
             None,
             None,
@@ -5821,6 +5934,7 @@ mod tests {
             None,
             None,
             Some(&status),
+            None,
             None,
         );
 

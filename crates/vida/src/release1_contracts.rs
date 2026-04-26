@@ -860,6 +860,7 @@ pub(crate) enum BlockerCode {
     RunGraphLatestDispatchReceiptSignalAmbiguous,
     RunGraphLatestDispatchReceiptSummaryInconsistent,
     RunGraphLatestDispatchReceiptCheckpointLeakage,
+    TerminalContinueSnapshotWithoutNextBoundedUnit,
     ProjectActivationUnknown,
     DependencyGraphIssues,
     DispatchPacketContractInvalid,
@@ -1006,6 +1007,9 @@ impl BlockerCode {
             }
             Self::RunGraphLatestDispatchReceiptCheckpointLeakage => {
                 "run_graph_latest_dispatch_receipt_checkpoint_leakage"
+            }
+            Self::TerminalContinueSnapshotWithoutNextBoundedUnit => {
+                "terminal_continue_snapshot_without_next_bounded_unit"
             }
             Self::ProjectActivationUnknown => "project_activation_unknown",
             Self::DependencyGraphIssues => "dependency_graph_issues",
@@ -1181,6 +1185,9 @@ impl BlockerCode {
             }
             "run_graph_latest_dispatch_receipt_checkpoint_leakage" => {
                 Some(Self::RunGraphLatestDispatchReceiptCheckpointLeakage)
+            }
+            "terminal_continue_snapshot_without_next_bounded_unit" => {
+                Some(Self::TerminalContinueSnapshotWithoutNextBoundedUnit)
             }
             "project_activation_unknown" => Some(Self::ProjectActivationUnknown),
             "dependency_graph_issues" => Some(Self::DependencyGraphIssues),

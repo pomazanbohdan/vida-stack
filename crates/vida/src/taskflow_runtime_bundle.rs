@@ -133,6 +133,10 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             latest_run_graph_status.as_ref(),
             latest_run_graph_recovery.as_ref(),
             latest_run_graph_dispatch_receipt.as_ref(),
+            crate::latest_terminal_consume_continue_snapshot_run_id(store.root())
+                .ok()
+                .flatten()
+                .as_deref(),
             continuation_binding_evidence_ambiguous,
         );
     let taskflow_active_candidates = store

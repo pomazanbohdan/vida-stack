@@ -191,6 +191,7 @@ pub(crate) use runtime_consumption_state::{
 };
 pub(crate) use runtime_consumption_state::{
     latest_final_runtime_consumption_snapshot_path,
+    latest_terminal_consume_continue_snapshot_run_id,
     runtime_consumption_snapshot_has_release_admission_evidence, runtime_consumption_summary,
     write_runtime_consumption_snapshot,
 };
