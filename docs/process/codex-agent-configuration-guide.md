@@ -184,37 +184,27 @@ Coach separation rule:
 
 ## Model, Tier, And Pricing Policy
 
-Current project decision for Codex development agents:
+Current project rule for Codex development agents:
 
-1. use the selected `GPT-5.5` family with a four-level reasoning ladder,
-2. use four Codex execution tiers whose default execution settings are now carried by canonical model profiles:
-   - `junior` -> default profile `codex_gpt55_low_write` -> reasoning `low` -> rate `1`
-   - `middle` -> default profile `codex_gpt55_medium_write` -> reasoning `medium` -> rate `4`
-   - `senior` -> default profile `codex_gpt55_high_readonly` -> reasoning `high` -> rate `16`
-   - `architect` -> default profile `codex_gpt55_xhigh_arch` -> reasoning `xhigh` -> rate `48`
-3. keep all Codex development carriers on the active `GPT-5.5` model family and vary capability through carrier tier, reasoning effort, sandbox posture, and normalized cost units,
-4. map that preference in the active project overlay as:
-   - `junior` -> `gpt-5.5`
-   - `middle` -> `gpt-5.5`
-   - `senior` -> `gpt-5.5`
-   - `architect` -> `gpt-5.5`
-5. use `architect` default execution on `xhigh` for architecture preparation, hard escalation, cross-scope conflict, and other work that has already outgrown the normal implementer-coach-verifier path,
-6. treat legacy per-tier `model` and `model_reasoning_effort` fields as compatibility shorthand only; runtime should normalize them into a synthetic default model profile when the explicit profile catalog is absent,
-7. rendered `.codex/agents/*.toml` files are projections of the selected default model profile and must not become the authority surface for tier/model policy,
-8. do not use the highest tier as the normal default,
-9. choose the cheapest tier that satisfies:
+1. keep concrete model refs, pricing, model profile ids, reasoning effort, and provider names in `vida.config.yaml`,
+2. use framework-level model-profile/runtime-selection contracts for schema and behavior,
+3. treat project docs as routing/process guidance only, not a second model catalog,
+4. treat legacy per-tier `model` and `model_reasoning_effort` fields as compatibility shorthand only; runtime should normalize them into a synthetic default model profile when the explicit profile catalog is absent,
+5. rendered `.codex/agents/*.toml` files are projections of the selected default model profile and must not become the authority surface for tier/model policy,
+6. do not use the highest tier as the normal default,
+7. choose the cheapest tier that satisfies:
    - the required task-class minimum,
    - the local score guard from `.vida/state/worker-strategy.json`,
    - the lane/packet role boundary,
-10. use local scorecards and strategy state to refresh effective tier score dynamically:
+8. use local scorecards and strategy state to refresh effective tier score dynamically:
    - `.vida/state/worker-scorecards.json`
    - `.vida/state/worker-strategy.json`
-11. record post-task feedback through:
+9. record post-task feedback through:
    - `vida agent-feedback --agent-id <tier> --score <0-100> --task-class <task_class> [--outcome <success|failure|neutral>] [--notes "..."]`
-12. use the local host-agent observability ledger for automatic feedback history and budget rollup:
+10. use the local host-agent observability ledger for automatic feedback history and budget rollup:
    - `.vida/state/host-agent-observability.json`
-13. use `vida status --json` as the bounded operator surface for current tier state, current/default model-profile truth, rejected-candidate diagnostics, recent host-agent events, and total estimated budget units recorded so far,
-14. prefer `vida taskflow task close ...` over ad hoc task finalization when the task belongs to the tracked Codex execution path, because close-time telemetry now refreshes the same score/observability loop automatically.
+11. use `vida status --json` as the bounded operator surface for current tier state, current/default model-profile truth, rejected-candidate diagnostics, recent host-agent events, and total estimated budget units recorded so far,
+12. prefer `vida taskflow task close ...` over ad hoc task finalization when the task belongs to the tracked Codex execution path, because close-time telemetry now refreshes the same score/observability loop automatically.
 
 Policy note:
 

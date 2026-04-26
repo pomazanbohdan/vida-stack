@@ -121,14 +121,14 @@ Will implement / choose:
 - ADR link if needed
   - none
 
-### 3. `architect` keeps `high` by default and adds explicit `xhigh` escalation profile
+### 3. `architect` defaults through the configured model-profile catalog
 Will implement / choose:
-- preserve the current cheaper default (`gpt-5.3-codex-spark` with `high`) for `architect`
-- add an explicit `xhigh` profile for hard-escalation paths rather than globally upgrading all architect work
+- use the active configured `architect` default profile from `vida.config.yaml`
+- keep lower-cost architecture profiles available only when a bounded route explicitly selects them through the configured catalog
 - Why
-  - the current report calls out the `xhigh` gap, but defaulting every architecture task to `xhigh` would change cost/latency posture immediately
+  - framework behavior must stay model-agnostic while the project config remains the concrete source of model/profile/cost truth
 - Trade-offs
-  - initial runtime-selection logic needs an escalation hook or explicit default-to-high posture in diagnostics
+  - ordinary architecture work follows the configured default cost unless a route explicitly selects another configured profile
 - Alternatives considered
   - keep `architect` permanently pinned to `high` with no `xhigh` option
   - promote all architect work to `xhigh`

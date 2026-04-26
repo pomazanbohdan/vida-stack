@@ -644,8 +644,8 @@ agent_system:
 #       orchestration_tier: senior
 #       cost_priority: premium
 #       budget_cost_units: 10
-#       profiles: internal_fast,internal_arch,internal_review
-#       default_profile: internal_fast
+#       profiles: codex_gpt55_low_write,codex_gpt55_xhigh_arch,codex_gpt55_high_readonly
+#       default_profile: codex_gpt55_low_write
 #       capability_band: implementation_safe,architecture_safe
 #       write_scope: orchestrator_native
 #       billing_tier: internal
@@ -680,7 +680,7 @@ agent_system:
 #       executor_backend: internal_subagents
 #       fallback_executor_backend: internal_subagents
 #       profiles:
-#         internal_subagents: internal_fast
+#         internal_subagents: codex_gpt55_low_write
 #       budget_policy: balanced
 #       max_budget_units: 4
 #       max_runtime_seconds: 420
@@ -693,7 +693,7 @@ agent_system:
 #       fanout_executor_backends:
 #         - internal_subagents
 #       profiles:
-#         internal_subagents: internal_fast
+#         internal_subagents: codex_gpt55_low_write
 #       max_runtime_seconds: 180
 #       verification_gate: source_backed_summary
 #       verification_route_task_class: verification_ensemble
@@ -706,7 +706,7 @@ agent_system:
 #       executor_backend: internal_subagents
 #       fallback_executor_backend: internal_subagents
 #       profiles:
-#         internal_subagents: internal_fast
+#         internal_subagents: codex_gpt55_low_write
 #       max_runtime_seconds: 420
 #       verification_gate: targeted_verification
 #       coach_required: yes
@@ -731,7 +731,7 @@ agent_system:
 #       executor_backend: internal_subagents
 #       fallback_executor_backend: internal_subagents
 #       profiles:
-#         internal_subagents: internal_review
+#         internal_subagents: codex_gpt55_high_readonly
 #       max_runtime_seconds: 180
 #       verification_gate: verification_summary
 #       dispatch_required: diagnostic_only_internal_first_review

@@ -284,56 +284,56 @@ party_chat:
   dei_enabled: true
   single_agent:
     backend: internal_subagents
-    model: internal_fast
+    model: codex_gpt55_low_write
   role_model_bindings:
     party_chat_facilitator:
       backend: internal_subagents
-      model: internal_review
+      model: codex_gpt55_high_readonly
     party_chat_architect:
       backend: internal_subagents
-      model: internal_arch
+      model: codex_gpt55_xhigh_arch
     party_chat_runtime_systems:
       backend: internal_subagents
-      model: internal_arch
+      model: codex_gpt55_xhigh_arch
     party_chat_quality_verification:
       backend: internal_subagents
-      model: internal_review
+      model: codex_gpt55_high_readonly
     party_chat_delivery_cost:
       backend: internal_subagents
-      model: internal_review
+      model: codex_gpt55_high_readonly
     party_chat_product_scope:
       backend: internal_subagents
-      model: internal_fast
+      model: codex_gpt55_low_write
     party_chat_system_analyst:
       backend: internal_subagents
-      model: internal_review
+      model: codex_gpt55_medium_write
     party_chat_product_designer:
       backend: internal_subagents
-      model: internal_fast
+      model: codex_gpt55_low_write
     party_chat_security_safety:
       backend: internal_subagents
-      model: internal_review
+      model: codex_gpt55_high_readonly
     party_chat_sre_observability:
       backend: internal_subagents
-      model: internal_review
+      model: codex_gpt55_high_readonly
     party_chat_qa_tester:
       backend: internal_subagents
-      model: internal_review
+      model: codex_gpt55_high_readonly
     party_chat_accessibility_ux:
       backend: internal_subagents
-      model: internal_review
+      model: codex_gpt55_high_readonly
     party_chat_data_contracts:
       backend: internal_subagents
-      model: internal_arch
+      model: codex_gpt55_xhigh_arch
     party_chat_dx_tooling:
       backend: internal_subagents
-      model: internal_fast
+      model: codex_gpt55_low_write
     party_chat_pm_process:
       backend: internal_subagents
-      model: internal_review
+      model: codex_gpt55_medium_write
     party_chat_release_manager:
       backend: internal_subagents
-      model: internal_review
+      model: codex_gpt55_high_readonly
 
 agent_extensions:
   enabled: true
@@ -832,9 +832,9 @@ agent_system:
       orchestration_tier: senior
       cost_priority: premium
       budget_cost_units: 10
-      profiles: internal_fast,internal_arch,internal_review
-      default_profile: internal_fast
-      default_model_profile: internal_fast
+      profiles: codex_gpt55_low_write,codex_gpt55_xhigh_arch,codex_gpt55_high_readonly
+      default_profile: codex_gpt55_low_write
+      default_model_profile: codex_gpt55_low_write
       capability_band: implementation_safe,architecture_safe,review_safe
       default_runtime_role: worker
       write_scope: orchestrator_native
@@ -857,11 +857,11 @@ agent_system:
         - execution_preparation
         - hard_escalation
       model_profiles:
-        internal_fast:
-          provider: internal
-          model_ref: internal_fast
+        codex_gpt55_low_write:
+          provider: openai
+          model_ref: gpt-5.5
           reasoning_effort: low
-          normalized_cost_units: 6
+          normalized_cost_units: 1
           pricing:
             price_source_kind: provider_catalog
             source_paths:
@@ -881,13 +881,13 @@ agent_system:
             - analysis
             - delivery_task
           readiness:
-            mode: internal_profile
+            mode: codex_profile
             required: true
-        internal_review:
-          provider: internal
-          model_ref: internal_review
+        codex_gpt55_high_readonly:
+          provider: openai
+          model_ref: gpt-5.5
           reasoning_effort: high
-          normalized_cost_units: 8
+          normalized_cost_units: 16
           speed_tier: medium
           quality_tier: high
           write_scope: read_or_review
@@ -901,13 +901,13 @@ agent_system:
             - coach
             - release_readiness
           readiness:
-            mode: internal_profile
+            mode: codex_profile
             required: true
-        internal_arch:
-          provider: internal
-          model_ref: internal_arch
-          reasoning_effort: high
-          normalized_cost_units: 12
+        codex_gpt55_xhigh_arch:
+          provider: openai
+          model_ref: gpt-5.5
+          reasoning_effort: xhigh
+          normalized_cost_units: 48
           speed_tier: medium
           quality_tier: very_high
           write_scope: architecture_safe
@@ -918,7 +918,7 @@ agent_system:
             - execution_preparation
             - hard_escalation
           readiness:
-            mode: internal_profile
+            mode: codex_profile
             required: true
       specialties: implementation,architecture,integration,review,verification
     hermes_cli:
@@ -1315,7 +1315,7 @@ agent_system:
       executor_backend: kilo_cli
       subagents: kilo_cli
       profiles:
-        internal_subagents: internal_fast
+        internal_subagents: codex_gpt55_low_write
       fanout_executor_backends:
         - hermes_cli
         - opencode_cli
@@ -1348,7 +1348,7 @@ agent_system:
       executor_backend: kilo_cli
       subagents: kilo_cli
       profiles:
-        internal_subagents: internal_fast
+        internal_subagents: codex_gpt55_low_write
       fanout_executor_backends:
         - kilo_cli
         - opencode_cli
@@ -1373,7 +1373,7 @@ agent_system:
       executor_backend: vibe_cli
       subagents: vibe_cli
       profiles:
-        internal_subagents: internal_fast
+        internal_subagents: codex_gpt55_low_write
       fanout_executor_backends:
         - vibe_cli
         - opencode_cli
@@ -1398,7 +1398,7 @@ agent_system:
       executor_backend: kilo_cli
       subagents: kilo_cli
       profiles:
-        internal_subagents: internal_arch
+        internal_subagents: codex_gpt55_xhigh_arch
       fanout_executor_backends:
         - hermes_cli
         - opencode_cli
@@ -1430,7 +1430,7 @@ agent_system:
       executor_backend: opencode_cli
       subagents: opencode_cli
       profiles:
-        internal_subagents: internal_fast
+        internal_subagents: codex_gpt55_medium_write
       fanout_executor_backends:
         - hermes_cli
         - opencode_cli
@@ -1454,7 +1454,7 @@ agent_system:
       executor_backend: opencode_cli
       subagents: opencode_cli
       profiles:
-        internal_subagents: internal_fast
+        internal_subagents: codex_gpt55_low_write
       fanout_executor_backends:
         - opencode_cli
         - hermes_cli
@@ -1488,7 +1488,7 @@ agent_system:
       executor_backend: hermes_cli
       subagents: hermes_cli
       profiles:
-        internal_subagents: internal_review
+        internal_subagents: codex_gpt55_high_readonly
       fanout_executor_backends:
         - hermes_cli
         - opencode_cli
@@ -1511,7 +1511,7 @@ agent_system:
       executor_backend: hermes_cli
       subagents: hermes_cli
       profiles:
-        internal_subagents: internal_review
+        internal_subagents: codex_gpt55_high_readonly
       write_scope: none
       verification_gate: review_findings
       max_runtime_seconds: 180
@@ -1527,7 +1527,7 @@ agent_system:
       executor_backend: opencode_cli
       subagents: opencode_cli
       profiles:
-        internal_subagents: internal_review
+        internal_subagents: codex_gpt55_high_readonly
       write_scope: none
       verification_gate: review_findings
       max_runtime_seconds: 180
@@ -1543,7 +1543,7 @@ agent_system:
       executor_backend: vibe_cli
       subagents: vibe_cli
       profiles:
-        internal_subagents: internal_review
+        internal_subagents: codex_gpt55_high_readonly
       write_scope: none
       verification_gate: review_findings
       max_runtime_seconds: 180
@@ -1559,7 +1559,7 @@ agent_system:
       executor_backend: hermes_cli
       subagents: hermes_cli
       profiles:
-        internal_subagents: internal_review
+        internal_subagents: codex_gpt55_high_readonly
       fanout_executor_backends:
         - hermes_cli
         - opencode_cli
@@ -1619,7 +1619,7 @@ agent_system:
       executor_backend: opencode_cli
       subagents: opencode_cli
       profiles:
-        internal_subagents: internal_fast
+        internal_subagents: codex_gpt55_low_write
       analysis_required: yes
       analysis_executor_backend: opencode_cli
       analysis_route_task_class: analysis
@@ -1659,7 +1659,7 @@ agent_system:
       executor_backend: opencode_cli
       subagents: opencode_cli
       profiles:
-        internal_subagents: internal_fast
+        internal_subagents: codex_gpt55_low_write
       analysis_required: yes
       analysis_executor_backend: opencode_cli
       analysis_route_task_class: analysis
@@ -1692,7 +1692,7 @@ agent_system:
       executor_backend: vibe_cli
       subagents: vibe_cli
       profiles:
-        internal_subagents: internal_fast
+        internal_subagents: codex_gpt55_low_write
       analysis_required: yes
       analysis_executor_backend: vibe_cli
       analysis_route_task_class: ui_review
@@ -1725,7 +1725,7 @@ agent_system:
       executor_backend: opencode_cli
       subagents: opencode_cli
       profiles:
-        internal_subagents: internal_fast
+        internal_subagents: codex_gpt55_low_write
       max_runtime_seconds: 420
       analysis_required: yes
       analysis_executor_backend: opencode_cli
@@ -1766,7 +1766,7 @@ agent_system:
       executor_backend: hermes_cli
       subagents: hermes_cli
       profiles:
-        internal_subagents: internal_arch
+        internal_subagents: codex_gpt55_xhigh_arch
       fanout_executor_backends:
         - hermes_cli
         - opencode_cli
@@ -1785,7 +1785,7 @@ agent_system:
       executor_backend: opencode_cli
       subagents: opencode_cli
       profiles:
-        internal_subagents: internal_review
+        internal_subagents: codex_gpt55_high_readonly
       write_scope: none
       verification_gate: verification_summary
       max_runtime_seconds: 180
@@ -1806,7 +1806,7 @@ agent_system:
         - hermes_cli
         - vibe_cli
       profiles:
-        internal_subagents: internal_review
+        internal_subagents: codex_gpt55_high_readonly
       fanout_subagents: opencode_cli,kilo_cli,hermes_cli,vibe_cli
       fanout_min_results: 3
       merge_policy: consensus_with_conflict_flag

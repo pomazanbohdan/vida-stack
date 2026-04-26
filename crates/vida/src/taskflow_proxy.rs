@@ -3771,6 +3771,93 @@ fn selected_backend_readiness_payload(
     )
 }
 
+fn collect_model_profiles_from_yaml(
+    value: &serde_yaml::Value,
+    profiles: &mut BTreeMap<String, BTreeSet<String>>,
+) {
+    match value {
+        serde_yaml::Value::Mapping(mapping) => {
+            if let Some(model_profiles) =
+                mapping.get(serde_yaml::Value::String("model_profiles".to_string()))
+            {
+                if let serde_yaml::Value::Mapping(profile_mapping) = model_profiles {
+                    for (profile_id, profile_value) in profile_mapping {
+                        let Some(profile_id) = profile_id.as_str().map(str::trim) else {
+                            continue;
+                        };
+                        if profile_id.is_empty() {
+                            continue;
+                        }
+                        let model_ref = crate::yaml_lookup(profile_value, &["model_ref"])
+                            .and_then(serde_yaml::Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .unwrap_or(profile_id);
+                        profiles
+                            .entry(profile_id.to_string())
+                            .or_default()
+                            .insert(model_ref.to_string());
+                    }
+                }
+            }
+            for child in mapping.values() {
+                collect_model_profiles_from_yaml(child, profiles);
+            }
+        }
+        serde_yaml::Value::Sequence(values) => {
+            for child in values {
+                collect_model_profiles_from_yaml(child, profiles);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn current_project_model_profile_catalog() -> BTreeMap<String, BTreeSet<String>> {
+    let project_root = crate::state_store::repo_root();
+    let Ok(overlay) =
+        crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(&project_root)
+    else {
+        return BTreeMap::new();
+    };
+    let mut profiles = BTreeMap::new();
+    collect_model_profiles_from_yaml(&overlay, &mut profiles);
+    profiles
+}
+
+fn route_assignment_catalog_drift_payload(route: &serde_json::Value) -> Option<serde_json::Value> {
+    let selected_profile = route["selected_model_profile_id"].as_str()?.trim();
+    if selected_profile.is_empty() {
+        return None;
+    }
+    let selected_model_ref = route["selected_model_ref"].as_str().map(str::trim);
+    let catalog = current_project_model_profile_catalog();
+    if catalog.is_empty() {
+        return None;
+    }
+    let Some(current_model_refs) = catalog.get(selected_profile) else {
+        return Some(serde_json::json!({
+            "status": "blocked",
+            "reason": "selected_model_profile_not_in_current_config",
+            "selected_model_profile_id": selected_profile,
+            "selected_model_ref": selected_model_ref,
+            "current_model_refs": serde_json::Value::Null,
+        }));
+    };
+    if let Some(selected_model_ref) = selected_model_ref {
+        if !selected_model_ref.is_empty() && !current_model_refs.contains(selected_model_ref) {
+            return Some(serde_json::json!({
+                "status": "blocked",
+                "reason": "selected_model_ref_mismatch_current_config",
+                "selected_model_profile_id": selected_profile,
+                "selected_model_ref": selected_model_ref,
+                "current_model_refs": current_model_refs,
+            }));
+        }
+    }
+    None
+}
+
 fn route_payload_for_dispatch_target(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
@@ -3824,6 +3911,30 @@ fn route_payload_for_dispatch_target(
             "selected_backend_admissible".to_string(),
             admissible.map_or(serde_json::Value::Null, serde_json::Value::Bool),
         );
+    }
+    if let Some(drift) = route_assignment_catalog_drift_payload(&payload) {
+        let mut blocker_codes = string_array_from_payload(&payload["blocker_codes"]);
+        blocker_codes.push("model_not_pinned".to_string());
+        blocker_codes.sort();
+        blocker_codes.dedup();
+        if let Some(object) = payload.as_object_mut() {
+            object.insert(
+                "status".to_string(),
+                serde_json::Value::String("blocked".to_string()),
+            );
+            object.insert(
+                "blocker_codes".to_string(),
+                serde_json::to_value(blocker_codes)
+                    .expect("route catalog drift blocker codes should serialize"),
+            );
+            object.insert("route_assignment_catalog_drift".to_string(), drift);
+            object.insert(
+                "next_actions".to_string(),
+                serde_json::json!([
+                    "refresh the run graph dispatch context or reseed the route assignment from the current carrier catalog before trusting routing diagnostics"
+                ]),
+            );
+        }
     }
     payload
 }
@@ -4274,6 +4385,20 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>();
+            let next_actions = routes
+                .iter()
+                .flat_map(|route| {
+                    route["next_actions"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
             let status = if blocker_codes.is_empty() {
                 "pass"
             } else {
@@ -4287,6 +4412,7 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                 "task_id": context.task_id,
                 "route_count": routes.len(),
                 "routes": routes,
+                "next_actions": next_actions,
             })
         }
         RouteDiagnosticMode::ConfigActuationCensus => {
@@ -5551,7 +5677,7 @@ mod tests {
     }
 
     #[test]
-    fn route_payload_accepts_runtime_selected_internal_host_carrier_without_matrix_row() {
+    fn route_payload_blocks_runtime_selected_carrier_without_matrix_row() {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -5577,22 +5703,25 @@ mod tests {
                         "selected_backend_id": "junior",
                         "selected_carrier_id": "junior",
                         "selected_agent_id": "junior",
-                        "selected_tier": "junior",
-                        "selected_model_provider": "openai",
-                        "selected_model_profile_id": "codex_gpt54_low_write"
+                        "selected_tier": "junior"
                     }
                 }
             }
         });
 
-        let payload = super::route_payload_for_dispatch_target(&execution_plan, "implementer");
+        let payload = super::route_payload_for_dispatch_target(&execution_plan, "implementation");
 
         assert_eq!(payload["selected_backend"].as_str(), Some("junior"));
-        assert_eq!(payload["selected_backend_admissible"].as_bool(), Some(true));
-        assert_eq!(payload["status"].as_str(), Some("pass"));
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| codes.is_empty()));
+        assert_eq!(
+            payload["selected_backend_admissible"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(payload["status"].as_str(), Some("blocked"));
+        assert!(payload["blocker_codes"].as_array().is_some_and(|codes| {
+            codes.contains(&serde_json::json!(
+                "selected_backend_not_admissible_for_dispatch_target"
+            ))
+        }));
     }
 
     #[test]
@@ -5617,7 +5746,8 @@ mod tests {
                                 "enabled": true,
                                 "selected_backend_id": "junior",
                                 "selected_carrier_id": "junior",
-                                "selected_model_profile_id": "codex_gpt54_low_write",
+                                "selected_model_profile_id": "configured_low_profile",
+                                "selected_model_ref": "configured-model-a",
                                 "selected_reasoning_effort": "low",
                                 "model_selection_enabled": true,
                                 "candidate_scope": "unified_carrier_model_profiles",
@@ -5699,9 +5829,9 @@ mod tests {
             "status": "pass",
             "selected_backend": "junior",
             "selected_carrier_id": "junior",
-            "selected_model_profile_id": "codex_gpt54_low_write",
-            "selected_model_ref": "gpt-5.4",
-            "selected_model_provider": "openai",
+            "selected_model_profile_id": "configured_low_profile",
+            "selected_model_ref": "configured-model-a",
+            "selected_model_provider": "configured-provider",
             "selected_reasoning_effort": "low",
             "selected_reasoning_control_mode": "fixed",
             "selected_backend_readiness": {
@@ -5709,35 +5839,35 @@ mod tests {
                 "blocked": false,
                 "status": "pass",
                 "blocker_code": null,
-                "selected_model_profile": "codex_gpt54_low_write",
+                "selected_model_profile": "configured_low_profile",
                 "next_actions": []
             },
             "selection_source_paths": {
-                "selected_model_profile_id": "carrier_runtime.roles[junior].model_profiles.codex_gpt54_low_write.profile_id"
+                "selected_model_profile_id": "carrier_runtime.roles[junior].model_profiles.configured_low_profile.profile_id"
             },
             "selection_override_reasons": ["route_profile_mapping"],
             "selection_precedence": ["route_profile_mapping", "role_default"],
             "selected_route_profile_mapping": {
                 "runtime_role": "worker",
-                "profile_id": "codex_gpt54_low_write"
+                "profile_id": "configured_low_profile"
             },
             "selected_candidate": {
-                "profile_id": "codex_gpt54_low_write",
+                "profile_id": "configured_low_profile",
                 "selected": true
             },
             "candidate_pool": [
                 {
-                    "profile_id": "codex_gpt54_low_write",
+                    "profile_id": "configured_low_profile",
                     "selected": true
                 },
                 {
-                    "profile_id": "codex_spark_high_readonly",
+                    "profile_id": "configured_high_profile",
                     "selected": false
                 }
             ],
             "rejected_candidates": [
                 {
-                    "profile_id": "codex_spark_high_readonly",
+                    "profile_id": "configured_high_profile",
                     "reason": "write_scope_required"
                 }
             ],
@@ -5766,13 +5896,13 @@ mod tests {
         assert_eq!(payload["blocker_codes"], serde_json::json!([]));
         assert_eq!(
             payload["selected_profile"]["profile_id"],
-            "codex_gpt54_low_write"
+            "configured_low_profile"
         );
         assert_eq!(payload["selected_profile"]["readiness_status"], "pass");
         assert_eq!(payload["selected_profile"]["readiness_ready"], true);
         assert_eq!(
             payload["source_paths"]["selected_model_profile_id"],
-            "carrier_runtime.roles[junior].model_profiles.codex_gpt54_low_write.profile_id"
+            "carrier_runtime.roles[junior].model_profiles.configured_low_profile.profile_id"
         );
         assert_eq!(
             payload["override_reasons"],
@@ -5780,7 +5910,7 @@ mod tests {
         );
         assert_eq!(
             payload["rejected_alternatives"][0]["profile_id"],
-            "codex_spark_high_readonly"
+            "configured_high_profile"
         );
         assert_eq!(payload["budget"]["policy"], "tier_budget_guard");
     }
@@ -5791,9 +5921,9 @@ mod tests {
             "status": "blocked",
             "selected_backend": "junior",
             "selected_carrier_id": "junior",
-            "selected_model_profile_id": "codex_gpt54_low_write",
-            "selected_model_ref": "gpt-5.4",
-            "selected_model_provider": "openai",
+            "selected_model_profile_id": "configured_low_profile",
+            "selected_model_ref": "configured-model-a",
+            "selected_model_provider": "configured-provider",
             "selected_reasoning_effort": "low",
             "selected_reasoning_control_mode": "fixed",
             "selected_backend_readiness": {
@@ -5801,7 +5931,7 @@ mod tests {
                 "blocked": true,
                 "status": "blocked",
                 "blocker_code": "external_cli_missing_api_key",
-                "selected_model_profile": "codex_gpt54_low_write",
+                "selected_model_profile": "configured_low_profile",
                 "next_actions": ["configure OPENAI_API_KEY"]
             },
             "selection_source_paths": {},

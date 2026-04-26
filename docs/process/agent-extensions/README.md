@@ -48,6 +48,14 @@ Shared skill note:
 2. enabling a shared skill for this project still happens through `vida.config.yaml`,
 3. use `shared:<skill_id>` in project profiles when the skill is not project-owned.
 
+## Carrier And Model Authority
+
+1. `vida.config.yaml` is the authority for carrier tier, model profile, model ref, reasoning effort, and normalized cost units.
+2. Framework-level docs own the model-profile schema, pricing semantics, and selection behavior.
+3. Project profile fields such as `preferred_backend` and dispatch-alias `carrier_tier` are selectors into the configured carrier catalog, not a second model matrix.
+4. Project extension bridge files must not name concrete model refs, providers, pricing, or model profile ids unless the framework schema explicitly requires a selector field for import/export.
+5. Materialized host files such as `.codex/agents/*.toml` are projections of this catalog and must be refreshed when they drift.
+
 ## Activation Path
 
 1. `vida.config.yaml`
