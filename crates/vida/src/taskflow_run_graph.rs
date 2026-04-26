@@ -359,6 +359,51 @@ fn next_lawful_operator_action_for_status(status: &RunGraphStatus) -> Option<Str
     ))
 }
 
+fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -> Option<&str> {
+    if receipt.dispatch_status != "blocked" && receipt.lane_status != "lane_blocked" {
+        return None;
+    }
+    if receipt.blocker_code.as_deref() == Some("configured_backend_dispatch_failed") {
+        return Some("configured_backend_dispatch_failed");
+    }
+    if receipt
+        .downstream_dispatch_blockers
+        .iter()
+        .any(|value| value == "pending_terminal_write_evidence")
+    {
+        return Some("pending_terminal_write_evidence");
+    }
+    None
+}
+
+fn next_lawful_operator_action_for_dispatch_resolution(
+    status: &RunGraphStatus,
+    receipt: &RunGraphDispatchReceipt,
+) -> Option<String> {
+    let _reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
+    if let Some(receipt_id) = receipt
+        .exception_path_receipt_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|_| receipt.supersedes_receipt_id.is_none())
+    {
+        return Some(format!(
+            "vida lane supersede {} --receipt-id {} --json",
+            status.run_id, receipt_id
+        ));
+    }
+    if receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some() {
+        return (status.status != "completed").then(|| {
+            format!(
+                "vida taskflow consume continue --run-id {} --json",
+                status.run_id
+            )
+        });
+    }
+    Some(format!("vida lane show {} --json", status.run_id))
+}
+
 fn blocked_external_dispatch_artifact_mismatched_as_internal_activation(
     receipt: &RunGraphDispatchReceipt,
 ) -> bool {
@@ -413,6 +458,11 @@ fn next_lawful_operator_action_for_projection(
     status: &RunGraphStatus,
     receipt: Option<&RunGraphDispatchReceipt>,
 ) -> Option<String> {
+    if let Some(command) =
+        receipt.and_then(|value| next_lawful_operator_action_for_dispatch_resolution(status, value))
+    {
+        return Some(command);
+    }
     if receipt.is_some_and(blocked_external_dispatch_artifact_mismatched_as_internal_activation) {
         return Some(format!(
             "vida taskflow consume continue --run-id {} --json",
@@ -432,11 +482,55 @@ fn recommended_surface_for_command(command: &str) -> String {
     if command.starts_with("vida taskflow run-graph status") {
         return "vida taskflow run-graph status".to_string();
     }
+    if command.starts_with("vida lane show") {
+        return "vida lane show".to_string();
+    }
+    if command.starts_with("vida lane exception-takeover") {
+        return "vida lane exception-takeover".to_string();
+    }
+    if command.starts_with("vida lane supersede") {
+        return "vida lane supersede".to_string();
+    }
     command
         .split_whitespace()
         .take(4)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn recovery_next_action_reason(
+    command: &str,
+    summary: &crate::state_store::RunGraphRecoverySummary,
+    projection_truth: &RunGraphProjectionTruth,
+) -> String {
+    if command.starts_with("vida lane exception-takeover") {
+        return "record bounded exception-path evidence for the dispatch blocker before local recovery work".to_string();
+    }
+    if command.starts_with("vida lane supersede") {
+        return "activate the recorded exception-path receipt before treating local recovery as lawful".to_string();
+    }
+    if command.starts_with("vida lane show") {
+        return "inspect the lane envelope for the dispatch blocker, then record structured exception-takeover evidence and supersession before any local recovery work".to_string();
+    }
+    if command.starts_with("vida taskflow consume continue")
+        && projection_truth
+            .dispatch_receipt
+            .as_ref()
+            .is_some_and(|receipt| {
+                receipt.exception_path_receipt_id.is_some()
+                    && receipt.supersedes_receipt_id.is_some()
+                    && dispatch_receipt_resolution_reason_class(receipt).is_some()
+            })
+    {
+        return "continue the TaskFlow run after active exception-takeover evidence resolved the dispatch blocker".to_string();
+    }
+    if projection_truth.stale_state_suspected {
+        "stale delegated execution is suspected; inspect the authoritative run-graph status before re-dispatch".to_string()
+    } else if summary.recovery_ready {
+        "recovery is ready; continue the lawful delegated chain".to_string()
+    } else {
+        "inspect the authoritative run-graph status for the bound recovery state".to_string()
+    }
 }
 
 fn recovery_surface_contract(
@@ -465,14 +559,7 @@ fn recovery_surface_contract(
         .map(|command| RecoveryNextAction {
             command: command.to_string(),
             surface: recommended_surface_for_command(command),
-            reason: if projection_truth.stale_state_suspected {
-                "stale delegated execution is suspected; inspect the authoritative run-graph status before re-dispatch".to_string()
-            } else if summary.recovery_ready {
-                "recovery is ready; continue the lawful delegated chain".to_string()
-            } else {
-                "inspect the authoritative run-graph status for the bound recovery state"
-                    .to_string()
-            },
+            reason: recovery_next_action_reason(command, summary, projection_truth),
         });
     let why_not_now = (!blocker_codes.is_empty()).then(|| RecoveryWhyNotNow {
         category: "delegated_cycle_runtime_gate".to_string(),
@@ -4434,6 +4521,307 @@ mod tests {
             serde_json::json!("vida taskflow recovery status")
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn recovery_status_action_for_configured_backend_failure_points_to_lane_show() {
+        let status = RunGraphStatus {
+            run_id: "run-configured-backend-blocked".to_string(),
+            task_id: "task-configured-backend-blocked".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "analysis_lane".to_string(),
+            lifecycle_stage: "analysis_blocked".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-26T00:00:00Z".to_string(),
+        };
+
+        let command = next_lawful_operator_action_for_projection(&status, Some(&receipt));
+
+        assert!(command
+            .as_deref()
+            .is_some_and(|value| value == "vida lane show run-configured-backend-blocked --json"));
+    }
+
+    #[test]
+    fn recovery_status_payload_for_terminal_write_blocker_is_actionable_and_parity_safe() {
+        let summary = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-terminal-write-blocked".to_string(),
+            task_id: "task-terminal-write-blocked".to_string(),
+            active_node: "analysis".to_string(),
+            lifecycle_stage: "analysis_blocked".to_string(),
+            resume_node: None,
+            resume_status: "blocked".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "analysis".to_string(),
+                delegated_cycle_open: false,
+                delegated_cycle_state: "clear".to_string(),
+                local_exception_takeover_gate: "delegated_cycle_clear".to_string(),
+                reporting_pause_gate: "continuation_check_required".to_string(),
+                continuation_signal: "continuation_check_required".to_string(),
+                blocker_code: None,
+                lifecycle_stage: "analysis_blocked".to_string(),
+            },
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: summary.run_id.clone(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: Some("terminal evidence missing".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_terminal_write_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-26T00:00:00Z".to_string(),
+        };
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason: "run-graph status reflects persisted dispatch blocker evidence"
+                .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: false,
+            projection_vs_receipt_parity: "aligned".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: next_lawful_operator_action_for_projection(
+                &RunGraphStatus {
+                    run_id: summary.run_id.clone(),
+                    task_id: summary.task_id.clone(),
+                    task_class: "implementation".to_string(),
+                    active_node: summary.active_node.clone(),
+                    next_node: None,
+                    status: "blocked".to_string(),
+                    route_task_class: "implementation".to_string(),
+                    selected_backend: "internal_subagents".to_string(),
+                    lane_id: "analysis_lane".to_string(),
+                    lifecycle_stage: summary.lifecycle_stage.clone(),
+                    policy_gate: summary.policy_gate.clone(),
+                    handoff_state: summary.handoff_state.clone(),
+                    context_state: "sealed".to_string(),
+                    checkpoint_kind: summary.checkpoint_kind.clone(),
+                    resume_target: summary.resume_target.clone(),
+                    recovery_ready: summary.recovery_ready,
+                },
+                Some(&receipt),
+            ),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+        let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
+            recovery_surface_contract(&summary, &projection_truth);
+        let payload = build_recovery_json_payload(
+            "vida taskflow recovery status",
+            &summary,
+            &projection_truth,
+            blocker_codes,
+            why_not_now,
+            next_action,
+            recommended_command,
+            recommended_surface,
+        )
+        .expect("recovery status payload should render");
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["shared_fields"]["status"], "blocked");
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert_eq!(
+            payload["recommended_surface"],
+            serde_json::json!("vida lane show")
+        );
+        assert!(payload["recommended_command"]
+            .as_str()
+            .is_some_and(|value| value == "vida lane show run-terminal-write-blocked --json"));
+        assert_eq!(
+            payload["next_action"]["surface"],
+            serde_json::json!("vida lane show")
+        );
+        assert!(payload["next_actions"].as_array().is_some_and(|actions| {
+            actions.iter().any(|value| {
+                value.as_str().is_some_and(|text| {
+                    text.contains("lane envelope")
+                        && text.contains("exception-takeover evidence")
+                        && text.contains("supersession")
+                })
+            })
+        }));
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn recovery_status_action_for_recorded_exception_points_to_supersede() {
+        let status = RunGraphStatus {
+            run_id: "run-recorded-exception".to_string(),
+            task_id: "task-recorded-exception".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "analysis_lane".to_string(),
+            lifecycle_stage: "analysis_blocked".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_recorded".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("exception-receipt-1".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-26T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            next_lawful_operator_action_for_projection(&status, Some(&receipt)).as_deref(),
+            Some(
+                "vida lane supersede run-recorded-exception --receipt-id exception-receipt-1 --json"
+            )
+        );
+    }
+
+    #[test]
+    fn recovery_status_action_for_active_exception_returns_to_continue() {
+        let status = RunGraphStatus {
+            run_id: "run-active-exception".to_string(),
+            task_id: "task-active-exception".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "analysis_lane".to_string(),
+            lifecycle_stage: "analysis_blocked".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("exception-receipt-1".to_string()),
+            exception_path_receipt_id: Some("exception-receipt-1".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_terminal_write_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-26T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            next_lawful_operator_action_for_projection(&status, Some(&receipt)).as_deref(),
+            Some("vida taskflow consume continue --run-id run-active-exception --json")
+        );
     }
 
     #[test]
