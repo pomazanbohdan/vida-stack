@@ -33,6 +33,11 @@ fn explicit_binding_is_admissible_for_status(
     )
 }
 
+fn run_graph_status_is_blocked(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized == "blocked" || normalized == "lane_blocked" || normalized.ends_with("_blocked")
+}
+
 pub(crate) fn build_continuation_binding_summary(
     explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
@@ -100,6 +105,33 @@ pub(crate) fn build_continuation_binding_summary(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .is_none();
+
+        if run_graph_status_is_blocked(&status.status) {
+            return serde_json::json!({
+                "status": "ambiguous",
+                "continuation_allowed": false,
+                "continuation_required_now": false,
+                "active_bounded_unit": serde_json::Value::Null,
+                "binding_source": serde_json::Value::Null,
+                "why_this_unit": serde_json::Value::Null,
+                "primary_path": "diagnosis_path",
+                "sequential_vs_parallel_posture": "unknown_until_run_graph_blocker_resolved",
+                "pause_boundary_gate": "forbidden_while_run_graph_status_blocked",
+                "ambiguity_reason": "latest_run_graph_status_blocked",
+                "blocked_run_graph_status": {
+                    "task_id": status.task_id,
+                    "run_id": status.run_id,
+                    "active_node": status.active_node,
+                    "status": status.status,
+                    "lifecycle_stage": status.lifecycle_stage,
+                },
+                "next_actions": [
+                    "Do not continue normal delivery while the latest run-graph status is blocked.",
+                    "Inspect the blocked run-graph status with `vida taskflow recovery status <run-id> --json` and resolve the blocker before writing.",
+                    "After the blocker is resolved, refresh continuation evidence with `vida taskflow consume continue --json` or bind the next bounded unit explicitly."
+                ]
+            });
+        }
 
         if let Some(binding) = explicit_binding {
             if explicit_binding_is_admissible_for_status(binding, status) {
@@ -440,12 +472,90 @@ mod tests {
         assert_eq!(summary["binding_source"], "latest_run_graph_status");
         assert_eq!(summary["continuation_required_now"], true);
         assert_eq!(summary["pause_boundary_gate"], "non_blocking_only");
-        assert!(
-            summary["next_actions"]
-                .as_array()
-                .is_some_and(|rows| rows.iter().any(|row| row.as_str().is_some_and(
-                    |value| value.contains("consume continue --run-id task-1 --json")
-                )))
+        assert!(summary["next_actions"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row
+                .as_str()
+                .is_some_and(|value| value.contains("consume continue --run-id task-1 --json")))));
+    }
+
+    #[test]
+    fn blocked_latest_run_graph_status_fails_closed() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-audit-state-store-init-lock-timeout",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "runtime-audit-state-store-init-lock-timeout".to_string();
+        status.run_id = "run-blocked".to_string();
+        status.active_node = "implementer".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "implementation_blocked".to_string();
+
+        let summary = build_continuation_binding_summary(None, Some(&status), None, None, false);
+
+        assert_eq!(summary["status"], "ambiguous");
+        assert_eq!(summary["continuation_allowed"], false);
+        assert_eq!(summary["continuation_required_now"], false);
+        assert_eq!(summary["active_bounded_unit"], serde_json::Value::Null);
+        assert_eq!(summary["binding_source"], serde_json::Value::Null);
+        assert_eq!(summary["primary_path"], "diagnosis_path");
+        assert_eq!(
+            summary["ambiguity_reason"],
+            "latest_run_graph_status_blocked"
+        );
+        assert_eq!(
+            summary["blocked_run_graph_status"]["task_id"],
+            "runtime-audit-state-store-init-lock-timeout"
+        );
+        assert_eq!(summary["blocked_run_graph_status"]["run_id"], "run-blocked");
+        assert!(summary["next_actions"].as_array().is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row.as_str()
+                    .is_some_and(|value| value.contains("resolve the blocker"))
+            })
+        }));
+    }
+
+    #[test]
+    fn blocked_latest_run_graph_status_rejects_explicit_normal_binding() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "task-1",
+            "implementation",
+            "implementation",
+        );
+        status.active_node = "implementer".to_string();
+        status.status = "lane_blocked".to_string();
+        status.lifecycle_stage = "implementation_blocked".to_string();
+
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "task-1".to_string(),
+            task_id: "task-1".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "run_graph_task",
+                "task_id": "task-1",
+                "run_id": "task-1",
+                "active_node": "implementer"
+            }),
+            binding_source: "explicit_continuation_bind".to_string(),
+            why_this_unit: "explicit".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: Some("continue".to_string()),
+            recorded_at: "2026-04-26T10:00:00Z".to_string(),
+        };
+
+        let summary =
+            build_continuation_binding_summary(Some(&binding), Some(&status), None, None, false);
+
+        assert_eq!(summary["status"], "ambiguous");
+        assert_eq!(summary["continuation_allowed"], false);
+        assert_eq!(summary["binding_source"], serde_json::Value::Null);
+        assert_eq!(summary["primary_path"], "diagnosis_path");
+        assert_eq!(
+            summary["ambiguity_reason"],
+            "latest_run_graph_status_blocked"
         );
     }
 

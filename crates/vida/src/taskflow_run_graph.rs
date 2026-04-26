@@ -1,6 +1,6 @@
 use crate::{
-    RenderMode, RuntimeConsumptionLaneSelection, build_runtime_execution_plan_from_snapshot,
-    build_runtime_lane_selection_with_store, dispatch_contract_execution_lane_sequence,
+    build_runtime_execution_plan_from_snapshot, build_runtime_lane_selection_with_store,
+    dispatch_contract_execution_lane_sequence,
     operator_contracts::{
         canonical_release1_blocker_code_entries, finalize_release1_operator_truth,
         shared_operator_output_contract_parity_error,
@@ -12,6 +12,7 @@ use crate::{
     },
     taskflow_layer4::print_taskflow_proxy_help,
     taskflow_task_bridge::proxy_state_dir,
+    RenderMode, RuntimeConsumptionLaneSelection,
 };
 use std::process::ExitCode;
 use time::format_description::well_known::Rfc3339;
@@ -80,6 +81,34 @@ fn blocked_next_actions_for_operator_surface(
         return vec![format!("run `{command}`")];
     }
     vec!["inspect authoritative run-graph state".to_string()]
+}
+
+fn blocked_status_signal(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized == "blocked" || normalized == "lane_blocked" || normalized.ends_with("_blocked")
+}
+
+fn fallback_dispatch_blocker_code() -> String {
+    crate::contract_profile_adapter::blocker_code_str(
+        crate::contract_profile_adapter::BlockerCode::ToolExecutionFailed,
+    )
+    .to_string()
+}
+
+fn normalize_run_graph_blocker_codes(
+    blocker_codes: &[String],
+    blocked_evidence_present: bool,
+) -> Vec<String> {
+    let normalized = crate::operator_contracts::normalize_blocker_codes(
+        blocker_codes,
+        crate::release_contract_adapters::canonical_blocker_codes,
+        None,
+    );
+    if normalized.is_empty() && blocked_evidence_present {
+        vec![fallback_dispatch_blocker_code()]
+    } else {
+        normalized
+    }
 }
 
 fn build_run_graph_operator_surface_payload(
@@ -211,16 +240,13 @@ fn build_run_graph_status_json_payload(
     status: &RunGraphStatus,
     projection_truth: &RunGraphProjectionTruth,
 ) -> Result<serde_json::Value, String> {
-    let blocker_codes = dispatch_blocker_codes_from_status_surface(None, None);
-    let next_actions = if blocker_codes.is_empty() {
-        Vec::new()
-    } else {
-        projection_truth
-            .next_lawful_operator_action
-            .as_deref()
-            .map(|action| vec![action.to_ascii_lowercase()])
-            .unwrap_or_default()
-    };
+    let blocker_codes = run_graph_status_surface_blocker_codes(status, projection_truth);
+    let next_actions = blocked_next_actions_for_operator_surface(
+        &blocker_codes,
+        None,
+        None,
+        projection_truth.next_lawful_operator_action.as_deref(),
+    );
     build_run_graph_operator_surface_payload(
         surface,
         &status.run_id,
@@ -423,18 +449,15 @@ fn recovery_surface_contract(
     Option<String>,
     Option<String>,
 ) {
-    let blocker_codes = summary
+    let mut blocker_codes = summary
         .delegation_gate
         .blocker_code
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .map(|value| vec![value.to_string()])
         .unwrap_or_default();
-    let blocker_codes = crate::operator_contracts::normalize_blocker_codes(
-        &blocker_codes,
-        crate::release_contract_adapters::canonical_blocker_codes,
-        None,
-    );
+    blocker_codes.extend(projection_truth_blocker_codes(projection_truth));
+    let blocker_codes = normalize_run_graph_blocker_codes(&blocker_codes, false);
 
     let next_action = projection_truth
         .next_lawful_operator_action
@@ -745,6 +768,7 @@ fn dispatch_blocker_codes_from_status_surface(
     receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
 ) -> Vec<String> {
     let mut blocker_codes = Vec::new();
+    let mut blocked_evidence_present = false;
     if let Some(summary) = recovery {
         if let Some(blocker_code) = summary
             .delegation_gate
@@ -755,6 +779,8 @@ fn dispatch_blocker_codes_from_status_surface(
         {
             blocker_codes.push(blocker_code.to_string());
         }
+        blocked_evidence_present |= blocked_status_signal(&summary.lifecycle_stage)
+            || blocked_status_signal(&summary.resume_status);
     }
     if let Some(summary) = receipt {
         if let Some(blocker_code) = summary
@@ -773,14 +799,78 @@ fn dispatch_blocker_codes_from_status_surface(
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
         );
+        blocked_evidence_present |= blocked_status_signal(&summary.dispatch_status)
+            || blocked_status_signal(&summary.lane_status)
+            || summary
+                .downstream_dispatch_status
+                .as_deref()
+                .is_some_and(blocked_status_signal);
     }
     blocker_codes.sort_unstable();
     blocker_codes.dedup();
-    crate::operator_contracts::normalize_blocker_codes(
-        &blocker_codes,
-        crate::release_contract_adapters::canonical_blocker_codes,
-        None,
-    )
+    normalize_run_graph_blocker_codes(&blocker_codes, blocked_evidence_present)
+}
+
+fn dispatch_receipt_blocker_codes(
+    receipt: &RunGraphDispatchReceipt,
+    blocked_evidence_present: &mut bool,
+) -> Vec<String> {
+    let mut blocker_codes = Vec::new();
+    if let Some(blocker_code) = receipt
+        .blocker_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        blocker_codes.push(blocker_code.to_string());
+    }
+    blocker_codes.extend(
+        receipt
+            .downstream_dispatch_blockers
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+    );
+    *blocked_evidence_present |= blocked_status_signal(&receipt.dispatch_status)
+        || blocked_status_signal(&receipt.lane_status)
+        || receipt
+            .downstream_dispatch_status
+            .as_deref()
+            .is_some_and(blocked_status_signal);
+    blocker_codes
+}
+
+fn projection_truth_blocker_codes(projection_truth: &RunGraphProjectionTruth) -> Vec<String> {
+    let mut blocked_evidence_present = projection_truth.stale_state_suspected;
+    let mut blocker_codes = Vec::new();
+    if let Some(receipt) = projection_truth.dispatch_receipt.as_ref() {
+        blocker_codes.extend(dispatch_receipt_blocker_codes(
+            receipt,
+            &mut blocked_evidence_present,
+        ));
+    }
+    blocker_codes.sort_unstable();
+    blocker_codes.dedup();
+    normalize_run_graph_blocker_codes(&blocker_codes, blocked_evidence_present)
+}
+
+fn run_graph_status_surface_blocker_codes(
+    status: &RunGraphStatus,
+    projection_truth: &RunGraphProjectionTruth,
+) -> Vec<String> {
+    let mut blocked_evidence_present =
+        blocked_status_signal(&status.status) || blocked_status_signal(&status.lifecycle_stage);
+    let mut blocker_codes = projection_truth_blocker_codes(projection_truth);
+    if let Some(receipt) = projection_truth.dispatch_receipt.as_ref() {
+        blocker_codes.extend(dispatch_receipt_blocker_codes(
+            receipt,
+            &mut blocked_evidence_present,
+        ));
+    }
+    blocker_codes.sort_unstable();
+    blocker_codes.dedup();
+    normalize_run_graph_blocker_codes(&blocker_codes, blocked_evidence_present)
 }
 
 fn projection_truth_from_status_surface(
@@ -2219,14 +2309,14 @@ fn run_graph_blocker_evidence(
             args.run_id, args.status
         )
     })?;
-    let canonical_blocker_codes = canonical_release1_blocker_code_entries(&serde_json::json!([
-        blocker_code
-    ]))
-    .ok_or_else(|| {
-        format!(
+    let canonical_blocker_codes =
+        canonical_release1_blocker_code_entries(&serde_json::json!([blocker_code])).ok_or_else(
+            || {
+                format!(
             "run-graph blocker code `{blocker_code}` is not canonical (must be lowercase/digits/_)"
         )
-    })?;
+            },
+        )?;
     let canonical_blocker_code = canonical_blocker_codes
         .first()
         .expect("canonical block list always non-empty")
@@ -3969,15 +4059,9 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 }
             }
         }
-        [
-            head,
-            subcommand,
-            task_id,
-            task_class,
-            node,
-            status,
-            route_task_class,
-        ] if head == "run-graph" && subcommand == "update" => {
+        [head, subcommand, task_id, task_class, node, status, route_task_class]
+            if head == "run-graph" && subcommand == "update" =>
+        {
             let existing = match store.run_graph_status(task_id).await {
                 Ok(existing) => existing,
                 Err(StateStoreError::MissingTask { .. }) => {
@@ -4030,16 +4114,9 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 }
             }
         }
-        [
-            head,
-            subcommand,
-            task_id,
-            task_class,
-            node,
-            status,
-            route_task_class,
-            meta_json,
-        ] if head == "run-graph" && subcommand == "update" => {
+        [head, subcommand, task_id, task_class, node, status, route_task_class, meta_json]
+            if head == "run-graph" && subcommand == "update" =>
+        {
             let meta: serde_json::Value = match serde_json::from_str(meta_json) {
                 Ok(meta) => meta,
                 Err(error) => {
@@ -4133,7 +4210,6 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RuntimeConsumptionLaneSelection;
     use crate::build_compiled_agent_extension_bundle_for_root;
     use crate::launcher_activation_snapshot::config_file_digest;
     use crate::launcher_activation_snapshot::pack_router_keywords_json;
@@ -4141,6 +4217,7 @@ mod tests {
     use crate::state_store::LauncherActivationSnapshot;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::guard_current_dir;
+    use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
     use std::path::Path;
 
@@ -4410,6 +4487,156 @@ mod tests {
             serde_json::json!("vida taskflow run-graph status")
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn run_graph_status_json_payload_surfaces_blocked_dispatch_truth() {
+        let status = RunGraphStatus {
+            run_id: "runtime-audit-state-store-init-lock-timeout".to_string(),
+            task_id: "runtime-audit-state-store-init-lock-timeout".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "opencode_cli".to_string(),
+            lane_id: "analysis-lane".to_string(),
+            lifecycle_stage: "analysis_blocked".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/runtime-audit-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/runtime-audit-result.json".to_string()),
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: Some("analysis".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("opencode_cli".to_string()),
+            recorded_at: "2026-04-26T00:00:00Z".to_string(),
+        };
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason: "run-graph status reflects persisted dispatch blocker evidence"
+                .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: false,
+            projection_vs_receipt_parity: "aligned".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(format!(
+                "vida taskflow run-graph status {} --json",
+                status.run_id
+            )),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let payload = build_run_graph_status_json_payload(
+            "vida taskflow run-graph status",
+            &status,
+            &projection_truth,
+        )
+        .expect("blocked run-graph status payload should render");
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["shared_fields"]["status"], "blocked");
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["tool_execution_failed"])
+        );
+        assert_eq!(
+            payload["projection_truth"]["dispatch_receipt"]["blocker_code"],
+            serde_json::json!("configured_backend_dispatch_failed")
+        );
+        assert!(payload["next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty()));
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn status_surface_projection_truth_keeps_blocked_receipt_actionable() {
+        let status = RunGraphStatus {
+            run_id: "run-status-surface-blocked".to_string(),
+            task_id: "task-status-surface-blocked".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "opencode_cli".to_string(),
+            lane_id: "analysis-lane".to_string(),
+            lifecycle_stage: "analysis_blocked".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: status.run_id.clone(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/status-surface-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/status-surface-result.json".to_string()),
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: Some("analysis".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("opencode_cli".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "2026-04-26T00:00:00Z".to_string(),
+        };
+
+        let (_projection_truth, blocker_codes) =
+            projection_truth_from_status_surface(&status, None, Some(&receipt), None);
+
+        assert_eq!(blocker_codes, vec!["tool_execution_failed".to_string()]);
     }
 
     #[test]
@@ -4826,12 +5053,10 @@ mod tests {
         .expect("compact summary should exist");
 
         assert!(summary.stale_state_suspected);
-        assert!(
-            summary
-                .route_truth
-                .projection_reason
-                .contains("looks stale")
-        );
+        assert!(summary
+            .route_truth
+            .projection_reason
+            .contains("looks stale"));
         assert_eq!(
             summary.recommended_command.as_deref(),
             Some("vida taskflow run-graph status run-stale --json")
@@ -4988,8 +5213,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn derive_seeded_run_graph_prefers_worker_for_existing_design_backed_qwen_remediation_task()
-     {
+    async fn derive_seeded_run_graph_prefers_worker_for_existing_design_backed_qwen_remediation_task(
+    ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
 
@@ -5048,13 +5273,11 @@ mod tests {
             payload.role_selection.reason,
             "auto_existing_design_backed_implementation_request_override"
         );
-        assert!(
-            payload
-                .role_selection
-                .matched_terms
-                .iter()
-                .any(|term| term == "existing_design_backed_work_pool_override")
-        );
+        assert!(payload
+            .role_selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "existing_design_backed_work_pool_override"));
         assert_eq!(payload.status.task_class, "implementation");
         assert_eq!(payload.status.route_task_class, "implementation");
         assert_ne!(payload.status.next_node.as_deref(), Some("pm"));
@@ -5066,8 +5289,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn derive_seeded_run_graph_prefers_worker_for_existing_design_backed_blocker_without_file_terms()
-     {
+    async fn derive_seeded_run_graph_prefers_worker_for_existing_design_backed_blocker_without_file_terms(
+    ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
 
@@ -5122,13 +5345,11 @@ mod tests {
             payload.role_selection.reason,
             "auto_existing_design_backed_implementation_request_override"
         );
-        assert!(
-            payload
-                .role_selection
-                .matched_terms
-                .iter()
-                .all(|term| term != ".rs" && term != "crates/" && term != "src/")
-        );
+        assert!(payload
+            .role_selection
+            .matched_terms
+            .iter()
+            .all(|term| term != ".rs" && term != "crates/" && term != "src/"));
         assert!(!payload.role_selection.matched_terms.is_empty());
         assert_eq!(
             payload.role_selection.tracked_flow_entry.as_deref(),
@@ -6049,13 +6270,11 @@ mod tests {
             .expect("reconciled status should load");
         assert_eq!(reconciled.status, "completed");
         assert_eq!(reconciled.lifecycle_stage, "closure_complete");
-        assert!(
-            store
-                .run_graph_continuation_binding("run-terminal-update")
-                .await
-                .expect("continuation binding lookup should succeed")
-                .is_none()
-        );
+        assert!(store
+            .run_graph_continuation_binding("run-terminal-update")
+            .await
+            .expect("continuation binding lookup should succeed")
+            .is_none());
     }
 
     #[test]
@@ -6547,20 +6766,16 @@ mod tests {
         let (_codes, why_not_now, next_action, _command, _surface) =
             recovery_surface_contract(&summary, &projection_truth);
 
-        assert!(
-            why_not_now
-                .as_ref()
-                .map(|value| value.summary.contains("looks stale"))
-                .unwrap_or(false)
-        );
-        assert!(
-            next_action
-                .as_ref()
-                .map(|value| value
-                    .reason
-                    .contains("stale delegated execution is suspected"))
-                .unwrap_or(false)
-        );
+        assert!(why_not_now
+            .as_ref()
+            .map(|value| value.summary.contains("looks stale"))
+            .unwrap_or(false));
+        assert!(next_action
+            .as_ref()
+            .map(|value| value
+                .reason
+                .contains("stale delegated execution is suspected"))
+            .unwrap_or(false));
     }
 
     #[test]
