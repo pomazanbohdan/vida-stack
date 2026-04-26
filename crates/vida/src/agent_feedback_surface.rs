@@ -277,8 +277,48 @@ fn default_feedback_score(outcome: &str, task_class: &str) -> u64 {
     }
 }
 
+fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
+    ignored_feedback_phrases(
+        reason,
+        &[
+            "close feedback derivation",
+            "blocked feedback derivation",
+            "canonical close blocked feedback derivation",
+            "blocker keyword matching",
+            "blocked reason detection",
+            "concrete blocked reasons",
+            "top-level blocked/actionable",
+            "top level blocked/actionable",
+            "actionable blocked output",
+            "genuinely blocked",
+            "readiness blockers",
+            "readiness blocker",
+            "blocker coverage",
+            "blocked coverage",
+            "blocked path coverage",
+            "blocked-path coverage",
+            "blocked scenario coverage",
+            "blocked scenarios covered",
+            "blocked routes",
+            "blocked route",
+            "blocked alternatives",
+            "blocked alternative",
+            "blocked candidates",
+            "blocked candidate",
+            "approval coverage",
+            "awaiting approval coverage",
+            "approval_wait coverage",
+            "approval required coverage",
+            "pending approval coverage",
+        ],
+    )
+}
+
 fn canonical_close_status_from_reason(reason: &str) -> Option<(&'static str, &'static str)> {
-    let normalized = reason.to_ascii_lowercase();
+    let mut normalized = reason.to_ascii_lowercase();
+    for phrase in ignored_canonical_close_meta_language(reason) {
+        normalized = normalized.replace(&phrase, " canonical_close_context_language ");
+    }
     let approval_keywords = [
         "approval_wait".to_string(),
         "awaiting_approval".to_string(),
@@ -934,7 +974,9 @@ mod tests {
         let ignored = inference["ignored_meta_language"]
             .as_array()
             .expect("ignored meta language should render");
-        assert!(ignored.iter().any(|phrase| phrase == "failure-case coverage"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "failure-case coverage"));
         assert!(ignored
             .iter()
             .any(|phrase| phrase == "rejected wording coverage"));
@@ -953,7 +995,47 @@ mod tests {
 
             assert_eq!(outcome, "failure");
             assert_eq!(score, 35);
-            assert_eq!(inference["failure_markers"], serde_json::json!(["rejected"]));
+            assert_eq!(
+                inference["failure_markers"],
+                serde_json::json!(["rejected"])
+            );
         }
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_readiness_blockers_audit_language() {
+        let reason = "Added model-profile readiness audit payload with selected overrides, rejected alternatives, and readiness blockers; model_profile_readiness_audit tests passed.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let ignored = super::ignored_canonical_close_meta_language(reason);
+        assert!(ignored.iter().any(|phrase| phrase == "readiness blockers"));
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_concrete_blocked_reasons() {
+        let reason = "Task remains blocked pending operator evidence.";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_fix_description_meta_blocked_phrases() {
+        let reason = "Fixed false canonical close feedback derivation: classifier strips audit and fix-description phrases before keyword matching while preserving concrete blocked reason detection. Task close JSON now exposes deferred canonical-close telemetry as actionable blocked output only when the close reason is genuinely blocked. Proofs: ...";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let ignored = super::ignored_canonical_close_meta_language(reason);
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "close feedback derivation"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "blocked reason detection"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "actionable blocked output"));
+        assert!(ignored.iter().any(|phrase| phrase == "genuinely blocked"));
     }
 }

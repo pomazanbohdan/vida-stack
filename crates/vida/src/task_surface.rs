@@ -283,6 +283,44 @@ fn task_close_host_agent_telemetry(
     }
 }
 
+fn task_close_feedback_blocker_summary(
+    telemetry: &serde_json::Value,
+) -> Option<(Vec<String>, Vec<String>)> {
+    let reason = telemetry
+        .get("reason")
+        .and_then(serde_json::Value::as_str)?;
+    if reason != "feedback_deferred_for_canonical_close_status" {
+        return None;
+    }
+    let canonical_status = telemetry
+        .get("canonical_status")
+        .and_then(serde_json::Value::as_str)?;
+    let canonical_gate = telemetry
+        .get("canonical_gate")
+        .and_then(serde_json::Value::as_str)?;
+    let blocker_code = match canonical_status {
+        "blocked" => "close_feedback_canonical_status_blocked",
+        "awaiting_approval" => "close_feedback_canonical_status_awaiting_approval",
+        _ => "close_feedback_canonical_status_deferred",
+    };
+    let next_action = match canonical_status {
+        "blocked" => {
+            "Resolve the blocked condition described in the close reason, then rerun `vida task close ... --json`."
+        }
+        "awaiting_approval" => {
+            "Satisfy the approval requirement described in the close reason, then rerun `vida task close ... --json`."
+        }
+        _ => "Resolve the deferred canonical close condition, then rerun `vida task close ... --json`.",
+    };
+    Some((
+        vec![
+            blocker_code.to_string(),
+            format!("canonical_gate_{canonical_gate}"),
+        ],
+        vec![next_action.to_string()],
+    ))
+}
+
 fn resolve_optional_text_arg(
     label: &str,
     direct: Option<&str>,
@@ -3768,21 +3806,36 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         } else {
                             None
                         };
+                        let telemetry_feedback_blocker =
+                            task_close_feedback_blocker_summary(&telemetry);
                         let automation_blocked = automation
                             .as_ref()
                             .map(|receipt| receipt.status != "pass")
                             .unwrap_or(false);
+                        let feedback_blocked = telemetry_feedback_blocker.is_some();
                         if command.json {
+                            let blocker_codes =
+                                if let Some((blocker_codes, _)) = &telemetry_feedback_blocker {
+                                    blocker_codes.clone()
+                                } else {
+                                    automation
+                                        .as_ref()
+                                        .map(|receipt| receipt.blocker_codes.clone())
+                                        .unwrap_or_default()
+                                };
+                            let next_actions =
+                                if let Some((_, next_actions)) = &telemetry_feedback_blocker {
+                                    next_actions.clone()
+                                } else {
+                                    automation
+                                        .as_ref()
+                                        .map(|receipt| receipt.next_actions.clone())
+                                        .unwrap_or_default()
+                                };
                             crate::print_json_pretty(&serde_json::json!({
-                                "status": if automation_blocked { "blocked" } else { "pass" },
-                                "blocker_codes": automation
-                                    .as_ref()
-                                    .map(|receipt| receipt.blocker_codes.clone())
-                                    .unwrap_or_default(),
-                                "next_actions": automation
-                                    .as_ref()
-                                    .map(|receipt| receipt.next_actions.clone())
-                                    .unwrap_or_default(),
+                                "status": if automation_blocked || feedback_blocked { "blocked" } else { "pass" },
+                                "blocker_codes": blocker_codes,
+                                "next_actions": next_actions,
                                 "task": task,
                                 "host_agent_telemetry": telemetry,
                                 "automation": automation,
@@ -3807,6 +3860,13 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 "host agent telemetry",
                                 &telemetry_summary,
                             );
+                            if let Some((blocker_codes, _)) = &telemetry_feedback_blocker {
+                                print_surface_line(
+                                    command.render,
+                                    "telemetry blockers",
+                                    &blocker_codes.join(", "),
+                                );
+                            }
                             if let Some(automation) = &automation {
                                 print_surface_line(
                                     command.render,
@@ -3822,7 +3882,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 }
                             }
                         }
-                        if automation_blocked {
+                        if automation_blocked || feedback_blocked {
                             ExitCode::from(1)
                         } else {
                             ExitCode::SUCCESS
@@ -4220,11 +4280,12 @@ mod tests {
         parse_label_values, parse_optional_label_value, parse_split_child_specs,
         persist_task_handoff_accept_receipt, select_task_next_lawful_binding,
         task_close_automation_receipt, task_close_commit_allowlist_next_actions,
-        task_close_commit_file_strings, task_close_host_agent_telemetry,
-        task_close_uses_isolated_state_dir, task_create_title, task_handoff_accept_receipt,
-        task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
-        task_json_success_status, task_next_lawful_receipt, task_owned_status_receipt,
-        validate_task_handoff_accept_receipt, ADAPTIVE_REPLAN_FINDING_KINDS,
+        task_close_commit_file_strings, task_close_feedback_blocker_summary,
+        task_close_host_agent_telemetry, task_close_uses_isolated_state_dir, task_create_title,
+        task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
+        task_handoff_receipt_root, task_json_success_status, task_next_lawful_receipt,
+        task_owned_status_receipt, validate_task_handoff_accept_receipt,
+        ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
@@ -5079,6 +5140,28 @@ mod tests {
             &project_state_dir,
             true
         ));
+    }
+
+    #[test]
+    fn task_close_feedback_blocker_summary_surfaces_deferred_canonical_close() {
+        let telemetry = serde_json::json!({
+            "status": "skipped",
+            "reason": "feedback_deferred_for_canonical_close_status",
+            "canonical_status": "blocked",
+            "canonical_gate": "blocked",
+        });
+
+        let (blocker_codes, next_actions) = task_close_feedback_blocker_summary(&telemetry)
+            .expect("deferred canonical close should produce blocker summary");
+
+        assert_eq!(
+            blocker_codes,
+            vec![
+                "close_feedback_canonical_status_blocked".to_string(),
+                "canonical_gate_blocked".to_string()
+            ]
+        );
+        assert!(next_actions[0].contains("Resolve the blocked condition"));
     }
 
     #[test]
