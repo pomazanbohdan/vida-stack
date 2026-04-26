@@ -388,7 +388,7 @@ fn persist_docflow_current_receipt(
         other => {
             return Err(format!(
                 "unsupported docflow current receipt kind `{other}`"
-            ))
+            ));
         }
     };
     let verdict = if output.trim().is_empty() || output.contains("✅ OK:") {

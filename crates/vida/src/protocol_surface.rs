@@ -434,8 +434,7 @@ mod tests {
 
     #[test]
     fn extract_protocol_view_fragment_supports_section_markers() {
-        let content =
-            "intro\n## Section: web-search\n# Web Validation Integration\nbody\n## Section: other\nnext";
+        let content = "intro\n## Section: web-search\n# Web Validation Integration\nbody\n## Section: other\nnext";
         let section = extract_protocol_view_fragment(content, "section-web-search")
             .expect("section marker should resolve");
         assert!(

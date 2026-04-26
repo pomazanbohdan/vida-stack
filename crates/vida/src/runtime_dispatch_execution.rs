@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
-use crate::{RuntimeConsumptionLaneSelection, StateStore, yaml_lookup};
+use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 
 fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> &str {
     match dispatch_target {
@@ -1846,14 +1846,14 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandTimeoutWrapper, agent_lane_dispatch_result,
-        configured_internal_host_activation_parts, configured_internal_host_runtime_env,
-        dispatch_packet_prompt, execute_external_agent_lane_dispatch, execute_wrapped_command,
+        agent_lane_dispatch_result, configured_internal_host_activation_parts,
+        configured_internal_host_runtime_env, dispatch_packet_prompt,
+        execute_external_agent_lane_dispatch, execute_wrapped_command,
         external_provider_output_confirms_execution, internal_codex_output_confirms_execution,
         mark_dispatch_result_execution_evidence, parse_external_provider_output,
         parse_internal_codex_exec_output,
         should_render_store_backed_activation_view_for_internal_failure,
-        wrap_command_with_optional_timeout,
+        wrap_command_with_optional_timeout, CommandTimeoutWrapper,
     };
     use crate::RuntimeConsumptionLaneSelection;
     use std::path::Path;
@@ -2791,8 +2791,8 @@ agent_system:
     }
 
     #[test]
-    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing()
-     {
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing(
+    ) {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -3095,12 +3095,10 @@ agent_system:
             result["backend_dispatch"]["provider_error"],
             serde_json::Value::Null
         );
-        assert!(
-            !result["blocker_reason"]
-                .as_str()
-                .expect("blocker reason should render")
-                .contains("SHOULD_NOT_LAUNCH")
-        );
+        assert!(!result["blocker_reason"]
+            .as_str()
+            .expect("blocker reason should render")
+            .contains("SHOULD_NOT_LAUNCH"));
 
         let _ = std::fs::remove_dir_all(&project_root);
     }

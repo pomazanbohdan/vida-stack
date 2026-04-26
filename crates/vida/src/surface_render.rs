@@ -2,7 +2,10 @@ use crate::RenderMode;
 use serde::Serialize;
 
 const BOOTSTRAP_COMMAND_ENTRIES: [(&str, &str); 4] = [
-    ("init", "bootstrap framework carriers into the current project"),
+    (
+        "init",
+        "bootstrap framework carriers into the current project",
+    ),
     (
         "boot",
         "initialize authoritative state and instruction/framework-memory surfaces",
