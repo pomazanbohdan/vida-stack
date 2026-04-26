@@ -155,6 +155,78 @@ fn emit_consume_continue_state_access_blocker_json(
     ));
 }
 
+fn consume_continue_resume_error_blocker_code(error: &str) -> &'static str {
+    if error.contains("Latest continuation binding") && error.contains("ambiguous") {
+        "continuation_binding_ambiguous"
+    } else if error.contains("Latest explicit continuation binding points to run") {
+        "continuation_binding_mismatch"
+    } else if error.contains("not resumeable through default") {
+        "continuation_binding_not_resumeable"
+    } else {
+        "consume_continue_resume_blocked"
+    }
+}
+
+fn consume_continue_resume_error_run_id(error: &str) -> Option<String> {
+    let marker = "run `";
+    let start = error.find(marker)? + marker.len();
+    let rest = &error[start..];
+    let end = rest.find('`')?;
+    let run_id = rest[..end].trim();
+    (!run_id.is_empty()).then(|| run_id.to_string())
+}
+
+fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> serde_json::Value {
+    let blocker_code = consume_continue_resume_error_blocker_code(error);
+    let run_id = consume_continue_resume_error_run_id(error);
+    let next_actions = if blocker_code == "continuation_binding_ambiguous" {
+        serde_json::json!([
+            "Bind the next bounded unit explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id> --json`.",
+            "Pass `--run-id <run-id>` only when intentionally refreshing that specific run."
+        ])
+    } else {
+        serde_json::json!([
+            "Inspect continuation evidence with `vida status --json` and `vida taskflow recovery latest --json`.",
+            "Bind or refresh the intended bounded unit before retrying `vida taskflow consume continue --json`."
+        ])
+    };
+    let artifact_refs = serde_json::json!({
+        "surface": surface_name,
+        "run_id": run_id,
+    });
+    let shared_fields = serde_json::json!({
+        "status": "blocked",
+        "blocker_codes": [blocker_code],
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+    });
+    serde_json::json!({
+        "surface": surface_name,
+        "status": "blocked",
+        "error": error,
+        "run_id": run_id,
+        "blocker_codes": [blocker_code],
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+        "shared_fields": shared_fields,
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "blocked",
+            "blocker_codes": [blocker_code],
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+            "risk_tier": null,
+            "trace_id": null,
+            "workflow_class": null
+        }
+    })
+}
+
+fn emit_consume_continue_resume_error_json(error: &str, surface_name: &str) {
+    crate::print_json_pretty(&consume_continue_resume_error_payload(error, surface_name));
+}
+
 fn missing_dispatch_packet_path_error(latest: bool) -> String {
     let _ = super::blocker_code_str(super::BlockerCode::MissingPacket);
     if latest {
@@ -3268,7 +3340,13 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     run_graph_bootstrap = bootstrap;
                 }
                 Err(error) => {
-                    eprintln!("{error}");
+                    if as_json {
+                        if emit_output {
+                            emit_consume_continue_resume_error_json(&error, surface_name);
+                        }
+                    } else {
+                        eprintln!("{error}");
+                    }
                     return ExitCode::from(1);
                 }
             }
@@ -3839,11 +3917,11 @@ mod tests {
         blocked_external_dispatch_artifact_mismatched_as_internal_activation,
         build_failure_control_evidence, canonical_resume_dispatch_status,
         canonical_resume_lane_status, canonical_resume_string_array_entries,
-        consume_continue_state_access_blocker_payload, dispatch_receipt_internal_retry_eligible,
-        dispatch_receipt_primary_rebind_eligible, dispatch_receipt_retry_eligible,
-        emit_runtime_consumption_resume_json, fail_fast_state_store_open_read_only_with_timeout,
-        normalize_runtime_dispatch_packet, normalize_stale_in_flight_dispatch_receipt,
-        persisted_dispatch_packet_lineage_task_id,
+        consume_continue_resume_error_payload, consume_continue_state_access_blocker_payload,
+        dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
+        dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
+        fail_fast_state_store_open_read_only_with_timeout, normalize_runtime_dispatch_packet,
+        normalize_stale_in_flight_dispatch_receipt, persisted_dispatch_packet_lineage_task_id,
         prefer_ready_downstream_packet_over_active_result, prepare_explicit_resume_retry_artifact,
         primary_backend_for_dispatch_receipt, read_dispatch_packet,
         reconcile_blocked_implementer_timeout_with_tracked_close_evidence,
@@ -10607,6 +10685,37 @@ agent_system:
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn consume_continue_resume_error_payload_preserves_json_contract_for_ambiguous_binding() {
+        let error = "Latest continuation binding for run `run-ambiguous-latest` is ambiguous. Either bind the next bounded unit explicitly with `vida taskflow continuation bind run-ambiguous-latest --task-id <task-id> --json` or pass `--run-id run-ambiguous-latest` to refresh that specific run.";
+        let payload =
+            consume_continue_resume_error_payload(error, "vida taskflow consume continue");
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["run_id"], "run-ambiguous-latest");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["continuation_binding_ambiguous"])
+        );
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert_eq!(
+            payload["operator_contracts"]["blocker_codes"],
+            payload["blocker_codes"]
+        );
+        assert_eq!(
+            payload["shared_fields"]["next_actions"],
+            payload["next_actions"]
+        );
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be array")
+            .iter()
+            .any(|action| action
+                .as_str()
+                .unwrap_or_default()
+                .contains("continuation bind <run-id> --task-id <task-id> --json")));
     }
 
     #[tokio::test]
