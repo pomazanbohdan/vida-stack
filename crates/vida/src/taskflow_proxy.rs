@@ -486,6 +486,55 @@ fn scheduler_execute_agent_init_command(
     Ok((stdout, activation_kind))
 }
 
+fn explicit_task_graph_continuation_task_id(
+    binding: Option<&crate::state_store::RunGraphContinuationBinding>,
+) -> Option<&str> {
+    let binding = binding?;
+    if binding.status != "bound" || binding.binding_source != "explicit_continuation_bind_task" {
+        return None;
+    }
+    if binding
+        .active_bounded_unit
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        != Some("task_graph_task")
+    {
+        return None;
+    }
+    binding
+        .active_bounded_unit
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|task_id| !task_id.is_empty())
+        .or_else(|| {
+            let task_id = binding.task_id.trim();
+            (!task_id.is_empty()).then_some(task_id)
+        })
+}
+
+fn scheduler_agent_init_activation_result_status(
+    activation_kind: Option<&str>,
+) -> (&'static str, &'static str, &'static str) {
+    match activation_kind {
+        Some("activation_view") => (
+            "activation_view_only",
+            "agent_init_activation_view_only",
+            "scheduler_agent_init_activation_view_only",
+        ),
+        Some(_) => (
+            "activation_evidence_returned",
+            "agent_init_activation_evidence_only",
+            "scheduler_agent_init_activation_evidence_only",
+        ),
+        None => (
+            "activation_evidence_returned_unclassified",
+            "agent_init_activation_evidence_unclassified",
+            "scheduler_agent_init_activation_evidence_unclassified",
+        ),
+    }
+}
+
 fn scheduler_reservation_acquire_requests(
     plan: &TaskflowSchedulerDispatchPlan,
     receipt_id: &str,
@@ -577,16 +626,10 @@ async fn persist_scheduler_execute_receipt(
         }
         match scheduler_execute_agent_init_command(&reservation.task_id, state_dir) {
             Ok((stdout, activation_kind)) => {
-                let execute_status = match activation_kind.as_deref() {
-                    Some("activation_view") => "activation_view_only",
-                    Some(_) => "agent_init_returned",
-                    None => "agent_init_returned_unclassified",
-                };
+                let (execute_status, preview_only_reason, blocker_code) =
+                    scheduler_agent_init_activation_result_status(activation_kind.as_deref());
                 reservation.execute_status = execute_status.to_string();
-                reservation.preview_only_reason = activation_kind
-                    .as_deref()
-                    .filter(|kind| *kind == "activation_view")
-                    .map(|_| "agent_init_activation_view_only".to_string());
+                reservation.preview_only_reason = Some(preview_only_reason.to_string());
                 launch_results.push(serde_json::json!({
                     "task_id": reservation.task_id,
                     "reservation_id": reservation.reservation_id,
@@ -594,9 +637,7 @@ async fn persist_scheduler_execute_receipt(
                     "activation_kind": activation_kind,
                     "stdout": stdout,
                 }));
-                if execute_status == "activation_view_only" {
-                    launch_blockers.push("scheduler_agent_init_activation_view_only".to_string());
-                }
+                launch_blockers.push(blocker_code.to_string());
                 let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
                     .await
                     .map_err(|error| {
@@ -668,11 +709,22 @@ async fn persist_scheduler_execute_receipt(
     plan.execute_supported = true;
     plan.execution_attempted = true;
     if launch_blockers.is_empty() {
-        plan.status = "pass".to_string();
-        plan.dispatch_receipt.dispatch_status = "pass".to_string();
-        plan.execution_status = "agent_init_returned".to_string();
-        plan.dispatch_receipt.execute_status = "agent_init_returned".to_string();
-        plan.dispatch_receipt.preview_only_reason = None;
+        plan.status = "blocked".to_string();
+        plan.dispatch_receipt.dispatch_status = "blocked".to_string();
+        plan.execution_status = "scheduler_execute_no_execution_evidence".to_string();
+        plan.dispatch_receipt.execute_status = plan.execution_status.clone();
+        plan.dispatch_receipt.preview_only_reason = Some(plan.execution_status.clone());
+        plan.blocker_codes.push(plan.execution_status.clone());
+        plan.dispatch_receipt
+            .blocker_codes
+            .push(plan.execution_status.clone());
+        plan.dispatch_receipt
+            .execution_blocker_codes
+            .push(plan.execution_status.clone());
+        plan.next_actions.push(
+            "Scheduler execute did not receive receipt-backed worker execution evidence; continue through the lawful execution handoff before claiming completion."
+                .to_string(),
+        );
     } else {
         for blocker in &launch_blockers {
             if !plan.blocker_codes.iter().any(|code| code == blocker) {
@@ -747,6 +799,7 @@ fn build_taskflow_scheduler_dispatch_plan(
     requested_parallel_limit: Option<u64>,
     scope_task_id: Option<&str>,
     requested_current_task_id: Option<&str>,
+    explicit_bound_current_task_id: Option<&str>,
     state_dir: &std::path::Path,
     dry_run: bool,
     execute_requested: bool,
@@ -757,6 +810,11 @@ fn build_taskflow_scheduler_dispatch_plan(
         requested_parallel_limit,
     );
     let selected_current_candidate = if let Some(task_id) = requested_current_task_id {
+        scheduling
+            .ready
+            .iter()
+            .find(|candidate| candidate.task.id == task_id)
+    } else if let Some(task_id) = explicit_bound_current_task_id {
         scheduling
             .ready
             .iter()
@@ -775,6 +833,12 @@ fn build_taskflow_scheduler_dispatch_plan(
             "requested_current_task"
         } else {
             "requested_current_task_not_ready"
+        }
+    } else if explicit_bound_current_task_id.is_some() {
+        if selected_current_task_id.is_some() {
+            "explicit_run_graph_continuation_binding"
+        } else {
+            "explicit_run_graph_continuation_binding_not_ready"
         }
     } else if selected_current_candidate.is_some_and(|candidate| candidate.active_critical_path) {
         "critical_path_ready_head"
@@ -847,6 +911,8 @@ fn build_taskflow_scheduler_dispatch_plan(
         }
         if requested_current_task_id.is_some() {
             blocker_codes.push("requested_current_task_not_ready".to_string());
+        } else if explicit_bound_current_task_id.is_some() {
+            blocker_codes.push("explicit_run_graph_continuation_binding_not_ready".to_string());
         }
         next_actions.push(
             "Inspect `vida taskflow graph-summary --json` before attempting scheduler dispatch."
@@ -2676,9 +2742,25 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         Ok(payload) => normalize_scheduler_max_parallel_agents(&payload.activation_bundle),
         Err(_) => 1,
     };
+    let explicit_binding = if current_task_id.is_none() {
+        match store.latest_explicit_run_graph_continuation_binding().await {
+            Ok(binding) => binding,
+            Err(error) => {
+                eprintln!("Failed to read latest explicit continuation binding: {error}");
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        None
+    };
+    let explicit_bound_current_task_id =
+        explicit_task_graph_continuation_task_id(explicit_binding.as_ref());
+    let effective_current_task_id = current_task_id
+        .as_deref()
+        .or(explicit_bound_current_task_id);
 
     let initial_projection = match store
-        .scheduling_projection_scoped(scope_task_id.as_deref(), current_task_id.as_deref())
+        .scheduling_projection_scoped(scope_task_id.as_deref(), effective_current_task_id)
         .await
     {
         Ok(projection) => projection,
@@ -2687,7 +2769,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let selected_primary_id = if let Some(task_id) = current_task_id.as_deref() {
+    let selected_primary_id = if let Some(task_id) = effective_current_task_id {
         initial_projection
             .ready
             .iter()
@@ -2727,6 +2809,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         requested_parallel_limit,
         scope_task_id.as_deref(),
         current_task_id.as_deref(),
+        explicit_bound_current_task_id,
         &state_dir,
         dry_run || !execute_requested,
         execute_requested,
@@ -4026,7 +4109,7 @@ mod tests {
 
         let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
         let plan = build_taskflow_scheduler_dispatch_plan(
-            projection, 2, None, None, None, state_dir, true, false,
+            projection, 2, None, None, None, None, state_dir, true, false,
         );
 
         assert_eq!(plan.status, "pass");
@@ -4149,7 +4232,7 @@ mod tests {
 
         let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
         let plan = build_taskflow_scheduler_dispatch_plan(
-            projection, 1, None, None, None, state_dir, false, true,
+            projection, 1, None, None, None, None, state_dir, false, true,
         );
 
         assert_eq!(plan.status, "pass");
@@ -4230,6 +4313,7 @@ mod tests {
             Some(1),
             None,
             None,
+            None,
             state_dir,
             true,
             false,
@@ -4264,7 +4348,7 @@ mod tests {
 
         let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
         let plan = build_taskflow_scheduler_dispatch_plan(
-            projection, 2, None, None, None, state_dir, true, false,
+            projection, 2, None, None, None, None, state_dir, true, false,
         );
         let payload = serde_json::to_value(&plan).expect("scheduler plan should serialize");
 
@@ -4360,6 +4444,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             state_dir,
             true,
             false,
@@ -4377,7 +4462,7 @@ mod tests {
         }));
 
         let cap_two = build_taskflow_scheduler_dispatch_plan(
-            projection, 2, None, None, None, state_dir, true, false,
+            projection, 2, None, None, None, None, state_dir, true, false,
         );
         assert_eq!(
             cap_two.selected_task_ids,
@@ -4422,7 +4507,7 @@ mod tests {
         let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
 
         let plan = build_taskflow_scheduler_dispatch_plan(
-            projection, 2, None, None, None, state_dir, true, false,
+            projection, 2, None, None, None, None, state_dir, true, false,
         );
 
         assert_eq!(plan.selected_task_ids, vec!["current", "safe-parallel"]);
@@ -4462,7 +4547,7 @@ mod tests {
         let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
 
         let plan = build_taskflow_scheduler_dispatch_plan(
-            projection, 1, None, None, None, state_dir, true, false,
+            projection, 1, None, None, None, None, state_dir, true, false,
         );
 
         assert_eq!(plan.selection_source, "critical_path_ready_head");
@@ -4472,6 +4557,67 @@ mod tests {
                 .as_ref()
                 .and_then(|task| task.conflict_domain.as_deref()),
             Some("critical")
+        );
+    }
+
+    #[test]
+    fn scheduler_dispatch_plan_prefers_explicit_task_graph_binding_over_critical_path() {
+        let mut critical = task("critical-ready", "task", "open", 1, &[], Vec::new());
+        critical.execution_semantics.conflict_domain = Some("critical".to_string());
+        let mut bound = task("explicit-bound", "task", "open", 2, &[], Vec::new());
+        bound.execution_semantics.conflict_domain = Some("bound".to_string());
+
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("explicit-bound".to_string()),
+            ready: vec![
+                scheduling_candidate(critical, true, true, true, Vec::new(), vec![]),
+                scheduling_candidate(bound, true, false, false, Vec::new(), vec![]),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+
+        let plan = build_taskflow_scheduler_dispatch_plan(
+            projection,
+            1,
+            None,
+            None,
+            None,
+            Some("explicit-bound"),
+            state_dir,
+            true,
+            false,
+        );
+
+        assert_eq!(
+            plan.selection_source,
+            "explicit_run_graph_continuation_binding"
+        );
+        assert_eq!(plan.selected_task_ids, vec!["explicit-bound"]);
+        assert!(plan.rejected_candidates.iter().any(|candidate| {
+            candidate.task_id == "critical-ready"
+                && candidate.active_critical_path
+                && candidate
+                    .reasons
+                    .iter()
+                    .any(|reason| reason == "max_parallel_agents_cap_reached")
+        }));
+    }
+
+    #[test]
+    fn scheduler_agent_init_activation_evidence_status_stays_blocked_without_execution_evidence() {
+        assert_eq!(
+            super::scheduler_agent_init_activation_result_status(Some("dispatch_packet")),
+            (
+                "activation_evidence_returned",
+                "agent_init_activation_evidence_only",
+                "scheduler_agent_init_activation_evidence_only"
+            )
+        );
+        assert_ne!(
+            super::scheduler_agent_init_activation_result_status(Some("dispatch_packet")).0,
+            "agent_init_returned"
         );
     }
 
@@ -4507,7 +4653,7 @@ mod tests {
         let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
 
         let plan = build_taskflow_scheduler_dispatch_plan(
-            projection, 3, None, None, None, state_dir, true, false,
+            projection, 3, None, None, None, None, state_dir, true, false,
         );
 
         assert_eq!(
@@ -4548,6 +4694,7 @@ mod tests {
             None,
             None,
             Some("old-waiting"),
+            None,
             state_dir,
             true,
             false,
@@ -5491,7 +5638,7 @@ mod tests {
         };
         let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
         let mut plan = super::build_taskflow_scheduler_dispatch_plan(
-            projection, 1, None, None, None, state_dir, false, true,
+            projection, 1, None, None, None, None, state_dir, false, true,
         );
 
         super::apply_scheduler_execute_runtime_gate_blockers(
