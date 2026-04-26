@@ -387,7 +387,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Returned semantics:");
             println!(
-                "  status, blocker_codes, next_actions, max_parallel_agents, selection_source, selected_primary_task, selected_parallel_tasks, selected_task_ids, rejected_candidates, scheduling, reservations"
+                "  status, blocker_codes, next_actions, max_parallel_agents, selection_source, selected_primary_task, selected_parallel_tasks, selected_task_ids, rejected_candidates, scheduling, reservations, dispatch_receipt, activation_attempted, activation_status, worker_execution_evidence_status, worker_completion_claimed"
             );
             println!();
             println!("Failure modes:");

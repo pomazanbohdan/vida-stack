@@ -99,6 +99,12 @@ struct TaskflowSchedulerReservationPreview {
     execute_supported: bool,
     execution_attempted: bool,
     execute_status: String,
+    activation_attempt_supported: bool,
+    activation_attempted: bool,
+    activation_status: String,
+    activation_blocker_codes: Vec<String>,
+    worker_execution_evidence_status: String,
+    worker_completion_claimed: bool,
     receipt_id: Option<String>,
     receipt_path: Option<String>,
     preview_only_reason: Option<String>,
@@ -117,6 +123,12 @@ struct TaskflowSchedulerDispatchReceiptPreview {
     execute_supported: bool,
     execution_attempted: bool,
     execute_status: String,
+    activation_attempt_supported: bool,
+    activation_attempted: bool,
+    activation_status: String,
+    activation_blocker_codes: Vec<String>,
+    worker_execution_evidence_status: String,
+    worker_completion_claimed: bool,
     preview_only_reason: Option<String>,
     execution_blocker_codes: Vec<String>,
     selected_task_ids: Vec<String>,
@@ -135,6 +147,12 @@ struct TaskflowSchedulerDispatchPlan {
     execute_supported: bool,
     execution_attempted: bool,
     execution_status: String,
+    activation_attempt_supported: bool,
+    activation_attempted: bool,
+    activation_status: String,
+    activation_blocker_codes: Vec<String>,
+    worker_execution_evidence_status: String,
+    worker_completion_claimed: bool,
     configured_max_parallel_agents: u64,
     requested_parallel_limit: Option<u64>,
     scope_task_id: Option<String>,
@@ -292,6 +310,12 @@ fn scheduler_reservation_preview(
         execute_supported: false,
         execution_attempted: false,
         execute_status: execute_status.to_string(),
+        activation_attempt_supported: false,
+        activation_attempted: false,
+        activation_status: execute_status.to_string(),
+        activation_blocker_codes: Vec::new(),
+        worker_execution_evidence_status: "not_received".to_string(),
+        worker_completion_claimed: false,
         receipt_id: None,
         receipt_path: None,
         preview_only_reason,
@@ -372,14 +396,24 @@ fn apply_scheduler_execute_runtime_gate_blockers(
     plan.status = "blocked".to_string();
     if !is_noop_projection {
         plan.execution_status = execution_status.clone();
+        plan.activation_status = execution_status.clone();
+        plan.activation_blocker_codes = blocker_codes.to_vec();
         plan.dispatch_receipt.execute_status = execution_status.clone();
+        plan.dispatch_receipt.activation_status = execution_status.clone();
         plan.dispatch_receipt.preview_only_reason = Some(execution_status);
         plan.dispatch_receipt.dispatch_status = "blocked".to_string();
         plan.dispatch_receipt.execution_blocker_codes = blocker_codes.to_vec();
+        plan.dispatch_receipt.activation_blocker_codes = blocker_codes.to_vec();
         plan.execute_supported = true;
         plan.execution_attempted = false;
+        plan.activation_attempt_supported = true;
+        plan.activation_attempted = false;
         for reservation in &mut plan.reservations {
             reservation.preview_only_reason = Some(plan.dispatch_receipt.execute_status.clone());
+            reservation.activation_status = plan.dispatch_receipt.execute_status.clone();
+            reservation.activation_blocker_codes = blocker_codes.to_vec();
+            reservation.activation_attempt_supported = true;
+            reservation.activation_attempted = false;
         }
     }
     if signals.open_delegated_cycle {
@@ -601,6 +635,8 @@ async fn persist_scheduler_execute_receipt(
         reservation.reservation_persisted = true;
         reservation.execute_supported = true;
         reservation.execution_attempted = true;
+        reservation.activation_attempt_supported = true;
+        reservation.activation_attempted = true;
         reservation.reservation_status = "reservation_persisted".to_string();
         reservation.receipt_id = Some(receipt_id.clone());
         reservation.receipt_path = Some(receipt_path_string.clone());
@@ -629,11 +665,16 @@ async fn persist_scheduler_execute_receipt(
                 let (execute_status, preview_only_reason, blocker_code) =
                     scheduler_agent_init_activation_result_status(activation_kind.as_deref());
                 reservation.execute_status = execute_status.to_string();
+                reservation.activation_status = execute_status.to_string();
                 reservation.preview_only_reason = Some(preview_only_reason.to_string());
+                reservation.activation_blocker_codes = vec![blocker_code.to_string()];
                 launch_results.push(serde_json::json!({
                     "task_id": reservation.task_id,
                     "reservation_id": reservation.reservation_id,
                     "status": execute_status,
+                    "activation_status": execute_status,
+                    "worker_execution_evidence_status": "not_received",
+                    "worker_completion_claimed": false,
                     "activation_kind": activation_kind,
                     "stdout": stdout,
                 }));
@@ -658,12 +699,18 @@ async fn persist_scheduler_execute_receipt(
             }
             Err(error) => {
                 reservation.execute_status = "agent_init_failed".to_string();
+                reservation.activation_status = "agent_init_failed".to_string();
                 reservation.preview_only_reason = Some("scheduler_agent_init_failed".to_string());
+                reservation.activation_blocker_codes =
+                    vec!["scheduler_agent_init_failed".to_string()];
                 launch_blockers.push("scheduler_agent_init_failed".to_string());
                 launch_results.push(serde_json::json!({
                     "task_id": reservation.task_id,
                     "reservation_id": reservation.reservation_id,
                     "status": "agent_init_failed",
+                    "activation_status": "agent_init_failed",
+                    "worker_execution_evidence_status": "not_received",
+                    "worker_completion_claimed": false,
                     "error": error,
                 }));
                 let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
@@ -700,24 +747,33 @@ async fn persist_scheduler_execute_receipt(
     plan.next_actions
         .retain(|action| !action.contains("external lane execution is not attempted"));
     plan.dispatch_receipt.execution_blocker_codes = launch_blockers.clone();
+    plan.dispatch_receipt.activation_blocker_codes = launch_blockers.clone();
     plan.dispatch_receipt.receipt_id = Some(receipt_id.clone());
     plan.dispatch_receipt.receipt_path = Some(receipt_path_string.clone());
     plan.dispatch_receipt.receipt_persisted = true;
     plan.dispatch_receipt.receipt_status = "persisted".to_string();
     plan.dispatch_receipt.execute_supported = true;
     plan.dispatch_receipt.execution_attempted = true;
+    plan.dispatch_receipt.activation_attempt_supported = true;
+    plan.dispatch_receipt.activation_attempted = true;
     plan.execute_supported = true;
     plan.execution_attempted = true;
+    plan.activation_attempt_supported = true;
+    plan.activation_attempted = true;
     if launch_blockers.is_empty() {
         plan.status = "blocked".to_string();
         plan.dispatch_receipt.dispatch_status = "blocked".to_string();
         plan.execution_status = "scheduler_execute_no_execution_evidence".to_string();
+        plan.activation_status = plan.execution_status.clone();
         plan.dispatch_receipt.execute_status = plan.execution_status.clone();
+        plan.dispatch_receipt.activation_status = plan.execution_status.clone();
         plan.dispatch_receipt.preview_only_reason = Some(plan.execution_status.clone());
         plan.blocker_codes.push(plan.execution_status.clone());
+        plan.activation_blocker_codes = vec![plan.execution_status.clone()];
         plan.dispatch_receipt
             .blocker_codes
             .push(plan.execution_status.clone());
+        plan.dispatch_receipt.activation_blocker_codes = vec![plan.execution_status.clone()];
         plan.dispatch_receipt
             .execution_blocker_codes
             .push(plan.execution_status.clone());
@@ -763,7 +819,11 @@ async fn persist_scheduler_execute_receipt(
             .first()
             .cloned()
             .unwrap_or_else(|| "scheduler_execute_blocked".to_string());
+        plan.activation_status = plan.execution_status.clone();
+        plan.activation_blocker_codes = launch_blockers.clone();
         plan.dispatch_receipt.execute_status = plan.execution_status.clone();
+        plan.dispatch_receipt.activation_status = plan.execution_status.clone();
+        plan.dispatch_receipt.activation_blocker_codes = launch_blockers.clone();
         plan.dispatch_receipt.preview_only_reason = Some(plan.execution_status.clone());
     }
 
@@ -777,6 +837,12 @@ async fn persist_scheduler_execute_receipt(
         "execute_supported": plan.execute_supported,
         "execution_attempted": plan.execution_attempted,
         "execution_status": plan.execution_status,
+        "activation_attempt_supported": plan.activation_attempt_supported,
+        "activation_attempted": plan.activation_attempted,
+        "activation_status": plan.activation_status,
+        "activation_blocker_codes": plan.activation_blocker_codes,
+        "worker_execution_evidence_status": plan.worker_execution_evidence_status,
+        "worker_completion_claimed": plan.worker_completion_claimed,
         "selected_task_ids": plan.selected_task_ids,
         "reservation_ids": plan.dispatch_receipt.reservation_ids,
         "blocker_codes": plan.blocker_codes,
@@ -1022,6 +1088,16 @@ fn build_taskflow_scheduler_dispatch_plan(
         } else {
             "preview_not_executed".to_string()
         },
+        activation_attempt_supported: execute_supported,
+        activation_attempted: false,
+        activation_status: if execute_requested {
+            execution_status.clone()
+        } else {
+            "preview_not_executed".to_string()
+        },
+        activation_blocker_codes: Vec::new(),
+        worker_execution_evidence_status: "not_received".to_string(),
+        worker_completion_claimed: false,
         preview_only_reason,
         execution_blocker_codes: Vec::new(),
         selected_task_ids: selected_task_ids.clone(),
@@ -1039,6 +1115,21 @@ fn build_taskflow_scheduler_dispatch_plan(
         execute_supported,
         execution_attempted: false,
         execution_status,
+        activation_attempt_supported: execute_supported,
+        activation_attempted: false,
+        activation_status: if execute_requested {
+            if selected_primary_task.is_some() {
+                "execute_projection_not_executed"
+            } else {
+                "blocked_no_lawful_selection"
+            }
+        } else {
+            "preview"
+        }
+        .to_string(),
+        activation_blocker_codes: Vec::new(),
+        worker_execution_evidence_status: "not_received".to_string(),
+        worker_completion_claimed: false,
         configured_max_parallel_agents,
         requested_parallel_limit,
         scope_task_id: scope_task_id.map(str::to_string),
@@ -4370,6 +4461,18 @@ mod tests {
             "preview_not_executed"
         );
         assert_eq!(
+            payload["reservations"][0]["activation_status"],
+            "preview_not_executed"
+        );
+        assert_eq!(
+            payload["reservations"][0]["worker_execution_evidence_status"],
+            "not_received"
+        );
+        assert_eq!(
+            payload["reservations"][0]["worker_completion_claimed"],
+            false
+        );
+        assert_eq!(
             payload["reservations"][0]["preview_only_reason"],
             "scheduler_dispatch_is_preview_only"
         );
@@ -4404,6 +4507,18 @@ mod tests {
             "preview_not_executed"
         );
         assert_eq!(
+            payload["dispatch_receipt"]["activation_status"],
+            "preview_not_executed"
+        );
+        assert_eq!(
+            payload["dispatch_receipt"]["worker_execution_evidence_status"],
+            "not_received"
+        );
+        assert_eq!(
+            payload["dispatch_receipt"]["worker_completion_claimed"],
+            false
+        );
+        assert_eq!(
             payload["dispatch_receipt"]["preview_only_reason"],
             "scheduler_dispatch_is_preview_only"
         );
@@ -4415,6 +4530,9 @@ mod tests {
             ])
         );
         assert_eq!(payload["dispatch_receipt"]["execution_attempted"], false);
+        assert_eq!(payload["activation_attempted"], false);
+        assert_eq!(payload["worker_execution_evidence_status"], "not_received");
+        assert_eq!(payload["worker_completion_claimed"], false);
     }
 
     #[test]
@@ -4608,6 +4726,14 @@ mod tests {
     #[test]
     fn scheduler_agent_init_activation_evidence_status_stays_blocked_without_execution_evidence() {
         assert_eq!(
+            super::scheduler_agent_init_activation_result_status(Some("activation_view")),
+            (
+                "activation_view_only",
+                "agent_init_activation_view_only",
+                "scheduler_agent_init_activation_view_only"
+            )
+        );
+        assert_eq!(
             super::scheduler_agent_init_activation_result_status(Some("dispatch_packet")),
             (
                 "activation_evidence_returned",
@@ -4618,6 +4744,10 @@ mod tests {
         assert_ne!(
             super::scheduler_agent_init_activation_result_status(Some("dispatch_packet")).0,
             "agent_init_returned"
+        );
+        assert_ne!(
+            super::scheduler_agent_init_activation_result_status(Some("activation_view")).0,
+            "completed"
         );
     }
 
@@ -5652,8 +5782,21 @@ mod tests {
 
         assert_eq!(plan.status, "blocked");
         assert_eq!(plan.execution_status, "open_delegated_cycle");
+        assert_eq!(plan.activation_status, "open_delegated_cycle");
+        assert_eq!(plan.activation_blocker_codes, vec!["open_delegated_cycle"]);
+        assert_eq!(plan.worker_execution_evidence_status, "not_received");
+        assert!(!plan.worker_completion_claimed);
         assert_eq!(plan.dispatch_receipt.dispatch_status, "blocked");
         assert_eq!(plan.dispatch_receipt.execute_status, "open_delegated_cycle");
+        assert_eq!(
+            plan.dispatch_receipt.activation_status,
+            "open_delegated_cycle"
+        );
+        assert_eq!(
+            plan.dispatch_receipt.worker_execution_evidence_status,
+            "not_received"
+        );
+        assert!(!plan.dispatch_receipt.worker_completion_claimed);
         assert!(plan.next_actions.iter().any(|action| action
             .contains("Resolve the open delegated-cycle gate before scheduler execute")));
     }
