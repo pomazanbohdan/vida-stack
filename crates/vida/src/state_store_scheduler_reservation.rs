@@ -298,6 +298,9 @@ impl StateStore {
         reservation.lease_status = SchedulerDispatchReservationStatus::Released
             .as_str()
             .to_string();
+        if !reason.trim().is_empty() {
+            reservation.execute_status = reason.to_string();
+        }
         reservation.released_at =
             Some(scheduler_reservation_timestamp(scheduler_reservation_time()));
         reservation.release_reason = Some(reason.to_string());
