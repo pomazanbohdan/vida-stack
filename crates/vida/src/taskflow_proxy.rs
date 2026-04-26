@@ -17,14 +17,14 @@ use serde::Serialize;
 use taskflow_cli::Cli as TaskflowCli;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct GraphSummaryTaskRef {
-    id: String,
-    display_id: Option<String>,
-    title: String,
-    status: String,
-    priority: u32,
-    issue_type: String,
-    conflict_domain: Option<String>,
+pub(crate) struct GraphSummaryTaskRef {
+    pub(crate) id: String,
+    pub(crate) display_id: Option<String>,
+    pub(crate) title: String,
+    pub(crate) status: String,
+    pub(crate) priority: u32,
+    pub(crate) issue_type: String,
+    pub(crate) conflict_domain: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -73,45 +73,45 @@ struct TaskflowNextDecision {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct TaskflowSchedulerRejectedCandidate {
-    task_id: String,
-    task: GraphSummaryTaskRef,
-    ready_now: bool,
-    active_critical_path: bool,
-    conflict_domain: Option<String>,
-    reasons: Vec<String>,
-    blocked_by: Vec<crate::state_store::TaskDependencyStatus>,
-    parallel_blockers: Vec<String>,
+pub(crate) struct TaskflowSchedulerRejectedCandidate {
+    pub(crate) task_id: String,
+    pub(crate) task: GraphSummaryTaskRef,
+    pub(crate) ready_now: bool,
+    pub(crate) active_critical_path: bool,
+    pub(crate) conflict_domain: Option<String>,
+    pub(crate) reasons: Vec<String>,
+    pub(crate) blocked_by: Vec<crate::state_store::TaskDependencyStatus>,
+    pub(crate) parallel_blockers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct TaskflowSchedulerReservationPreview {
-    reservation_id: String,
-    task_id: String,
-    task: GraphSummaryTaskRef,
-    launch_role: String,
-    launch_index: usize,
-    conflict_domain: Option<String>,
-    command: String,
-    state_dir: String,
-    reservation_status: String,
-    reservation_persisted: bool,
-    execute_supported: bool,
-    execution_attempted: bool,
-    execute_status: String,
-    activation_attempt_supported: bool,
-    activation_attempted: bool,
-    activation_status: String,
-    activation_blocker_codes: Vec<String>,
-    worker_execution_evidence_status: String,
-    worker_completion_claimed: bool,
-    receipt_id: Option<String>,
-    receipt_path: Option<String>,
-    preview_only_reason: Option<String>,
+pub(crate) struct TaskflowSchedulerReservationPreview {
+    pub(crate) reservation_id: String,
+    pub(crate) task_id: String,
+    pub(crate) task: GraphSummaryTaskRef,
+    pub(crate) launch_role: String,
+    pub(crate) launch_index: usize,
+    pub(crate) conflict_domain: Option<String>,
+    pub(crate) command: String,
+    pub(crate) state_dir: String,
+    pub(crate) reservation_status: String,
+    pub(crate) reservation_persisted: bool,
+    pub(crate) execute_supported: bool,
+    pub(crate) execution_attempted: bool,
+    pub(crate) execute_status: String,
+    pub(crate) activation_attempt_supported: bool,
+    pub(crate) activation_attempted: bool,
+    pub(crate) activation_status: String,
+    pub(crate) activation_blocker_codes: Vec<String>,
+    pub(crate) worker_execution_evidence_status: String,
+    pub(crate) worker_completion_claimed: bool,
+    pub(crate) receipt_id: Option<String>,
+    pub(crate) receipt_path: Option<String>,
+    pub(crate) preview_only_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct TaskflowSchedulerDispatchReceiptPreview {
+pub(crate) struct TaskflowSchedulerDispatchReceiptPreview {
     receipt_id: Option<String>,
     receipt_path: Option<String>,
     receipt_status: String,
@@ -137,38 +137,38 @@ struct TaskflowSchedulerDispatchReceiptPreview {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct TaskflowSchedulerDispatchPlan {
-    status: String,
-    surface: String,
-    blocker_codes: Vec<String>,
-    next_actions: Vec<String>,
-    dry_run: bool,
-    execute_requested: bool,
-    execute_supported: bool,
-    execution_attempted: bool,
-    execution_status: String,
-    activation_attempt_supported: bool,
-    activation_attempted: bool,
-    activation_status: String,
-    activation_blocker_codes: Vec<String>,
-    worker_execution_evidence_status: String,
-    worker_completion_claimed: bool,
-    configured_max_parallel_agents: u64,
-    requested_parallel_limit: Option<u64>,
-    scope_task_id: Option<String>,
-    requested_current_task_id: Option<String>,
-    selected_current_task_id: Option<String>,
-    selection_source: String,
-    max_parallel_agents: u64,
-    ready_count: usize,
-    blocked_count: usize,
-    selected_primary_task: Option<GraphSummaryTaskRef>,
-    selected_parallel_tasks: Vec<GraphSummaryTaskRef>,
-    selected_task_ids: Vec<String>,
-    reservations: Vec<TaskflowSchedulerReservationPreview>,
-    dispatch_receipt: TaskflowSchedulerDispatchReceiptPreview,
-    rejected_candidates: Vec<TaskflowSchedulerRejectedCandidate>,
-    scheduling: crate::state_store::TaskSchedulingProjection,
+pub(crate) struct TaskflowSchedulerDispatchPlan {
+    pub(crate) status: String,
+    pub(crate) surface: String,
+    pub(crate) blocker_codes: Vec<String>,
+    pub(crate) next_actions: Vec<String>,
+    pub(crate) dry_run: bool,
+    pub(crate) execute_requested: bool,
+    pub(crate) execute_supported: bool,
+    pub(crate) execution_attempted: bool,
+    pub(crate) execution_status: String,
+    pub(crate) activation_attempt_supported: bool,
+    pub(crate) activation_attempted: bool,
+    pub(crate) activation_status: String,
+    pub(crate) activation_blocker_codes: Vec<String>,
+    pub(crate) worker_execution_evidence_status: String,
+    pub(crate) worker_completion_claimed: bool,
+    pub(crate) configured_max_parallel_agents: u64,
+    pub(crate) requested_parallel_limit: Option<u64>,
+    pub(crate) scope_task_id: Option<String>,
+    pub(crate) requested_current_task_id: Option<String>,
+    pub(crate) selected_current_task_id: Option<String>,
+    pub(crate) selection_source: String,
+    pub(crate) max_parallel_agents: u64,
+    pub(crate) ready_count: usize,
+    pub(crate) blocked_count: usize,
+    pub(crate) selected_primary_task: Option<GraphSummaryTaskRef>,
+    pub(crate) selected_parallel_tasks: Vec<GraphSummaryTaskRef>,
+    pub(crate) selected_task_ids: Vec<String>,
+    pub(crate) reservations: Vec<TaskflowSchedulerReservationPreview>,
+    pub(crate) dispatch_receipt: TaskflowSchedulerDispatchReceiptPreview,
+    pub(crate) rejected_candidates: Vec<TaskflowSchedulerRejectedCandidate>,
+    pub(crate) scheduling: crate::state_store::TaskSchedulingProjection,
 }
 
 fn graph_summary_task_ref(task: &crate::state_store::TaskRecord) -> GraphSummaryTaskRef {
@@ -1147,6 +1147,81 @@ fn build_taskflow_scheduler_dispatch_plan(
         rejected_candidates,
         scheduling,
     }
+}
+
+pub(crate) async fn build_taskflow_scheduler_dispatch_plan_from_store(
+    store: &crate::state_store::StateStore,
+    state_dir: &Path,
+    scope_task_id: Option<&str>,
+    current_task_id: Option<&str>,
+    requested_parallel_limit: Option<u64>,
+    dry_run: bool,
+    execute_requested: bool,
+) -> Result<TaskflowSchedulerDispatchPlan, String> {
+    let max_parallel_agents = crate::build_taskflow_consume_bundle_payload(store)
+        .await
+        .map(|payload| normalize_scheduler_max_parallel_agents(&payload.activation_bundle))
+        .unwrap_or(1);
+    let explicit_binding = if current_task_id.is_none() {
+        Some(
+            store
+                .latest_explicit_run_graph_continuation_binding()
+                .await
+                .map_err(|error| {
+                    format!("Failed to read latest explicit continuation binding: {error}")
+                })?,
+        )
+    } else {
+        None
+    };
+    let explicit_bound_current_task_id = explicit_task_graph_continuation_task_id(
+        explicit_binding.as_ref().and_then(|value| value.as_ref()),
+    );
+    let effective_current_task_id = current_task_id.or(explicit_bound_current_task_id);
+
+    let initial_projection = store
+        .scheduling_projection_scoped(scope_task_id, effective_current_task_id)
+        .await
+        .map_err(|error| format!("Failed to compute scheduler projection: {error}"))?;
+    let selected_primary_id = if let Some(task_id) = effective_current_task_id {
+        initial_projection
+            .ready
+            .iter()
+            .find(|candidate| candidate.task.id == task_id)
+            .map(|candidate| candidate.task.id.clone())
+    } else {
+        initial_projection
+            .ready
+            .iter()
+            .find(|candidate| candidate.active_critical_path)
+            .or_else(|| initial_projection.ready.first())
+            .map(|candidate| candidate.task.id.clone())
+    };
+
+    let scheduling = if let Some(primary_id) = selected_primary_id.as_deref() {
+        if initial_projection.current_task_id.as_deref() == Some(primary_id) {
+            initial_projection
+        } else {
+            store
+                .scheduling_projection_scoped(scope_task_id, Some(primary_id))
+                .await
+                .map_err(|error| format!("Failed to recompute scheduler projection: {error}"))?
+        }
+    } else {
+        initial_projection
+    };
+
+    Ok(build_taskflow_scheduler_dispatch_plan(
+        scheduling,
+        max_parallel_agents,
+        requested_parallel_limit,
+        scope_task_id,
+        current_task_id,
+        explicit_bound_current_task_id,
+        state_dir,
+        dry_run,
+        execute_requested,
+    ))
 }
 
 fn terminal_completed_without_next_unit(
@@ -2829,82 +2904,23 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         }
     };
 
-    let max_parallel_agents = match crate::build_taskflow_consume_bundle_payload(&store).await {
-        Ok(payload) => normalize_scheduler_max_parallel_agents(&payload.activation_bundle),
-        Err(_) => 1,
-    };
-    let explicit_binding = if current_task_id.is_none() {
-        match store.latest_explicit_run_graph_continuation_binding().await {
-            Ok(binding) => binding,
-            Err(error) => {
-                eprintln!("Failed to read latest explicit continuation binding: {error}");
-                return ExitCode::from(1);
-            }
-        }
-    } else {
-        None
-    };
-    let explicit_bound_current_task_id =
-        explicit_task_graph_continuation_task_id(explicit_binding.as_ref());
-    let effective_current_task_id = current_task_id
-        .as_deref()
-        .or(explicit_bound_current_task_id);
-
-    let initial_projection = match store
-        .scheduling_projection_scoped(scope_task_id.as_deref(), effective_current_task_id)
-        .await
+    let mut plan = match build_taskflow_scheduler_dispatch_plan_from_store(
+        &store,
+        &state_dir,
+        scope_task_id.as_deref(),
+        current_task_id.as_deref(),
+        requested_parallel_limit,
+        dry_run || !execute_requested,
+        execute_requested,
+    )
+    .await
     {
-        Ok(projection) => projection,
+        Ok(plan) => plan,
         Err(error) => {
-            eprintln!("Failed to compute scheduler projection: {error}");
+            eprintln!("{error}");
             return ExitCode::from(1);
         }
     };
-    let selected_primary_id = if let Some(task_id) = effective_current_task_id {
-        initial_projection
-            .ready
-            .iter()
-            .find(|candidate| candidate.task.id == task_id)
-            .map(|candidate| candidate.task.id.clone())
-    } else {
-        initial_projection
-            .ready
-            .iter()
-            .find(|candidate| candidate.active_critical_path)
-            .or_else(|| initial_projection.ready.first())
-            .map(|candidate| candidate.task.id.clone())
-    };
-
-    let scheduling = if let Some(primary_id) = selected_primary_id.as_deref() {
-        if initial_projection.current_task_id.as_deref() == Some(primary_id) {
-            initial_projection
-        } else {
-            match store
-                .scheduling_projection_scoped(scope_task_id.as_deref(), Some(primary_id))
-                .await
-            {
-                Ok(projection) => projection,
-                Err(error) => {
-                    eprintln!("Failed to recompute scheduler projection: {error}");
-                    return ExitCode::from(1);
-                }
-            }
-        }
-    } else {
-        initial_projection
-    };
-
-    let mut plan = build_taskflow_scheduler_dispatch_plan(
-        scheduling,
-        max_parallel_agents,
-        requested_parallel_limit,
-        scope_task_id.as_deref(),
-        current_task_id.as_deref(),
-        explicit_bound_current_task_id,
-        &state_dir,
-        dry_run || !execute_requested,
-        execute_requested,
-    );
     let recovery = if execute_requested && !dry_run {
         Some(match store.latest_run_graph_recovery_summary().await {
             Ok(summary) => summary,

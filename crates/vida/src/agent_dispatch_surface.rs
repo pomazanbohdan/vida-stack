@@ -752,6 +752,148 @@ fn build_agent_dispatch_next_preview_dev_team(
     }
 }
 
+fn scheduler_task_record<'a>(
+    plan: &'a crate::taskflow_proxy::TaskflowSchedulerDispatchPlan,
+    task_id: &str,
+) -> Option<&'a state_store::TaskRecord> {
+    plan.scheduling
+        .ready
+        .iter()
+        .chain(plan.scheduling.blocked.iter())
+        .find(|candidate| candidate.task.id == task_id)
+        .map(|candidate| &candidate.task)
+}
+
+fn scheduler_task_parallel_safety(
+    plan: &crate::taskflow_proxy::TaskflowSchedulerDispatchPlan,
+    task_id: &str,
+) -> bool {
+    plan.scheduling
+        .ready
+        .iter()
+        .chain(plan.scheduling.blocked.iter())
+        .find(|candidate| candidate.task.id == task_id)
+        .is_some_and(|candidate| candidate.ready_parallel_safe)
+}
+
+fn build_agent_dispatch_next_preview_from_scheduler_plan(
+    activation_bundle: &serde_json::Value,
+    plan: crate::taskflow_proxy::TaskflowSchedulerDispatchPlan,
+    lanes_requested: usize,
+    explicit_state_dir: Option<&std::path::Path>,
+) -> AgentDispatchNextPreview {
+    let mut blocker_codes = plan.blocker_codes.clone();
+    let mut next_actions = plan.next_actions.clone();
+    let mut selected_lanes = Vec::new();
+    let blocked_candidates = plan
+        .rejected_candidates
+        .iter()
+        .map(|candidate| AgentDispatchBlockedCandidate {
+            task_id: candidate.task_id.clone(),
+            title: candidate.task.title.clone(),
+            ready_now: candidate.ready_now,
+            ready_parallel_safe: candidate.ready_now && candidate.parallel_blockers.is_empty(),
+            reasons: candidate.reasons.clone(),
+            parallel_blockers: candidate.parallel_blockers.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    for (index, reservation) in plan.reservations.iter().enumerate() {
+        let Some(task) = scheduler_task_record(&plan, &reservation.task_id) else {
+            blocker_codes.push(format!(
+                "selected_lane_task_record_missing:task={}",
+                reservation.task_id
+            ));
+            continue;
+        };
+        match selection_truth_for_task(activation_bundle, task) {
+            Ok(selection_truth) => selected_lanes.push(AgentDispatchLanePreview {
+                lane_index: index + 1,
+                task_id: reservation.task_id.clone(),
+                title: reservation.task.title.clone(),
+                role_label: if reservation.launch_role == "primary" {
+                    "default".to_string()
+                } else {
+                    reservation.launch_role.clone()
+                },
+                runtime_role: selection_truth.runtime_role.clone(),
+                task_class: selection_truth.task_class.clone(),
+                dispatch_command: agent_init_command(
+                    &reservation.task_id,
+                    explicit_state_dir,
+                    &selection_truth.runtime_role,
+                ),
+                ready_parallel_safe: scheduler_task_parallel_safety(&plan, &reservation.task_id),
+                selection_reason: if reservation.launch_role == "primary" {
+                    "scheduler_primary_ready_task".to_string()
+                } else {
+                    "scheduler_parallel_safe_ready_task".to_string()
+                },
+                selection_truth,
+            }),
+            Err(reason) => blocker_codes.push(format!(
+                "selected_lane_runtime_assignment_truth_missing:task={}:{}",
+                reservation.task_id, reason
+            )),
+        }
+    }
+
+    if blocker_codes
+        .iter()
+        .any(|code| code.starts_with("selected_lane_runtime_assignment_truth_missing:"))
+        || blocker_codes
+            .iter()
+            .any(|code| code.starts_with("selected_lane_task_record_missing:"))
+    {
+        selected_lanes.clear();
+        blocker_codes.push("selected_lane_runtime_assignment_truth_required".to_string());
+        next_actions.push(
+            "Selection truth is incomplete for at least one scheduler-selected lane; fix runtime assignment evidence before launching `vida agent-init`."
+                .to_string(),
+        );
+    }
+    if plan.max_parallel_agents > 1
+        && blocked_candidates
+            .iter()
+            .any(|candidate| candidate.ready_now && !candidate.ready_parallel_safe)
+    {
+        next_actions.push(
+            "Some ready candidates are not parallel-safe; they remain blocked candidates and are not selected for this preview."
+                .to_string(),
+        );
+    }
+    if !selected_lanes.is_empty() {
+        next_actions.push(
+            "Preview only: review the selected carrier/model/cost truth first; run the shown `vida agent-init` command only after operator review."
+                .to_string(),
+        );
+    }
+
+    let status = if blocker_codes.is_empty() {
+        "pass"
+    } else {
+        "blocked"
+    }
+    .to_string();
+    AgentDispatchNextPreview {
+        status,
+        mode: "preview".to_string(),
+        lanes_requested,
+        configured_max_parallel_agents: usize::try_from(plan.configured_max_parallel_agents)
+            .unwrap_or(usize::MAX),
+        effective_max_parallel_agents: usize::try_from(plan.max_parallel_agents)
+            .unwrap_or(usize::MAX),
+        lanes_selected: selected_lanes.len(),
+        selected_lanes,
+        blocked_candidates,
+        blocker_codes,
+        next_actions,
+        execute_supported: false,
+        execution_attempted: false,
+        source_surfaces: agent_dispatch_source_surfaces(),
+    }
+}
+
 pub(crate) async fn run_agent(args: AgentArgs) -> ExitCode {
     match args.command {
         AgentCommand::DispatchNext(command) => run_agent_dispatch_next(command).await,
@@ -764,34 +906,29 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
         .clone()
         .unwrap_or_else(state_store::default_state_dir);
     let explicit_state_dir = command.state_dir.as_deref();
-    match StateStore::open_existing_read_only(state_dir).await {
+    match StateStore::open_existing_read_only(state_dir.clone()).await {
         Ok(store) => {
-            let configured_max_parallel_agents =
-                match crate::build_taskflow_consume_bundle_payload(&store).await {
-                    Ok(payload) => configured_max_parallel_agents_from_activation_bundle(
-                        &payload.activation_bundle,
-                    ),
-                    Err(_) => 1,
-                };
-            let projection = match store
-                .scheduling_projection_scoped(
-                    command.scope.as_deref(),
-                    command.current_task_id.as_deref(),
-                )
-                .await
-            {
-                Ok(projection) => projection,
-                Err(error) => {
-                    eprintln!("Failed to compute agent dispatch preview: {error}");
-                    return ExitCode::from(1);
-                }
-            };
             let mut activation_bundle =
                 match crate::build_taskflow_consume_bundle_payload(&store).await {
                     Ok(payload) => payload.activation_bundle,
                     Err(_) => serde_json::Value::Null,
                 };
-            if command.dev_team {
+            let preview = if command.dev_team {
+                let configured_max_parallel_agents =
+                    configured_max_parallel_agents_from_activation_bundle(&activation_bundle);
+                let projection = match store
+                    .scheduling_projection_scoped(
+                        command.scope.as_deref(),
+                        command.current_task_id.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(projection) => projection,
+                    Err(error) => {
+                        eprintln!("Failed to compute agent dispatch preview: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
                 let readiness = crate::taskflow_consume_bundle::build_dev_team_readiness(
                     "vida.config.yaml",
                     &activation_bundle,
@@ -799,15 +936,41 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                 if let Some(object) = activation_bundle.as_object_mut() {
                     object.insert("dev_team_readiness".to_string(), readiness);
                 }
-            }
-            let preview = build_agent_dispatch_next_preview(
-                &activation_bundle,
-                &projection,
-                command.lanes,
-                configured_max_parallel_agents,
-                explicit_state_dir,
-                command.dev_team,
-            );
+                build_agent_dispatch_next_preview(
+                    &activation_bundle,
+                    &projection,
+                    command.lanes,
+                    configured_max_parallel_agents,
+                    explicit_state_dir,
+                    true,
+                )
+            } else {
+                let requested_parallel_limit = u64::try_from(command.lanes).ok();
+                let plan =
+                    match crate::taskflow_proxy::build_taskflow_scheduler_dispatch_plan_from_store(
+                        &store,
+                        &state_dir,
+                        command.scope.as_deref(),
+                        command.current_task_id.as_deref(),
+                        requested_parallel_limit,
+                        true,
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(plan) => plan,
+                        Err(error) => {
+                            eprintln!("Failed to compute agent dispatch preview: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                build_agent_dispatch_next_preview_from_scheduler_plan(
+                    &activation_bundle,
+                    plan,
+                    command.lanes,
+                    explicit_state_dir,
+                )
+            };
             if command.json {
                 crate::print_json_pretty(
                     &serde_json::to_value(&preview)

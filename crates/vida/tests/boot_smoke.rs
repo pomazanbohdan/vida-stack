@@ -1977,6 +1977,116 @@ fn taskflow_scheduler_dispatch_execute_smoke_reports_projection_truth_and_parall
 }
 
 #[test]
+fn agent_dispatch_next_preview_aligns_scheduler_preview_selected_lanes_and_unsafe_rejections() {
+    let state_dir = unique_state_dir();
+    let boot = boot_with_retry(&state_dir);
+    assert!(
+        boot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+    seed_scheduler_execute_smoke_tasks(&state_dir);
+
+    let scheduler_output = bounded_vida_output(
+        &["-k", "5s", "20s"],
+        "scheduler preview should run",
+        |command| {
+            command.args([
+                "taskflow",
+                "scheduler",
+                "dispatch",
+                "--current-task-id",
+                "sched-primary",
+                "--state-dir",
+                &state_dir,
+                "--limit",
+                "2",
+                "--json",
+            ]);
+        },
+    );
+    assert!(
+        scheduler_output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&scheduler_output.stdout),
+        String::from_utf8_lossy(&scheduler_output.stderr)
+    );
+    let scheduler: serde_json::Value =
+        serde_json::from_slice(&scheduler_output.stdout).expect("scheduler json should parse");
+
+    let agent_output = bounded_vida_output(
+        &["-k", "5s", "20s"],
+        "agent dispatch-next preview should run",
+        |command| {
+            command.args([
+                "agent",
+                "dispatch-next",
+                "--current-task-id",
+                "sched-primary",
+                "--state-dir",
+                &state_dir,
+                "--lanes",
+                "2",
+                "--json",
+            ]);
+        },
+    );
+    assert!(
+        agent_output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&agent_output.stdout),
+        String::from_utf8_lossy(&agent_output.stderr)
+    );
+    let agent: serde_json::Value =
+        serde_json::from_slice(&agent_output.stdout).expect("agent json should parse");
+
+    assert_eq!(scheduler["status"], "pass");
+    assert_eq!(agent["status"], "pass");
+    assert_eq!(
+        scheduler["selected_task_ids"],
+        serde_json::json!(["sched-primary", "sched-parallel-a"])
+    );
+    assert_eq!(agent["lanes_selected"], 2);
+    assert_eq!(agent["selected_lanes"][0]["task_id"], "sched-primary");
+    assert_eq!(agent["selected_lanes"][1]["task_id"], "sched-parallel-a");
+    assert_eq!(
+        agent["selected_lanes"][0]["selection_reason"],
+        "scheduler_primary_ready_task"
+    );
+    assert_eq!(
+        agent["selected_lanes"][1]["selection_reason"],
+        "scheduler_parallel_safe_ready_task"
+    );
+
+    assert!(scheduler["rejected_candidates"]
+        .as_array()
+        .expect("scheduler rejected candidates should render")
+        .iter()
+        .any(|candidate| {
+            candidate["task"]["id"] == "sched-unsafe"
+                && candidate["reasons"]
+                    .as_array()
+                    .expect("scheduler reasons should render")
+                    .iter()
+                    .any(|reason| reason == "execution_mode_not_parallel_safe")
+        }));
+    assert!(agent["blocked_candidates"]
+        .as_array()
+        .expect("agent blocked candidates should render")
+        .iter()
+        .any(|candidate| {
+            candidate["task_id"] == "sched-unsafe"
+                && candidate["ready_now"] == true
+                && candidate["ready_parallel_safe"] == false
+                && candidate["reasons"]
+                    .as_array()
+                    .expect("agent reasons should render")
+                    .iter()
+                    .any(|reason| reason == "execution_mode_not_parallel_safe")
+        }));
+}
+
+#[test]
 fn taskflow_proxy_help_supports_graph_summary_topic() {
     let output = vida()
         .args(["taskflow", "help", "graph-summary"])
