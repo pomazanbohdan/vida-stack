@@ -665,6 +665,132 @@ fn scheduler_reservation_acquire_requests(
         .collect()
 }
 
+struct SchedulerPacketDispatchResult {
+    run_id: String,
+    command: String,
+    dispatch_packet_path: String,
+    dispatch_status: String,
+    lane_status: String,
+    execute_status: String,
+    worker_execution_evidence_status: String,
+    worker_completion_claimed: bool,
+    preview_only_reason: Option<String>,
+    blocker_codes: Vec<String>,
+}
+
+async fn scheduler_execute_packet_backed_dispatch(
+    state_dir: &Path,
+    task_id: &str,
+    run_id: &str,
+    expected_dispatch_packet_path: Option<&str>,
+    reservation_id: &str,
+) -> Result<SchedulerPacketDispatchResult, String> {
+    let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
+        .await
+        .map_err(|error| {
+            format!("failed to open scheduler packet dispatch store before launch: {error}")
+        })?;
+    let mut artifacts =
+        crate::taskflow_run_graph::prepare_run_graph_dispatch_init_artifacts(&store, run_id)
+            .await?;
+    if artifacts.run_id != run_id || artifacts.dispatch_receipt.run_id != run_id {
+        return Err(format!(
+            "scheduler packet dispatch lineage mismatch for task `{task_id}`: expected run `{run_id}`, got artifacts run `{}` and receipt run `{}`",
+            artifacts.run_id, artifacts.dispatch_receipt.run_id
+        ));
+    }
+    let run_id = artifacts.run_id.clone();
+    let dispatch_packet_path = artifacts.dispatch_packet_path.clone();
+    if let Some(expected_dispatch_packet_path) = expected_dispatch_packet_path {
+        if dispatch_packet_path != expected_dispatch_packet_path {
+            return Err(format!(
+                "scheduler packet dispatch path mismatch for task `{task_id}` run `{run_id}`: gate verified `{expected_dispatch_packet_path}`, materialized `{dispatch_packet_path}`"
+            ));
+        }
+    }
+    store
+        .mark_scheduler_dispatch_reservation_executing(
+            reservation_id,
+            Some(run_id.as_str()),
+            "packet_dispatch_launching",
+        )
+        .await
+        .map_err(|error| {
+            format!(
+                "failed to mark scheduler packet reservation `{reservation_id}` executing: {error}"
+            )
+        })?;
+    drop(store);
+
+    let execution_error = crate::runtime_dispatch_state::execute_and_record_dispatch_receipt(
+        state_dir,
+        &artifacts.role_selection,
+        &artifacts.run_graph_bootstrap,
+        &mut artifacts.dispatch_receipt,
+    )
+    .await
+    .err();
+    let has_execution_evidence =
+        crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(
+            &artifacts.dispatch_receipt,
+        );
+    let worker_execution_evidence_status = if has_execution_evidence {
+        "received"
+    } else {
+        "not_received"
+    }
+    .to_string();
+    let mut blocker_codes = Vec::new();
+    let (execute_status, preview_only_reason) = if let Some(error) = execution_error {
+        blocker_codes.push("scheduler_packet_dispatch_failed".to_string());
+        (
+            "packet_dispatch_failed".to_string(),
+            Some(format!("scheduler_packet_dispatch_failed: {error}")),
+        )
+    } else if has_execution_evidence {
+        ("packet_dispatch_executed".to_string(), None)
+    } else {
+        blocker_codes.push("scheduler_packet_dispatch_no_execution_evidence".to_string());
+        (
+            "packet_dispatch_no_execution_evidence".to_string(),
+            Some("scheduler_packet_dispatch_no_execution_evidence".to_string()),
+        )
+    };
+
+    let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
+        .await
+        .map_err(|error| {
+            format!("failed to open scheduler packet dispatch store after launch: {error}")
+        })?;
+    store
+        .release_scheduler_dispatch_reservation(reservation_id, &execute_status)
+        .await
+        .map_err(|error| {
+            format!("failed to release scheduler packet reservation `{reservation_id}`: {error}")
+        })?;
+
+    Ok(SchedulerPacketDispatchResult {
+        run_id,
+        command: artifacts
+            .dispatch_receipt
+            .dispatch_command
+            .clone()
+            .unwrap_or_else(|| {
+                crate::runtime_dispatch_state::agent_init_execute_command_for_packet_path(
+                    &dispatch_packet_path,
+                )
+            }),
+        dispatch_packet_path,
+        dispatch_status: artifacts.dispatch_receipt.dispatch_status.clone(),
+        lane_status: artifacts.dispatch_receipt.lane_status.clone(),
+        execute_status,
+        worker_execution_evidence_status,
+        worker_completion_claimed: false,
+        preview_only_reason,
+        blocker_codes,
+    })
+}
+
 async fn persist_scheduler_execute_receipt(
     plan: &mut TaskflowSchedulerDispatchPlan,
     state_dir: &Path,
@@ -689,12 +815,17 @@ async fn persist_scheduler_execute_receipt(
     plan.packet_backed_execution_status = gate.status.clone();
     plan.dispatch_receipt.packet_backed_execution_supported = gate.supported;
     plan.dispatch_receipt.packet_backed_execution_status = gate.status.clone();
+    let packet_backed_run_id = gate.run_id.clone();
+    let packet_backed_dispatch_packet_path = gate.dispatch_packet_path.clone();
     plan.dispatch_receipt.packet_backed_execution_gate = Some(gate.clone());
     plan.packet_backed_execution_gate = Some(gate);
-    plan.next_actions.push(
-        "Packet-backed scheduler execute is blocked until run-graph lineage, continuation binding, and task/run mapping preconditions are verified; current execute path records scheduler reservations and activation evidence only."
-            .to_string(),
-    );
+    let packet_backed_execution_supported = plan.packet_backed_execution_supported;
+    if !packet_backed_execution_supported {
+        plan.next_actions.push(
+            "Packet-backed scheduler execute is blocked until run-graph lineage, continuation binding, and task/run mapping preconditions are verified; current execute path records scheduler reservations and activation evidence only."
+                .to_string(),
+        );
+    }
 
     let receipt_id = scheduler_dispatch_receipt_id();
     let receipt_root = state_dir.join("scheduler-dispatch").join("receipts");
@@ -729,6 +860,88 @@ async fn persist_scheduler_execute_receipt(
         reservation.reservation_status = "reservation_persisted".to_string();
         reservation.receipt_id = Some(receipt_id.clone());
         reservation.receipt_path = Some(receipt_path_string.clone());
+        if packet_backed_execution_supported {
+            let packet_backed_run_id = packet_backed_run_id.as_deref().ok_or_else(|| {
+                format!(
+                    "scheduler packet-backed execution gate supported task `{}` without run_id",
+                    reservation.task_id
+                )
+            })?;
+            let packet_result = scheduler_execute_packet_backed_dispatch(
+                state_dir,
+                &reservation.task_id,
+                packet_backed_run_id,
+                packet_backed_dispatch_packet_path.as_deref(),
+                &reservation.reservation_id,
+            )
+            .await;
+            match packet_result {
+                Ok(packet_result) => {
+                    reservation.command = packet_result.command.clone();
+                    reservation.execute_status = packet_result.execute_status.clone();
+                    reservation.activation_status = packet_result.execute_status.clone();
+                    reservation.worker_execution_evidence_status =
+                        packet_result.worker_execution_evidence_status.clone();
+                    reservation.worker_completion_claimed = packet_result.worker_completion_claimed;
+                    reservation.preview_only_reason = packet_result.preview_only_reason.clone();
+                    reservation.activation_blocker_codes = packet_result.blocker_codes.clone();
+                    launch_blockers.extend(packet_result.blocker_codes.clone());
+                    if packet_result.worker_execution_evidence_status == "received" {
+                        plan.worker_execution_evidence_status = "received".to_string();
+                        plan.dispatch_receipt.worker_execution_evidence_status =
+                            "received".to_string();
+                    }
+                    launch_results.push(serde_json::json!({
+                        "task_id": reservation.task_id,
+                        "reservation_id": reservation.reservation_id,
+                        "status": packet_result.execute_status,
+                        "activation_status": packet_result.execute_status,
+                        "worker_execution_evidence_status": packet_result.worker_execution_evidence_status,
+                        "worker_completion_claimed": packet_result.worker_completion_claimed,
+                        "run_id": packet_result.run_id,
+                        "dispatch_packet_path": packet_result.dispatch_packet_path,
+                        "dispatch_status": packet_result.dispatch_status,
+                        "lane_status": packet_result.lane_status,
+                    }));
+                }
+                Err(error) => {
+                    reservation.execute_status = "packet_dispatch_failed".to_string();
+                    reservation.activation_status = "packet_dispatch_failed".to_string();
+                    reservation.preview_only_reason =
+                        Some("scheduler_packet_dispatch_failed".to_string());
+                    reservation.activation_blocker_codes =
+                        vec!["scheduler_packet_dispatch_failed".to_string()];
+                    launch_blockers.push("scheduler_packet_dispatch_failed".to_string());
+                    launch_results.push(serde_json::json!({
+                        "task_id": reservation.task_id,
+                        "reservation_id": reservation.reservation_id,
+                        "status": "packet_dispatch_failed",
+                        "activation_status": "packet_dispatch_failed",
+                        "worker_execution_evidence_status": "not_received",
+                        "worker_completion_claimed": false,
+                        "error": error,
+                    }));
+                    let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
+                        .await
+                        .map_err(|error| {
+                            format!("failed to open scheduler reservation store after packet dispatch failure: {error}")
+                        })?;
+                    store
+                        .release_scheduler_dispatch_reservation(
+                            &reservation.reservation_id,
+                            "packet_dispatch_failed",
+                        )
+                        .await
+                        .map_err(|error| {
+                            format!(
+                                "failed to release scheduler reservation `{}` after packet dispatch failure: {error}",
+                                reservation.reservation_id
+                            )
+                        })?;
+                }
+            }
+            continue;
+        }
         {
             let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
                 .await
@@ -849,7 +1062,20 @@ async fn persist_scheduler_execute_receipt(
     plan.execution_attempted = true;
     plan.activation_attempt_supported = true;
     plan.activation_attempted = true;
-    if launch_blockers.is_empty() {
+    let packet_execution_evidence_received =
+        packet_backed_execution_supported && plan.worker_execution_evidence_status == "received";
+    if packet_execution_evidence_received {
+        plan.status = "pass".to_string();
+        plan.dispatch_receipt.dispatch_status = "pass".to_string();
+        plan.execution_status = "packet_dispatch_executed".to_string();
+        plan.activation_status = plan.execution_status.clone();
+        plan.activation_blocker_codes = Vec::new();
+        plan.dispatch_receipt.execute_status = plan.execution_status.clone();
+        plan.dispatch_receipt.activation_status = plan.execution_status.clone();
+        plan.dispatch_receipt.preview_only_reason = None;
+        plan.dispatch_receipt.activation_blocker_codes = Vec::new();
+        plan.dispatch_receipt.execution_blocker_codes = Vec::new();
+    } else if launch_blockers.is_empty() {
         plan.status = "blocked".to_string();
         plan.dispatch_receipt.dispatch_status = "blocked".to_string();
         plan.execution_status = "scheduler_execute_no_execution_evidence".to_string();
