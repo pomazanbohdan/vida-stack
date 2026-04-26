@@ -3243,7 +3243,39 @@ pub(crate) fn run_graph_dispatch_bootstrap_from_status(
     }))
 }
 
-fn dispatch_command_from_packet_path(packet_path: &str) -> Result<Option<String>, String> {
+pub(crate) struct RunGraphDispatchInitArtifacts {
+    pub(crate) requested_run_id: String,
+    pub(crate) run_id: String,
+    #[allow(dead_code)]
+    pub(crate) role_selection: crate::RuntimeConsumptionLaneSelection,
+    pub(crate) run_graph_bootstrap: serde_json::Value,
+    pub(crate) taskflow_handoff_plan: serde_json::Value,
+    pub(crate) dispatch_receipt: crate::state_store::RunGraphDispatchReceipt,
+    pub(crate) dispatch_packet_path: String,
+}
+
+impl RunGraphDispatchInitArtifacts {
+    fn into_json_payload(self) -> serde_json::Value {
+        let downstream_dispatch_packet_path = self
+            .dispatch_receipt
+            .downstream_dispatch_packet_path
+            .clone();
+        serde_json::json!({
+            "surface": "vida taskflow run-graph dispatch-init",
+            "requested_run_id": self.requested_run_id,
+            "run_id": self.run_id,
+            "dispatch_receipt": self.dispatch_receipt,
+            "dispatch_packet_path": self.dispatch_packet_path,
+            "downstream_dispatch_packet_path": downstream_dispatch_packet_path,
+            "taskflow_handoff_plan": self.taskflow_handoff_plan,
+            "run_graph_bootstrap": self.run_graph_bootstrap,
+        })
+    }
+}
+
+pub(crate) fn dispatch_command_from_packet_path(
+    packet_path: &str,
+) -> Result<Option<String>, String> {
     let body = std::fs::read_to_string(packet_path).map_err(|error| {
         format!("Failed to read rendered dispatch packet `{packet_path}`: {error}")
     })?;
@@ -3336,10 +3368,10 @@ async fn reseed_explicit_task_graph_binding_for_dispatch_init(
     Ok(Some(bound_task_id.to_string()))
 }
 
-async fn run_graph_dispatch_init(
+pub(crate) async fn prepare_run_graph_dispatch_init_artifacts(
     store: &StateStore,
     run_id: &str,
-) -> Result<serde_json::Value, String> {
+) -> Result<RunGraphDispatchInitArtifacts, String> {
     let effective_run_id = reseed_explicit_task_graph_binding_for_dispatch_init(store, run_id)
         .await?
         .unwrap_or_else(|| run_id.to_string());
@@ -3410,16 +3442,24 @@ async fn run_graph_dispatch_init(
         "run_graph_dispatch_init",
     )
     .await?;
-    Ok(serde_json::json!({
-        "surface": "vida taskflow run-graph dispatch-init",
-        "requested_run_id": run_id,
-        "run_id": effective_run_id,
-        "dispatch_receipt": dispatch_receipt,
-        "dispatch_packet_path": dispatch_packet_path,
-        "downstream_dispatch_packet_path": dispatch_receipt.downstream_dispatch_packet_path,
-        "taskflow_handoff_plan": taskflow_handoff_plan,
-        "run_graph_bootstrap": run_graph_bootstrap,
-    }))
+    Ok(RunGraphDispatchInitArtifacts {
+        requested_run_id: run_id.to_string(),
+        run_id: effective_run_id,
+        role_selection,
+        run_graph_bootstrap,
+        taskflow_handoff_plan,
+        dispatch_receipt,
+        dispatch_packet_path,
+    })
+}
+
+async fn run_graph_dispatch_init(
+    store: &StateStore,
+    run_id: &str,
+) -> Result<serde_json::Value, String> {
+    prepare_run_graph_dispatch_init_artifacts(store, run_id)
+        .await
+        .map(RunGraphDispatchInitArtifacts::into_json_payload)
 }
 
 pub(crate) async fn derive_advanced_run_graph_status(
@@ -6117,9 +6157,14 @@ mod tests {
             .await
             .expect("record dispatch context");
 
-        let payload = run_graph_dispatch_init(&store, "task-1")
+        let artifacts = prepare_run_graph_dispatch_init_artifacts(&store, "task-1")
             .await
-            .expect("dispatch init should succeed");
+            .expect("dispatch init artifacts should be prepared");
+        assert_eq!(artifacts.requested_run_id, "task-1");
+        assert_eq!(artifacts.run_id, "task-1");
+        assert_eq!(artifacts.role_selection.selected_role, "worker");
+        assert!(artifacts.dispatch_receipt.dispatch_packet_path.is_some());
+        let payload = artifacts.into_json_payload();
         let receipt = store
             .run_graph_dispatch_receipt("task-1")
             .await
