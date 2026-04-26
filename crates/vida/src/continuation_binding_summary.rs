@@ -38,6 +38,129 @@ fn run_graph_status_is_blocked(value: &str) -> bool {
     normalized == "blocked" || normalized == "lane_blocked" || normalized.ends_with("_blocked")
 }
 
+fn active_exception_takeover_evidence_matches_status(
+    status: &crate::state_store::RunGraphStatus,
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> bool {
+    let Some(dispatch) = dispatch else {
+        return false;
+    };
+    dispatch.run_id == status.run_id
+        && dispatch.lane_status == "lane_exception_takeover"
+        && dispatch
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && dispatch
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn active_exception_takeover_binding_matches_status(
+    binding: &crate::state_store::RunGraphContinuationBinding,
+    status: &crate::state_store::RunGraphStatus,
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> bool {
+    let binding_kind = binding
+        .active_bounded_unit
+        .get("kind")
+        .and_then(serde_json::Value::as_str);
+
+    binding.status == "bound"
+        && binding.run_id == status.run_id
+        && binding.task_id == status.task_id
+        && binding.binding_source == "consume_continue_after_downstream_chain"
+        && binding_kind == Some("run_graph_task")
+        && active_exception_takeover_evidence_matches_status(status, dispatch)
+}
+
+fn active_exception_takeover_binding_summary_json(
+    binding: &crate::state_store::RunGraphContinuationBinding,
+    status: &crate::state_store::RunGraphStatus,
+    continuation_required_now: bool,
+    pause_boundary_gate: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": binding.status,
+        "continuation_allowed": binding.status == "bound",
+        "continuation_required_now": continuation_required_now,
+        "active_bounded_unit": binding.active_bounded_unit,
+        "binding_source": binding.binding_source,
+        "why_this_unit": binding.why_this_unit,
+        "primary_path": binding.primary_path,
+        "sequential_vs_parallel_posture": binding.sequential_vs_parallel_posture,
+        "pause_boundary_gate": pause_boundary_gate,
+        "ambiguity_reason": serde_json::Value::Null,
+        "active_exception_takeover": true,
+        "next_actions": [
+            format!(
+                "Continue the active exception-backed bounded unit with `vida taskflow consume continue --run-id {} --json`.",
+                status.run_id
+            )
+        ]
+    })
+}
+
+fn active_exception_takeover_status_summary_json(
+    status: &crate::state_store::RunGraphStatus,
+    continuation_required_now: bool,
+    pause_boundary_gate: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "bound",
+        "continuation_allowed": true,
+        "continuation_required_now": continuation_required_now,
+        "active_bounded_unit": {
+            "kind": "run_graph_task",
+            "task_id": status.task_id,
+            "run_id": status.run_id,
+            "active_node": status.active_node,
+        },
+        "binding_source": "latest_run_graph_exception_takeover_dispatch",
+        "why_this_unit": format!(
+            "Latest runtime dispatch records exception-takeover evidence for task `{}` at node `{}`.",
+            status.task_id, status.active_node
+        ),
+        "primary_path": "normal_delivery_path",
+        "sequential_vs_parallel_posture": "sequential_only_exception_takeover",
+        "pause_boundary_gate": pause_boundary_gate,
+        "ambiguity_reason": serde_json::Value::Null,
+        "active_exception_takeover": true,
+        "next_actions": [
+            format!(
+                "Continue the active exception-backed bounded unit with `vida taskflow consume continue --run-id {} --json`.",
+                status.run_id
+            )
+        ]
+    })
+}
+
+fn binding_summary_json(
+    binding: &crate::state_store::RunGraphContinuationBinding,
+    continuation_required_now: bool,
+    pause_boundary_gate: &str,
+    continuation_next_actions: Vec<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": binding.status,
+        "continuation_allowed": binding.status == "bound",
+        "continuation_required_now": continuation_required_now,
+        "active_bounded_unit": binding.active_bounded_unit,
+        "binding_source": binding.binding_source,
+        "why_this_unit": binding.why_this_unit,
+        "primary_path": binding.primary_path,
+        "sequential_vs_parallel_posture": binding.sequential_vs_parallel_posture,
+        "pause_boundary_gate": pause_boundary_gate,
+        "ambiguity_reason": serde_json::Value::Null,
+        "next_actions": if continuation_required_now {
+            continuation_next_actions
+        } else {
+            Vec::<String>::new()
+        }
+    })
+}
+
 pub(crate) fn build_continuation_binding_summary(
     explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
@@ -107,6 +230,31 @@ pub(crate) fn build_continuation_binding_summary(
                 .is_none();
 
         if run_graph_status_is_blocked(&status.status) {
+            if let Some(binding) = explicit_binding {
+                if active_exception_takeover_binding_matches_status(
+                    binding,
+                    status,
+                    latest_run_graph_dispatch_receipt,
+                ) {
+                    return active_exception_takeover_binding_summary_json(
+                        binding,
+                        status,
+                        continuation_required_now,
+                        pause_boundary_gate,
+                    );
+                }
+            }
+            if active_exception_takeover_evidence_matches_status(
+                status,
+                latest_run_graph_dispatch_receipt,
+            ) {
+                return active_exception_takeover_status_summary_json(
+                    status,
+                    continuation_required_now,
+                    pause_boundary_gate,
+                );
+            }
+
             return serde_json::json!({
                 "status": "ambiguous",
                 "continuation_allowed": false,
@@ -135,23 +283,12 @@ pub(crate) fn build_continuation_binding_summary(
 
         if let Some(binding) = explicit_binding {
             if explicit_binding_is_admissible_for_status(binding, status) {
-                return serde_json::json!({
-                    "status": binding.status,
-                    "continuation_allowed": binding.status == "bound",
-                    "continuation_required_now": continuation_required_now,
-                    "active_bounded_unit": binding.active_bounded_unit,
-                    "binding_source": binding.binding_source,
-                    "why_this_unit": binding.why_this_unit,
-                    "primary_path": binding.primary_path,
-                    "sequential_vs_parallel_posture": binding.sequential_vs_parallel_posture,
-                    "pause_boundary_gate": pause_boundary_gate,
-                    "ambiguity_reason": serde_json::Value::Null,
-                    "next_actions": if continuation_required_now {
-                        continuation_next_actions.clone()
-                    } else {
-                        Vec::<String>::new()
-                    }
-                });
+                return binding_summary_json(
+                    binding,
+                    continuation_required_now,
+                    pause_boundary_gate,
+                    continuation_next_actions.clone(),
+                );
             }
         }
 
@@ -427,6 +564,48 @@ mod tests {
         }
     }
 
+    fn exception_takeover_dispatch(
+        run_id: &str,
+    ) -> crate::state_store::RunGraphDispatchReceiptSummary {
+        crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: run_id.to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some(
+                "stream4-recovery-status-actionable-command-fix".to_string(),
+            ),
+            exception_path_receipt_id: Some(
+                "stream4-recovery-status-actionable-command-fix".to_string(),
+            ),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: Some("exception takeover active".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_terminal_write_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "2026-04-24T18:50:54Z".to_string(),
+        }
+    }
+
     #[test]
     fn active_run_graph_status_binds_current_bounded_unit() {
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
@@ -515,6 +694,108 @@ mod tests {
                     .is_some_and(|value| value.contains("resolve the blocker"))
             })
         }));
+    }
+
+    #[test]
+    fn blocked_latest_run_graph_status_accepts_active_exception_takeover_binding() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-audit-state-store-init-lock-timeout",
+            "runtime-audit-state-store-init-lock-timeout",
+            "analysis",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "runtime-audit-state-store-init-lock-timeout".to_string(),
+            task_id: "runtime-audit-state-store-init-lock-timeout".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "run_graph_task",
+                "task_id": "runtime-audit-state-store-init-lock-timeout",
+                "run_id": "runtime-audit-state-store-init-lock-timeout",
+                "active_node": "analysis"
+            }),
+            binding_source: "consume_continue_after_downstream_chain".to_string(),
+            why_this_unit:
+                "Explicit continuation binding records the active exception-takeover unit."
+                    .to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: Some("audit-p1-state-store-init-lock-timeout-proof-blocker".to_string()),
+            recorded_at: "2026-04-26T07:52:53Z".to_string(),
+        };
+        let dispatch = exception_takeover_dispatch("runtime-audit-state-store-init-lock-timeout");
+
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            Some(&dispatch),
+            false,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["continuation_allowed"], true);
+        assert_eq!(
+            summary["binding_source"],
+            "consume_continue_after_downstream_chain"
+        );
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "runtime-audit-state-store-init-lock-timeout"
+        );
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn blocked_latest_run_graph_status_accepts_exception_takeover_despite_stale_explicit_binding() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-audit-state-store-init-lock-timeout",
+            "runtime-audit-state-store-init-lock-timeout",
+            "analysis",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+
+        let stale_binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "feature-reconcile-qwen-cli-carrier-drift-across-config-code".to_string(),
+            task_id: "feature-reconcile-qwen-cli-carrier-drift-across-config-code".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "downstream_dispatch_target",
+                "task_id": "feature-reconcile-qwen-cli-carrier-drift-across-config-code",
+                "run_id": "feature-reconcile-qwen-cli-carrier-drift-across-config-code",
+                "dispatch_target": "closure"
+            }),
+            binding_source: "task_close_reconcile".to_string(),
+            why_this_unit: "stale close reconcile binding".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: None,
+            recorded_at: "2026-04-22T08:44:36Z".to_string(),
+        };
+        let dispatch = exception_takeover_dispatch("runtime-audit-state-store-init-lock-timeout");
+
+        let summary = build_continuation_binding_summary(
+            Some(&stale_binding),
+            Some(&status),
+            None,
+            Some(&dispatch),
+            false,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["continuation_allowed"], true);
+        assert_eq!(
+            summary["binding_source"],
+            "latest_run_graph_exception_takeover_dispatch"
+        );
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "runtime-audit-state-store-init-lock-timeout"
+        );
+        assert_eq!(summary["active_exception_takeover"], true);
     }
 
     #[test]

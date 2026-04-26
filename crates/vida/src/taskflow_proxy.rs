@@ -1025,6 +1025,52 @@ fn explicit_task_binding_matches_status(
             == Some("task_graph_task")
 }
 
+fn active_exception_takeover_evidence_matches_status(
+    status: Option<&crate::state_store::RunGraphStatus>,
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> bool {
+    let Some(status) = status else {
+        return false;
+    };
+    let Some(dispatch) = dispatch else {
+        return false;
+    };
+    dispatch.run_id == status.run_id
+        && dispatch.lane_status == "lane_exception_takeover"
+        && dispatch
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && dispatch
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn active_exception_takeover_binding_matches_status(
+    binding: Option<&crate::state_store::RunGraphContinuationBinding>,
+    status: Option<&crate::state_store::RunGraphStatus>,
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> bool {
+    let Some(binding) = binding else {
+        return false;
+    };
+    let Some(status) = status else {
+        return false;
+    };
+    let binding_kind = binding
+        .active_bounded_unit
+        .get("kind")
+        .and_then(serde_json::Value::as_str);
+
+    binding.status == "bound"
+        && binding.run_id == status.run_id
+        && binding.task_id == status.task_id
+        && binding.binding_source == "consume_continue_after_downstream_chain"
+        && binding_kind == Some("run_graph_task")
+        && active_exception_takeover_evidence_matches_status(Some(status), dispatch)
+}
+
 fn build_taskflow_next_decision(
     ready_head: Option<&crate::state_store::TaskRecord>,
     recovery_holds_active_bound_run: bool,
@@ -1038,12 +1084,23 @@ fn build_taskflow_next_decision(
     let ready_head = ready_head.map(graph_summary_task_ref);
     let latest_run_graph_status_blocked =
         latest_run_graph_status_blocks_normal_continuation(latest_run_graph_status);
+    let active_exception_takeover_binding = active_exception_takeover_binding_matches_status(
+        explicit_binding,
+        latest_run_graph_status,
+        dispatch,
+    );
+    let active_exception_takeover_evidence =
+        active_exception_takeover_evidence_matches_status(latest_run_graph_status, dispatch);
+    let latest_run_graph_status_blocks_admission =
+        latest_run_graph_status_blocked && !active_exception_takeover_evidence;
     let completed_without_explicit_next_unit =
         terminal_completed_without_next_unit(latest_run_graph_status)
             && !explicit_task_binding_matches_status(explicit_binding, latest_run_graph_status);
     let admissibility_gate = if recovery_holds_active_bound_run {
         "delegated_cycle_runtime_gate".to_string()
-    } else if latest_run_graph_status_blocked {
+    } else if active_exception_takeover_evidence {
+        "active_exception_takeover_continuation".to_string()
+    } else if latest_run_graph_status_blocks_admission {
         "latest_run_graph_status_blocked".to_string()
     } else if completed_without_explicit_next_unit {
         "completed_without_explicit_next_bounded_unit".to_string()
@@ -1057,7 +1114,9 @@ fn build_taskflow_next_decision(
     let candidate_task_context = TaskflowNextCandidateContext {
         ready_head: ready_head.clone(),
         admissible_now: !(recovery_holds_active_bound_run
-            || latest_run_graph_status_blocked
+            || active_exception_takeover_binding
+            || (active_exception_takeover_evidence && latest_run_graph_status_blocked)
+            || latest_run_graph_status_blocks_admission
             || completed_without_explicit_next_unit),
         admissibility_gate,
     };
@@ -1116,6 +1175,26 @@ fn build_taskflow_next_decision(
                     Some(next_action),
                 )
             }
+        } else if active_exception_takeover_evidence {
+            let run_id = latest_run_graph_status
+                .map(|status| status.run_id.as_str())
+                .unwrap_or("<run-id>");
+            let next_action = TaskflowNextAction {
+                command: format!("vida taskflow consume continue --run-id {run_id} --json"),
+                surface: "vida taskflow consume continue".to_string(),
+                reason: "active exception-takeover evidence has resolved the dispatch blocker; continue the bound run before considering backlog ready-head work".to_string(),
+            };
+            next_actions.push(format!(
+                "Continue the active exception-backed bounded unit with `{}` before selecting backlog work.",
+                next_action.command
+            ));
+            (
+                Some(next_action.command.clone()),
+                Some(next_action.surface.clone()),
+                None,
+                None,
+                Some(next_action),
+            )
         } else if completed_without_explicit_next_unit {
             let run_id = latest_run_graph_status
                 .map(|status| status.run_id.as_str())
@@ -1148,7 +1227,7 @@ fn build_taskflow_next_decision(
                 }),
                 Some(next_action),
             )
-        } else if latest_run_graph_status_blocked {
+        } else if latest_run_graph_status_blocks_admission {
             if let Some(code) = crate::release1_contracts::blocker_code_value(
                 crate::release1_contracts::BlockerCode::LatestRunGraphStatusBlocked,
             ) {
@@ -5409,6 +5488,48 @@ mod tests {
         }
     }
 
+    fn exception_takeover_dispatch(
+        run_id: &str,
+    ) -> crate::state_store::RunGraphDispatchReceiptSummary {
+        crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: run_id.to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            selected_backend: Some("internal_subagents".to_string()),
+            exception_path_receipt_id: Some(
+                "stream4-recovery-status-actionable-command-fix".to_string(),
+            ),
+            supersedes_receipt_id: Some(
+                "stream4-recovery-status-actionable-command-fix".to_string(),
+            ),
+            recorded_at: "2026-04-24T18:50:54Z".to_string(),
+            activation_runtime_role: Some("verifier".to_string()),
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_evidence: serde_json::Value::Null,
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_last_target: None,
+            downstream_dispatch_note: Some("exception takeover active".to_string()),
+            downstream_dispatch_blockers: vec!["pending_terminal_write_evidence".to_string()],
+        }
+    }
+
     #[test]
     fn taskflow_next_decision_surfaces_candidate_when_runtime_gate_blocks_ready_head() {
         let dispatch = crate::state_store::RunGraphDispatchReceiptSummary {
@@ -5568,6 +5689,78 @@ mod tests {
             operator_contracts["artifact_refs"],
             shared_fields["artifact_refs"]
         );
+    }
+
+    #[test]
+    fn taskflow_next_decision_continues_active_exception_takeover_before_ready_head() {
+        let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-audit-state-store-init-lock-timeout",
+            "runtime-audit-state-store-init-lock-timeout",
+            "analysis",
+        );
+        latest_status.status = "blocked".to_string();
+        latest_status.lifecycle_stage = "analysis_blocked".to_string();
+        let stale_binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "feature-reconcile-qwen-cli-carrier-drift-across-config-code".to_string(),
+            task_id: "feature-reconcile-qwen-cli-carrier-drift-across-config-code".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "downstream_dispatch_target",
+                "task_id": "feature-reconcile-qwen-cli-carrier-drift-across-config-code",
+                "run_id": "feature-reconcile-qwen-cli-carrier-drift-across-config-code",
+                "dispatch_target": "closure"
+            }),
+            binding_source: "task_close_reconcile".to_string(),
+            why_this_unit: "stale close reconcile binding".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: None,
+            recorded_at: "2026-04-22T08:44:36Z".to_string(),
+        };
+        let dispatch = exception_takeover_dispatch("runtime-audit-state-store-init-lock-timeout");
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("ready-head")),
+            false,
+            true,
+            Some("final"),
+            None,
+            Some(&dispatch),
+            Some(&latest_status),
+            Some(&stale_binding),
+        );
+
+        assert_eq!(decision.status, "pass");
+        assert!(decision.primary_ready_task.is_none());
+        assert_eq!(
+            decision
+                .candidate_task_context
+                .ready_head
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("ready-head")
+        );
+        assert!(!decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "active_exception_takeover_continuation"
+        );
+        assert!(decision.why_not_now.is_none());
+        assert_eq!(
+            decision
+                .next_action
+                .as_ref()
+                .map(|value| value.command.as_str()),
+            Some("vida taskflow consume continue --run-id runtime-audit-state-store-init-lock-timeout --json")
+        );
+        assert_eq!(
+            decision.recommended_surface.as_deref(),
+            Some("vida taskflow consume continue")
+        );
+        assert!(!decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "latest_run_graph_status_blocked"));
     }
 
     #[test]
