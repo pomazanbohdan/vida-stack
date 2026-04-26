@@ -108,7 +108,10 @@ fn atomic_write_file(path: &str, body: &str) {
 }
 
 fn vida() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_vida"))
+    let mut command = Command::new("timeout");
+    command.args(["-k", "5s", "120s"]);
+    command.arg(env!("CARGO_BIN_EXE_vida"));
+    command
 }
 
 fn installed_vida() -> (String, Command) {
