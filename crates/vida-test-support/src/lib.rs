@@ -4,12 +4,13 @@ use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, ExitStatus, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_TIMEOUT_ARGS: [&str; 3] = ["-k", "5s", "120s"];
+pub const STATE_LOCK_ERROR_MESSAGE: &str = "LOCK is already locked";
 
 struct RecoveringMutex(Mutex<()>);
 
@@ -38,6 +39,28 @@ pub fn bounded_command(
     command.args(timeout_args);
     command.arg(program);
     command
+}
+
+pub fn simulated_state_lock_output() -> Output {
+    Output {
+        status: failing_exit_status(),
+        stdout: Vec::new(),
+        stderr: format!("{STATE_LOCK_ERROR_MESSAGE}\n").into_bytes(),
+    }
+}
+
+#[cfg(unix)]
+fn failing_exit_status() -> ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+
+    ExitStatus::from_raw(1 << 8)
+}
+
+#[cfg(windows)]
+fn failing_exit_status() -> ExitStatus {
+    use std::os::windows::process::ExitStatusExt;
+
+    ExitStatus::from_raw(1)
 }
 
 pub fn temp_dir(prefix: &str) -> PathBuf {

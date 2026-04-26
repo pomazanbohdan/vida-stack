@@ -768,7 +768,7 @@ fn is_retryable_temporary_failure(output: &std::process::Output) -> bool {
 }
 
 fn is_state_lock_error_text(text: &str) -> bool {
-    text.contains("LOCK is already locked")
+    text.contains(support::STATE_LOCK_ERROR_MESSAGE)
         || text.contains("timed out while waiting for authoritative datastore lock")
         || text.contains("Timed out opening authoritative state store")
 }
@@ -2731,11 +2731,7 @@ fn protocol_binding_check_lock_retry_preserves_boot_blocker_codes() {
     let check_output = run_with_state_lock_retry(|| {
         let attempt = BOOT_PROTOCOL_BINDING_LOCK_SIMULATION_COUNTER.fetch_add(1, Ordering::SeqCst);
         if attempt == 0 {
-            Command::new("sh")
-                .arg("-c")
-                .arg("printf 'LOCK is already locked\\n' >&2; exit 1")
-                .output()
-                .expect("lock simulator should run")
+            support::simulated_state_lock_output()
         } else {
             let mut command = vida();
             command

@@ -235,7 +235,7 @@ const STATE_LOCK_RETRY_LIMIT: usize = 600;
 
 fn is_state_lock_error(output: &std::process::Output) -> bool {
     let stderr = String::from_utf8_lossy(&output.stderr);
-    stderr.contains("LOCK is already locked")
+    stderr.contains(vida_test_support::STATE_LOCK_ERROR_MESSAGE)
         || stderr.contains("timed out while waiting for authoritative datastore lock")
 }
 
@@ -2750,22 +2750,22 @@ fn protocol_binding_check_lock_retry_preserves_blocker_codes() {
     );
 
     PROTOCOL_BINDING_LOCK_SIMULATION_COUNTER.store(0, Ordering::SeqCst);
-    let output = run_with_state_lock_retry(|| {
-        let attempt = PROTOCOL_BINDING_LOCK_SIMULATION_COUNTER.fetch_add(1, Ordering::SeqCst);
-        if attempt == 0 {
-            let mut simul = Command::new("sh");
-            simul
-                .arg("-c")
-                .arg("printf 'LOCK is already locked\\n' >&2; exit 1");
-            simul
-        } else {
-            let mut command = vida();
-            command
-                .args(["taskflow", "protocol-binding", "check", "--json"])
-                .env("VIDA_STATE_DIR", &state_dir);
-            command
-        }
-    });
+    let output = vida_test_support::retry_with_backoff(
+        || {
+            let attempt = PROTOCOL_BINDING_LOCK_SIMULATION_COUNTER.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                vida_test_support::simulated_state_lock_output()
+            } else {
+                let mut command = vida();
+                command
+                    .args(["taskflow", "protocol-binding", "check", "--json"])
+                    .env("VIDA_STATE_DIR", &state_dir);
+                command.output().expect("protocol-binding check should run")
+            }
+        },
+        STATE_LOCK_RETRY_LIMIT,
+        |output| !output.status.success() && is_state_lock_error(output),
+    );
 
     assert!(!output.status.success());
     let parsed: serde_json::Value =
