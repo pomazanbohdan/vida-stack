@@ -1844,6 +1844,7 @@ struct TaskCloseGitAutomationReceipt {
     blocker_codes: Vec<String>,
     next_actions: Vec<String>,
     explicit_files: Vec<String>,
+    stage_error_detail: Option<String>,
     commit_message: Option<String>,
     commit_exit_code: Option<i32>,
     push_exit_code: Option<i32>,
@@ -2051,15 +2052,30 @@ fn task_close_git_automation_receipt(
             .arg("--")
             .args(&stage_files)
             .current_dir(&repo_root)
-            .status();
+            .output();
         match add_status {
-            Ok(status) if status.success() => {}
-            _ => {
-                return blocked_task_close_git_receipt(
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                let failure = classify_task_close_git_stage_failure(
+                    String::from_utf8_lossy(&output.stderr).trim(),
+                    None,
+                );
+                return blocked_task_close_git_receipt_with_stage_detail(
                     explicit_files,
                     commit_message,
-                    "git_stage_failed",
-                    "Verify the explicit commit files exist and can be staged.",
+                    failure.blocker_code,
+                    failure.next_action,
+                    Some(failure.detail),
+                );
+            }
+            Err(error) => {
+                let failure = classify_task_close_git_stage_failure("", Some(&error));
+                return blocked_task_close_git_receipt_with_stage_detail(
+                    explicit_files,
+                    commit_message,
+                    failure.blocker_code,
+                    failure.next_action,
+                    Some(failure.detail),
                 );
             }
         }
@@ -2112,6 +2128,7 @@ fn task_close_git_automation_receipt(
                                 &ignored_dirty_files,
                             ),
                             explicit_files,
+                            stage_error_detail: None,
                             commit_message,
                             commit_exit_code: status.code(),
                             push_exit_code: push.code(),
@@ -2124,6 +2141,7 @@ fn task_close_git_automation_receipt(
                                     .to_string(),
                             ],
                             explicit_files,
+                            stage_error_detail: None,
                             commit_message,
                             commit_exit_code: status.code(),
                             push_exit_code: push.code(),
@@ -2136,6 +2154,7 @@ fn task_close_git_automation_receipt(
                                     .to_string(),
                             ],
                             explicit_files,
+                            stage_error_detail: None,
                             commit_message,
                             commit_exit_code: status.code(),
                             push_exit_code: None,
@@ -2149,6 +2168,7 @@ fn task_close_git_automation_receipt(
                             &ignored_dirty_files,
                         ),
                         explicit_files,
+                        stage_error_detail: None,
                         commit_message,
                         commit_exit_code: status.code(),
                         push_exit_code: None,
@@ -2163,6 +2183,7 @@ fn task_close_git_automation_receipt(
                         .to_string(),
                 ],
                 explicit_files,
+                stage_error_detail: None,
                 commit_message,
                 commit_exit_code: status.code(),
                 push_exit_code: None,
@@ -2174,6 +2195,7 @@ fn task_close_git_automation_receipt(
                     "Ensure `git commit` can run in this worktree before retrying.".to_string(),
                 ],
                 explicit_files,
+                stage_error_detail: None,
                 commit_message,
                 commit_exit_code: None,
                 push_exit_code: None,
@@ -2185,10 +2207,94 @@ fn task_close_git_automation_receipt(
             blocker_codes: Vec::new(),
             next_actions: Vec::new(),
             explicit_files,
+            stage_error_detail: None,
             commit_message,
             commit_exit_code: None,
             push_exit_code: None,
         }
+    }
+}
+
+struct TaskCloseGitStageFailure<'a> {
+    blocker_code: &'a str,
+    next_action: &'a str,
+    detail: String,
+}
+
+fn classify_task_close_git_stage_failure(
+    stderr: &str,
+    error: Option<&std::io::Error>,
+) -> TaskCloseGitStageFailure<'static> {
+    let normalized_stderr = stderr.trim();
+    let normalized_lower = normalized_stderr.to_ascii_lowercase();
+    if normalized_lower.contains("read-only")
+        || normalized_lower.contains("permission denied")
+        || normalized_lower.contains("operation not permitted")
+        || normalized_lower.contains("sandbox")
+    {
+        let detail = if normalized_stderr.is_empty() {
+            "git add failed because the worktree appears read-only or sandbox-blocked".to_string()
+        } else {
+            normalized_stderr.to_string()
+        };
+        return TaskCloseGitStageFailure {
+            blocker_code: "git_stage_read_only_or_sandbox_blocked",
+            next_action:
+                "Make the worktree writable or rerun outside the blocking sandbox, then retry the task-close command.",
+            detail,
+        };
+    }
+    if normalized_lower.contains("index.lock") {
+        let detail = if normalized_stderr.is_empty() {
+            "git add failed because `.git/index.lock` is present".to_string()
+        } else {
+            normalized_stderr.to_string()
+        };
+        return TaskCloseGitStageFailure {
+            blocker_code: "git_stage_index_lock_blocked",
+            next_action:
+                "Clear the `.git/index.lock` blocker or stop the concurrent git writer, then retry the task-close command.",
+            detail,
+        };
+    }
+    if let Some(error) = error {
+        let detail = format!("git add failed to start: {error}");
+        let lower = detail.to_ascii_lowercase();
+        if lower.contains("read-only")
+            || lower.contains("permission denied")
+            || lower.contains("operation not permitted")
+            || lower.contains("sandbox")
+        {
+            return TaskCloseGitStageFailure {
+                blocker_code: "git_stage_read_only_or_sandbox_blocked",
+                next_action:
+                    "Make the worktree writable or rerun outside the blocking sandbox, then retry the task-close command.",
+                detail,
+            };
+        }
+        if lower.contains("index.lock") {
+            return TaskCloseGitStageFailure {
+                blocker_code: "git_stage_index_lock_blocked",
+                next_action:
+                    "Clear the `.git/index.lock` blocker or stop the concurrent git writer, then retry the task-close command.",
+                detail,
+            };
+        }
+        return TaskCloseGitStageFailure {
+            blocker_code: "git_stage_failed",
+            next_action: "Verify the explicit commit files exist and can be staged.",
+            detail,
+        };
+    }
+
+    TaskCloseGitStageFailure {
+        blocker_code: "git_stage_failed",
+        next_action: "Verify the explicit commit files exist and can be staged.",
+        detail: if normalized_stderr.is_empty() {
+            "git add failed without stderr output".to_string()
+        } else {
+            normalized_stderr.to_string()
+        },
     }
 }
 
@@ -2209,11 +2315,28 @@ fn blocked_task_close_git_receipt(
     blocker_code: &str,
     next_action: &str,
 ) -> TaskCloseGitAutomationReceipt {
+    blocked_task_close_git_receipt_with_stage_detail(
+        explicit_files,
+        commit_message,
+        blocker_code,
+        next_action,
+        None,
+    )
+}
+
+fn blocked_task_close_git_receipt_with_stage_detail(
+    explicit_files: Vec<String>,
+    commit_message: Option<String>,
+    blocker_code: &str,
+    next_action: &str,
+    stage_error_detail: Option<String>,
+) -> TaskCloseGitAutomationReceipt {
     TaskCloseGitAutomationReceipt {
         status: "blocked".to_string(),
         blocker_codes: vec![blocker_code.to_string()],
         next_actions: vec![next_action.to_string()],
         explicit_files,
+        stage_error_detail,
         commit_message,
         commit_exit_code: None,
         push_exit_code: None,
@@ -4092,12 +4215,12 @@ mod tests {
     use super::{
         build_adaptive_replan_finding_preview, build_spawn_blocker_preview,
         build_split_mutation_preview, canonical_json_string_array_entries,
-        load_adaptive_preview_finding_json, normalize_task_json_contract_arrays,
-        parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
-        parse_split_child_specs, persist_task_handoff_accept_receipt,
-        select_task_next_lawful_binding, task_close_automation_receipt,
-        task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
-        task_close_host_agent_telemetry,
+        classify_task_close_git_stage_failure, load_adaptive_preview_finding_json,
+        normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
+        parse_label_values, parse_optional_label_value, parse_split_child_specs,
+        persist_task_handoff_accept_receipt, select_task_next_lawful_binding,
+        task_close_automation_receipt, task_close_commit_allowlist_next_actions,
+        task_close_commit_file_strings, task_close_host_agent_telemetry,
         task_close_uses_isolated_state_dir, task_create_title, task_handoff_accept_receipt,
         task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
         task_json_success_status, task_next_lawful_receipt, task_owned_status_receipt,
@@ -4308,6 +4431,51 @@ mod tests {
             ]
         );
         assert!(task_close_commit_allowlist_next_actions(&[]).is_empty());
+    }
+
+    #[test]
+    fn task_close_git_stage_failure_classifies_read_only_or_sandbox_stderr() {
+        let failure = classify_task_close_git_stage_failure(
+            "fatal: Unable to create '/repo/.git/index.lock': Read-only file system",
+            None,
+        );
+
+        assert_eq!(
+            failure.blocker_code,
+            "git_stage_read_only_or_sandbox_blocked"
+        );
+        assert!(failure.detail.contains("Read-only file system"));
+        assert!(failure.next_action.contains("writable"));
+    }
+
+    #[test]
+    fn task_close_git_stage_failure_classifies_index_lock_stderr() {
+        let failure = classify_task_close_git_stage_failure(
+            "fatal: Unable to create '/repo/.git/index.lock': File exists.",
+            None,
+        );
+
+        assert_eq!(failure.blocker_code, "git_stage_index_lock_blocked");
+        assert!(failure.detail.contains(".git/index.lock"));
+        assert!(failure.next_action.contains(".git/index.lock"));
+    }
+
+    #[test]
+    fn task_close_git_stage_failure_preserves_fallback_stderr_detail() {
+        let failure = classify_task_close_git_stage_failure(
+            "fatal: pathspec 'missing-file' did not match any files",
+            None,
+        );
+
+        assert_eq!(failure.blocker_code, "git_stage_failed");
+        assert_eq!(
+            failure.detail,
+            "fatal: pathspec 'missing-file' did not match any files"
+        );
+        assert_eq!(
+            failure.next_action,
+            "Verify the explicit commit files exist and can be staged."
+        );
     }
 
     #[test]
