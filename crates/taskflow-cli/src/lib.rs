@@ -7,6 +7,7 @@ const AFTER_HELP: &str = "Standalone TaskFlow wrapper.\n\nExamples:\n  taskflow 
 #[derive(Debug, Parser)]
 #[command(
     name = "taskflow",
+    version = env!("CARGO_PKG_VERSION"),
     disable_help_subcommand = true,
     about = "Standalone TaskFlow CLI wrapper",
     long_about = "Standalone TaskFlow CLI wrapper\n\nThis binary provides a stable `taskflow` entrypoint while the canonical TaskFlow command family remains implemented under `vida taskflow`.",

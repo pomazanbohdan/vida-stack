@@ -20,6 +20,7 @@ use time::format_description::well_known::Rfc3339;
 #[derive(Debug, Parser)]
 #[command(
     name = "docflow",
+    version = env!("CARGO_PKG_VERSION"),
     about = "Standalone DocFlow CLI for documentation readiness, validation, and agent handoff"
 )]
 pub struct Cli {

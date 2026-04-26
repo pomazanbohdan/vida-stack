@@ -92,3 +92,19 @@ fn root_help_renders_without_delegation() {
     assert!(stdout.contains("Standalone TaskFlow CLI wrapper"));
     assert!(stdout.contains("validate-routing --json"));
 }
+
+#[test]
+fn version_renders_without_delegation() {
+    let context = vida_test_support::CommandContext::empty();
+    let output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_taskflow"))
+        .arg("--version")
+        .output()
+        .expect("taskflow version should run");
+
+    assert!(output.status.success(), "{}", context.diagnostics(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim_end(),
+        format!("taskflow {}", env!("CARGO_PKG_VERSION"))
+    );
+}

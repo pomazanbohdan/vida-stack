@@ -60,3 +60,35 @@ fn init_json_prints_machine_readable_agent_bootstrap() {
     assert!(stdout.contains("\"safe_first_commands\""));
     assert!(stdout.contains("\"next_actions\""));
 }
+
+#[test]
+fn root_help_renders_as_binary() {
+    let context = vida_test_support::CommandContext::empty();
+    let output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .arg("--help")
+        .output()
+        .expect("docflow help should run");
+
+    assert!(output.status.success(), "{}", context.diagnostics(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Standalone DocFlow CLI"));
+    assert!(stdout.contains("Usage: docflow <COMMAND>"));
+    assert!(stdout.contains("init"));
+    assert!(stdout.contains("readiness-check"));
+}
+
+#[test]
+fn version_renders_as_binary() {
+    let context = vida_test_support::CommandContext::empty();
+    let output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .arg("--version")
+        .output()
+        .expect("docflow version should run");
+
+    assert!(output.status.success(), "{}", context.diagnostics(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim_end(),
+        format!("docflow {}", env!("CARGO_PKG_VERSION"))
+    );
+}
