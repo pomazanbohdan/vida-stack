@@ -11,3 +11,5 @@ path = "src/main.rs"
 [dependencies]
 clap.workspace = true
 
+[dev-dependencies]
+vida-test-support = { path = "../vida-test-support" }

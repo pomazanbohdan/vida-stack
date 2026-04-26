@@ -23,3 +23,6 @@ taskflow-state-fs = { path = "../taskflow-state-fs" }
 taskflow-state-surreal = { path = "../taskflow-state-surreal" }
 time = { workspace = true }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+vida-test-support = { path = "../vida-test-support" }

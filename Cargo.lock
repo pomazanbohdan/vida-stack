@@ -1168,6 +1168,7 @@ dependencies = [
  "serde",
  "serde_json",
  "time",
+ "vida-test-support",
 ]
 
 [[package]]
@@ -4981,6 +4982,7 @@ name = "taskflow-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "vida-test-support",
 ]
 
 [[package]]
@@ -5698,7 +5700,12 @@ dependencies = [
  "taskflow-state-surreal",
  "time",
  "tokio",
+ "vida-test-support",
 ]
+
+[[package]]
+name = "vida-test-support"
+version = "0.1.0"
 
 [[package]]
 name = "walkdir"

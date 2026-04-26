@@ -11,8 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::types::SurrealValue;
 use surrealdb::Surreal;
-
-mod support;
+use vida_test_support as support;
 
 const SNAPSHOT_OVERWRITE_HELPER_STATE_DIR_ENV: &str =
     "VIDA_BOOT_SMOKE_SNAPSHOT_OVERWRITE_STATE_DIR";

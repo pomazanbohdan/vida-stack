@@ -24,3 +24,6 @@ docflow-operator = { path = "../docflow-operator" }
 docflow-readiness = { path = "../docflow-readiness" }
 docflow-relations = { path = "../docflow-relations" }
 docflow-validation = { path = "../docflow-validation" }
+
+[dev-dependencies]
+vida-test-support = { path = "../vida-test-support" }

@@ -23,6 +23,7 @@ members = [
     "crates/taskflow-state",
     "crates/taskflow-state-fs",
     "crates/taskflow-state-surreal",
+    "crates/vida-test-support",
     "crates/vida",
 ]
 resolver = "2"
