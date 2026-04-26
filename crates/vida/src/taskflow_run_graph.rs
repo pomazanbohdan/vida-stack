@@ -157,6 +157,10 @@ fn build_recovery_json_payload(
     recommended_command: Option<String>,
     recommended_surface: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let why_not_now = why_not_now.map(|mut value| {
+        value.blocking_surface = Some(surface.to_string());
+        value
+    });
     let next_actions = blocked_next_actions_for_operator_surface(
         &blocker_codes,
         next_action.as_ref(),
@@ -585,21 +589,41 @@ fn recovery_surface_contract(
             surface: recommended_surface_for_command(command),
             reason: recovery_next_action_reason(command, summary, projection_truth),
         });
-    let why_not_now = (!blocker_codes.is_empty()).then(|| RecoveryWhyNotNow {
-        category: "delegated_cycle_runtime_gate".to_string(),
-        summary: if projection_truth.stale_state_suspected {
-            format!(
-                "The delegated cycle remains open in recovery state `{}`, and the persisted delegated execution now looks stale.",
-                summary.delegation_gate.delegated_cycle_state
-            )
-        } else {
-            format!(
-                "The delegated cycle remains open in recovery state `{}`.",
-                summary.delegation_gate.delegated_cycle_state
-            )
-        },
-        blocker_codes: blocker_codes.clone(),
-        blocking_surface: Some("vida taskflow recovery latest".to_string()),
+    let why_not_now = (!blocker_codes.is_empty()).then(|| {
+        let delegated_cycle_open = summary.delegation_gate.delegated_cycle_open;
+        let stale_state_suspected = projection_truth.stale_state_suspected;
+        RecoveryWhyNotNow {
+            category: if delegated_cycle_open {
+                "delegated_cycle_runtime_gate".to_string()
+            } else if stale_state_suspected {
+                "stale_run_graph_blocked_state".to_string()
+            } else {
+                "run_graph_blocked_state".to_string()
+            },
+            summary: if delegated_cycle_open && stale_state_suspected {
+                format!(
+                    "The delegated cycle remains open in recovery state `{}`, and the persisted delegated execution now looks stale.",
+                    summary.delegation_gate.delegated_cycle_state
+                )
+            } else if delegated_cycle_open {
+                format!(
+                    "The delegated cycle remains open in recovery state `{}`.",
+                    summary.delegation_gate.delegated_cycle_state
+                )
+            } else if stale_state_suspected {
+                format!(
+                    "The run graph is blocked while delegated cycle state is `{}`; persisted dispatch evidence looks stale.",
+                    summary.delegation_gate.delegated_cycle_state
+                )
+            } else {
+                format!(
+                    "The run graph is blocked while delegated cycle state is `{}`.",
+                    summary.delegation_gate.delegated_cycle_state
+                )
+            },
+            blocker_codes: blocker_codes.clone(),
+            blocking_surface: Some("vida taskflow recovery latest".to_string()),
+        }
     });
     let recommended_command = next_action.as_ref().map(|value| value.command.clone());
     let recommended_surface = next_action.as_ref().map(|value| value.surface.clone());
@@ -4474,6 +4498,14 @@ mod tests {
             payload["artifact_refs"]["run_id"],
             serde_json::json!("run-recovery-json")
         );
+        assert_eq!(
+            payload["artifact_refs"]["surface"],
+            serde_json::json!("vida taskflow recovery latest")
+        );
+        assert_eq!(
+            payload["why_not_now"]["blocking_surface"],
+            serde_json::json!("vida taskflow recovery latest")
+        );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
@@ -4518,28 +4550,17 @@ mod tests {
             dispatch_receipt: None,
             continuation_binding: None,
         };
+        let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
+            recovery_surface_contract(&summary, &projection_truth);
         let payload = build_recovery_json_payload(
             "vida taskflow recovery status",
             &summary,
             &projection_truth,
-            vec!["open_delegated_cycle".to_string()],
-            Some(RecoveryWhyNotNow {
-                category: "delegated_cycle_runtime_gate".to_string(),
-                summary: "The delegated cycle remains open.".to_string(),
-                blocker_codes: vec!["open_delegated_cycle".to_string()],
-                blocking_surface: Some("vida taskflow recovery status".to_string()),
-            }),
-            Some(RecoveryNextAction {
-                command: "vida taskflow consume continue --run-id run-recovery-status-json --json"
-                    .to_string(),
-                surface: "vida taskflow consume continue".to_string(),
-                reason: "recovery is ready; continue the lawful delegated chain".to_string(),
-            }),
-            Some(
-                "vida taskflow consume continue --run-id run-recovery-status-json --json"
-                    .to_string(),
-            ),
-            Some("vida taskflow consume continue".to_string()),
+            blocker_codes,
+            why_not_now,
+            next_action,
+            recommended_command,
+            recommended_surface,
         )
         .expect("recovery status payload should render");
 
@@ -4548,6 +4569,10 @@ mod tests {
         assert_eq!(payload["operator_contracts"]["status"], "blocked");
         assert_eq!(
             payload["artifact_refs"]["surface"],
+            serde_json::json!("vida taskflow recovery status")
+        );
+        assert_eq!(
+            payload["why_not_now"]["blocking_surface"],
             serde_json::json!("vida taskflow recovery status")
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
@@ -4723,6 +4748,17 @@ mod tests {
         assert!(payload["recommended_command"]
             .as_str()
             .is_some_and(|value| value == "vida lane show run-terminal-write-blocked --json"));
+        assert_eq!(
+            payload["why_not_now"]["category"],
+            serde_json::json!("run_graph_blocked_state")
+        );
+        assert_eq!(
+            payload["why_not_now"]["blocking_surface"],
+            serde_json::json!("vida taskflow recovery status")
+        );
+        assert!(payload["why_not_now"]["summary"].as_str().is_some_and(
+            |value| value == "The run graph is blocked while delegated cycle state is `clear`."
+        ));
         assert_eq!(
             payload["next_action"]["surface"],
             serde_json::json!("vida lane show")
@@ -7258,6 +7294,68 @@ mod tests {
                 .reason
                 .contains("stale delegated execution is suspected"))
             .unwrap_or(false));
+    }
+
+    #[test]
+    fn recovery_surface_contract_distinguishes_stale_blocked_state_from_open_cycle() {
+        let summary = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-stale-clear-summary".to_string(),
+            task_id: "run-stale-clear-summary".to_string(),
+            active_node: "analysis".to_string(),
+            lifecycle_stage: "analysis_blocked".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            resume_node: None,
+            resume_status: "blocked".to_string(),
+            recovery_ready: false,
+            handoff_state: "none".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "analysis".to_string(),
+                lifecycle_stage: "analysis_blocked".to_string(),
+                delegated_cycle_open: false,
+                delegated_cycle_state: "clear".to_string(),
+                local_exception_takeover_gate: "delegated_cycle_clear".to_string(),
+                blocker_code: None,
+                reporting_pause_gate: "continuation_check_required".to_string(),
+                continuation_signal: "continuation_check_required".to_string(),
+            },
+        };
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason: "run-graph status reflects persisted dispatch blocker evidence"
+                .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: false,
+            projection_vs_receipt_parity: "aligned".to_string(),
+            stale_state_suspected: true,
+            next_lawful_operator_action: Some(
+                "vida taskflow run-graph status run-stale-clear-summary --json".to_string(),
+            ),
+            dispatch_receipt: None,
+            continuation_binding: None,
+        };
+
+        let (blocker_codes, why_not_now, _next_action, _command, _surface) =
+            recovery_surface_contract(&summary, &projection_truth);
+
+        assert_eq!(blocker_codes, vec!["tool_execution_failed".to_string()]);
+        assert_eq!(
+            why_not_now.as_ref().map(|value| value.category.as_str()),
+            Some("stale_run_graph_blocked_state")
+        );
+        assert!(why_not_now
+            .as_ref()
+            .and_then(|value| Some(value.summary.as_str()))
+            .is_some_and(|value| value.contains("persisted dispatch evidence looks stale")));
+        assert!(why_not_now
+            .as_ref()
+            .and_then(|value| Some(value.summary.as_str()))
+            .is_some_and(|value| !value.contains("delegated cycle remains open")));
+        assert!(why_not_now
+            .as_ref()
+            .and_then(|value| Some(value.summary.as_str()))
+            .is_some_and(|value| !value.contains("actively open")));
     }
 
     #[test]
