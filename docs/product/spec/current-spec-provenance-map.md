@@ -92,7 +92,7 @@ Companion rule:
 12. [team-coordination-model.md](team-coordination-model.md)
     Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/agent-lane-selection-and-conversation-mode-model.md`, and current OpenAI/Anthropic/Microsoft official multi-agent coordination baselines
 13. [status-families-and-query-surface-model.md](status-families-and-query-surface-model.md)
-    Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/docflow-v1-runtime-modernization-plan.md`, and current `vida` boot/status/doctor/memory shell surfaces
+    Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/docflow-v1-runtime-modernization-plan.md`, current `vida` boot/status/doctor/memory shell surfaces, and current TaskFlow query routing in `crates/vida/src/taskflow_layer4.rs`
 14. [project-protocol-promotion-law.md](project-protocol-promotion-law.md)
     Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/compiled-runtime-bundle-contract.md`, `runtime-instructions/work.project-agent-extension-protocol.md`, and the current project activation versus executable bundle admission decisions
 15. [taskflow-protocol-runtime-binding-model.md](taskflow-protocol-runtime-binding-model.md)
@@ -102,7 +102,7 @@ Companion rule:
 17. [bootstrap-carriers-and-project-activator-model.md](bootstrap-carriers-and-project-activator-model.md)
     Sources: `AGENTS.md`, `AGENTS.sidecar.md`, `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/product/spec/root-map-and-runtime-surface-model.md`, `docs/product/spec/framework-project-documentation-layer-model.md`, `docs/product/spec/project-activation-and-configurator-model.md`, and the current onboarding/init split decisions for orchestrator-init, agent-init, project-activator, and sidecar enrichment
 18. [execution-preparation-and-developer-handoff-model.md](execution-preparation-and-developer-handoff-model.md)
-    Sources: `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/team-coordination-model.md`, `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/release-1-plan.md`, and the current v1 decision to insert an explicit preparation stage between planning and code-shaped implementation
+    Sources: `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/team-coordination-model.md`, `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/release-1-plan.md`, current artifact query code in `crates/vida/src/taskflow_artifacts.rs`, and the current v1 decision to insert an explicit preparation stage between planning and code-shaped implementation
 19. [operational-state-and-synchronization-model.md](operational-state-and-synchronization-model.md)
     Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/embedded-runtime-and-editable-projection-model.md`, `docs/product/spec/runtime-paths-and-derived-cache-model.md`, and the current DB-first synchronization boundary decisions
 20. [host-agent-layer-status-matrix.md](host-agent-layer-status-matrix.md)
@@ -265,5 +265,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-provenance-map.md
 created_at: '2026-03-16T09:05:00+02:00'
-updated_at: 2026-04-24T16:11:52.331479239Z
+updated_at: 2026-04-26T14:58:34.965110628Z
 changelog_ref: current-spec-provenance-map.changelog.jsonl

@@ -453,81 +453,6 @@ fn scheduler_remove_blocker_codes(codes: &mut Vec<String>, remove: &[&str]) {
     codes.retain(|code| !remove.iter().any(|candidate| candidate == code));
 }
 
-fn scheduler_execute_agent_init_command(
-    task_id: &str,
-    state_dir: &Path,
-) -> Result<(String, Option<String>), String> {
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("failed to resolve current VIDA executable: {error}"))?;
-    let executable = if executable.exists() {
-        executable
-    } else if let Ok(path) = std::env::var("CARGO_BIN_EXE_vida") {
-        PathBuf::from(path)
-    } else {
-        PathBuf::from("vida")
-    };
-    let state_dir_arg = state_dir.display().to_string();
-    let output = {
-        let mut final_output = None;
-        for attempt in 0..4 {
-            let output = std::process::Command::new(&executable)
-                .args([
-                    "agent-init",
-                    "--role",
-                    "worker",
-                    task_id,
-                    "--state-dir",
-                    &state_dir_arg,
-                    "--json",
-                ])
-                .output()
-                .map_err(|error| {
-                    format!("failed to launch scheduler agent-init for `{task_id}`: {error}")
-                })?;
-            if output.status.success() {
-                final_output = Some(output);
-                break;
-            }
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let lock_contention = stderr.contains("LOCK")
-                || stderr.contains("locked by another process")
-                || stderr.contains("Resource temporarily unavailable");
-            if lock_contention && attempt < 3 {
-                std::thread::sleep(std::time::Duration::from_millis(200 * (attempt + 1) as u64));
-                continue;
-            }
-            final_output = Some(output);
-            break;
-        }
-        final_output.expect("scheduler agent-init loop should produce output")
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            format!(
-                "scheduler agent-init for `{task_id}` exited with {}",
-                output.status
-            )
-        } else {
-            format!(
-                "scheduler agent-init for `{task_id}` exited with {}: {stderr}",
-                output.status
-            )
-        });
-    }
-    let activation_kind = serde_json::from_str::<serde_json::Value>(&stdout)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("activation_semantics")
-                .and_then(|semantics| semantics.get("activation_kind"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        });
-    Ok((stdout, activation_kind))
-}
-
 fn explicit_task_graph_continuation_task_id(
     binding: Option<&crate::state_store::RunGraphContinuationBinding>,
 ) -> Option<&str> {
@@ -571,10 +496,38 @@ async fn build_scheduler_packet_backed_execution_gate(
             ),
         );
     };
-    let status = match store.run_graph_status(selected_task_id).await {
+    build_scheduler_packet_backed_execution_gate_for_task(store, selected_task_id).await
+}
+
+async fn build_scheduler_packet_backed_execution_gate_for_task(
+    store: &crate::state_store::StateStore,
+    selected_task_id: &str,
+) -> Result<crate::taskflow_run_graph::RunGraphPacketBackedExecutionGate, String> {
+    let mut status = match store.run_graph_status(selected_task_id).await {
         Ok(status) => Some(status),
         Err(_) => None,
     };
+    if status.is_none() {
+        let task = store.show_task(selected_task_id).await.map_err(|error| {
+            format!(
+                "Failed to read selected scheduler task `{selected_task_id}` for packet-backed run-graph seed: {error}"
+            )
+        })?;
+        let request_text = scheduler_task_request_text(&task).ok_or_else(|| {
+            format!(
+                "Selected scheduler task `{selected_task_id}` has no request text for packet-backed run-graph seed."
+            )
+        })?;
+        let mut payload = crate::taskflow_run_graph::derive_seeded_run_graph_status(
+            store,
+            selected_task_id,
+            &request_text,
+        )
+        .await?;
+        payload.status.recovery_ready = true;
+        crate::taskflow_run_graph::persist_seed_artifacts(store, &payload).await?;
+        status = Some(payload.status);
+    }
     let context = match status.as_ref() {
         Some(status) => store
             .run_graph_dispatch_context(&status.run_id)
@@ -584,7 +537,7 @@ async fn build_scheduler_packet_backed_execution_gate(
             })?,
         None => None,
     };
-    let binding = match status.as_ref() {
+    let mut binding = match status.as_ref() {
         Some(status) => store
             .run_graph_continuation_binding(&status.run_id)
             .await
@@ -593,7 +546,54 @@ async fn build_scheduler_packet_backed_execution_gate(
             })?,
         None => None,
     };
-    let receipt = match status.as_ref() {
+    if let Some(status) = status.as_ref() {
+        let binding_task_id = binding.as_ref().and_then(|binding| {
+            (binding.status == "bound"
+                && binding.binding_source == "explicit_continuation_bind_task"
+                && binding.active_bounded_unit["kind"].as_str() == Some("task_graph_task"))
+            .then(|| {
+                binding.active_bounded_unit["task_id"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(binding.task_id.as_str())
+            })
+        });
+        if binding_task_id != Some(selected_task_id) {
+            let task = store.show_task(selected_task_id).await.map_err(|error| {
+                format!(
+                    "Failed to read selected scheduler task `{selected_task_id}` for packet-backed continuation binding: {error}"
+                )
+            })?;
+            let request_text = context
+                .as_ref()
+                .map(|context| context.request_text.as_str());
+            let why = format!(
+                "Scheduler execute materialized packet-backed dispatch for selected task `{selected_task_id}`."
+            );
+            let new_binding = crate::taskflow_continuation::build_task_graph_continuation_binding(
+                &status.run_id,
+                request_text,
+                &task,
+                Some(&why),
+            )
+            .ok_or_else(|| {
+                format!(
+                    "Selected scheduler task `{selected_task_id}` did not yield a packet-backed continuation binding."
+                )
+            })?;
+            store
+                .record_run_graph_continuation_binding(&new_binding)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "Failed to record scheduler packet-backed continuation binding: {error}"
+                    )
+                })?;
+            binding = Some(new_binding);
+        }
+    }
+    let mut receipt = match status.as_ref() {
         Some(status) => store
             .run_graph_dispatch_receipt(&status.run_id)
             .await
@@ -602,6 +602,24 @@ async fn build_scheduler_packet_backed_execution_gate(
             })?,
         None => None,
     };
+    if let Some(status) = status.as_ref() {
+        let receipt_missing_packet = receipt.as_ref().map_or(true, |receipt| {
+            receipt
+                .dispatch_packet_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+        });
+        if receipt_missing_packet {
+            let artifacts = crate::taskflow_run_graph::prepare_run_graph_dispatch_init_artifacts(
+                store,
+                &status.run_id,
+            )
+            .await?;
+            receipt = Some(artifacts.dispatch_receipt);
+        }
+    }
     Ok(
         crate::taskflow_run_graph::evaluate_run_graph_packet_backed_execution_gate(
             Some(selected_task_id),
@@ -613,6 +631,25 @@ async fn build_scheduler_packet_backed_execution_gate(
     )
 }
 
+fn scheduler_task_request_text(task: &crate::state_store::TaskRecord) -> Option<String> {
+    task.description
+        .trim()
+        .strip_prefix('\n')
+        .unwrap_or(task.description.trim())
+        .trim()
+        .chars()
+        .next()
+        .map(|_| task.description.trim().to_string())
+        .or_else(|| {
+            task.title
+                .trim()
+                .chars()
+                .next()
+                .map(|_| task.title.trim().to_string())
+        })
+}
+
+#[cfg(test)]
 fn scheduler_agent_init_activation_result_status(
     activation_kind: Option<&str>,
 ) -> (&'static str, &'static str, &'static str) {
@@ -763,7 +800,11 @@ async fn scheduler_execute_packet_backed_dispatch(
             format!("failed to open scheduler packet dispatch store after launch: {error}")
         })?;
     store
-        .release_scheduler_dispatch_reservation(reservation_id, &execute_status)
+        .release_scheduler_dispatch_reservation_with_blockers(
+            reservation_id,
+            &execute_status,
+            &blocker_codes,
+        )
         .await
         .map_err(|error| {
             format!("failed to release scheduler packet reservation `{reservation_id}`: {error}")
@@ -785,7 +826,7 @@ async fn scheduler_execute_packet_backed_dispatch(
         lane_status: artifacts.dispatch_receipt.lane_status.clone(),
         execute_status,
         worker_execution_evidence_status,
-        worker_completion_claimed: false,
+        worker_completion_claimed: has_execution_evidence,
         preview_only_reason,
         blocker_codes,
     })
@@ -815,17 +856,9 @@ async fn persist_scheduler_execute_receipt(
     plan.packet_backed_execution_status = gate.status.clone();
     plan.dispatch_receipt.packet_backed_execution_supported = gate.supported;
     plan.dispatch_receipt.packet_backed_execution_status = gate.status.clone();
-    let packet_backed_run_id = gate.run_id.clone();
-    let packet_backed_dispatch_packet_path = gate.dispatch_packet_path.clone();
     plan.dispatch_receipt.packet_backed_execution_gate = Some(gate.clone());
     plan.packet_backed_execution_gate = Some(gate);
-    let packet_backed_execution_supported = plan.packet_backed_execution_supported;
-    if !packet_backed_execution_supported {
-        plan.next_actions.push(
-            "Packet-backed scheduler execute is blocked until run-graph lineage, continuation binding, and task/run mapping preconditions are verified; current execute path records scheduler reservations and activation evidence only."
-                .to_string(),
-        );
-    }
+    let mut all_packet_backed_execution_supported = true;
 
     let receipt_id = scheduler_dispatch_receipt_id();
     let receipt_root = state_dir.join("scheduler-dispatch").join("receipts");
@@ -860,18 +893,40 @@ async fn persist_scheduler_execute_receipt(
         reservation.reservation_status = "reservation_persisted".to_string();
         reservation.receipt_id = Some(receipt_id.clone());
         reservation.receipt_path = Some(receipt_path_string.clone());
-        if packet_backed_execution_supported {
-            let packet_backed_run_id = packet_backed_run_id.as_deref().ok_or_else(|| {
+        let reservation_gate = {
+            let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
+                .await
+                .map_err(|error| {
+                    format!(
+                        "failed to open scheduler packet gate store for `{}`: {error}",
+                        reservation.task_id
+                    )
+                })?;
+            build_scheduler_packet_backed_execution_gate_for_task(&store, &reservation.task_id)
+                .await?
+        };
+        if reservation_gate.supported {
+            plan.packet_backed_execution_supported = true;
+            plan.packet_backed_execution_status = reservation_gate.status.clone();
+            plan.dispatch_receipt.packet_backed_execution_supported = true;
+            plan.dispatch_receipt.packet_backed_execution_status = reservation_gate.status.clone();
+            if plan.selected_task_ids.len() == 1 {
+                plan.dispatch_receipt.packet_backed_execution_gate = Some(reservation_gate.clone());
+                plan.packet_backed_execution_gate = Some(reservation_gate.clone());
+            }
+            let packet_backed_run_id = reservation_gate.run_id.as_deref().ok_or_else(|| {
                 format!(
                     "scheduler packet-backed execution gate supported task `{}` without run_id",
                     reservation.task_id
                 )
             })?;
+            let packet_backed_dispatch_packet_path =
+                reservation_gate.dispatch_packet_path.as_deref();
             let packet_result = scheduler_execute_packet_backed_dispatch(
                 state_dir,
                 &reservation.task_id,
                 packet_backed_run_id,
-                packet_backed_dispatch_packet_path.as_deref(),
+                packet_backed_dispatch_packet_path,
                 &reservation.reservation_id,
             )
             .await;
@@ -890,6 +945,10 @@ async fn persist_scheduler_execute_receipt(
                         plan.worker_execution_evidence_status = "received".to_string();
                         plan.dispatch_receipt.worker_execution_evidence_status =
                             "received".to_string();
+                    }
+                    if packet_result.worker_completion_claimed {
+                        plan.worker_completion_claimed = true;
+                        plan.dispatch_receipt.worker_completion_claimed = true;
                     }
                     launch_results.push(serde_json::json!({
                         "task_id": reservation.task_id,
@@ -927,9 +986,10 @@ async fn persist_scheduler_execute_receipt(
                             format!("failed to open scheduler reservation store after packet dispatch failure: {error}")
                         })?;
                     store
-                        .release_scheduler_dispatch_reservation(
+                        .release_scheduler_dispatch_reservation_with_blockers(
                             &reservation.reservation_id,
                             "packet_dispatch_failed",
+                            &reservation.activation_blocker_codes,
                         )
                         .await
                         .map_err(|error| {
@@ -942,98 +1002,46 @@ async fn persist_scheduler_execute_receipt(
             }
             continue;
         }
+        all_packet_backed_execution_supported = false;
         {
             let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
                 .await
                 .map_err(|error| {
-                    format!("failed to open scheduler reservation store before launch: {error}")
+                    format!("failed to open scheduler reservation store after packet gate block: {error}")
                 })?;
+            let blocked_status = reservation_gate.status.clone();
+            let mut blocker_codes = reservation_gate.blocker_codes.clone();
+            if blocker_codes.is_empty() {
+                blocker_codes.push(blocked_status.clone());
+            }
+            reservation.execute_status = blocked_status.clone();
+            reservation.activation_status = blocked_status.clone();
+            reservation.preview_only_reason = Some(blocked_status.clone());
+            reservation.activation_blocker_codes = blocker_codes.clone();
+            launch_blockers.extend(blocker_codes.clone());
+            launch_results.push(serde_json::json!({
+                "task_id": reservation.task_id,
+                "reservation_id": reservation.reservation_id,
+                "status": blocked_status,
+                "activation_status": blocked_status,
+                "worker_execution_evidence_status": "not_received",
+                "worker_completion_claimed": false,
+            }));
             store
-                .mark_scheduler_dispatch_reservation_executing(
+                .release_scheduler_dispatch_reservation_with_blockers(
                     &reservation.reservation_id,
-                    None,
-                    "agent_init_launching",
+                    &blocked_status,
+                    &reservation.activation_blocker_codes,
                 )
                 .await
                 .map_err(|error| {
                     format!(
-                        "failed to mark scheduler reservation `{}` executing: {error}",
+                        "failed to release scheduler reservation `{}` after packet gate block: {error}",
                         reservation.reservation_id
                     )
                 })?;
         }
-        match scheduler_execute_agent_init_command(&reservation.task_id, state_dir) {
-            Ok((stdout, activation_kind)) => {
-                let (execute_status, preview_only_reason, blocker_code) =
-                    scheduler_agent_init_activation_result_status(activation_kind.as_deref());
-                reservation.execute_status = execute_status.to_string();
-                reservation.activation_status = execute_status.to_string();
-                reservation.preview_only_reason = Some(preview_only_reason.to_string());
-                reservation.activation_blocker_codes = vec![blocker_code.to_string()];
-                launch_results.push(serde_json::json!({
-                    "task_id": reservation.task_id,
-                    "reservation_id": reservation.reservation_id,
-                    "status": execute_status,
-                    "activation_status": execute_status,
-                    "worker_execution_evidence_status": "not_received",
-                    "worker_completion_claimed": false,
-                    "activation_kind": activation_kind,
-                    "stdout": stdout,
-                }));
-                launch_blockers.push(blocker_code.to_string());
-                let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
-                    .await
-                    .map_err(|error| {
-                        format!("failed to open scheduler reservation store after launch: {error}")
-                    })?;
-                store
-                    .release_scheduler_dispatch_reservation(
-                        &reservation.reservation_id,
-                        execute_status,
-                    )
-                    .await
-                    .map_err(|error| {
-                        format!(
-                            "failed to release scheduler reservation `{}`: {error}",
-                            reservation.reservation_id
-                        )
-                    })?;
-            }
-            Err(error) => {
-                reservation.execute_status = "agent_init_failed".to_string();
-                reservation.activation_status = "agent_init_failed".to_string();
-                reservation.preview_only_reason = Some("scheduler_agent_init_failed".to_string());
-                reservation.activation_blocker_codes =
-                    vec!["scheduler_agent_init_failed".to_string()];
-                launch_blockers.push("scheduler_agent_init_failed".to_string());
-                launch_results.push(serde_json::json!({
-                    "task_id": reservation.task_id,
-                    "reservation_id": reservation.reservation_id,
-                    "status": "agent_init_failed",
-                    "activation_status": "agent_init_failed",
-                    "worker_execution_evidence_status": "not_received",
-                    "worker_completion_claimed": false,
-                    "error": error,
-                }));
-                let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
-                    .await
-                    .map_err(|error| {
-                        format!("failed to open scheduler reservation store after launch failure: {error}")
-                    })?;
-                store
-                    .release_scheduler_dispatch_reservation(
-                        &reservation.reservation_id,
-                        "agent_init_failed",
-                    )
-                    .await
-                    .map_err(|error| {
-                        format!(
-                            "failed to release scheduler reservation `{}` after launch failure: {error}",
-                            reservation.reservation_id
-                        )
-                    })?;
-            }
-        }
+        continue;
     }
 
     launch_blockers.sort();
@@ -1062,8 +1070,14 @@ async fn persist_scheduler_execute_receipt(
     plan.execution_attempted = true;
     plan.activation_attempt_supported = true;
     plan.activation_attempted = true;
+    if all_packet_backed_execution_supported {
+        plan.packet_backed_execution_supported = true;
+        plan.dispatch_receipt.packet_backed_execution_supported = true;
+        plan.packet_backed_execution_status = "packet_ready".to_string();
+        plan.dispatch_receipt.packet_backed_execution_status = "packet_ready".to_string();
+    }
     let packet_execution_evidence_received =
-        packet_backed_execution_supported && plan.worker_execution_evidence_status == "received";
+        launch_blockers.is_empty() && plan.worker_execution_evidence_status == "received";
     if packet_execution_evidence_received {
         plan.status = "pass".to_string();
         plan.dispatch_receipt.dispatch_status = "pass".to_string();
@@ -1162,6 +1176,7 @@ async fn persist_scheduler_execute_receipt(
         "packet_backed_execution_status": plan.packet_backed_execution_status,
         "packet_backed_execution_gate": plan.packet_backed_execution_gate,
         "selected_task_ids": plan.selected_task_ids,
+        "reservations": plan.reservations,
         "reservation_ids": plan.dispatch_receipt.reservation_ids,
         "blocker_codes": plan.blocker_codes,
         "launch_results": launch_results,
@@ -1239,26 +1254,51 @@ fn build_taskflow_scheduler_dispatch_plan(
     let mut selected_parallel_tasks = Vec::new();
     let mut rejected_candidates = Vec::new();
     let mut remaining_parallel_capacity = parallel_capacity;
+    let mut selected_conflict_domains = BTreeSet::<String>::new();
+    if let Some(domain) = selected_primary_task
+        .as_ref()
+        .and_then(|task| task.conflict_domain.as_ref())
+    {
+        selected_conflict_domains.insert(domain.clone());
+    }
 
     for candidate in &scheduling.ready {
         if Some(candidate.task.id.as_str()) == selected_current_task_id.as_deref() {
             continue;
         }
 
-        if candidate.ready_parallel_safe && remaining_parallel_capacity > 0 {
-            selected_parallel_tasks.push(graph_summary_task_ref(&candidate.task));
+        let task = graph_summary_task_ref(&candidate.task);
+        let conflict_domain_blocker = task
+            .conflict_domain
+            .as_ref()
+            .filter(|domain| selected_conflict_domains.contains(*domain))
+            .map(|domain| format!("conflict_domain_already_selected:{domain}"));
+
+        if candidate.ready_parallel_safe
+            && conflict_domain_blocker.is_none()
+            && remaining_parallel_capacity > 0
+        {
+            if let Some(domain) = task.conflict_domain.as_ref() {
+                selected_conflict_domains.insert(domain.clone());
+            }
+            selected_parallel_tasks.push(task);
             remaining_parallel_capacity -= 1;
             continue;
         }
 
-        let reasons = if candidate.ready_parallel_safe {
+        let reasons = if let Some(blocker) = conflict_domain_blocker {
+            let mut reasons = candidate.parallel_blockers.clone();
+            if !reasons.iter().any(|reason| reason == &blocker) {
+                reasons.push(blocker);
+            }
+            reasons
+        } else if candidate.ready_parallel_safe {
             vec!["max_parallel_agents_cap_reached".to_string()]
         } else if candidate.parallel_blockers.is_empty() {
             vec!["max_parallel_agents_cap_reached".to_string()]
         } else {
             candidate.parallel_blockers.clone()
         };
-        let task = graph_summary_task_ref(&candidate.task);
         rejected_candidates.push(TaskflowSchedulerRejectedCandidate {
             task_id: task.id.clone(),
             conflict_domain: task.conflict_domain.clone(),
@@ -5137,6 +5177,80 @@ mod tests {
                     .parallel_blockers
                     .iter()
                     .any(|reason| reason == "conflict_domain_already_selected:shared-docs")
+                && candidate
+                    .reasons
+                    .iter()
+                    .any(|reason| reason == "conflict_domain_already_selected:shared-docs")
+        }));
+    }
+
+    #[test]
+    fn scheduler_dispatch_plan_enforces_conflict_domain_even_when_projection_is_permissive() {
+        let mut current = task("current", "task", "open", 1, &[], Vec::new());
+        current.execution_semantics.conflict_domain = Some("shared-docs".to_string());
+        let mut conflicting = task("conflicting", "task", "open", 2, &[], Vec::new());
+        conflicting.execution_semantics.conflict_domain = Some("shared-docs".to_string());
+        let mut safe = task("safe-parallel", "task", "open", 3, &[], Vec::new());
+        safe.execution_semantics.conflict_domain = Some("safe-docs".to_string());
+
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("current".to_string()),
+            ready: vec![
+                scheduling_candidate(current, true, false, true, Vec::new(), vec![]),
+                scheduling_candidate(conflicting, true, true, false, Vec::new(), vec![]),
+                scheduling_candidate(safe, true, true, false, Vec::new(), vec![]),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+
+        let plan = build_taskflow_scheduler_dispatch_plan(
+            projection, 3, None, None, None, None, state_dir, true, false,
+        );
+
+        assert_eq!(plan.selected_task_ids, vec!["current", "safe-parallel"]);
+        assert_eq!(plan.max_parallel_agents, 3);
+        assert!(plan.rejected_candidates.iter().any(|candidate| {
+            candidate.task_id == "conflicting"
+                && candidate.ready_now
+                && candidate.conflict_domain.as_deref() == Some("shared-docs")
+                && candidate
+                    .reasons
+                    .iter()
+                    .any(|reason| reason == "conflict_domain_already_selected:shared-docs")
+        }));
+    }
+
+    #[test]
+    fn scheduler_dispatch_plan_excludes_conflicts_between_parallel_candidates() {
+        let mut current = task("current", "task", "open", 1, &[], Vec::new());
+        current.execution_semantics.conflict_domain = Some("current-docs".to_string());
+        let mut first = task("parallel-a", "task", "open", 2, &[], Vec::new());
+        first.execution_semantics.conflict_domain = Some("shared-docs".to_string());
+        let mut second = task("parallel-b", "task", "open", 3, &[], Vec::new());
+        second.execution_semantics.conflict_domain = Some("shared-docs".to_string());
+
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("current".to_string()),
+            ready: vec![
+                scheduling_candidate(current, true, false, true, Vec::new(), vec![]),
+                scheduling_candidate(first, true, true, false, Vec::new(), vec![]),
+                scheduling_candidate(second, true, true, false, Vec::new(), vec![]),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+
+        let plan = build_taskflow_scheduler_dispatch_plan(
+            projection, 3, None, None, None, None, state_dir, true, false,
+        );
+
+        assert_eq!(plan.selected_task_ids, vec!["current", "parallel-a"]);
+        assert_eq!(plan.selected_parallel_tasks.len(), 1);
+        assert!(plan.rejected_candidates.iter().any(|candidate| {
+            candidate.task_id == "parallel-b"
                 && candidate
                     .reasons
                     .iter()

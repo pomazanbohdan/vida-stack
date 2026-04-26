@@ -202,6 +202,12 @@ The runtime should be able to answer at least:
 
 These answers must be queryable through bounded runtime/status surfaces rather than only through chat recap.
 
+Current operator query surface:
+
+1. `vida taskflow artifacts list --json` reports the execution-preparation registry, missing/materialized posture, source snapshot pointer, and Release-1 operator contract,
+2. `vida taskflow artifacts show <artifact-id> --json` reports one artifact entry and fails closed when the requested id is outside the current registry,
+3. blocked query output must use canonical `blocker_codes` and shared `operator_contracts` rather than a local prose-only failure.
+
 ## 12. Fail-Closed Rule
 
 Execution must fail closed when:
@@ -256,5 +262,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/execution-preparation-and-developer-handoff-model.md
 created_at: '2026-03-12T23:59:59+02:00'
-updated_at: '2026-03-13T00:10:00+02:00'
+updated_at: 2026-04-26T14:58:34.964682781Z
 changelog_ref: execution-preparation-and-developer-handoff-model.changelog.jsonl

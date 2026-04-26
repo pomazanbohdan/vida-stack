@@ -121,6 +121,16 @@ fn scheduler_reservation_collision(
     None
 }
 
+fn scheduler_reservation_blocker_codes(blocker_codes: &[String]) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    blocker_codes
+        .iter()
+        .map(|code| code.trim())
+        .filter(|code| !code.is_empty())
+        .filter_map(|code| seen.insert(code.to_string()).then(|| code.to_string()))
+        .collect()
+}
+
 impl StateStore {
     pub(crate) async fn expire_stale_scheduler_dispatch_reservations(
         &self,
@@ -289,6 +299,16 @@ impl StateStore {
         reservation_id: &str,
         reason: &str,
     ) -> Result<(), StateStoreError> {
+        self.release_scheduler_dispatch_reservation_with_blockers(reservation_id, reason, &[])
+            .await
+    }
+
+    pub(crate) async fn release_scheduler_dispatch_reservation_with_blockers(
+        &self,
+        reservation_id: &str,
+        reason: &str,
+        blocker_codes: &[String],
+    ) -> Result<(), StateStoreError> {
         let mut reservation = self
             .scheduler_dispatch_reservation(reservation_id)
             .await?
@@ -301,6 +321,7 @@ impl StateStore {
         if !reason.trim().is_empty() {
             reservation.execute_status = reason.to_string();
         }
+        reservation.blocker_codes = scheduler_reservation_blocker_codes(blocker_codes);
         reservation.released_at =
             Some(scheduler_reservation_timestamp(scheduler_reservation_time()));
         reservation.release_reason = Some(reason.to_string());
@@ -434,6 +455,44 @@ mod tests {
 
         assert_eq!(reservations.len(), 1);
         assert_eq!(reservations[0].reservation_id, "reservation-2");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn scheduler_reservation_release_persists_canonical_blocker_codes() {
+        let root = temp_state_dir("release-blockers");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .acquire_scheduler_dispatch_reservations(&[reservation_request(
+                "reservation-1",
+                "task-1",
+                Some("domain-a"),
+            )])
+            .await
+            .expect("reservation should acquire");
+
+        store
+            .release_scheduler_dispatch_reservation_with_blockers(
+                "reservation-1",
+                "activation_view_only",
+                &[
+                    "scheduler_agent_init_activation_view_only".to_string(),
+                    "scheduler_agent_init_activation_view_only".to_string(),
+                ],
+            )
+            .await
+            .expect("release should persist blocker truth");
+
+        let reservation = store
+            .scheduler_dispatch_reservation("reservation-1")
+            .await
+            .expect("reservation should read")
+            .expect("released reservation should remain queryable");
+        assert_eq!(reservation.execute_status, "activation_view_only");
+        assert_eq!(
+            reservation.blocker_codes,
+            vec!["scheduler_agent_init_activation_view_only"]
+        );
         let _ = fs::remove_dir_all(root);
     }
 

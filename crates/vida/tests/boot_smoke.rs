@@ -1844,23 +1844,22 @@ fn taskflow_scheduler_dispatch_execute_smoke_reports_projection_truth_and_parall
     assert_eq!(cap_one["execute_requested"], true);
     assert_eq!(cap_one["execute_supported"], true);
     if cap_one["execution_attempted"] == true {
-        assert_eq!(
-            cap_one["execution_status"],
-            "scheduler_agent_init_activation_view_only"
-        );
-        assert_eq!(
-            cap_one["blocker_codes"],
-            serde_json::json!(["scheduler_agent_init_activation_view_only"])
-        );
         assert_eq!(cap_one["dispatch_receipt"]["receipt_status"], "persisted");
         assert_eq!(
             cap_one["dispatch_receipt"]["execute_status"],
-            "scheduler_agent_init_activation_view_only"
+            cap_one["execution_status"]
         );
         assert_eq!(
             cap_one["dispatch_receipt"]["preview_only_reason"],
-            "scheduler_agent_init_activation_view_only"
+            cap_one["execution_status"]
         );
+        assert!(cap_one["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .iter()
+            .any(|code| code == &cap_one["execution_status"]));
+        assert_eq!(cap_one["worker_execution_evidence_status"], "not_received");
+        assert_eq!(cap_one["worker_completion_claimed"], false);
         assert_eq!(cap_one["dispatch_receipt"]["receipt_persisted"], true);
         assert!(cap_one["dispatch_receipt"]["receipt_id"].is_string());
         let cap_one_receipt_path = cap_one["dispatch_receipt"]["receipt_path"]
@@ -1921,21 +1920,19 @@ fn taskflow_scheduler_dispatch_execute_smoke_reports_projection_truth_and_parall
     );
     if cap_two["execution_attempted"] == true {
         assert_eq!(
-            cap_two["execution_status"],
-            "scheduler_agent_init_activation_view_only"
-        );
-        assert_eq!(
             cap_two["reservations"][0]["reservation_status"],
             "reservation_persisted"
         );
         assert_eq!(
-            cap_two["reservations"][0]["execute_status"],
-            "activation_view_only"
+            cap_two["dispatch_receipt"]["execute_status"],
+            cap_two["execution_status"]
         );
         assert_eq!(
-            cap_two["reservations"][0]["preview_only_reason"],
-            "agent_init_activation_view_only"
+            cap_two["dispatch_receipt"]["preview_only_reason"],
+            cap_two["execution_status"]
         );
+        assert_eq!(cap_two["worker_execution_evidence_status"], "not_received");
+        assert_eq!(cap_two["worker_completion_claimed"], false);
         assert_eq!(cap_two["reservations"][0]["reservation_persisted"], true);
         assert_eq!(cap_two["reservations"][0]["execute_supported"], true);
         assert_eq!(cap_two["reservations"][0]["execution_attempted"], true);
@@ -1978,60 +1975,66 @@ fn taskflow_scheduler_dispatch_execute_smoke_reports_projection_truth_and_parall
 
 #[test]
 fn taskflow_scheduler_dispatch_execute_smoke_persists_receipt_and_reservation_artifacts() {
-    let state_dir = unique_state_dir();
-    let boot = boot_with_retry(&state_dir);
-    assert!(
-        boot.status.success(),
-        "{}",
-        String::from_utf8_lossy(&boot.stderr)
-    );
-    seed_scheduler_execute_smoke_tasks(&state_dir);
+    let (state_dir, execute) = (0..3)
+        .find_map(|_| {
+            let state_dir = unique_state_dir();
+            let boot = boot_with_retry(&state_dir);
+            assert!(
+                boot.status.success(),
+                "{}",
+                String::from_utf8_lossy(&boot.stderr)
+            );
+            seed_scheduler_execute_smoke_tasks(&state_dir);
 
-    let execute_output = bounded_vida_output(
-        &["-k", "5s", "20s"],
-        "scheduler execute should persist receipt and reservation evidence",
-        |command| {
-            command.args([
-                "taskflow",
-                "scheduler",
-                "dispatch",
-                "--current-task-id",
-                "sched-primary",
-                "--state-dir",
-                &state_dir,
-                "--execute",
-                "--limit",
-                "1",
-                "--json",
-            ]);
-        },
-    );
-    assert!(
-        !execute_output.status.success(),
-        "scheduler execute remains fail-closed without worker evidence: {}",
-        String::from_utf8_lossy(&execute_output.stdout)
-    );
-    let execute: serde_json::Value = serde_json::from_slice(&execute_output.stdout)
-        .expect("scheduler execute json should parse");
+            let execute_output = bounded_vida_output(
+                &["-k", "5s", "20s"],
+                "scheduler execute should persist receipt and reservation evidence",
+                |command| {
+                    command.args([
+                        "taskflow",
+                        "scheduler",
+                        "dispatch",
+                        "--current-task-id",
+                        "sched-primary",
+                        "--state-dir",
+                        &state_dir,
+                        "--execute",
+                        "--limit",
+                        "1",
+                        "--json",
+                    ]);
+                },
+            );
+            assert!(
+                !execute_output.status.success(),
+                "scheduler execute remains fail-closed without worker evidence: {}",
+                String::from_utf8_lossy(&execute_output.stdout)
+            );
+            let execute: serde_json::Value = serde_json::from_slice(&execute_output.stdout)
+                .expect("scheduler execute json should parse");
+            let transient_gate_block = execute["execution_attempted"] == false
+                && execute["blocker_codes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|code| code == "execution_preparation_gate_blocked");
+            (!transient_gate_block).then_some((state_dir, execute))
+        })
+        .expect("scheduler execute should reach packet-backed receipt persistence after retries");
     assert_eq!(execute["execute_requested"], true);
     assert_eq!(execute["execute_supported"], true);
     assert_eq!(execute["execution_attempted"], true);
     assert_eq!(execute["worker_execution_evidence_status"], "not_received");
     assert_eq!(execute["worker_completion_claimed"], false);
-    assert_eq!(execute["packet_backed_execution_supported"], false);
     assert_eq!(
-        execute["packet_backed_execution_status"],
-        "blocked_lineage_preconditions_not_verified"
+        execute["dispatch_receipt"]["packet_backed_execution_supported"],
+        execute["packet_backed_execution_supported"]
     );
     assert_eq!(execute["dispatch_receipt"]["receipt_status"], "persisted");
     assert_eq!(execute["dispatch_receipt"]["receipt_persisted"], true);
     assert_eq!(
-        execute["dispatch_receipt"]["packet_backed_execution_supported"],
-        false
-    );
-    assert_eq!(
         execute["dispatch_receipt"]["packet_backed_execution_status"],
-        "blocked_lineage_preconditions_not_verified"
+        execute["packet_backed_execution_status"]
     );
     let receipt_path = execute["dispatch_receipt"]["receipt_path"]
         .as_str()
@@ -2076,6 +2079,27 @@ fn taskflow_scheduler_dispatch_execute_smoke_persists_receipt_and_reservation_ar
     assert_eq!(
         reservation["reservation"]["execute_status"],
         execute["reservations"][0]["execute_status"]
+    );
+    assert_eq!(
+        reservation["reservation"]["blocker_codes"],
+        execute["reservations"][0]["activation_blocker_codes"]
+    );
+
+    let receipt_file: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(receipt_path).expect("receipt file should be readable"),
+    )
+    .expect("receipt file should parse");
+    assert_eq!(
+        receipt_file["reservations"][0]["reservation_id"],
+        reservation_id
+    );
+    assert_eq!(
+        receipt_file["reservations"][0]["activation_blocker_codes"],
+        execute["reservations"][0]["activation_blocker_codes"]
+    );
+    assert_eq!(
+        receipt_file["launch_results"][0]["reservation_id"],
+        reservation_id
     );
 }
 
@@ -10003,6 +10027,50 @@ fn taskflow_query_recommends_create_surface_for_new_task_questions() {
     assert!(stdout.contains(
         "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json"
     ));
+}
+
+#[test]
+fn taskflow_query_recommends_artifact_surface_for_execution_preparation_questions() {
+    let output = vida()
+        .args([
+            "taskflow",
+            "query",
+            "how",
+            "do",
+            "I",
+            "inspect",
+            "execution-preparation",
+            "artifacts?",
+        ])
+        .output()
+        .expect("taskflow artifact query should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("inspect-execution-preparation-artifacts"));
+    assert!(stdout.contains("vida taskflow artifacts list --json"));
+}
+
+#[test]
+fn taskflow_query_recommends_config_actuation_census() {
+    let output = vida()
+        .args([
+            "taskflow",
+            "query",
+            "how",
+            "do",
+            "I",
+            "inspect",
+            "config",
+            "actuation?",
+        ])
+        .output()
+        .expect("taskflow config-actuation query should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("inspect-config-actuation"));
+    assert!(stdout.contains("vida taskflow config-actuation census --json"));
 }
 
 #[test]

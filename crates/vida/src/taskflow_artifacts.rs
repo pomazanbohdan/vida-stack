@@ -236,7 +236,7 @@ fn build_artifact_list_payload(snapshot: &ArtifactSnapshot, project_root: Option
     let artifact_registry_validation =
         execution_artifact_registry_validation_payload(&artifact_registry_contract);
 
-    json!({
+    let payload = json!({
         "surface": "vida taskflow artifacts list",
         "status": "pass",
         "artifact_scope": "execution_preparation",
@@ -262,10 +262,19 @@ fn build_artifact_list_payload(snapshot: &ArtifactSnapshot, project_root: Option
             .get("handoff_ready")
             .cloned()
             .unwrap_or(Value::Null),
-        "operator_contracts": snapshot.operator_contracts,
-        "shared_fields": snapshot.shared_fields,
-        "artifact_refs": snapshot.artifact_refs,
-    })
+        "source_operator_contracts": snapshot.operator_contracts,
+        "source_shared_fields": snapshot.shared_fields,
+        "source_artifact_refs": snapshot.artifact_refs,
+        "artifact_refs": {
+            "runtime_consumption_snapshot_path": snapshot.source.path,
+            "execution_preparation_artifacts_pointer": snapshot.source.pointer,
+        },
+    });
+    with_artifact_operator_contract(
+        payload,
+        None,
+        "inspect execution-preparation artifacts with `vida taskflow artifacts list --json`",
+    )
 }
 
 fn build_artifact_show_payload(list_payload: &Value, artifact_id: &str) -> Value {
@@ -279,7 +288,8 @@ fn build_artifact_show_payload(list_payload: &Value, artifact_id: &str) -> Value
         .cloned();
 
     match artifact {
-        Some(artifact) => json!({
+        Some(artifact) => with_artifact_operator_contract(
+            json!({
             "surface": "vida taskflow artifacts show",
             "status": "pass",
             "artifact_scope": list_payload["artifact_scope"].clone(),
@@ -288,23 +298,115 @@ fn build_artifact_show_payload(list_payload: &Value, artifact_id: &str) -> Value
             "artifact_registry_contract": list_payload["artifact_registry_contract"].clone(),
             "artifact_registry_validation": list_payload["artifact_registry_validation"].clone(),
             "execution_preparation_evidence": list_payload["execution_preparation_evidence"].clone(),
-            "operator_contracts": list_payload["operator_contracts"].clone(),
-            "shared_fields": list_payload["shared_fields"].clone(),
             "artifact_refs": list_payload["artifact_refs"].clone(),
-        }),
-        None => json!({
+            }),
+            None,
+            "inspect execution-preparation artifacts with `vida taskflow artifacts list --json`",
+        ),
+        None => with_artifact_operator_contract(
+            json!({
             "surface": "vida taskflow artifacts show",
             "status": "blocked",
-            "blocker_code": "missing_execution_preparation_artifact_query_target",
+            "blocker_codes": [
+                crate::release1_contracts::BlockerCode::MissingExecutionPreparationArtifactQueryTarget.as_str()
+            ],
             "artifact_scope": list_payload["artifact_scope"].clone(),
             "requested_artifact_id": artifact_id,
             "required_artifacts": list_payload["required_artifacts"].clone(),
             "source": list_payload["source"].clone(),
+            "artifact_refs": list_payload["artifact_refs"].clone(),
             "next_actions": [
                 "Run `vida taskflow artifacts list --json` to inspect queryable execution-preparation artifacts."
             ],
-        }),
+            }),
+            Some(
+                crate::release1_contracts::BlockerCode::MissingExecutionPreparationArtifactQueryTarget,
+            ),
+            "run `vida taskflow artifacts list --json` to inspect queryable execution-preparation artifacts",
+        ),
     }
+}
+
+fn string_array_from_payload(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn with_artifact_operator_contract(
+    mut payload: Value,
+    fallback_blocker: Option<crate::release1_contracts::BlockerCode>,
+    fallback_next_action: &str,
+) -> Value {
+    let mut blocker_codes = string_array_from_payload(&payload["blocker_codes"]);
+    if blocker_codes.is_empty() {
+        if let Some(blocker_code) = payload["blocker_code"].as_str() {
+            blocker_codes.push(blocker_code.to_string());
+        }
+    }
+    if blocker_codes.is_empty() && payload["status"].as_str() == Some("blocked") {
+        if let Some(blocker) = fallback_blocker {
+            blocker_codes.push(blocker.as_str().to_string());
+        }
+    }
+
+    let mut next_actions = string_array_from_payload(&payload["next_actions"]);
+    if !blocker_codes.is_empty() && next_actions.is_empty() {
+        next_actions.push(fallback_next_action.to_string());
+    }
+    let artifact_refs = payload
+        .get("artifact_refs")
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    let finalized = crate::operator_contracts::finalize_release1_operator_truth(
+        blocker_codes,
+        next_actions,
+        artifact_refs,
+    )
+    .unwrap_or_else(|_| {
+        crate::operator_contracts::finalize_release1_operator_truth(
+            vec![crate::release1_contracts::BlockerCode::Unsupported
+                .as_str()
+                .to_string()],
+            vec!["inspect execution-preparation artifact operator contract output".to_string()],
+            json!({}),
+        )
+        .expect("unsupported blocker fallback should be a valid release-1 contract")
+    });
+
+    let Some(object) = payload.as_object_mut() else {
+        return payload;
+    };
+    object.insert(
+        "status".to_string(),
+        Value::String(finalized.status.to_string()),
+    );
+    object.insert(
+        "blocker_codes".to_string(),
+        serde_json::to_value(finalized.blocker_codes)
+            .expect("artifact blocker codes should serialize"),
+    );
+    object.insert(
+        "next_actions".to_string(),
+        serde_json::to_value(finalized.next_actions)
+            .expect("artifact next actions should serialize"),
+    );
+    object.insert("artifact_refs".to_string(), finalized.artifact_refs);
+    object.insert("shared_fields".to_string(), finalized.shared_fields);
+    object.insert(
+        "operator_contracts".to_string(),
+        finalized.operator_contracts,
+    );
+    object.remove("blocker_code");
+    payload
 }
 
 fn required_artifacts(artifacts_payload: &Value) -> Vec<String> {
@@ -626,20 +728,30 @@ fn artifact_path_materialized(artifact_path: &str, project_root: Option<&Path>) 
 }
 
 fn blocked_payload(surface: &str, state_root: &Path, reason: String) -> Value {
-    json!({
+    with_artifact_operator_contract(
+        json!({
         "surface": surface,
         "status": "blocked",
-        "blocker_code": "execution_preparation_artifacts_unavailable",
+        "blocker_codes": [
+            crate::release1_contracts::BlockerCode::ExecutionPreparationArtifactsUnavailable.as_str()
+        ],
         "artifact_scope": "execution_preparation",
         "state_root": state_root.display().to_string(),
         "reason": reason,
         "required_artifacts": REQUIRED_EXECUTION_PREPARATION_ARTIFACTS,
         "missing_artifacts": REQUIRED_EXECUTION_PREPARATION_ARTIFACTS,
         "materialized_artifacts": [],
+        "artifact_refs": {
+            "state_root": state_root.display().to_string(),
+            "surface": surface,
+        },
         "next_actions": [
             "Materialize or refresh a final runtime-consumption snapshot that includes execution_preparation_artifacts."
         ],
-    })
+        }),
+        Some(crate::release1_contracts::BlockerCode::ExecutionPreparationArtifactsUnavailable),
+        "materialize or refresh a final runtime-consumption snapshot that includes execution_preparation_artifacts",
+    )
 }
 
 fn print_artifact_list_plain(payload: &Value) {
@@ -799,6 +911,12 @@ mod tests {
 
         let payload = build_artifact_list_payload(&snapshot, Some(&temp_root));
         assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(payload["shared_fields"]["status"], payload["status"]);
+        assert_eq!(
+            payload["shared_fields"]["artifact_refs"],
+            payload["artifact_refs"]
+        );
         assert_eq!(payload["artifact_registry_validation"]["status"], "pass");
         assert_eq!(
             payload["missing_artifacts"],
@@ -811,6 +929,8 @@ mod tests {
 
         let show = build_artifact_show_payload(&payload, "developer_handoff_packet");
         assert_eq!(show["status"], "pass");
+        assert_eq!(show["operator_contracts"]["status"], "pass");
+        assert_eq!(show["shared_fields"]["status"], show["status"]);
         assert_eq!(show["artifact"]["materialized"], true);
         assert_eq!(
             show["artifact_registry_contract"]["contract_id"],
@@ -962,9 +1082,43 @@ mod tests {
         let show = build_artifact_show_payload(&payload, "unknown_artifact");
         assert_eq!(show["status"], "blocked");
         assert_eq!(
-            show["blocker_code"],
-            "missing_execution_preparation_artifact_query_target"
+            show["blocker_codes"],
+            json!(["missing_execution_preparation_artifact_query_target"])
+        );
+        assert_eq!(
+            show["operator_contracts"]["blocker_codes"],
+            show["blocker_codes"]
+        );
+        assert_eq!(
+            show["shared_fields"]["next_actions"],
+            show["operator_contracts"]["next_actions"]
         );
         assert_eq!(show["required_artifacts"], json!(["change_boundary"]));
+    }
+
+    #[test]
+    fn execution_artifact_blocked_payload_uses_release1_operator_contract() {
+        let state_root = Path::new("/tmp/vida-artifact-state");
+        let payload = blocked_payload(
+            "vida taskflow artifacts list",
+            state_root,
+            "no recorded final runtime-consumption snapshot found".to_string(),
+        );
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            json!(["execution_preparation_artifacts_unavailable"])
+        );
+        assert!(payload.get("blocker_code").is_none());
+        assert_eq!(payload["operator_contracts"]["status"], payload["status"]);
+        assert_eq!(
+            payload["shared_fields"]["blocker_codes"],
+            payload["blocker_codes"]
+        );
+        assert_eq!(
+            payload["operator_contracts"]["artifact_refs"],
+            payload["artifact_refs"]
+        );
     }
 }

@@ -99,7 +99,7 @@ pub(crate) fn build_run_graph_continuation_binding(
     })
 }
 
-fn build_task_graph_continuation_binding(
+pub(crate) fn build_task_graph_continuation_binding(
     run_id: &str,
     request_text: Option<&str>,
     task: &TaskRecord,

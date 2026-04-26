@@ -68,6 +68,13 @@ This taxonomy defines:
 3. `local_takeover_forbidden`
 4. `recovery_not_trustworthy`
 
+## 7.1 Execution Preparation And Artifact Query Codes
+
+1. `execution_preparation_artifacts_unavailable`
+   - emitted when an execution-preparation artifact query cannot find a final runtime-consumption snapshot with `execution_preparation_artifacts`
+2. `missing_execution_preparation_artifact_query_target`
+   - emitted when an artifact query names an artifact id outside the current execution-preparation registry
+
 ## 8. Usage Rule
 
 1. Every blocked or failed Release-1 control flow must include at least one canonical code.
@@ -119,5 +126,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/release-1-error-and-exception-taxonomy.md
 created_at: 2026-03-16T11:35:00Z
-updated_at: 2026-04-04T20:12:10.235730643Z
+updated_at: 2026-04-26T14:58:34.964327145Z
 changelog_ref: release-1-error-and-exception-taxonomy.changelog.jsonl

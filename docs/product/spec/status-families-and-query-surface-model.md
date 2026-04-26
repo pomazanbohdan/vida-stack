@@ -28,6 +28,12 @@ That means:
 1. model narration does not replace query surfaces,
 2. rendered summaries must remain grounded in explicit state retrieval.
 
+Operator query routing rule:
+
+1. when a user asks for execution-preparation artifact readiness, route to `vida taskflow artifacts list --json` or `vida taskflow artifacts show <artifact-id> --json`,
+2. when a user asks for routing/model-selection config actuation, route to `vida taskflow config-actuation census --json`,
+3. generic task inspection must not swallow these more specific artifact and config-actuation intents.
+
 ## 3. Release-1 Must-Have Families
 
 Release 1 must support at least:
@@ -46,6 +52,10 @@ Release 1 must support at least:
    - DB/filesystem synchronization and reconcile posture
 7. `memory status`
    - command-time memory snapshot only for Release 1
+8. `execution-preparation artifact status`
+   - required/missing/materialized artifact truth from the runtime-consumption snapshot
+9. `config actuation status`
+   - routing/model-selection config keys mapped to validators, runtime consumers, and proof posture
 
 ## 4. Family-Specific Meaning
 
@@ -159,5 +169,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/status-families-and-query-surface-model.md
 created_at: '2026-03-11T23:01:49+02:00'
-updated_at: '2026-03-12T07:48:27+02:00'
+updated_at: 2026-04-26T14:58:34.964609994Z
 changelog_ref: status-families-and-query-surface-model.changelog.jsonl

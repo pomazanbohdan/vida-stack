@@ -21,6 +21,12 @@ Rule:
 2. nested compatibility paths may exist temporarily,
 3. nested compatibility paths must not replace the root contract as owner law.
 
+TaskFlow diagnostic/query adjunct rule:
+
+1. Release-1 shared-envelope parity also applies to promoted TaskFlow diagnostic adjuncts that operators use as proof surfaces,
+2. current promoted adjuncts are `vida taskflow config-actuation census` and `vida taskflow artifacts {list,show}`,
+3. those adjuncts may remain under the `taskflow` family, but their JSON must still expose `status`, `blocker_codes`, `next_actions`, `artifact_refs`, `shared_fields`, and `operator_contracts`.
+
 ## 2. Shared Envelope Rule
 
 All operator surfaces must expose machine-readable output with the shared envelope:
@@ -125,6 +131,25 @@ Must expose:
 5. trust reevaluation verdict
 6. recovery blockers and remediation path
 
+### 4.7 TaskFlow Diagnostic Adjuncts
+
+`config-actuation census` must expose:
+
+1. routed lane coverage,
+2. config key,
+3. validator,
+4. runtime consumer,
+5. proof status,
+6. model-profile readiness audit when model selection is in scope.
+
+`artifacts list/show` must expose:
+
+1. execution-preparation artifact registry entries,
+2. required/missing/materialized posture,
+3. source runtime-consumption snapshot pointer,
+4. source snapshot operator-contract evidence,
+5. fail-closed Release-1 blocker codes when query evidence is unavailable or the requested artifact id is unknown.
+
 ## 5. Unsupported And Missing Surface Rule
 
 1. if a surface is invoked before it is fully implemented, the runtime must respond with one explicit fail-closed unsupported envelope,
@@ -155,5 +180,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/release-1-operator-surface-contract.md
 created_at: 2026-03-16T11:45:00Z
-updated_at: 2026-04-08T07:25:59.88011969Z
+updated_at: 2026-04-26T14:58:34.964502972Z
 changelog_ref: release-1-operator-surface-contract.changelog.jsonl

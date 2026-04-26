@@ -914,6 +914,8 @@ pub(crate) enum BlockerCode {
     PendingDesignPacket,
     PendingDeveloperHandoffPacket,
     MissingExecutionPreparationContract,
+    ExecutionPreparationArtifactsUnavailable,
+    MissingExecutionPreparationArtifactQueryTarget,
     ImplementationReviewDenied,
     ImplementationReviewExpired,
     ImplementationReviewFindings,
@@ -1090,6 +1092,12 @@ impl BlockerCode {
             Self::PendingDesignPacket => "pending_design_packet",
             Self::PendingDeveloperHandoffPacket => "pending_developer_handoff_packet",
             Self::MissingExecutionPreparationContract => "missing_execution_preparation_contract",
+            Self::ExecutionPreparationArtifactsUnavailable => {
+                "execution_preparation_artifacts_unavailable"
+            }
+            Self::MissingExecutionPreparationArtifactQueryTarget => {
+                "missing_execution_preparation_artifact_query_target"
+            }
             Self::ImplementationReviewDenied => "implementation_review_denied",
             Self::ImplementationReviewExpired => "implementation_review_expired",
             Self::ImplementationReviewFindings => "implementation_review_findings",
@@ -1279,6 +1287,12 @@ impl BlockerCode {
             "pending_developer_handoff_packet" => Some(Self::PendingDeveloperHandoffPacket),
             "missing_execution_preparation_contract" => {
                 Some(Self::MissingExecutionPreparationContract)
+            }
+            "execution_preparation_artifacts_unavailable" => {
+                Some(Self::ExecutionPreparationArtifactsUnavailable)
+            }
+            "missing_execution_preparation_artifact_query_target" => {
+                Some(Self::MissingExecutionPreparationArtifactQueryTarget)
             }
             "implementation_review_denied" => Some(Self::ImplementationReviewDenied),
             "implementation_review_expired" => Some(Self::ImplementationReviewExpired),

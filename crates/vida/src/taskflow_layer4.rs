@@ -937,6 +937,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  Bind the current bounded unit explicitly: vida taskflow help continuation");
     println!("  Inspect persisted packet evidence: vida taskflow help packet");
     println!("  Inspect execution-preparation artifact truth: vida taskflow artifacts list --json");
+    println!(
+        "  Inspect routing/model config actuation: vida taskflow config-actuation census --json"
+    );
     println!("  Inspect resumability state: vida taskflow help run-graph");
     println!(
         "  Bootstrap one design-first feature slice: vida taskflow bootstrap-spec \"feature request\" --json"
@@ -1108,6 +1111,46 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
             why: "Persisted dispatch packet and result evidence should be inspected through the packet surface before retry, supersession, or downstream diagnosis.",
             command,
             failure_modes,
+        };
+    }
+
+    if normalized.contains("config-actuation")
+        || normalized.contains("config actuation")
+        || (normalized.contains("config") && normalized.contains("actuation"))
+        || normalized.contains("actuation census")
+        || (normalized.contains("routing") && normalized.contains("model selection"))
+        || (normalized.contains("route") && normalized.contains("model selection"))
+    {
+        return TaskflowQueryAnswer {
+            intent: "inspect-config-actuation",
+            why: "Routing and model-selection config actuation should be inspected through the bounded census surface that links each covered key to its validator, runtime consumer, and proof status.",
+            command: "vida taskflow config-actuation census --json",
+            failure_modes: "The census is bounded to routing/model-selection keys and fails closed when dispatch context is missing; it does not claim whole-project config coverage.",
+        };
+    }
+
+    if normalized.contains("artifact")
+        || normalized.contains("artifacts")
+        || normalized.contains("execution-preparation")
+        || normalized.contains("execution preparation")
+        || normalized.contains("developer handoff")
+        || normalized.contains("handoff packet")
+        || normalized.contains("materialized")
+    {
+        let show_mode = normalized.contains("show")
+            || normalized.contains("one artifact")
+            || normalized.contains("specific artifact")
+            || normalized.contains("developer_handoff_packet");
+        let command = if show_mode {
+            "vida taskflow artifacts show <artifact-id> --json"
+        } else {
+            "vida taskflow artifacts list --json"
+        };
+        return TaskflowQueryAnswer {
+            intent: "inspect-execution-preparation-artifacts",
+            why: "Execution-preparation artifact readiness and materialization truth should be read from the artifact query surface before worker execution or handoff diagnosis.",
+            command,
+            failure_modes: "The artifacts surface is read-only and reports a blocked Release-1 operator envelope when the latest final runtime-consumption snapshot has no execution_preparation_artifacts payload.",
         };
     }
 
@@ -1306,6 +1349,8 @@ fn print_taskflow_query_help() {
     println!("  vida taskflow query \"how do I inspect dependencies?\"");
     println!("  vida taskflow query \"how do I inspect the queue?\"");
     println!("  vida taskflow query \"how do I inspect packet evidence?\"");
+    println!("  vida taskflow query \"how do I inspect execution-preparation artifacts?\"");
+    println!("  vida taskflow query \"how do I inspect config actuation?\"");
     println!("  vida taskflow query \"what can run in parallel with the current task?\"");
     println!("  vida taskflow query \"how do I create a new task under this epic?\"");
     println!("  vida taskflow query \"how do I replace the current backlog snapshot?\"");
@@ -1314,7 +1359,7 @@ fn print_taskflow_query_help() {
     println!();
     println!("Current intents:");
     println!(
-        "  parallelism/scheduling, subtree/tree, dependencies, queue, next/ready, packet evidence, dispatch diagnosis, inspect/show, create/new, update/progress, close/done, display-id, export/jsonl, replace/snapshot, resume/run-graph, doctor/health, final/consume, protocol-binding"
+        "  parallelism/scheduling, subtree/tree, dependencies, queue, next/ready, packet evidence, execution-preparation artifacts, config-actuation, dispatch diagnosis, inspect/show, create/new, update/progress, close/done, display-id, export/jsonl, replace/snapshot, resume/run-graph, doctor/health, final/consume, protocol-binding"
     );
     println!();
     println!("Failure modes:");

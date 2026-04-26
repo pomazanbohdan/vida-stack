@@ -3207,7 +3207,6 @@ pub(crate) fn evaluate_run_graph_packet_backed_execution_gate(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .is_some()
-        || !receipt.downstream_dispatch_blockers.is_empty()
     {
         return RunGraphPacketBackedExecutionGate::blocked(
             "blocked_lineage_preconditions_not_verified",
@@ -3415,7 +3414,7 @@ pub(crate) fn run_graph_dispatch_context_from_seed_payload(
     }
 }
 
-async fn persist_seed_artifacts(
+pub(crate) async fn persist_seed_artifacts(
     store: &StateStore,
     payload: &TaskflowRunGraphSeedPayload,
 ) -> Result<(), String> {
@@ -4723,6 +4722,29 @@ mod tests {
             gate.dispatch_packet_path.as_deref(),
             Some("/tmp/packet.json")
         );
+        assert!(gate.blocker_codes.is_empty());
+    }
+
+    #[test]
+    fn packet_backed_execute_gate_allows_downstream_blockers_for_first_lane_packet() {
+        let status = packet_gate_status("sched-primary");
+        let context = packet_gate_context("sched-primary");
+        let binding = packet_gate_binding("sched-primary");
+        let mut receipt = packet_gate_receipt("sched-primary");
+        receipt
+            .downstream_dispatch_blockers
+            .push("pending_implementation_evidence".to_string());
+
+        let gate = evaluate_run_graph_packet_backed_execution_gate(
+            Some("sched-primary"),
+            Some(&status),
+            Some(&context),
+            Some(&binding),
+            Some(&receipt),
+        );
+
+        assert!(gate.supported);
+        assert_eq!(gate.status, "packet_ready");
         assert!(gate.blocker_codes.is_empty());
     }
 

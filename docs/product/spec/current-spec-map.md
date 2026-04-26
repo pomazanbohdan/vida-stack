@@ -91,7 +91,8 @@ Companion rule:
 12. [team-coordination-model.md](team-coordination-model.md)
     Config families: team composition, coordination pattern, activation, shared policy, handoff/context posture, and closure semantics
 13. [status-families-and-query-surface-model.md](status-families-and-query-surface-model.md)
-    Config families: CLI query/status families, operator-facing render surfaces, bounded runtime snapshots, and status-family routing
+    Config families: CLI query/status families, operator-facing render surfaces, bounded runtime snapshots, status-family routing, execution-preparation artifact queries, and routing/model-selection config-actuation census
+    Registered path: `docs/product/spec/status-families-and-query-surface-model.md`
 14. [project-protocol-promotion-law.md](project-protocol-promotion-law.md)
     Config families: known versus compiled project protocol admission, project discovery/mapping, executable bundle promotion, and fail-closed protocol binding
 15. [taskflow-protocol-runtime-binding-model.md](taskflow-protocol-runtime-binding-model.md)
@@ -101,7 +102,8 @@ Companion rule:
 17. [bootstrap-carriers-and-project-activator-model.md](bootstrap-carriers-and-project-activator-model.md)
     Config families: bootstrap carriers, runtime init command split, project activator pipeline, sidecar/project-map enrichment, host-template onboarding, and bounded protocol-load separation between orchestrator and agent lanes
 18. [execution-preparation-and-developer-handoff-model.md](execution-preparation-and-developer-handoff-model.md)
-    Config families: `solution_architect`, execution preparation, architecture-preparation reports, developer handoff packets, change-boundary shaping, dependency-impact summaries, and fail-closed pre-execution gating for code-shaped work
+    Config families: `solution_architect`, execution preparation, architecture-preparation reports, developer handoff packets, change-boundary shaping, dependency-impact summaries, artifact registry query surfaces, and fail-closed pre-execution gating for code-shaped work
+    Registered path: `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
 19. [operational-state-and-synchronization-model.md](operational-state-and-synchronization-model.md)
     Config families: DB-first operational state, filesystem projection, Git lineage, synchronization law, conflict handling, and reactive domain routing
 20. [host-agent-layer-status-matrix.md](host-agent-layer-status-matrix.md)
@@ -359,5 +361,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-24T16:11:52.331222494Z
+updated_at: 2026-04-26T14:59:05.605112109Z
 changelog_ref: current-spec-map.changelog.jsonl
