@@ -31,14 +31,14 @@ host_environment:
         description: Level 1 Codex lane for cheap bounded implementation packets that own one explicit write scope and return concrete delivery evidence without self-approving closure.
         rate: 1
         reasoning_band: low
-        model: gpt-5.4
+        model: gpt-5.5
         model_reasoning_effort: low
         sandbox_mode: workspace-write
-        default_model_profile: codex_gpt54_low_write
+        default_model_profile: codex_gpt55_low_write
         model_profiles:
-          codex_gpt54_low_write:
+          codex_gpt55_low_write:
             provider: openai
-            model_ref: gpt-5.4
+            model_ref: gpt-5.5
             reasoning_effort: low
             plan_mode_reasoning_effort: medium
             sandbox_mode: workspace-write
@@ -78,14 +78,14 @@ host_environment:
         description: Level 2 Codex lane for bounded specification, planning, spec-conformance coach review, and medium implementation packets when the work still fits one packet and does not require senior proof or architecture escalation.
         rate: 4
         reasoning_band: medium
-        model: gpt-5.4
+        model: gpt-5.5
         model_reasoning_effort: medium
         sandbox_mode: workspace-write
-        default_model_profile: codex_gpt54_medium_write
+        default_model_profile: codex_gpt55_medium_write
         model_profiles:
-          codex_gpt54_medium_write:
+          codex_gpt55_medium_write:
             provider: openai
-            model_ref: gpt-5.4
+            model_ref: gpt-5.5
             reasoning_effort: medium
             plan_mode_reasoning_effort: high
             sandbox_mode: workspace-write
@@ -122,14 +122,14 @@ host_environment:
         description: Level 3 Codex lane for independent verification, proof-strength review, and high-confidence closure gates that fail closed on missing evidence.
         rate: 16
         reasoning_band: high
-        model: gpt-5.3-codex-spark
+        model: gpt-5.5
         model_reasoning_effort: high
         sandbox_mode: read-only
-        default_model_profile: codex_spark_high_readonly
+        default_model_profile: codex_gpt55_high_readonly
         model_profiles:
-          codex_spark_high_readonly:
+          codex_gpt55_high_readonly:
             provider: openai
-            model_ref: gpt-5.3-codex-spark
+            model_ref: gpt-5.5
             reasoning_effort: high
             plan_mode_reasoning_effort: high
             sandbox_mode: read-only
@@ -160,16 +160,16 @@ host_environment:
       architect:
         tier: architect
         description: Level 4 Codex lane for architecture preparation, hard escalation, and cross-scope conflict resolution when the normal implementer-coach-verifier path cannot close lawfully.
-        rate: 32
+        rate: 48
         reasoning_band: xhigh
-        model: gpt-5.3-codex-spark
-        model_reasoning_effort: high
+        model: gpt-5.5
+        model_reasoning_effort: xhigh
         sandbox_mode: read-only
-        default_model_profile: codex_spark_high_arch
+        default_model_profile: codex_gpt55_xhigh_arch
         model_profiles:
-          codex_spark_high_arch:
+          codex_gpt55_high_arch:
             provider: openai
-            model_ref: gpt-5.3-codex-spark
+            model_ref: gpt-5.5
             reasoning_effort: high
             plan_mode_reasoning_effort: high
             sandbox_mode: read-only
@@ -187,9 +187,9 @@ host_environment:
             readiness:
               mode: codex_profile
               required: true
-          codex_spark_xhigh_arch:
+          codex_gpt55_xhigh_arch:
             provider: openai
-            model_ref: gpt-5.3-codex-spark
+            model_ref: gpt-5.5
             reasoning_effort: xhigh
             plan_mode_reasoning_effort: xhigh
             sandbox_mode: read-only
@@ -460,7 +460,7 @@ dev_team:
         - specification
         - planning
       default_carrier: middle
-      default_model: gpt-5.4
+      default_model: gpt-5.5
       default_model_reasoning_effort: medium
       cost_policy:
         budget_units: 4
@@ -483,7 +483,7 @@ dev_team:
         - delivery_task
         - execution_block
       default_carrier: junior
-      default_model: gpt-5.4
+      default_model: gpt-5.5
       default_model_reasoning_effort: low
       cost_policy:
         budget_units: 1
@@ -504,7 +504,7 @@ dev_team:
         - verification
         - quality_gate
       default_carrier: senior
-      default_model: gpt-5.3-codex-spark
+      default_model: gpt-5.5
       default_model_reasoning_effort: high
       cost_policy:
         budget_units: 16
@@ -533,7 +533,7 @@ dev_team:
         - coach
         - review
       default_carrier: middle
-      default_model: gpt-5.4
+      default_model: gpt-5.5
       default_model_reasoning_effort: medium
       cost_policy:
         budget_units: 4
@@ -553,7 +553,7 @@ dev_team:
         - review
         - quality_gate
       default_carrier: senior
-      default_model: gpt-5.3-codex-spark
+      default_model: gpt-5.5
       default_model_reasoning_effort: high
       cost_policy:
         budget_units: 16
@@ -572,7 +572,7 @@ dev_team:
         - quality_gate
         - release_readiness
       default_carrier: senior
-      default_model: gpt-5.3-codex-spark
+      default_model: gpt-5.5
       default_model_reasoning_effort: high
       cost_policy:
         budget_units: 16
@@ -590,7 +590,7 @@ dev_team:
         - release_readiness
         - quality_gate
       default_carrier: senior
-      default_model: gpt-5.3-codex-spark
+      default_model: gpt-5.5
       default_model_reasoning_effort: high
       cost_policy:
         budget_units: 16

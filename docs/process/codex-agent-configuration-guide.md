@@ -111,7 +111,7 @@ Minimum tier topology:
    - rate `16`
    - independent verification and high-confidence proof lane
 5. `architect`
-   - rate `32`
+   - rate `48`
    - architecture-preparation and hard-escalation lane for conflicts the normal delivery cycle cannot close
 
 Internal dispatch aliases:
@@ -186,19 +186,19 @@ Coach separation rule:
 
 Current project decision for Codex development agents:
 
-1. use the selected `GPT-5.4` family with a four-level reasoning ladder,
+1. use the selected `GPT-5.5` family with a four-level reasoning ladder,
 2. use four Codex execution tiers whose default execution settings are now carried by canonical model profiles:
-   - `junior` -> default profile `codex_gpt54_low_write` -> reasoning `low` -> rate `1`
-   - `middle` -> default profile `codex_gpt54_medium_write` -> reasoning `medium` -> rate `4`
-   - `senior` -> default profile `codex_spark_high_readonly` -> reasoning `high` -> rate `16`
-   - `architect` -> default profile `codex_spark_high_arch` -> rate `32`
-3. keep write-capable carrier tiers on the frontier general model and prefer `GPT-5.3-Codex-Spark` only for read-only Codex tiers used for fast host-side analysis, exploration, verification, and architecture preparation,
+   - `junior` -> default profile `codex_gpt55_low_write` -> reasoning `low` -> rate `1`
+   - `middle` -> default profile `codex_gpt55_medium_write` -> reasoning `medium` -> rate `4`
+   - `senior` -> default profile `codex_gpt55_high_readonly` -> reasoning `high` -> rate `16`
+   - `architect` -> default profile `codex_gpt55_xhigh_arch` -> reasoning `xhigh` -> rate `48`
+3. keep all Codex development carriers on the active `GPT-5.5` model family and vary capability through carrier tier, reasoning effort, sandbox posture, and normalized cost units,
 4. map that preference in the active project overlay as:
-   - `junior` -> `gpt-5.4`
-   - `middle` -> `gpt-5.4`
-   - `senior` -> `gpt-5.3-codex-spark`
-   - `architect` -> `gpt-5.3-codex-spark`
-5. preserve `architect` default execution on `high`, but keep an explicit `codex_spark_xhigh_arch` escalation profile available for `hard_escalation`, `cross_scope_conflict`, and other xhigh-worthy work instead of globally promoting every architecture task,
+   - `junior` -> `gpt-5.5`
+   - `middle` -> `gpt-5.5`
+   - `senior` -> `gpt-5.5`
+   - `architect` -> `gpt-5.5`
+5. use `architect` default execution on `xhigh` for architecture preparation, hard escalation, cross-scope conflict, and other work that has already outgrown the normal implementer-coach-verifier path,
 6. treat legacy per-tier `model` and `model_reasoning_effort` fields as compatibility shorthand only; runtime should normalize them into a synthetic default model profile when the explicit profile catalog is absent,
 7. rendered `.codex/agents/*.toml` files are projections of the selected default model profile and must not become the authority surface for tier/model policy,
 8. do not use the highest tier as the normal default,
