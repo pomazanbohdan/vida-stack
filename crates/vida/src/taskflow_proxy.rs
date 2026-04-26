@@ -12,8 +12,9 @@ use crate::{
     print_surface_header, print_surface_line, surface_render, taskflow_consume,
     taskflow_protocol_binding, Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs,
 };
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use serde::Serialize;
+use taskflow_cli::Cli as TaskflowCli;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct GraphSummaryTaskRef {
@@ -5964,6 +5965,19 @@ mod tests {
 pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
     if matches!(args.args.first().map(String::as_str), Some("query")) {
         return run_taskflow_query(&args.args);
+    }
+
+    if matches!(
+        args.args.first().map(String::as_str),
+        Some("--version" | "-V")
+    ) {
+        let command = TaskflowCli::command();
+        let version = command
+            .get_version()
+            .unwrap_or(env!("CARGO_PKG_VERSION"))
+            .to_string();
+        println!("taskflow {version}");
+        return ExitCode::SUCCESS;
     }
 
     if let Some(topic) = taskflow_help_topic(&args.args) {

@@ -17,6 +17,7 @@ serde_json = "1.0.145"
 serde_yaml = "0.9.34"
 surrealdb = { version = "3.0.2", features = ["kv-surrealkv"] }
 taskflow-contracts = { path = "../taskflow-contracts" }
+taskflow-cli = { path = "../taskflow-cli" }
 taskflow-core = { path = "../taskflow-core" }
 taskflow-state = { path = "../taskflow-state" }
 taskflow-state-fs = { path = "../taskflow-state-fs" }

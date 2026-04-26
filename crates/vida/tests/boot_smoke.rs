@@ -1154,6 +1154,40 @@ fn root_version_succeeds() {
 }
 
 #[test]
+fn taskflow_proxy_version_matches_runtime_family() {
+    let output = vida()
+        .args(["taskflow", "--version"])
+        .output()
+        .expect("taskflow proxy version should run");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim_end(), "taskflow 0.1.0");
+}
+
+#[test]
+fn docflow_proxy_version_matches_runtime_family() {
+    let output = vida()
+        .args(["docflow", "--version"])
+        .output()
+        .expect("docflow proxy version should run");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim_end(), "docflow 0.1.0");
+}
+
+#[test]
 fn protocol_view_accepts_multiple_targets_in_json_mode() {
     let output = vida()
         .args([
@@ -1340,7 +1374,7 @@ fn taskflow_proxy_help_is_runtime_specific() {
     assert!(stdout.contains("vida task ready --json"));
     assert!(stdout.contains("vida task next --json"));
     assert!(stdout.contains(
-        "vida taskflow help [task|parallelism|dependencies|queue|next|graph-summary|plan|replan|scheduler|status|consume|continuation|packet|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
+        "vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|config-actuation|status|consume|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
     ));
     assert!(stdout.contains("vida taskflow status --summary --json"));
     assert!(stdout.contains("vida taskflow scheduler dispatch --json"));
