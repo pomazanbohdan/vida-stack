@@ -379,6 +379,7 @@ fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -
 fn next_lawful_operator_action_for_dispatch_resolution(
     status: &RunGraphStatus,
     receipt: &RunGraphDispatchReceipt,
+    terminal_consume_continue_run_id: Option<&str>,
 ) -> Option<String> {
     let _reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
     if let Some(receipt_id) = receipt
@@ -394,6 +395,12 @@ fn next_lawful_operator_action_for_dispatch_resolution(
         ));
     }
     if receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some() {
+        if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
+            return Some(format!(
+                "vida taskflow continuation bind {} --task-id <task-id> --json",
+                status.run_id
+            ));
+        }
         return (status.status != "completed").then(|| {
             format!(
                 "vida taskflow consume continue --run-id {} --json",
@@ -457,13 +464,24 @@ fn blocked_external_dispatch_artifact_mismatched_as_internal_activation(
 fn next_lawful_operator_action_for_projection(
     status: &RunGraphStatus,
     receipt: Option<&RunGraphDispatchReceipt>,
+    terminal_consume_continue_run_id: Option<&str>,
 ) -> Option<String> {
-    if let Some(command) =
-        receipt.and_then(|value| next_lawful_operator_action_for_dispatch_resolution(status, value))
-    {
+    if let Some(command) = receipt.and_then(|value| {
+        next_lawful_operator_action_for_dispatch_resolution(
+            status,
+            value,
+            terminal_consume_continue_run_id,
+        )
+    }) {
         return Some(command);
     }
     if receipt.is_some_and(blocked_external_dispatch_artifact_mismatched_as_internal_activation) {
+        if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
+            return Some(format!(
+                "vida taskflow continuation bind {} --task-id <task-id> --json",
+                status.run_id
+            ));
+        }
         return Some(format!(
             "vida taskflow consume continue --run-id {} --json",
             status.run_id
@@ -481,6 +499,9 @@ fn recommended_surface_for_command(command: &str) -> String {
     }
     if command.starts_with("vida taskflow run-graph status") {
         return "vida taskflow run-graph status".to_string();
+    }
+    if command.starts_with("vida taskflow continuation bind") {
+        return "vida taskflow continuation bind".to_string();
     }
     if command.starts_with("vida lane show") {
         return "vida lane show".to_string();
@@ -508,6 +529,9 @@ fn recovery_next_action_reason(
     }
     if command.starts_with("vida lane supersede") {
         return "activate the recorded exception-path receipt before treating local recovery as lawful".to_string();
+    }
+    if command.starts_with("vida taskflow continuation bind") {
+        return "the latest consume-continue snapshot already completed without a next action, so bind the next bounded unit explicitly instead of repeating continuation".to_string();
     }
     if command.starts_with("vida lane show") {
         return "inspect the lane envelope for the dispatch blocker, then record structured exception-takeover evidence and supersession before any local recovery work".to_string();
@@ -1034,6 +1058,7 @@ fn projection_truth_from_status_surface(
         next_lawful_operator_action: next_lawful_operator_action_for_projection(
             status,
             status_surface_receipt.as_ref(),
+            None,
         ),
         dispatch_receipt: None,
         continuation_binding: None,
@@ -1146,6 +1171,10 @@ pub(crate) async fn run_graph_projection_truth(
 ) -> Result<RunGraphProjectionTruth, StateStoreError> {
     let dispatch_receipt = store.run_graph_dispatch_receipt(&status.run_id).await?;
     let continuation_binding = store.run_graph_continuation_binding(&status.run_id).await?;
+    let terminal_consume_continue_run_id =
+        crate::latest_terminal_consume_continue_snapshot_run_id(store.root())
+            .ok()
+            .flatten();
     let stale_state_suspected = projection_stale_state_suspected(dispatch_receipt.as_ref());
     Ok(RunGraphProjectionTruth {
         projection_source: if dispatch_receipt.is_some() {
@@ -1168,6 +1197,7 @@ pub(crate) async fn run_graph_projection_truth(
         next_lawful_operator_action: next_lawful_operator_action_for_projection(
             status,
             dispatch_receipt.as_ref(),
+            terminal_consume_continue_run_id.as_deref(),
         ),
         dispatch_receipt,
         continuation_binding,
@@ -4574,7 +4604,7 @@ mod tests {
             recorded_at: "2026-04-26T00:00:00Z".to_string(),
         };
 
-        let command = next_lawful_operator_action_for_projection(&status, Some(&receipt));
+        let command = next_lawful_operator_action_for_projection(&status, Some(&receipt), None);
 
         assert!(command
             .as_deref()
@@ -4664,6 +4694,7 @@ mod tests {
                     recovery_ready: summary.recovery_ready,
                 },
                 Some(&receipt),
+                None,
             ),
             dispatch_receipt: Some(receipt),
             continuation_binding: None,
@@ -4760,7 +4791,7 @@ mod tests {
         };
 
         assert_eq!(
-            next_lawful_operator_action_for_projection(&status, Some(&receipt)).as_deref(),
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None).as_deref(),
             Some(
                 "vida lane supersede run-recorded-exception --receipt-id exception-receipt-1 --json"
             )
@@ -4819,8 +4850,70 @@ mod tests {
         };
 
         assert_eq!(
-            next_lawful_operator_action_for_projection(&status, Some(&receipt)).as_deref(),
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None).as_deref(),
             Some("vida taskflow consume continue --run-id run-active-exception --json")
+        );
+    }
+
+    #[test]
+    fn recovery_status_action_for_terminal_consumed_exception_requires_bind() {
+        let status = RunGraphStatus {
+            run_id: "run-active-exception".to_string(),
+            task_id: "task-active-exception".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "analysis_lane".to_string(),
+            lifecycle_stage: "analysis_blocked".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("exception-receipt-1".to_string()),
+            exception_path_receipt_id: Some("exception-receipt-1".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_terminal_write_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-26T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            next_lawful_operator_action_for_projection(
+                &status,
+                Some(&receipt),
+                Some("run-active-exception")
+            )
+            .as_deref(),
+            Some("vida taskflow continuation bind run-active-exception --task-id <task-id> --json")
         );
     }
 
@@ -7075,6 +7168,7 @@ mod tests {
                     recovery_ready: false,
                 },
                 Some(&receipt),
+                None,
             )
             .as_deref(),
             Some("vida taskflow consume continue --run-id run-projection-blocked-mismatch --json")
