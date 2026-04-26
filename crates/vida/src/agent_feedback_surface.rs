@@ -170,6 +170,7 @@ fn feedback_success_markers(normalized_reason: &str) -> Vec<String> {
             "test passed".to_string(),
             "proof commands passed".to_string(),
             "proof passed".to_string(),
+            "proofs passed".to_string(),
             "green".to_string(),
         ],
     )
@@ -215,6 +216,11 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "failed keywords",
             "failure keyword",
             "failed keyword",
+            "failed subprocess status",
+            "failed subprocess status/stdout/stderr",
+            "failed status/stdout/stderr",
+            "failed subprocess diagnostics",
+            "failed command diagnostics",
             "records failure",
             "recorded failure",
             "recording failure",
@@ -1036,6 +1042,28 @@ mod tests {
         assert!(ignored
             .iter()
             .any(|phrase| phrase == "rejected wording coverage"));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_failed_subprocess_diagnostic_wording() {
+        let reason = "Migrated task_smoke VIDA command construction to vida-test-support bounded_binary_command; improved helper diagnostics for failed subprocess status/stdout/stderr; protocol_binding_check_statuses_are_canonical and protocol_binding_check_lock_retry_preserves_blocker_codes tests passed.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert_eq!(inference["success_markers"], serde_json::json!([]));
+        let ignored = inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render");
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "failed subprocess status"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "failed subprocess status/stdout/stderr"));
     }
 
     #[test]
