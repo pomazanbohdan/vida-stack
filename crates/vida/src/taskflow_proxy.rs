@@ -129,6 +129,8 @@ pub(crate) struct TaskflowSchedulerDispatchReceiptPreview {
     activation_blocker_codes: Vec<String>,
     worker_execution_evidence_status: String,
     worker_completion_claimed: bool,
+    packet_backed_execution_supported: bool,
+    packet_backed_execution_status: String,
     preview_only_reason: Option<String>,
     execution_blocker_codes: Vec<String>,
     selected_task_ids: Vec<String>,
@@ -153,6 +155,8 @@ pub(crate) struct TaskflowSchedulerDispatchPlan {
     pub(crate) activation_blocker_codes: Vec<String>,
     pub(crate) worker_execution_evidence_status: String,
     pub(crate) worker_completion_claimed: bool,
+    pub(crate) packet_backed_execution_supported: bool,
+    pub(crate) packet_backed_execution_status: String,
     pub(crate) configured_max_parallel_agents: u64,
     pub(crate) requested_parallel_limit: Option<u64>,
     pub(crate) scope_task_id: Option<String>,
@@ -607,6 +611,16 @@ async fn persist_scheduler_execute_receipt(
         return Ok(());
     }
 
+    plan.packet_backed_execution_supported = false;
+    plan.packet_backed_execution_status = "blocked_lineage_preconditions_not_verified".to_string();
+    plan.dispatch_receipt.packet_backed_execution_supported = false;
+    plan.dispatch_receipt.packet_backed_execution_status =
+        plan.packet_backed_execution_status.clone();
+    plan.next_actions.push(
+        "Packet-backed scheduler execute is blocked until run-graph lineage, continuation binding, and task/run mapping preconditions are verified; current execute path records scheduler reservations and activation evidence only."
+            .to_string(),
+    );
+
     let receipt_id = scheduler_dispatch_receipt_id();
     let receipt_root = state_dir.join("scheduler-dispatch").join("receipts");
     std::fs::create_dir_all(&receipt_root).map_err(|error| {
@@ -843,6 +857,8 @@ async fn persist_scheduler_execute_receipt(
         "activation_blocker_codes": plan.activation_blocker_codes,
         "worker_execution_evidence_status": plan.worker_execution_evidence_status,
         "worker_completion_claimed": plan.worker_completion_claimed,
+        "packet_backed_execution_supported": plan.packet_backed_execution_supported,
+        "packet_backed_execution_status": plan.packet_backed_execution_status,
         "selected_task_ids": plan.selected_task_ids,
         "reservation_ids": plan.dispatch_receipt.reservation_ids,
         "blocker_codes": plan.blocker_codes,
@@ -1098,6 +1114,12 @@ fn build_taskflow_scheduler_dispatch_plan(
         activation_blocker_codes: Vec::new(),
         worker_execution_evidence_status: "not_received".to_string(),
         worker_completion_claimed: false,
+        packet_backed_execution_supported: false,
+        packet_backed_execution_status: if execute_requested {
+            "blocked_lineage_preconditions_not_verified".to_string()
+        } else {
+            "preview_not_requested".to_string()
+        },
         preview_only_reason,
         execution_blocker_codes: Vec::new(),
         selected_task_ids: selected_task_ids.clone(),
@@ -1130,6 +1152,12 @@ fn build_taskflow_scheduler_dispatch_plan(
         activation_blocker_codes: Vec::new(),
         worker_execution_evidence_status: "not_received".to_string(),
         worker_completion_claimed: false,
+        packet_backed_execution_supported: false,
+        packet_backed_execution_status: if execute_requested {
+            "blocked_lineage_preconditions_not_verified".to_string()
+        } else {
+            "preview_not_requested".to_string()
+        },
         configured_max_parallel_agents,
         requested_parallel_limit,
         scope_task_id: scope_task_id.map(str::to_string),

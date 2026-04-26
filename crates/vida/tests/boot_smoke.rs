@@ -2018,8 +2018,21 @@ fn taskflow_scheduler_dispatch_execute_smoke_persists_receipt_and_reservation_ar
     assert_eq!(execute["execution_attempted"], true);
     assert_eq!(execute["worker_execution_evidence_status"], "not_received");
     assert_eq!(execute["worker_completion_claimed"], false);
+    assert_eq!(execute["packet_backed_execution_supported"], false);
+    assert_eq!(
+        execute["packet_backed_execution_status"],
+        "blocked_lineage_preconditions_not_verified"
+    );
     assert_eq!(execute["dispatch_receipt"]["receipt_status"], "persisted");
     assert_eq!(execute["dispatch_receipt"]["receipt_persisted"], true);
+    assert_eq!(
+        execute["dispatch_receipt"]["packet_backed_execution_supported"],
+        false
+    );
+    assert_eq!(
+        execute["dispatch_receipt"]["packet_backed_execution_status"],
+        "blocked_lineage_preconditions_not_verified"
+    );
     let receipt_path = execute["dispatch_receipt"]["receipt_path"]
         .as_str()
         .expect("receipt path should render");
