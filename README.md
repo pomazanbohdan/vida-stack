@@ -104,6 +104,8 @@ The current VIDA direction is grounded in orchestrator-led multi-agent product e
 
 ### One-line install
 
+Linux/macOS:
+
 ```bash
 mkdir myproject
 cd myproject
@@ -111,18 +113,28 @@ curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/insta
 vida init
 ```
 
+Windows PowerShell:
+
+```powershell
+mkdir myproject
+cd myproject
+irm https://github.com/pomazanbohdan/vida-stack/releases/latest/download/vida-install.ps1 -OutFile vida-install.ps1
+pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install
+vida init
+```
+
 ### What the installer does
 
 - 📦 downloads the tagged release archive
 - 🔐 verifies release checksums
-- 🗂️ installs versioned sources under `~/.local/share/vida-stack/releases/<tag>`
-- 🔁 updates `~/.local/share/vida-stack/current`
+- 🗂️ installs versioned sources under `~/.local/share/vida-stack/releases/<tag>` on Unix-like systems or `%LOCALAPPDATA%\vida-stack\releases\<tag>` on Windows
+- 🔁 updates the active `current` release pointer
 - 🧩 ships host CLI runtime templates (`.codex/`, `.qwen/`, `.kilo/`, `.opencode/`) and materializes the selected one through `vida project-activator`
 - 📍 deploys a clean `AGENTS.sidecar.md` scaffold for the external project owner
 - 🧱 scaffolds `vida.config.yaml` from the packaged template when the installed release root does not already have one
-- 🧰 writes launchers into `~/.local/bin`:
+- 🧰 writes launchers into `~/.local/bin` on Unix-like systems or `%LOCALAPPDATA%\vida-stack\bin` on Windows:
   - `vida`
-- 🐚 wires `VIDA_HOME`, `VIDA_ROOT`, and `PATH` into `bash` / `zsh`
+- 🐚 wires `VIDA_HOME`, `VIDA_ROOT`, and `PATH` into `bash` / `zsh` or the Windows user `PATH`
 
 ### Bootstrap the current project folder
 

@@ -99,6 +99,7 @@ jobs:
           assert any("/.codex/config.toml" in name for name in names), names[:20]
           assert any("/vida/root-map.md" in name for name in names), names[:20]
           assert any("/install/assets/vida.config.yaml.template" in name for name in names), names[:20]
+          assert any("/install/assets/feature-design-document.template.md" in name for name in names), names[:20]
 
           forbidden_roots = ("crates", "scripts", "tests", "target")
           leaked = []
@@ -116,6 +117,8 @@ jobs:
           PY
           bash dist/vida-install.sh help >/tmp/vida-install-help.txt
           test -s /tmp/vida-install-help.txt
+          pwsh -NoProfile -ExecutionPolicy Bypass -File dist/vida-install.ps1 help > /tmp/vida-install-ps-help.txt
+          test -s /tmp/vida-install-ps-help.txt
 
       - name: Run local installer smoke
         shell: bash
@@ -187,3 +190,71 @@ jobs:
           cargo run -p vida -- agent-init --role worker --state-dir "$STATE_DIR" --json >/tmp/ci-agent-init.json
           cargo run -p vida -- project-activator --json >/tmp/ci-project-activator.json
           cargo run -p vida -- protocol view bootstrap/router >/tmp/ci-protocol-router.txt
+
+  validate-windows-installer:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: vida-ci-windows-installer
+          cache-on-failure: false
+
+      - name: Build Windows release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          export VIDA_RELEASE_SUFFIX=windows-x86_64
+          bash scripts/build-release.sh
+
+      - name: Run Windows installer smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tmpRoot = Join-Path $env:RUNNER_TEMP "vida-installer-smoke"
+          $installRoot = Join-Path $tmpRoot "install-root"
+          $binDir = Join-Path $tmpRoot "bin"
+          $projectDir = Join-Path $tmpRoot "project"
+          New-Item -ItemType Directory -Force -Path $binDir, $projectDir | Out-Null
+          $archive = Get-ChildItem -LiteralPath dist -Filter "vida-stack-v*-windows-x86_64.zip" | Select-Object -First 1
+          if (-not $archive) { throw "Windows release zip was not generated" }
+
+          pwsh -NoProfile -ExecutionPolicy Bypass -File dist/vida-install.ps1 install -Archive $archive.FullName -Root $installRoot -BinDir $binDir -Force
+          if ($LASTEXITCODE -ne 0) { throw "Windows installer install failed" }
+          pwsh -NoProfile -ExecutionPolicy Bypass -File dist/vida-install.ps1 doctor -Root $installRoot -BinDir $binDir
+          if ($LASTEXITCODE -ne 0) { throw "Windows installer doctor failed" }
+
+          $env:VIDA_HOME = $installRoot
+          $env:VIDA_ROOT = Join-Path $installRoot "current"
+          $env:PATH = "$binDir;$env:PATH"
+          vida root | Out-File -FilePath (Join-Path $tmpRoot "vida-root.txt") -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "vida root failed" }
+          vida --help | Out-File -FilePath (Join-Path $tmpRoot "vida-help.txt") -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "vida help failed" }
+          taskflow help | Out-File -FilePath (Join-Path $tmpRoot "taskflow-help.txt") -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "taskflow help failed" }
+          docflow --help | Out-File -FilePath (Join-Path $tmpRoot "docflow-help.txt") -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "docflow help failed" }
+
+          Push-Location $projectDir
+          try {
+            vida init | Out-File -FilePath (Join-Path $tmpRoot "vida-init.txt") -Encoding utf8
+            if ($LASTEXITCODE -ne 0) { throw "vida init failed" }
+          } finally {
+            Pop-Location
+          }
+
+          Select-String -LiteralPath (Join-Path $tmpRoot "taskflow-help.txt") -Pattern "TaskFlow CLI"
+          Select-String -LiteralPath (Join-Path $tmpRoot "docflow-help.txt") -Pattern "Standalone DocFlow CLI"
+          Select-String -LiteralPath (Join-Path $tmpRoot "vida-root.txt") -Pattern ([regex]::Escape((Join-Path $installRoot "current")))
+          if (-not (Test-Path -LiteralPath (Join-Path $projectDir "AGENTS.md"))) { throw "AGENTS.md was not bootstrapped" }
+          if (-not (Test-Path -LiteralPath (Join-Path $projectDir "AGENTS.sidecar.md"))) { throw "AGENTS.sidecar.md was not bootstrapped" }
+          if (-not (Test-Path -LiteralPath (Join-Path $projectDir "vida.config.yaml"))) { throw "vida.config.yaml was not bootstrapped" }
+          if (-not (Test-Path -LiteralPath (Join-Path $projectDir "docs/product/spec/templates/feature-design-document.template.md"))) { throw "feature design template was not bootstrapped" }

@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-}"
 RELEASE_SUFFIX="${VIDA_RELEASE_SUFFIX:-}"
+WINDOWS_RELEASE="no"
 
 fail() {
   printf '[release-build] ERROR: %s\n' "$*" >&2
@@ -53,14 +54,24 @@ ARCHIVE_BASE="vida-stack-${VERSION}"
 if [[ -n "$RELEASE_SUFFIX" ]]; then
   ARCHIVE_BASE="${ARCHIVE_BASE}-${RELEASE_SUFFIX}"
 fi
+if [[ "$RELEASE_SUFFIX" == "windows-x86_64" ]]; then
+  WINDOWS_RELEASE="yes"
+fi
 DIST_DIR="$ROOT_DIR/dist"
 PACKAGE_ROOT="$DIST_DIR/package"
 STAGE_DIR="$PACKAGE_ROOT/$ARCHIVE_BASE"
-VIDA_BIN="$STAGE_DIR/bin/vida"
-TASKFLOW_BIN="$STAGE_DIR/bin/taskflow"
-DOCFLOW_BIN="$STAGE_DIR/bin/docflow"
+if [[ "$WINDOWS_RELEASE" == "yes" ]]; then
+  VIDA_BIN="$STAGE_DIR/bin/vida.exe"
+  TASKFLOW_BIN="$STAGE_DIR/bin/taskflow.exe"
+  DOCFLOW_BIN="$STAGE_DIR/bin/docflow.exe"
+else
+  VIDA_BIN="$STAGE_DIR/bin/vida"
+  TASKFLOW_BIN="$STAGE_DIR/bin/taskflow"
+  DOCFLOW_BIN="$STAGE_DIR/bin/docflow"
+fi
 INSTALL_ASSETS_DIR="$STAGE_DIR/install/assets"
 INSTALLER_ASSET="$DIST_DIR/vida-install.sh"
+WINDOWS_INSTALLER_ASSET="$DIST_DIR/vida-install.ps1"
 MANIFEST_OUT="$DIST_DIR/${ARCHIVE_BASE}.manifest.json"
 RELEASE_NOTES_SRC="$ROOT_DIR/install/release-notes-${VERSION}.md"
 RELEASE_NOTES_OUT="$DIST_DIR/release-notes.md"
@@ -101,13 +112,15 @@ copy_runtime_binary vida "$VIDA_BIN"
 copy_runtime_binary taskflow "$TASKFLOW_BIN"
 copy_runtime_binary docflow "$DOCFLOW_BIN"
 cp "$ROOT_DIR/docs/framework/templates/vida.config.yaml.template" "$INSTALL_ASSETS_DIR/vida.config.yaml.template"
+cp "$ROOT_DIR/docs/product/spec/templates/feature-design-document.template.md" "$INSTALL_ASSETS_DIR/feature-design-document.template.md"
 
 PY_MANIFEST_OUT="$(normalize_path_for_python "$MANIFEST_OUT")"
 PY_PACKAGE_ROOT="$(normalize_path_for_python "$PACKAGE_ROOT")"
 PY_DIST_DIR="$(normalize_path_for_python "$DIST_DIR")"
 PY_INSTALLER_ASSET="$(normalize_path_for_python "$INSTALLER_ASSET")"
+PY_WINDOWS_INSTALLER_ASSET="$(normalize_path_for_python "$WINDOWS_INSTALLER_ASSET")"
 
-MANIFEST_OUT="$PY_MANIFEST_OUT" ARCHIVE_BASE="$ARCHIVE_BASE" VERSION="$VERSION" python3 - <<'PY'
+MANIFEST_OUT="$PY_MANIFEST_OUT" ARCHIVE_BASE="$ARCHIVE_BASE" VERSION="$VERSION" WINDOWS_RELEASE="$WINDOWS_RELEASE" python3 - <<'PY'
 import json
 import os
 from datetime import datetime, timezone
@@ -116,6 +129,8 @@ from pathlib import Path
 manifest_path = Path(os.environ["MANIFEST_OUT"])
 archive_base = os.environ["ARCHIVE_BASE"]
 version = os.environ["VERSION"]
+windows_release = os.environ["WINDOWS_RELEASE"] == "yes"
+binary_roots = ["bin/vida.exe", "bin/taskflow.exe", "bin/docflow.exe"] if windows_release else ["bin/vida", "bin/taskflow", "bin/docflow"]
 manifest = {
     "artifact_name": archive_base,
     "version": version,
@@ -128,9 +143,7 @@ manifest = {
         ".qwen/",
         ".kilo/",
         ".opencode/",
-        "bin/vida",
-        "bin/taskflow",
-        "bin/docflow",
+        *binary_roots,
         "install/assets/",
         "vida/",
     ],
@@ -141,11 +154,7 @@ manifest = {
         "vida docflow",
         "vida taskflow",
     ],
-    "bundled_binaries": [
-        "bin/vida",
-        "bin/taskflow",
-        "bin/docflow",
-    ],
+    "bundled_binaries": binary_roots,
     "installer_managed_runtimes": [
         "vida",
         "taskflow",
@@ -189,6 +198,7 @@ PY
 
 cp "$ROOT_DIR/install/install.sh" "$INSTALLER_ASSET"
 chmod +x "$INSTALLER_ASSET"
+cp "$ROOT_DIR/install/install.ps1" "$WINDOWS_INSTALLER_ASSET"
 
 if [[ -f "$RELEASE_NOTES_SRC" ]]; then
   cp "$RELEASE_NOTES_SRC" "$RELEASE_NOTES_OUT"
@@ -200,7 +210,7 @@ else
   ' "$ROOT_DIR/README.md" > "$RELEASE_NOTES_OUT"
 fi
 
-DIST_DIR="$PY_DIST_DIR" ARCHIVE_BASE="$ARCHIVE_BASE" INSTALLER_ASSET="$PY_INSTALLER_ASSET" python3 - <<'PY'
+DIST_DIR="$PY_DIST_DIR" ARCHIVE_BASE="$ARCHIVE_BASE" INSTALLER_ASSET="$PY_INSTALLER_ASSET" WINDOWS_INSTALLER_ASSET="$PY_WINDOWS_INSTALLER_ASSET" python3 - <<'PY'
 import hashlib
 import os
 from pathlib import Path
@@ -208,10 +218,12 @@ from pathlib import Path
 dist_dir = Path(os.environ["DIST_DIR"])
 archive_base = os.environ["ARCHIVE_BASE"]
 installer_asset = os.environ["INSTALLER_ASSET"]
+windows_installer_asset = os.environ["WINDOWS_INSTALLER_ASSET"]
 files = [
     dist_dir / f"{archive_base}.tar.gz",
     dist_dir / f"{archive_base}.zip",
     dist_dir / Path(installer_asset).name,
+    dist_dir / Path(windows_installer_asset).name,
 ]
 out = dist_dir / f"{archive_base}.sha256"
 
@@ -227,4 +239,5 @@ printf '[release-build] Assets:\n'
 printf '  - %s\n' "$DIST_DIR/${ARCHIVE_BASE}.tar.gz"
 printf '  - %s\n' "$DIST_DIR/${ARCHIVE_BASE}.zip"
 printf '  - %s\n' "$INSTALLER_ASSET"
+printf '  - %s\n' "$WINDOWS_INSTALLER_ASSET"
 printf '  - %s\n' "$DIST_DIR/${ARCHIVE_BASE}.sha256"

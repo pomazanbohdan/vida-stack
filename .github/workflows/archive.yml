@@ -89,6 +89,7 @@ jobs:
           cp dist/vida-stack-"${RELEASE_TAG}"*.manifest.json _release_out/
           if [[ -z "${{ matrix.suffix }}" ]]; then
             cp dist/vida-install.sh _release_out/
+            cp dist/vida-install.ps1 _release_out/
           fi
 
       - name: Upload packaged assets
@@ -149,6 +150,7 @@ jobs:
             _release_assets/**/vida-stack-"${RELEASE_TAG}"*.sha256
             _release_assets/**/vida-stack-"${RELEASE_TAG}"*.manifest.json
             _release_assets/**/vida-install.sh
+            _release_assets/**/vida-install.ps1
           )
 
           if [[ ${#assets[@]} -eq 0 ]]; then

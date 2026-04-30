@@ -911,8 +911,15 @@ fn materialize_project_docs_scaffold(project_root: &Path) -> Result<(), String> 
     let project_id = super::project_activator_surface::inferred_project_id_candidate(project_root);
     let project_title = super::inferred_project_title(&project_id, None);
     let source_root = resolve_init_bootstrap_source_root();
-    let feature_template_source =
+    let default_feature_template_source =
         source_root.join("docs/product/spec/templates/feature-design-document.template.md");
+    let packaged_feature_template_source =
+        source_root.join("install/assets/feature-design-document.template.md");
+    let feature_template_source = if default_feature_template_source.is_file() {
+        default_feature_template_source
+    } else {
+        packaged_feature_template_source
+    };
     let feature_template = std::fs::read_to_string(&feature_template_source).map_err(|error| {
         format!(
             "Failed to read framework feature-design template source {}: {error}",
