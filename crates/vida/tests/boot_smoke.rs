@@ -1,4 +1,5 @@
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -167,18 +168,26 @@ fn donor_docflow_script_name() -> String {
 
 fn write_executable_script(path: &str, body: &str) {
     fs::write(path, body).expect("script should be written");
-    let mut perms = fs::metadata(path).expect("script metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("script perms should be updated");
+    set_executable_permissions(path, "script");
 }
 
 fn copy_executable(from: &str, to: &str) {
     fs::copy(from, to).expect("binary should be copied");
-    let mut perms = fs::metadata(to)
-        .expect("copied binary metadata")
+    set_executable_permissions(to, "copied binary");
+}
+
+#[cfg(unix)]
+fn set_executable_permissions(path: &str, label: &str) {
+    let mut perms = fs::metadata(path)
+        .unwrap_or_else(|_| panic!("{label} metadata"))
         .permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(to, perms).expect("copied binary perms should be updated");
+    fs::set_permissions(path, perms).unwrap_or_else(|_| panic!("{label} perms should be updated"));
+}
+
+#[cfg(not(unix))]
+fn set_executable_permissions(path: &str, label: &str) {
+    let _ = (path, label);
 }
 
 fn task_rows_from_payload<'a>(

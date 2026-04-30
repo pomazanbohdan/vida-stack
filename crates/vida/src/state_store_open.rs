@@ -1,6 +1,6 @@
 use super::*;
+use fs2::FileExt;
 use std::fs::OpenOptions;
-use std::os::fd::AsRawFd;
 
 const AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS: u64 = 25;
 const AUTHORITATIVE_DATASTORE_LOCK_MAX_WAIT_MS: u64 = 30_000;
@@ -25,23 +25,22 @@ impl AuthoritativeOpenGuard {
             .write(true)
             .open(&guard_path)?;
         for attempt in 0..AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT {
-            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-            if result == 0 {
-                return Ok(Self { file });
+            match file.try_lock_exclusive() {
+                Ok(()) => {
+                    return Ok(Self { file });
+                }
+                Err(error) if Self::is_lock_contention_error(&error) => {
+                    if attempt + 1 < AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT {
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS,
+                        ))
+                        .await;
+                        continue;
+                    }
+                    return Err(StateStoreError::Io(error));
+                }
+                Err(error) => return Err(StateStoreError::Io(error)),
             }
-            let error = std::io::Error::last_os_error();
-            let would_block = matches!(
-                error.raw_os_error(),
-                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
-            );
-            if would_block && attempt + 1 < AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT {
-                tokio::time::sleep(std::time::Duration::from_millis(
-                    AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS,
-                ))
-                .await;
-                continue;
-            }
-            return Err(StateStoreError::Io(error));
         }
 
         Err(StateStoreError::Io(std::io::Error::new(
@@ -49,11 +48,22 @@ impl AuthoritativeOpenGuard {
             "timed out while waiting for authoritative datastore access serialization guard",
         )))
     }
+
+    fn is_lock_contention_error(error: &std::io::Error) -> bool {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock
+                | std::io::ErrorKind::TimedOut
+                | std::io::ErrorKind::Interrupted
+        ) || error
+            .raw_os_error()
+            .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
+    }
 }
 
 impl Drop for AuthoritativeOpenGuard {
     fn drop(&mut self) {
-        let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        let _ = self.file.unlock();
     }
 }
 

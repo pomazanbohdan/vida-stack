@@ -168,13 +168,44 @@ This copies the current project bootstrap surfaces into the working directory:
 
 For local framework development, keep the system launcher on a release build and keep proofs/tests on the debug profile:
 
+Linux/macOS:
+
 ```bash
 cargo build -p vida --release
 install -m 755 target/release/vida ~/.local/bin/vida
 cargo test -p vida -- --nocapture
 ```
 
-This keeps the operator-facing `vida` in `~/.local/bin` aligned with the release binary while preserving faster and more inspectable local proof runs on the debug build.
+Windows PowerShell:
+
+```powershell
+# Optional when the bundled Codex ripgrep is blocked by Windows app policy.
+bun add -g @vscode/ripgrep
+Copy-Item "$env:USERPROFILE\.bun\install\global\node_modules\@vscode\ripgrep\bin\rg.exe" "$env:USERPROFILE\.bun\bin\rg.exe" -Force
+rg --version
+
+# Compile and smoke the debug profile.
+cargo build -p vida
+cargo test -p vida --no-run
+cargo test -p vida --bin vida read_only_open -- --nocapture
+
+# Build and install the operator-facing launcher from the release profile.
+cargo build --release -p vida
+Copy-Item .\target\release\vida.exe "$env:USERPROFILE\.bun\bin\vida.exe" -Force
+vida orchestrator-init --json
+```
+
+This keeps the operator-facing `vida` in `~/.local/bin` on Unix-like systems or `~/.bun/bin` on Windows aligned with the release binary while preserving faster and more inspectable local proof runs on the debug build.
+
+On Windows, a full `cargo test` may be blocked by Application Control when Cargo tries to execute generated integration-test binaries under `target\debug\deps\*.exe`. Use `cargo test -p vida --no-run` for compile coverage and run targeted bin tests such as `cargo test -p vida --bin vida read_only_open -- --nocapture` unless the host policy allows those test executables.
+
+Fresh-state smoke after installing `vida.exe`:
+
+```powershell
+$state = Join-Path $env:TEMP "vida-fresh-state-proof-$PID"
+vida boot --state-dir $state
+vida status --state-dir $state --summary --json
+```
 
 ### Project activation survey
 

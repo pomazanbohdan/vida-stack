@@ -1,0 +1,65 @@
+# -----------------------------------
+# OS X
+# -----------------------------------
+
+# Directory files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnail files
+._*
+
+# Files that might appear on external disk
+.Spotlight-V100
+.Trashes
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# -----------------------------------
+# Files
+# -----------------------------------
+
+**/*.rs.bk
+*.db
+*.sw?
+*.gz
+
+# -----------------------------------
+# Folders
+# -----------------------------------
+
+/target/
+/lib/target/
+.idea/
+.vscode/
+/result
+/bin/
+/docker/
+/.direnv/
+
+# -----------------------------------
+# Specific
+# -----------------------------------
+
+surreal
+history.txt
+test_data/
+crud-bench/
+fuzz/
+
+
+# Added by cargo
+
+/target
+/.cursor
+
+/fuzz/artifacts/
+/fuzz/corpus/
+/fuzz/target/
+

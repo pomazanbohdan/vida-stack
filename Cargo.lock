@@ -4869,8 +4869,6 @@ dependencies = [
 [[package]]
 name = "surrealkv"
 version = "0.20.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6c1dd97851edc773c24afb282d6a17eb1bc798fafac53ea0d2951458854d472"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -5688,6 +5686,7 @@ dependencies = [
  "blake3",
  "clap",
  "docflow-cli",
+ "fs2",
  "libc",
  "serde",
  "serde_json",

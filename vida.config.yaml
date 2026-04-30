@@ -17,10 +17,10 @@ project_bootstrap:
   require_launch_confirmation: false
 
 language_policy:
-  user_communication: rust
-  reasoning: rust
-  documentation: rust
-  todo_protocol: rust
+  user_communication: uk
+  reasoning: en
+  documentation: en
+  todo_protocol: en
 
 host_environment:
   cli_system: codex

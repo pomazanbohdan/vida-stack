@@ -11,6 +11,7 @@ path = "src/main.rs"
 blake3 = "1.8.2"
 clap = { version = "4.5.38", features = ["derive", "env"] }
 docflow-cli = { path = "../docflow-cli" }
+fs2 = "0.4.3"
 libc = "0.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
