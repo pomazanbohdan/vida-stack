@@ -486,6 +486,24 @@ fn consume_bundle_check_next_actions(blockers: &[String]) -> Vec<String> {
     }
     if blockers
         .iter()
+        .any(|code| code.starts_with("missing_retrieval_trust_evidence_field:"))
+    {
+        next_actions.push(
+            "Run `vida taskflow protocol-binding sync --json`, then `vida taskflow consume bundle check --json` to materialize retrieval-trust source/citation/freshness/ACL evidence."
+                .to_string(),
+        );
+    }
+    if blockers
+        .iter()
+        .any(|code| code.starts_with("invalid_cache_key_input:"))
+    {
+        next_actions.push(
+            "Refresh the startup bundle projection with `vida orchestrator-init --json`, then rerun `vida taskflow consume bundle check --json`."
+                .to_string(),
+        );
+    }
+    if blockers
+        .iter()
         .any(|code| code == "protocol_binding_not_runtime_ready")
     {
         next_actions.push(
@@ -2468,6 +2486,19 @@ dev_team:
             actions,
             vec!["Resolve consume-bundle-check blockers before closure packaging.".to_string()]
         );
+    }
+
+    #[test]
+    fn consume_bundle_next_actions_include_retrieval_trust_remediation() {
+        let actions = consume_bundle_check_next_actions(&[
+            "missing_retrieval_trust_evidence_field:source".to_string(),
+        ]);
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("vida taskflow protocol-binding sync --json")));
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("vida taskflow consume bundle check --json")));
     }
 
     #[test]

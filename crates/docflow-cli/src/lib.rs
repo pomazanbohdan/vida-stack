@@ -47,6 +47,12 @@ pub enum Command {
     ActivationCheck(CheckArgs),
     ProtocolCoverageCheck(CheckArgs),
     FinalizeEdit(FinalizeEditArgs),
+    #[command(
+        about = "initialize missing canonical footer metadata on an existing markdown artifact",
+        long_about = "Initialize missing canonical footer metadata on an existing markdown artifact and append a changelog event.\n\nUse this for migrated legacy documents that already exist but predate the DocFlow footer contract.",
+        after_help = "Examples:\n  docflow repair-footer docs/process/example.md process/example process_doc \"initialize missing footer\"\n  docflow repair-footer docs/process/example.md --json\n  docflow finalize-edit docs/process/example.md \"record edit\" --init-missing-footer"
+    )]
+    RepairFooter(RepairFooterArgs),
     Proofcheck(ProofcheckArgs),
     Doctor(DoctorArgs),
     Relations(RelationsArgs),
@@ -183,6 +189,18 @@ pub struct FinalizeEditArgs {
     pub artifact_revision: String,
     #[arg(long = "set")]
     pub set_values: Vec<String>,
+    #[arg(
+        long = "init-missing-footer",
+        default_value_t = false,
+        help = "Initialize missing footer metadata before finalizing an existing legacy markdown file"
+    )]
+    pub init_missing_footer: bool,
+    #[arg(
+        long = "artifact-type",
+        default_value = "document",
+        help = "Artifact type to use only when --init-missing-footer has to create footer metadata"
+    )]
+    pub init_artifact_type: String,
     #[arg(long = "task-id", default_value = "")]
     pub task_id: String,
     #[arg(long, default_value = "manual")]
@@ -191,6 +209,35 @@ pub struct FinalizeEditArgs {
     pub scope: String,
     #[arg(long, default_value = "")]
     pub tags: String,
+}
+
+#[derive(Debug, Args)]
+pub struct RepairFooterArgs {
+    pub markdown_file: String,
+    #[arg(default_value = "")]
+    pub artifact_path: String,
+    #[arg(default_value = "document")]
+    pub artifact_type: String,
+    #[arg(default_value = "initialize missing footer metadata")]
+    pub change_note: String,
+    #[arg(long, default_value = "canonical")]
+    pub status: String,
+    #[arg(long = "artifact-version", default_value_t = 1)]
+    pub artifact_version: u64,
+    #[arg(long = "artifact-revision", default_value = "")]
+    pub artifact_revision: String,
+    #[arg(long = "schema-version", default_value_t = 1)]
+    pub schema_version: u64,
+    #[arg(long = "task-id", default_value = "")]
+    pub task_id: String,
+    #[arg(long, default_value = "manual")]
+    pub actor: String,
+    #[arg(long, default_value = "docflow-footer-repair")]
+    pub scope: String,
+    #[arg(long, default_value = "docflow,footer,repair")]
+    pub tags: String,
+    #[arg(long = "json", default_value_t = false)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -693,6 +740,10 @@ pub fn run(cli: Cli) -> String {
         Command::FinalizeEdit(args) => match finalize_edit(args) {
             Ok(rendered) => rendered,
             Err(error) => format!("finalize-edit\n  error: {error}"),
+        },
+        Command::RepairFooter(args) => match repair_footer(args) {
+            Ok(rendered) => rendered,
+            Err(error) => format!("repair-footer\n  error: {error}"),
         },
         Command::Touch(args) => match touch(args) {
             Ok(rendered) => rendered,
@@ -2611,12 +2662,158 @@ fn resolve_readiness_output(args: &RegistryWriteArgs) -> String {
         .unwrap_or_else(|| resolve_rooted_output(&args.root, "_temp/docflow-readiness.jsonl"))
 }
 
+fn default_artifact_path_for_markdown(path: &std::path::Path) -> String {
+    let rel = normalize_path_for_repo(path);
+    match rel.as_str() {
+        "AGENTS.sidecar.md" => return "project/repository/agents.sidecar".to_string(),
+        "AGENTS.md" => return "project/repository/agents".to_string(),
+        "README.md" => return "project/readme".to_string(),
+        _ => {}
+    }
+    let without_extension = rel.strip_suffix(".md").unwrap_or(&rel);
+    without_extension
+        .strip_prefix("docs/")
+        .unwrap_or(without_extension)
+        .replace('\\', "/")
+}
+
+fn trimmed_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed.to_string())
+}
+
+fn default_artifact_revision() -> String {
+    now_iso().chars().take(10).collect::<String>()
+}
+
+struct MissingFooterInit<'a> {
+    artifact_path: Option<&'a str>,
+    artifact_type: &'a str,
+    artifact_version: u64,
+    artifact_revision: Option<&'a str>,
+    schema_version: u64,
+    status: &'a str,
+    event: &'a str,
+    reason: &'a str,
+    task_id: &'a str,
+    actor: &'a str,
+    scope: &'a str,
+    tags: &'a str,
+}
+
+fn initialize_missing_footer(
+    path: &std::path::Path,
+    options: &MissingFooterInit<'_>,
+) -> Result<(), String> {
+    let content = fs::read_to_string(path).map_err(|err| err.to_string())?;
+    let body = docflow_markdown::split_footer(&content)
+        .map(|artifact| artifact.body)
+        .unwrap_or(content);
+    let now = now_iso();
+    let source_path = normalize_path_for_repo(path);
+    let changelog_ref = format!(
+        "{}.changelog.jsonl",
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("artifact")
+    );
+    let artifact_path = options
+        .artifact_path
+        .and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then_some(trimmed.to_string())
+        })
+        .unwrap_or_else(|| default_artifact_path_for_markdown(path));
+    let artifact_revision = options
+        .artifact_revision
+        .and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then_some(trimmed.to_string())
+        })
+        .unwrap_or_else(default_artifact_revision);
+    let footer = vec![
+        ("artifact_path".to_string(), artifact_path),
+        (
+            "artifact_type".to_string(),
+            options.artifact_type.to_string(),
+        ),
+        (
+            "artifact_version".to_string(),
+            options.artifact_version.to_string(),
+        ),
+        ("artifact_revision".to_string(), artifact_revision),
+        (
+            "schema_version".to_string(),
+            options.schema_version.to_string(),
+        ),
+        ("status".to_string(), options.status.to_string()),
+        ("source_path".to_string(), source_path),
+        ("created_at".to_string(), now.clone()),
+        ("updated_at".to_string(), now),
+        ("changelog_ref".to_string(), changelog_ref),
+    ];
+    write_markdown_with_footer(path, body, &footer)?;
+    append_changelog_event(
+        path,
+        &footer,
+        options.event,
+        options.reason,
+        options.task_id,
+        options.actor,
+        options.scope,
+        options.tags,
+        &["footer_initialized".to_string()],
+        &BTreeMap::new(),
+    )
+}
+
+fn load_markdown_with_footer_or_initialize(
+    path: &std::path::Path,
+    initialize: bool,
+    options: &MissingFooterInit<'_>,
+) -> Result<LoadedMarkdownWithFooter, String> {
+    match load_markdown_with_footer(path) {
+        Ok(loaded) => Ok(loaded),
+        Err(error) if initialize && error.starts_with("missing footer:") => {
+            initialize_missing_footer(path, options)?;
+            load_markdown_with_footer(path)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn finalize_edit(args: FinalizeEditArgs) -> Result<String, String> {
     let (markdown_files, change_note) = split_finalize_args(&args.args)?;
     let mut changed_files = Vec::new();
     for raw_path in markdown_files {
         let path = resolve_runtime_path(raw_path);
-        let loaded = load_markdown_with_footer(&path)?;
+        let init_options = MissingFooterInit {
+            artifact_path: None,
+            artifact_type: &args.init_artifact_type,
+            artifact_version: args.artifact_version.parse::<u64>().unwrap_or(1),
+            artifact_revision: if args.artifact_revision.trim().is_empty() {
+                None
+            } else {
+                Some(args.artifact_revision.as_str())
+            },
+            schema_version: 1,
+            status: if args.status.trim().is_empty() {
+                "canonical"
+            } else {
+                args.status.as_str()
+            },
+            event: "footer_metadata_initialized",
+            reason: change_note,
+            task_id: &args.task_id,
+            actor: &args.actor,
+            scope: &args.scope,
+            tags: &args.tags,
+        };
+        let loaded = load_markdown_with_footer_or_initialize(
+            &path,
+            args.init_missing_footer,
+            &init_options,
+        )?;
         let mut footer = loaded.footer;
         let applied_updates = apply_finalize_updates(
             &mut footer,
@@ -2648,6 +2845,70 @@ fn finalize_edit(args: FinalizeEditArgs) -> Result<String, String> {
             format!("  note: {change_note}"),
         ],
         &changed_files,
+    ))
+}
+
+fn repair_footer(args: RepairFooterArgs) -> Result<String, String> {
+    let path = resolve_runtime_path(&args.markdown_file);
+    if !path.exists() {
+        return Err(format!("markdown file not found: {}", path.display()));
+    }
+    let artifact_path = trimmed_string(args.artifact_path.as_str());
+    let existing = load_markdown_with_footer(&path);
+    let repaired = match existing {
+        Ok(_) => false,
+        Err(error) if error.starts_with("missing footer:") => {
+            let options = MissingFooterInit {
+                artifact_path: artifact_path.as_deref(),
+                artifact_type: &args.artifact_type,
+                artifact_version: args.artifact_version,
+                artifact_revision: if args.artifact_revision.trim().is_empty() {
+                    None
+                } else {
+                    Some(args.artifact_revision.as_str())
+                },
+                schema_version: args.schema_version,
+                status: &args.status,
+                event: "footer_metadata_initialized",
+                reason: &args.change_note,
+                task_id: &args.task_id,
+                actor: &args.actor,
+                scope: &args.scope,
+                tags: &args.tags,
+            };
+            initialize_missing_footer(&path, &options)?;
+            true
+        }
+        Err(error) => return Err(error),
+    };
+    let loaded = load_markdown_with_footer(&path)?;
+    if args.json {
+        return serde_json::to_string(&serde_json::json!({
+            "command": "repair-footer",
+            "status": if repaired { "repaired" } else { "already_present" },
+            "file": normalize_path_for_repo(&path),
+            "artifact_path": footer_value(&loaded.footer, "artifact_path"),
+            "artifact_type": footer_value(&loaded.footer, "artifact_type"),
+            "changelog_ref": footer_value(&loaded.footer, "changelog_ref"),
+            "blocker_codes": [],
+            "next_actions": ["Run docflow check-file --path <file>"]
+        }))
+        .map_err(|error| error.to_string());
+    }
+    Ok(render_mutation_result(
+        "repair-footer",
+        &[
+            format!("  file: {}", normalize_path_for_repo(&path)),
+            format!(
+                "  status: {}",
+                if repaired {
+                    "repaired"
+                } else {
+                    "already_present"
+                }
+            ),
+        ],
+        std::slice::from_ref(&path),
     ))
 }
 

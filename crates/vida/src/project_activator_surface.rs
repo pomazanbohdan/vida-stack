@@ -109,8 +109,19 @@ fn set_yaml_bool_in_top_level_section(
 
 pub(crate) fn render_project_sidecar(project_title: &str) -> String {
     format!(
-        "# Project Docs Map\n\n\
-Repository: `{project_title}`\n\n\
+"# Project Agent Instructions\n\n\
+Purpose: provide the project-level agent instruction overlay for `{project_title}`.\n\n\
+## Authority Boundary\n\n\
+1. `AGENTS.md` owns VIDA framework bootstrap, lane routing, and hard runtime invariants.\n\
+2. This sidecar owns project-local agent instructions after framework bootstrap.\n\
+3. The project docs map below is mandatory, but it is one section of the sidecar rather than the whole sidecar contract.\n\
+4. Project instructions here may define local commands, coding/testing/release rules, domain constraints, and project-agent conventions.\n\
+5. Project instructions here must not redefine framework owner law or bypass runtime write guards.\n\n\
+## Project Operating Rules\n\n\
+1. Follow the repository's local build, test, release, and documentation rules before closure.\n\
+2. Keep project-specific constraints in this sidecar or the project docs it points to, not in the generated framework bootstrap carrier.\n\
+3. During pending activation, prefer `vida project-activator` for activation repair and `vida docflow` for docs/readiness inspection.\n\n\
+## Project Docs Map\n\n\
 1. Current project root map:\n\
    - `{DEFAULT_PROJECT_ROOT_MAP}`\n\
 2. Project product index:\n\
@@ -129,10 +140,22 @@ Repository: `{project_title}`\n\n\
    - `{DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC}`\n\
 9. Project research index:\n\
    - `{DEFAULT_PROJECT_RESEARCH_README}`\n\n\
-Working rule:\n\
-1. Use this sidecar as the project docs map after framework bootstrap.\n\
+## Working Rule\n\n\
+1. Read this sidecar immediately after `AGENTS.md` and the bounded VIDA init surface.\n\
 2. For bounded feature/change work that asks for research, specification, planning, and implementation, start with the local feature-design template and the documentation tooling path before code execution.\n\
-3. While project activation is pending, prefer `vida project-activator` for activation mutations and `vida docflow` for documentation/readiness inspection.\n"
+3. Use the docs map section for project-document discovery, and use the rest of this sidecar for project-local agent behavior.\n\
+4. Keep project-local agent/team conventions here or in project docs; keep framework lane law in `AGENTS.md` and VIDA protocol surfaces.\n\n\
+-----\n\
+artifact_path: project/repository/agents.sidecar\n\
+artifact_type: bootstrap_doc\n\
+artifact_version: '1'\n\
+artifact_revision: '2026-05-01'\n\
+schema_version: '1'\n\
+status: scaffold\n\
+source_path: AGENTS.sidecar.md\n\
+created_at: '2026-05-01T00:00:00Z'\n\
+updated_at: '2026-05-01T00:00:00Z'\n\
+changelog_ref: AGENTS.sidecar.changelog.jsonl\n"
     )
 }
 
@@ -616,7 +639,7 @@ pub(crate) fn file_contains_placeholder(path: &Path) -> bool {
     std::fs::read_to_string(path)
         .map(|contents| {
             let lowercase = contents.to_ascii_lowercase();
-            lowercase.contains("project documentation: docs/")
+            lowercase.trim() == "project documentation: docs/"
                 || contents.contains(PROJECT_ID_PLACEHOLDER)
                 || contents.contains(DOCS_ROOT_PLACEHOLDER)
                 || contents.contains(PROCESS_ROOT_PLACEHOLDER)
@@ -639,6 +662,10 @@ pub(crate) fn file_contains_placeholder(path: &Path) -> bool {
                 || contents.contains("<project-documentation-law-path>")
                 || contents.contains("<documentation-tooling-map-path>")
                 || contents.contains("<project-extension-map-path>")
+                || contents.contains("<build-command>")
+                || contents.contains("<test-command>")
+                || contents.contains("<release-or-verification-command>")
+                || contents.contains("<project-constraints>")
         })
         .unwrap_or(false)
 }
@@ -663,6 +690,12 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     let process_readme = project_root.join("docs/process/README.md");
     let codex_agent_guide = project_root.join(DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC);
     let documentation_tooling_map = project_root.join(DEFAULT_PROJECT_DOC_TOOLING_DOC);
+    let startup_bundle = project_root.join(DEFAULT_PROJECT_ORCHESTRATOR_STARTUP_BUNDLE);
+    let packet_lane_capsule = project_root.join(DEFAULT_PROJECT_PACKET_AND_LANE_RUNTIME_CAPSULE);
+    let start_readiness_capsule =
+        project_root.join(DEFAULT_PROJECT_START_READINESS_RUNTIME_CAPSULE);
+    let packet_rendering_capsule =
+        project_root.join(DEFAULT_PROJECT_PACKET_RENDERING_RUNTIME_CAPSULE);
     let runtime_agent_extensions = runtime_agent_extensions_root(project_root);
     let runtime_agent_extensions_readme = runtime_agent_extensions.join("README.md");
     let runtime_agent_extension_roles = runtime_agent_extensions.join("roles.yaml");
@@ -703,7 +736,11 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
         || !feature_design_template.is_file()
         || !process_readme.is_file()
         || !codex_agent_guide.is_file()
-        || !documentation_tooling_map.is_file();
+        || !documentation_tooling_map.is_file()
+        || !startup_bundle.is_file()
+        || !packet_lane_capsule.is_file()
+        || !start_readiness_capsule.is_file()
+        || !packet_rendering_capsule.is_file();
 
     let project_overlay = if vida_config.is_file() {
         read_yaml_file_checked(&vida_config).ok()
@@ -843,6 +880,10 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
             "host_agent_configuration_guide": codex_agent_guide.is_file(),
             "codex_agent_configuration_guide": codex_agent_guide.is_file(),
             "documentation_tooling_map": documentation_tooling_map.is_file(),
+            "project_orchestrator_startup_bundle": startup_bundle.is_file(),
+            "project_packet_and_lane_runtime_capsule": packet_lane_capsule.is_file(),
+            "project_start_readiness_runtime_capsule": start_readiness_capsule.is_file(),
+            "project_packet_rendering_runtime_capsule": packet_rendering_capsule.is_file(),
             "sidecar_has_placeholders": sidecar_has_placeholders,
             "config_has_placeholders": config_has_placeholders,
         },
@@ -1054,7 +1095,8 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
     let activation_pending = pre_activation_view["activation_pending"]
         .as_bool()
         .unwrap_or(true);
-    let activation_mutation_requested = args.host_cli_system.is_some()
+    let activation_mutation_requested = args.repair
+        || args.host_cli_system.is_some()
         || args.project_id.is_some()
         || args.project_name.is_some()
         || args.language.is_some()
@@ -1085,7 +1127,7 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
     } else {
         None
     };
-    if activation_pending && activation_mutation_requested {
+    if activation_pending && activation_mutation_requested && !args.repair {
         let missing_inputs = missing_required_activation_inputs(&pre_activation_view, &args);
         if !missing_inputs.is_empty() {
             let missing_flags = pre_activation_view["interview"]["required_inputs"]
@@ -1118,8 +1160,18 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
     let mut host_cli_activated = None;
     let mut changed_files = Vec::new();
     let activation_answers = resolve_project_activation_answers(&project_root, &args);
+    let requested_host_cli_system = args.host_cli_system.clone().or_else(|| {
+        if !args.repair {
+            return None;
+        }
+        pre_activation_view["host_environment"]["selected_cli_system"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    });
 
-    if let Some(requested_host_cli_system) = args.host_cli_system.as_deref() {
+    if let Some(requested_host_cli_system) = requested_host_cli_system.as_deref() {
         let registry = load_host_cli_system_registry_from_root(&project_root);
         let supported_values = registry
             .iter()
@@ -1191,6 +1243,19 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
             }
         }
     }
+    if args.repair {
+        if let Err(error) = super::init_surfaces::ensure_runtime_home(&project_root)
+            .and_then(|()| {
+                super::init_surfaces::write_runtime_agent_extension_projections(&project_root)
+            })
+            .and_then(|()| super::init_surfaces::materialize_project_docs_scaffold(&project_root))
+        {
+            eprintln!("Project activation repair failed closed: {error}");
+            return ExitCode::from(1);
+        }
+        changed_files.push(".vida/**".to_string());
+        changed_files.push("docs/**".to_string());
+    }
 
     changed_files.sort();
     changed_files.dedup();
@@ -1259,6 +1324,15 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
     };
 
     let mut view = build_project_activator_view(&project_root);
+    view["repair"] = serde_json::json!({
+        "requested": args.repair,
+        "changed_files": changed_files.clone(),
+        "next_action": if args.repair {
+            "Rerun `vida project-activator --json` and `vida orchestrator-init --json` to confirm ready-enough posture."
+        } else {
+            "Use `vida project-activator --repair --json` to materialize safe-default missing project activation pieces."
+        }
+    });
     if let Some(path) = activation_receipt_path.as_deref() {
         let mut activation_log = serde_json::json!({
             "receipt_path": path,
@@ -1436,7 +1510,7 @@ fn resolve_project_activation_answers(
         || args.reasoning_language.is_some()
         || args.documentation_language.is_some()
         || args.todo_protocol_language.is_some();
-    if !any_input_provided {
+    if !any_input_provided && !args.repair {
         return None;
     }
 
@@ -1446,12 +1520,14 @@ fn resolve_project_activation_answers(
                 .map(|name| slugify_project_id(&name))
                 .filter(|value| !value.is_empty())
         })
-        .or(current_project_id)?;
+        .or(current_project_id)
+        .unwrap_or_else(|| inferred_project_id_candidate(project_root));
     let shared_language = trimmed_non_empty(args.language.as_deref());
     let user_communication_language =
         trimmed_non_empty(args.user_communication_language.as_deref())
             .or(shared_language.clone())
-            .or(current_user_communication_language)?;
+            .or(current_user_communication_language)
+            .unwrap_or_else(|| "english".to_string());
     let reasoning_language = trimmed_non_empty(args.reasoning_language.as_deref())
         .or(shared_language.clone())
         .or(current_reasoning_language)
@@ -1739,6 +1815,46 @@ fn apply_project_activation_answers(
             DEFAULT_PROJECT_DOC_TOOLING_DOC,
         ),
         (
+            project_root.join(DEFAULT_PROJECT_ORCHESTRATOR_STARTUP_BUNDLE),
+            super::init_surfaces::render_project_runtime_projection_doc(
+                "Project Orchestrator Startup Bundle",
+                "process/project-orchestrator-startup-bundle",
+                DEFAULT_PROJECT_ORCHESTRATOR_STARTUP_BUNDLE,
+                "Compact orchestrator startup bundle scaffold used by `vida orchestrator-init`.",
+            ),
+            DEFAULT_PROJECT_ORCHESTRATOR_STARTUP_BUNDLE,
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_PACKET_AND_LANE_RUNTIME_CAPSULE),
+            super::init_surfaces::render_project_runtime_projection_doc(
+                "Project Packet And Lane Runtime Capsule",
+                "process/project-packet-and-lane-runtime-capsule",
+                DEFAULT_PROJECT_PACKET_AND_LANE_RUNTIME_CAPSULE,
+                "Compact packet and lane runtime capsule scaffold used by launcher startup projection.",
+            ),
+            DEFAULT_PROJECT_PACKET_AND_LANE_RUNTIME_CAPSULE,
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_START_READINESS_RUNTIME_CAPSULE),
+            super::init_surfaces::render_project_runtime_projection_doc(
+                "Project Start Readiness Runtime Capsule",
+                "process/project-start-readiness-runtime-capsule",
+                DEFAULT_PROJECT_START_READINESS_RUNTIME_CAPSULE,
+                "Compact project start-readiness runtime capsule scaffold used by launcher startup projection.",
+            ),
+            DEFAULT_PROJECT_START_READINESS_RUNTIME_CAPSULE,
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_PACKET_RENDERING_RUNTIME_CAPSULE),
+            super::init_surfaces::render_project_runtime_projection_doc(
+                "Project Packet Rendering Runtime Capsule",
+                "process/project-packet-rendering-runtime-capsule",
+                DEFAULT_PROJECT_PACKET_RENDERING_RUNTIME_CAPSULE,
+                "Compact packet rendering runtime capsule scaffold used by launcher startup projection.",
+            ),
+            DEFAULT_PROJECT_PACKET_RENDERING_RUNTIME_CAPSULE,
+        ),
+        (
             project_root.join(DEFAULT_PROJECT_RESEARCH_README),
             super::init_surfaces::render_project_research_readme(),
             DEFAULT_PROJECT_RESEARCH_README,
@@ -1902,6 +2018,10 @@ mod tests {
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
     use crate::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC;
+    use crate::DEFAULT_PROJECT_ORCHESTRATOR_STARTUP_BUNDLE;
+    use crate::DEFAULT_PROJECT_PACKET_AND_LANE_RUNTIME_CAPSULE;
+    use crate::DEFAULT_PROJECT_PACKET_RENDERING_RUNTIME_CAPSULE;
+    use crate::DEFAULT_PROJECT_START_READINESS_RUNTIME_CAPSULE;
     use crate::WORKER_SCORECARDS_STATE;
     use crate::WORKER_STRATEGY_STATE;
     use serde_json::json;
@@ -2654,6 +2774,26 @@ mod tests {
             "# tooling\n",
         )
         .expect("documentation tooling map should exist");
+        fs::write(
+            root.join(DEFAULT_PROJECT_ORCHESTRATOR_STARTUP_BUNDLE),
+            "# startup bundle\n",
+        )
+        .expect("startup bundle should exist");
+        fs::write(
+            root.join(DEFAULT_PROJECT_PACKET_AND_LANE_RUNTIME_CAPSULE),
+            "# packet lane capsule\n",
+        )
+        .expect("packet lane capsule should exist");
+        fs::write(
+            root.join(DEFAULT_PROJECT_START_READINESS_RUNTIME_CAPSULE),
+            "# start readiness capsule\n",
+        )
+        .expect("start readiness capsule should exist");
+        fs::write(
+            root.join(DEFAULT_PROJECT_PACKET_RENDERING_RUNTIME_CAPSULE),
+            "# packet rendering capsule\n",
+        )
+        .expect("packet rendering capsule should exist");
         fs::write(
             root.join(".vida/project/agent-extensions/README.md"),
             "# runtime agent extensions\n",

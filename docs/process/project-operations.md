@@ -3,7 +3,7 @@
 Current operating baseline:
 
 - bootstrap through `AGENTS.md` followed by the bounded VIDA init surfaces
-- use `AGENTS.sidecar.md` as the project documentation map
+- use `AGENTS.sidecar.md` as the project agent-instructions overlay and project documentation map
 - while project activation is pending, do not enter TaskFlow execution; use `vida project-activator` and `vida docflow`
 
 Default feature-delivery flow:
@@ -50,5 +50,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-operations.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-30T11:35:00+03:00
+updated_at: 2026-04-30T22:15:50.879021Z
 changelog_ref: project-operations.changelog.jsonl

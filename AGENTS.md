@@ -8,7 +8,7 @@ It is a delivery surface, not the framework owner layer.
 
 Core rule:
 1. Use command-first bootstrap through the local `vida` binary.
-2. Use `AGENTS.sidecar.md` as the project docs map.
+2. Use `AGENTS.sidecar.md` as the project agent-instructions overlay; its project docs map is a required section, not the whole sidecar contract.
 3. Use bounded framework canonical ids through `vida protocol view <id>` only when the runtime init surfaces leave an edge case unresolved.
 4. In host-agent execution, treat agent ids as execution carriers (model/tier/cost/effectiveness), while runtime role remains a separate activation state.
 5. Runtime may bind any admissible carrier to any runtime role when role/task-class constraints allow it, then select by capability/admissibility, local score/telemetry guard, and cheapest eligible carrier.
@@ -54,7 +54,7 @@ Host CLI rule:
    - or `vida agent-init`
 3. If the init surface reports `pending_activation`, run `vida project-activator` before ordinary work.
 4. Keep the L0 thinking activation rule active from Core rule before continuing lane-specific work.
-5. Prefer project-local docs/process/spec guidance resolved from `AGENTS.sidecar.md`.
+5. Prefer project-local operating rules and docs/process/spec guidance resolved from `AGENTS.sidecar.md`.
 6. Open deeper framework protocol surfaces only on demand through canonical shorthand ids interpreted via `vida protocol view`.
 
 ## Compact Re-entry Rule
@@ -72,7 +72,7 @@ Host CLI rule:
 ## Working Boundary
 
 1. This file routes bootstrap only.
-2. Project documentation ownership belongs to project docs resolved through `AGENTS.sidecar.md`.
+2. Project documentation ownership belongs to project docs resolved through the project docs map section in `AGENTS.sidecar.md`.
 3. Framework owner law remains in the framework runtime and bounded protocol-view surfaces.
 4. Do not treat this generated carrier as the owner of framework policy.
 
@@ -103,5 +103,5 @@ schema_version: '1'
 status: canonical
 source_path: install/assets/AGENTS.scaffold.md
 created_at: '2026-03-14T18:10:00+02:00'
-updated_at: 2026-04-04T20:12:10.231336708Z
+updated_at: 2026-04-30T22:15:50.3597198Z
 changelog_ref: AGENTS.scaffold.changelog.jsonl

@@ -172,7 +172,10 @@ pub(crate) fn resolve_init_agents_source(root: &Path) -> Result<PathBuf, String>
 }
 
 pub(crate) fn resolve_init_sidecar_source(root: &Path) -> Result<PathBuf, String> {
-    let candidates = [root.join("AGENTS.sidecar.md")];
+    let candidates = [
+        root.join("install/assets/AGENTS.sidecar.scaffold.md"),
+        root.join("AGENTS.sidecar.md"),
+    ];
     first_existing_path(&candidates).ok_or_else(|| {
         format!(
             "Unable to resolve project sidecar source. Checked: {}",
@@ -379,11 +382,17 @@ mod tests {
         .expect("existing agents should be written");
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        assert_eq!(
-            fs::read_to_string(harness.path().join("AGENTS.sidecar.md"))
-                .expect("sidecar should exist"),
-            "project documentation: docs/\n"
+        let sidecar = fs::read_to_string(harness.path().join("AGENTS.sidecar.md"))
+            .expect("sidecar should exist");
+        assert!(
+            sidecar.contains("Project Agent Instructions"),
+            "sidecar should use the project instruction overlay scaffold"
         );
+        assert!(
+            sidecar.contains("Migrated Project Instructions"),
+            "pre-init project instructions should be embedded, not used as the whole sidecar"
+        );
+        assert!(sidecar.contains("project documentation: docs/"));
         let framework_agents = fs::read_to_string(harness.path().join("AGENTS.md"))
             .expect("framework agents should exist");
         assert!(
@@ -428,7 +437,11 @@ mod tests {
                 .join(".vida/receipts/AGENTS.pre-init.backup.md"),
         )
         .expect("agents backup should be written");
-        assert_eq!(backup, "project-specific bootstrap notes\n");
+        assert!(
+            backup.contains("archived legacy snapshot"),
+            "backup should be explicitly inactive"
+        );
+        assert!(backup.contains("project-specific bootstrap notes"));
     }
 
     #[test]
@@ -538,12 +551,23 @@ mod tests {
 
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = fake_bin.join("codex");
-        fs::write(
-            &fake_codex,
-            "#!/bin/sh\nsleep 11\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"too-late\"}}'\n",
-        )
-        .expect("fake codex should write");
+        let fake_codex = if cfg!(windows) {
+            let fake_codex = fake_bin.join("codex.cmd");
+            fs::write(
+                &fake_codex,
+                "@echo off\r\nping -n 12 127.0.0.1 >nul\r\necho {\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"too-late\"}}\r\n",
+            )
+            .expect("fake codex should write");
+            fake_codex
+        } else {
+            let fake_codex = fake_bin.join("codex");
+            fs::write(
+                &fake_codex,
+                "#!/bin/sh\nsleep 11\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"too-late\"}}'\n",
+            )
+            .expect("fake codex should write");
+            fake_codex
+        };
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -553,16 +577,32 @@ mod tests {
             perms.set_mode(0o755);
             fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
         }
-        let original_path = std::env::var("PATH").ok();
-        let patched_path = if original_path.as_deref().unwrap_or_default().is_empty() {
-            fake_bin.display().to_string()
+        let config = fs::read_to_string(&config_path).expect("config should reload");
+        let fake_codex_command = fake_codex.to_string_lossy().replace('\\', "/");
+        let updated = if cfg!(windows) {
+            config.replacen(
+                "        command: codex\n        static_args:\n          - exec\n          - --json\n",
+                &format!(
+                    "        command: cmd\n        static_args:\n          - /C\n          - '{fake_codex_command}'\n"
+                ),
+                1,
+            )
         } else {
-            format!(
-                "{}:{}",
-                fake_bin.display(),
-                original_path.as_deref().unwrap_or_default()
+            config.replacen(
+                "        command: codex\n",
+                &format!("        command: '{fake_codex_command}'\n"),
+                1,
             )
         };
+        fs::write(&config_path, updated).expect("config should point at fake codex");
+
+        let original_path = std::env::var("PATH").ok();
+        let mut path_entries = vec![fake_bin.clone()];
+        if let Some(original_path) = original_path.as_deref() {
+            path_entries.extend(std::env::split_paths(original_path));
+        }
+        let patched_path =
+            std::env::join_paths(path_entries).expect("test PATH should join for platform");
         std::env::set_var("PATH", &patched_path);
 
         let state_root = harness.path().join(".vida").join("data").join("state");
@@ -712,7 +752,7 @@ mod tests {
     }
 }
 
-fn ensure_runtime_home(project_root: &Path) -> Result<(), String> {
+pub(crate) fn ensure_runtime_home(project_root: &Path) -> Result<(), String> {
     for relative in [
         ".vida/config",
         ".vida/db",
@@ -758,7 +798,7 @@ fn write_file_if_missing(target: &Path, contents: &str) -> Result<(), String> {
         .map_err(|error| format!("Failed to write {}: {error}", target.display()))
 }
 
-fn write_runtime_agent_extension_projections(project_root: &Path) -> Result<(), String> {
+pub(crate) fn write_runtime_agent_extension_projections(project_root: &Path) -> Result<(), String> {
     let root = super::project_activator_surface::runtime_agent_extensions_root(project_root);
     super::ensure_dir(&root)?;
     write_file_if_missing(
@@ -907,7 +947,7 @@ pub(crate) async fn run_init(args: super::BootArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn materialize_project_docs_scaffold(project_root: &Path) -> Result<(), String> {
+pub(crate) fn materialize_project_docs_scaffold(project_root: &Path) -> Result<(), String> {
     let project_id = super::project_activator_surface::inferred_project_id_candidate(project_root);
     let project_title = super::inferred_project_title(&project_id, None);
     let source_root = resolve_init_bootstrap_source_root();
@@ -982,6 +1022,42 @@ fn materialize_project_docs_scaffold(project_root: &Path) -> Result<(), String> 
             render_project_doc_tooling_map(),
         ),
         (
+            project_root.join(super::DEFAULT_PROJECT_ORCHESTRATOR_STARTUP_BUNDLE),
+            render_project_runtime_projection_doc(
+                "Project Orchestrator Startup Bundle",
+                "process/project-orchestrator-startup-bundle",
+                super::DEFAULT_PROJECT_ORCHESTRATOR_STARTUP_BUNDLE,
+                "Compact orchestrator startup bundle scaffold used by `vida orchestrator-init`.",
+            ),
+        ),
+        (
+            project_root.join(super::DEFAULT_PROJECT_PACKET_AND_LANE_RUNTIME_CAPSULE),
+            render_project_runtime_projection_doc(
+                "Project Packet And Lane Runtime Capsule",
+                "process/project-packet-and-lane-runtime-capsule",
+                super::DEFAULT_PROJECT_PACKET_AND_LANE_RUNTIME_CAPSULE,
+                "Compact packet and lane runtime capsule scaffold used by launcher startup projection.",
+            ),
+        ),
+        (
+            project_root.join(super::DEFAULT_PROJECT_START_READINESS_RUNTIME_CAPSULE),
+            render_project_runtime_projection_doc(
+                "Project Start Readiness Runtime Capsule",
+                "process/project-start-readiness-runtime-capsule",
+                super::DEFAULT_PROJECT_START_READINESS_RUNTIME_CAPSULE,
+                "Compact project start-readiness runtime capsule scaffold used by launcher startup projection.",
+            ),
+        ),
+        (
+            project_root.join(super::DEFAULT_PROJECT_PACKET_RENDERING_RUNTIME_CAPSULE),
+            render_project_runtime_projection_doc(
+                "Project Packet Rendering Runtime Capsule",
+                "process/project-packet-rendering-runtime-capsule",
+                super::DEFAULT_PROJECT_PACKET_RENDERING_RUNTIME_CAPSULE,
+                "Compact packet rendering runtime capsule scaffold used by launcher startup projection.",
+            ),
+        ),
+        (
             project_root.join(super::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC),
             render_project_host_agent_guide(),
         ),
@@ -1011,7 +1087,7 @@ pub(crate) fn render_project_readme(project_title: &str) -> String {
         &format!(
             "# {project_title}\n\n\
 This repository contains a VIDA-initialized project scaffold.\n\n\
-Use `AGENTS.md` for framework bootstrap, `AGENTS.sidecar.md` for project docs routing, and `docs/` for project-owned operating context.\n"
+Use `AGENTS.md` for framework bootstrap, `AGENTS.sidecar.md` for project agent instructions and docs routing, and `docs/` for project-owned operating context.\n"
         ),
         "project/readme",
         "document",
@@ -1109,8 +1185,9 @@ pub(crate) fn render_project_process_readme() -> String {
 }
 
 pub(crate) fn render_project_decisions_doc(answers: &super::ProjectActivationAnswers) -> String {
-    format!(
-        "# Decisions\n\n\
+    with_scaffold_footer(
+        &format!(
+            "# Decisions\n\n\
 Initial activation decisions:\n\n\
 - project id: `{}`\n\
 - host CLI system: selected through `vida project-activator`\n\
@@ -1120,6 +1197,10 @@ Initial activation decisions:\n\n\
         answers.reasoning_language,
         answers.documentation_language,
         answers.todo_protocol_language
+        ),
+        "process/decisions",
+        "process_doc",
+        "docs/process/decisions.md",
     )
 }
 
@@ -1145,7 +1226,7 @@ pub(crate) fn render_project_operations_doc() -> String {
             "# Project Operations\n\n\
 Current operating baseline:\n\n\
 - bootstrap through `AGENTS.md` followed by the bounded VIDA init surfaces\n\
-- use `AGENTS.sidecar.md` as the project documentation map\n\
+- use `AGENTS.sidecar.md` as the project agent-instructions overlay and project documentation map\n\
 - while project activation is pending, do not enter TaskFlow execution; use `vida project-activator` and `vida docflow`\n\
 \n\
 Default feature-delivery flow:\n\n\
@@ -1182,7 +1263,7 @@ Default feature-delivery flow:\n\n\
 
 pub(crate) fn render_project_agent_system_doc() -> String {
     with_scaffold_footer(
-        "# Agent System\n\nProject activation owns host CLI agent-template selection and runtime admission.\n\n- default framework host templates become available only after the selected host CLI template is materialized\n- supported and active host CLI systems are config-driven under `vida.config.yaml -> host_environment.systems`\n- framework template inventory may be broader than the enabled active list in project config\n- carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers`; for the current internal Codex adapter, `vida.config.yaml -> host_environment.codex.agents` remains the rendered tier-catalog source\n- dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model\n- the selected runtime surface is rendered under the configured runtime root and is not the owner of tier/rate/task-class policy\n- project activation materializes the selected host template using the configured `materialization_mode`; the current internal Codex adapter renders the configured TOML catalog root, while external CLI systems use their configured runtime roots\n- runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`\n- project-local agent extensions remain under `.vida/project/agent-extensions/`\n- research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists\n- project \"agent-first\" development means the delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional carrier mechanics and not the canonical execution contract\n- host-local shell/edit capability is an executor affordance only and must not be interpreted as lawful root-session write ownership\n- when the selected host execution class is internal, optional external CLI subagents remain auxiliary carrier details and do not make the whole session externally gated by default\n- patch localization, runtime-defect diagnosis, or other read-only findings feed the next delegated packet and do not transfer write ownership back to the root session\n",
+        "# Agent System\n\nProject activation owns host CLI agent-template selection and runtime admission.\n\n- default framework host templates become available only after the selected host CLI template is materialized\n- supported and active host CLI systems are config-driven under `vida.config.yaml -> host_environment.systems`\n- framework template inventory may be broader than the enabled active list in project config\n- carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers`; compatibility projections such as `host_environment.codex.agents` may exist but must not become a second canonical source\n- dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model\n- the selected runtime surface is rendered under the configured runtime root and is not the owner of tier/rate/task-class policy\n- project activation materializes the selected host template using the configured `materialization_mode`; the current internal Codex adapter renders the configured TOML catalog root, while external CLI systems use their configured runtime roots\n- runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`\n- project-local agent extensions remain under `.vida/project/agent-extensions/`\n- research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists\n- project \"agent-first\" development means the delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional carrier mechanics and not the canonical execution contract\n- host-local shell/edit capability is an executor affordance only and must not be interpreted as lawful root-session write ownership\n- when the selected host execution class is internal, optional external CLI subagents remain auxiliary carrier details and do not make the whole session externally gated by default\n- patch localization, runtime-defect diagnosis, or other read-only findings feed the next delegated packet and do not transfer write ownership back to the root session\n",
         "process/agent-system",
         "process_doc",
         "docs/process/agent-system.md",
@@ -1217,6 +1298,31 @@ Activation rule:\n\n\
     )
 }
 
+pub(crate) fn render_project_runtime_projection_doc(
+    title: &str,
+    artifact_path: &str,
+    source_path: &str,
+    purpose: &str,
+) -> String {
+    with_scaffold_footer(
+        &format!(
+            "# {title}\n\n\
+Purpose: {purpose}\n\n\
+Runtime projection status:\n\n\
+- registered: true\n\
+- mapped: true\n\
+- bound: true\n\
+- compiled: true\n\
+- validated: true\n\
+- executable: true\n\n\
+This scaffold gives `vida init` a ready-enough project runtime projection. Projects may replace this body with richer local protocol text while preserving canonical footer metadata.\n"
+        ),
+        artifact_path,
+        "process_doc",
+        source_path,
+    )
+}
+
 pub(crate) fn render_project_research_readme() -> String {
     with_scaffold_footer(
         "# Research Notes\n\nUse this directory for research artifacts, discovery notes, and external references that support future project work.\n",
@@ -1228,7 +1334,7 @@ pub(crate) fn render_project_research_readme() -> String {
 
 pub(crate) fn render_project_host_agent_guide() -> String {
     with_scaffold_footer(
-        "# Host Agent Configuration Guide\n\nThis project uses framework-materialized host runtime surfaces; the active internal Codex surface currently renders under `.codex/**`.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` owns the dispatch-alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by the current internal Codex adapter after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from overlay\n\nCarrier rule:\n\n- the primary visible agent model is the configured carrier catalog rendered from `vida.config.yaml`, not a Rust-hardcoded role list\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in registry state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured carrier catalog instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Canonical delegated execution still dispatches through `vida agent-init`; host-tool-specific subagent APIs are optional executor details and not the primary project delegation surface.\n7. Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`; an active root-session write guard still means orchestration-only.\n8. If the user explicitly orders agent-first or parallel-agent execution, keep that routing sticky; do not silently substitute root-session coding because a host tool offers local write access.\n9. Finding the patch location, reproducing a runtime defect, hitting a worker timeout, or tripping a thread-limit/`not_found` lane failure is not a lane-change receipt and does not authorize root-session coding.\n10. Recover delegated-lane saturation first: inspect active lanes, synthesize completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is considered.\n11. Under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.\n12. Do not treat commentary, status output, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n13. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n14. After any bounded result, successful build, runtime handoff, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.\n15. Sticky continuation intent does not authorize choosing the first ready task or an adjacent slice by plausibility; continue only when the active bounded unit is explicit from user wording or runtime evidence.\n16. If `vida status --json` or `vida orchestrator-init --json` does not expose explicit `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, fail closed to an ambiguity report instead of continuing implementation.\n17. When recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n18. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n",
+        "# Host Agent Configuration Guide\n\nThis project uses framework-materialized host runtime surfaces; the active internal Codex surface currently renders under `.codex/**`.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.systems.<system>.carriers` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` owns the dispatch-alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by the current internal Codex adapter after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from the selected host-system carrier catalog\n\nCarrier rule:\n\n- the primary visible agent model is the configured carrier catalog rendered from `vida.config.yaml`, not a Rust-hardcoded role list\n- compatibility projections such as `host_environment.codex.agents` may exist for older consumers but must not be treated as a second canonical source\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in registry state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured carrier catalog instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Canonical delegated execution still dispatches through `vida agent-init`; host-tool-specific subagent APIs are optional executor details and not the primary project delegation surface.\n7. Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`; an active root-session write guard still means orchestration-only.\n8. If the user explicitly orders agent-first or parallel-agent execution, keep that routing sticky; do not silently substitute root-session coding because a host tool offers local write access.\n9. Finding the patch location, reproducing a runtime defect, hitting a worker timeout, or tripping a thread-limit/`not_found` lane failure is not a lane-change receipt and does not authorize root-session coding.\n10. Recover delegated-lane saturation first: inspect active lanes, synthesize completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is considered.\n11. Under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.\n12. Do not treat commentary, status output, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n13. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n14. After any bounded result, successful build, runtime handoff, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.\n15. Sticky continuation intent does not authorize choosing the first ready task or an adjacent slice by plausibility; continue only when the active bounded unit is explicit from user wording or runtime evidence.\n16. If `vida status --json` or `vida orchestrator-init --json` does not expose explicit `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, fail closed to an ambiguity report instead of continuing implementation.\n17. When recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n18. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n",
         "process/codex-agent-configuration-guide",
         "process_doc",
         "docs/process/codex-agent-configuration-guide.md",
@@ -1274,6 +1380,18 @@ fn scaffold_artifact_path_for(relative_source_path: &Path) -> &'static str {
         "docs/process/decisions.md" => "process/decisions",
         "docs/process/documentation-tooling-map.md" => "process/documentation-tooling-map",
         "docs/process/environments.md" => "process/environments",
+        "docs/process/project-orchestrator-startup-bundle.md" => {
+            "process/project-orchestrator-startup-bundle"
+        }
+        "docs/process/project-packet-and-lane-runtime-capsule.md" => {
+            "process/project-packet-and-lane-runtime-capsule"
+        }
+        "docs/process/project-start-readiness-runtime-capsule.md" => {
+            "process/project-start-readiness-runtime-capsule"
+        }
+        "docs/process/project-packet-rendering-runtime-capsule.md" => {
+            "process/project-packet-rendering-runtime-capsule"
+        }
         "docs/process/project-operations.md" => "process/project-operations",
         "docs/research/README.md" => "research/readme",
         _ => "project/scaffold-doc",
@@ -1288,6 +1406,10 @@ fn scaffold_artifact_type_for(relative_source_path: &Path) -> &'static str {
         | "docs/process/decisions.md"
         | "docs/process/documentation-tooling-map.md"
         | "docs/process/environments.md"
+        | "docs/process/project-orchestrator-startup-bundle.md"
+        | "docs/process/project-packet-and-lane-runtime-capsule.md"
+        | "docs/process/project-start-readiness-runtime-capsule.md"
+        | "docs/process/project-packet-rendering-runtime-capsule.md"
         | "docs/process/project-operations.md" => "process_doc",
         "docs/product/index.md" => "product_index",
         "docs/product/spec/README.md"
@@ -1320,15 +1442,74 @@ fn write_scaffold_changelog_if_missing(
     write_file_if_missing(&changelog_path, &entry)
 }
 
+fn existing_agents_looks_like_framework_bootstrap(contents: &str) -> bool {
+    let lower = contents.to_ascii_lowercase();
+    lower.contains("vida project bootstrap carrier")
+        || lower.contains("generated downstream bootstrap carrier")
+        || lower.contains("framework bootstrap carrier")
+        || lower.contains("vida orchestrator-init")
+        || lower.contains("vida agent-init")
+        || lower.contains("root-session write guard")
+}
+
+fn strip_markdown_footer(contents: &str) -> &str {
+    contents
+        .split_once("\n-----\n")
+        .map(|(body, _)| body.trim_end())
+        .unwrap_or_else(|| contents.trim_end())
+}
+
+fn render_migrated_project_sidecar(scaffold: &str, existing_agents: &str) -> String {
+    let migrated = strip_markdown_footer(existing_agents);
+    let section = format!(
+        "\n## Migrated Project Instructions\n\n\
+The following project-local instructions were migrated from the pre-init root `AGENTS.md`.\n\
+Treat them as active project instructions unless they conflict with the generated VIDA bootstrap carrier or runtime law.\n\n\
+<migrated_project_instructions>\n{migrated}\n</migrated_project_instructions>\n"
+    );
+    if let Some((body, footer)) = scaffold.split_once("\n-----\n") {
+        format!("{}{}\n-----\n{}", body.trim_end(), section, footer)
+    } else {
+        format!("{}{}\n", scaffold.trim_end(), section)
+    }
+}
+
+fn write_legacy_agents_snapshot(
+    project_root: &Path,
+    file_name: &str,
+    contents: &str,
+    note: &str,
+) -> Result<(), String> {
+    let backup_path = project_root.join(".vida/receipts").join(file_name);
+    if let Some(parent) = backup_path.parent() {
+        super::ensure_dir(parent)?;
+    }
+    if !backup_path.exists() {
+        let body = format!(
+            "# Legacy AGENTS Snapshot\n\n\
+Status: archived legacy snapshot, not active authority.\n\n\
+{note}\n\n\
+----- legacy content -----\n{contents}"
+        );
+        std::fs::write(&backup_path, body).map_err(|error| {
+            format!("Failed to write {} backup: {error}", backup_path.display())
+        })?;
+    }
+    Ok(())
+}
+
 fn materialize_framework_agents_and_sidecar(
     project_root: &Path,
     framework_agents: &Path,
-    sidecar_scaffold: &Path,
+    _sidecar_scaffold: &Path,
 ) -> Result<(), String> {
     let agents = project_root.join("AGENTS.md");
     let sidecar = project_root.join("AGENTS.sidecar.md");
     let framework_contents = std::fs::read_to_string(framework_agents)
         .map_err(|error| format!("Failed to read {}: {error}", framework_agents.display()))?;
+    let project_id = super::project_activator_surface::inferred_project_id_candidate(project_root);
+    let project_title = super::inferred_project_title(&project_id, None);
+    let default_sidecar = super::project_activator_surface::render_project_sidecar(&project_title);
 
     if agents.is_file() {
         let existing_agents = std::fs::read_to_string(&agents)
@@ -1337,31 +1518,45 @@ fn materialize_framework_agents_and_sidecar(
             if !sidecar.is_file()
                 || super::project_activator_surface::file_contains_placeholder(&sidecar)
             {
-                if let Some(parent) = sidecar.parent() {
-                    super::ensure_dir(parent)?;
-                }
-                std::fs::write(&sidecar, existing_agents).map_err(|error| {
-                    format!(
-                        "Failed to preserve existing {} as {}: {error}",
-                        agents.display(),
-                        sidecar.display()
-                    )
-                })?;
-            } else {
-                let backup_path = project_root.join(".vida/receipts/AGENTS.pre-init.backup.md");
-                if let Some(parent) = backup_path.parent() {
-                    super::ensure_dir(parent)?;
-                }
-                if !backup_path.exists() {
-                    std::fs::write(&backup_path, existing_agents).map_err(|error| {
-                        format!("Failed to write {} backup: {error}", backup_path.display())
+                if existing_agents_looks_like_framework_bootstrap(&existing_agents) {
+                    write_legacy_agents_snapshot(
+                        project_root,
+                        "AGENTS.legacy.md",
+                        &existing_agents,
+                        "The pre-init root AGENTS.md looked like a legacy framework/bootstrap carrier, so init archived it instead of making it active sidecar law.",
+                    )?;
+                } else {
+                    if let Some(parent) = sidecar.parent() {
+                        super::ensure_dir(parent)?;
+                    }
+                    let migrated_sidecar =
+                        render_migrated_project_sidecar(&default_sidecar, &existing_agents);
+                    std::fs::write(&sidecar, migrated_sidecar).map_err(|error| {
+                        format!(
+                            "Failed to preserve existing {} as migrated {}: {error}",
+                            agents.display(),
+                            sidecar.display()
+                        )
                     })?;
                 }
+            } else {
+                write_legacy_agents_snapshot(
+                    project_root,
+                    "AGENTS.pre-init.backup.md",
+                    &existing_agents,
+                    "An existing non-placeholder AGENTS.sidecar.md was preserved; the pre-init root AGENTS.md is archived for manual review.",
+                )?;
             }
         }
     }
 
-    copy_file_if_missing(sidecar_scaffold, &sidecar)?;
+    if !sidecar.is_file() || super::project_activator_surface::file_contains_placeholder(&sidecar) {
+        if let Some(parent) = sidecar.parent() {
+            super::ensure_dir(parent)?;
+        }
+        std::fs::write(&sidecar, &default_sidecar)
+            .map_err(|error| format!("Failed to write {}: {error}", sidecar.display()))?;
+    }
     std::fs::write(&agents, framework_contents)
         .map_err(|error| format!("Failed to write {}: {error}", agents.display()))
 }

@@ -9,10 +9,13 @@ use super::{
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
-    if let Some(error) = prepare_runtime_state_dir(&cli.command) {
-        eprintln!("{error}");
-        return ExitCode::from(1);
-    }
+    let _runtime_state_dir_guard = match prepare_runtime_state_dir(&cli.command) {
+        Ok(guard) => guard,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
 
     match cli.command {
         None => {
@@ -66,11 +69,13 @@ fn agent_command_needs_project_root(args: &AgentArgs) -> bool {
     }
 }
 
+fn proxy_args_request_help_or_version(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| matches!(arg.as_str(), "help" | "--help" | "-h" | "--version" | "-V"))
+}
+
 fn proxy_command_needs_project_root(args: &[String]) -> bool {
-    !matches!(
-        args.first().map(String::as_str),
-        None | Some("help" | "--help" | "-h")
-    )
+    !proxy_args_request_help_or_version(args)
 }
 
 fn command_needs_project_root_state_dir(command: &Option<Command>) -> bool {
@@ -80,6 +85,9 @@ fn command_needs_project_root_state_dir(command: &Option<Command>) -> bool {
         Some(Command::Taskflow(args) | Command::Consume(args) | Command::Recovery(args)) => {
             proxy_command_needs_project_root(&args.args)
         }
+        Some(Command::Lane(args) | Command::Approval(args)) => {
+            proxy_command_needs_project_root(&args.args)
+        }
         Some(
             Command::OrchestratorInit(_)
             | Command::AgentInit(_)
@@ -87,32 +95,54 @@ fn command_needs_project_root_state_dir(command: &Option<Command>) -> bool {
             | Command::AgentFeedback(_)
             | Command::Memory(_)
             | Command::Status(_)
-            | Command::Doctor(_)
-            | Command::Lane(_)
-            | Command::Approval(_),
+            | Command::Doctor(_),
         ) => true,
         _ => false,
     }
 }
 
-fn prepare_runtime_state_dir(command: &Option<Command>) -> Option<String> {
+struct RuntimeStateDirGuard {
+    previous: Option<std::ffi::OsString>,
+    active: bool,
+}
+
+impl Drop for RuntimeStateDirGuard {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        if let Some(previous) = &self.previous {
+            std::env::set_var("VIDA_STATE_DIR", previous);
+        } else {
+            std::env::remove_var("VIDA_STATE_DIR");
+        }
+    }
+}
+
+fn prepare_runtime_state_dir(
+    command: &Option<Command>,
+) -> Result<Option<RuntimeStateDirGuard>, String> {
     if std::env::var_os("VIDA_STATE_DIR").is_some() {
-        return None;
+        return Ok(None);
     }
 
     if !command_needs_project_root_state_dir(command) {
-        return None;
+        return Ok(None);
     }
 
     match resolve_runtime_project_root() {
         Ok(project_root) => {
+            let previous = std::env::var_os("VIDA_STATE_DIR");
             std::env::set_var(
                 "VIDA_STATE_DIR",
                 project_root.join(state_store::default_state_dir()),
             );
-            None
+            Ok(Some(RuntimeStateDirGuard {
+                previous,
+                active: true,
+            }))
         }
-        Err(error) => Some(error),
+        Err(error) => Err(error),
     }
 }
 
@@ -164,11 +194,15 @@ mod tests {
         let cli = Cli::try_parse_from(["vida", "status"]).expect("status cli should parse");
 
         assert!(command_needs_project_root_state_dir(&cli.command));
-        assert_eq!(prepare_runtime_state_dir(&cli.command), None);
+        let guard =
+            prepare_runtime_state_dir(&cli.command).expect("state dir preparation should succeed");
+        assert!(guard.is_some());
         assert_eq!(
             std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
             Some(harness.path().join(crate::state_store::default_state_dir()))
         );
+        drop(guard);
+        assert!(std::env::var_os("VIDA_STATE_DIR").is_none());
     }
 
     #[test]
@@ -177,7 +211,9 @@ mod tests {
         let cli = Cli::try_parse_from(["vida", "boot"]).expect("boot cli should parse");
 
         assert!(!command_needs_project_root_state_dir(&cli.command));
-        assert_eq!(prepare_runtime_state_dir(&cli.command), None);
+        assert!(prepare_runtime_state_dir(&cli.command)
+            .expect("state dir preparation should succeed")
+            .is_none());
         assert!(std::env::var_os("VIDA_STATE_DIR").is_none());
     }
 }

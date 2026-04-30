@@ -70,19 +70,21 @@ Project-local Codex configuration should live under:
 3. `.codex/agents/middle.toml`
 4. `.codex/agents/senior.toml`
 5. `.codex/agents/architect.toml`
-6. `vida.config.yaml -> host_environment.codex.agents`
+6. `vida.config.yaml -> host_environment.systems.codex.carriers`
    - canonical project-owned source of truth for carrier-tier metadata, rates, runtime-role fit, task-class fit, and profile-aware model selection metadata (`default_model_profile`, `model_profiles`)
+7. `vida.config.yaml -> host_environment.codex.agents`
+   - compatibility projection for older Codex consumers; it must not become a second canonical carrier source.
 
 Layout rule:
 
 1. the active root Codex session is the orchestrator and must remain outside the delegated agent list,
-2. `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier/rate/runtime-role/task-class metadata,
+2. `vida.config.yaml -> host_environment.systems.codex.carriers` owns carrier-tier/rate/runtime-role/task-class metadata,
    and also owns the canonical default-profile/model-profile catalog for each Codex carrier tier,
 3. `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` is the canonical internal alias registry for executor-local overlays and is not the primary project-visible agent model,
 4. `.codex/config.toml` is the rendered delegated carrier-tier registration surface, including thread/depth caps and per-role config-file mapping,
 5. `.codex/agents/*.toml` are rendered host-executor surfaces and must not become the owner of tier or dispatch-alias policy,
 6. project activation should render `.codex/**` from the overlay catalog while preserving the framework-owned tier instruction bodies from the template source,
-7. project-visible agent activation should target the carrier tiers declared in `vida.config.yaml -> host_environment.codex.agents`; runtime role selection is carried separately in packet/runtime state instead of replacing the carrier identity,
+7. project-visible agent activation should target the carrier tiers declared in `vida.config.yaml -> host_environment.systems.codex.carriers`; runtime role selection is carried separately in packet/runtime state instead of replacing the carrier identity,
 8. VIDA role/skill/profile/team meaning still comes from the project activation layer, not from Codex TOML alone.
 9. Role/profile/flow catalogs should be sourced from the agent-extension YAML registries; `vida.config.yaml` may narrow them, but runtime should not require duplicated id lists when the registries already define the active set.
 10. the root session is a bootstrap and coordination owner, not a separate long-lived local implementer role.
@@ -354,5 +356,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/codex-agent-configuration-guide.md
 created_at: '2026-03-12T08:35:27+02:00'
-updated_at: 2026-04-22T15:33:06.920846955Z
+updated_at: 2026-04-30T22:15:50.8204953Z
 changelog_ref: codex-agent-configuration-guide.changelog.jsonl

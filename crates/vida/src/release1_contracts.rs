@@ -1307,8 +1307,59 @@ impl BlockerCode {
     }
 }
 
+const EXTENDED_BLOCKER_CODE_STRINGS: &[&str] = &[
+    "ambiguous_unsafe_parallel_candidates",
+    "candidate_scope_not_supported",
+    "conflicting_owned_paths",
+    "cyclic_dependency",
+    "dev_team_disabled",
+    "duplicate_task_id",
+    "existing_task_conflict",
+    "explicit_run_graph_continuation_binding_not_ready",
+    "graph_blocked",
+    "invalid_lanes_requested",
+    "missing_acceptance_targets",
+    "missing_dependency",
+    "missing_dev_team_roles",
+    "missing_dev_team_sequence",
+    "missing_edge_source",
+    "missing_edge_type",
+    "missing_execution_semantics",
+    "missing_lane_hint",
+    "missing_order_bucket",
+    "missing_owned_paths",
+    "missing_parent",
+    "missing_proof_targets",
+    "missing_title",
+    "model_selection_disabled",
+    "no_dispatch_lanes_selected",
+    "no_ready_task_candidates",
+    "release_build_failed",
+    "requested_current_task_not_ready",
+    "route_fields_not_behavioral",
+    "route_missing",
+    "scheduler_packet_dispatch_failed",
+    "scheduler_packet_dispatch_no_execution_evidence",
+    "selected_backend_missing",
+    "selected_backend_not_admissible_for_dispatch_target",
+    "selected_backend_not_ready",
+    "selected_lane_runtime_assignment_truth_required",
+    "selected_model_profile_missing",
+    "selected_model_profile_not_ready",
+    "self_dependency",
+    "task_not_in_graph_projection",
+];
+
 pub(crate) fn canonical_blocker_code_str(value: &str) -> Option<&'static str> {
-    BlockerCode::from_str(value).map(BlockerCode::as_str)
+    let trimmed = value.trim();
+    BlockerCode::from_str(trimmed)
+        .map(BlockerCode::as_str)
+        .or_else(|| {
+            EXTENDED_BLOCKER_CODE_STRINGS
+                .iter()
+                .copied()
+                .find(|code| *code == trimmed)
+        })
 }
 
 const BLOCKER_FAMILY_NAMES: &[&str] = &[

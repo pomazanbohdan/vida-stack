@@ -514,7 +514,7 @@ The repository root bootstrap surface must use one explicit canonical mode rathe
 Canonical root-bootstrap rule:
 
 1. `AGENTS.md` is the bootstrap carrier and routing contract,
-2. `AGENTS.sidecar.md` is the canonical project-doc bootstrap carrier,
+2. `AGENTS.sidecar.md` is the canonical project agent-instructions overlay and contains the project-doc map section,
 3. repository root documents that are not bootstrap carriers must use the normal metadata and changelog contract.
 
 Validation and mutation rule:
@@ -777,5 +777,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md
 created_at: '2026-03-10T03:25:00+02:00'
-updated_at: '2026-03-13T09:09:25+02:00'
+updated_at: 2026-04-30T22:15:50.9836444Z
 changelog_ref: canonical-documentation-and-inventory-layer-matrix.changelog.jsonl

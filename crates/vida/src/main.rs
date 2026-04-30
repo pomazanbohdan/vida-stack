@@ -349,8 +349,8 @@ mod tests {
         let argv = ["vida".to_string(), "--HELP".to_string()]
             .into_iter()
             .map(normalize_cli_arg);
-        let normalized = Cli::try_parse_from(argv)
-            .expect_err("uppercase help should render clap display error");
+        let normalized =
+            Cli::try_parse_from(argv).expect_err("uppercase help should render clap display error");
 
         assert_eq!(parsed.kind(), normalized.kind());
         assert!(normalized.to_string().contains("Usage: vida"));

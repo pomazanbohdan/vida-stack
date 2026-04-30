@@ -38,7 +38,7 @@ It does not define future multi-host expansion beyond the current supported host
 
 ### `L1`
 
-1. `vida.config.yaml -> host_environment.codex.agents` owns tier metadata, runtime-role fit, and task-class fit.
+1. `vida.config.yaml -> host_environment.systems.codex.carriers` owns tier metadata, runtime-role fit, and task-class fit.
 2. `.codex/**` is a rendered executor surface, not the owner of rates or admissibility.
 
 ### `L2`
@@ -93,5 +93,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/host-agent-layer-status-matrix.md
 created_at: '2026-03-14T17:55:00+02:00'
-updated_at: '2026-03-14T17:55:00+02:00'
+updated_at: 2026-04-30T22:15:51.0921222Z
 changelog_ref: host-agent-layer-status-matrix.changelog.jsonl

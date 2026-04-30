@@ -67,7 +67,10 @@ pub(crate) fn run_docflow_proxy(args: ProxyArgs) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            if error.kind() == clap::error::ErrorKind::DisplayVersion {
+            if matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) {
                 if let Err(print_error) = error.print() {
                     eprintln!("{print_error}");
                     return ExitCode::from(1);

@@ -1,15 +1,16 @@
 # AGENTS Sidecar
 
-Purpose: provide the project docs map for the repository being developed on top of the VIDA framework, without moving project-document knowledge into `AGENTS.md`.
+Purpose: provide the project-level agent instruction overlay for the repository being developed on top of the VIDA framework, without moving project-specific operating knowledge into generated `AGENTS.md`.
 
-## Project Docs Scope
+## Project Instruction Scope
 
 1. Repository: `vida-stack`
-2. This sidecar is the project docs map only.
-3. It carries project-document discovery pointers and project-document orientation.
-4. It must not become a second framework map or a mixed runtime/bootstrap carrier.
-5. Framework-owned discovery for active development bootstrap starts from bounded framework carriers referenced by canonical shorthand ids interpreted through `vida protocol view`.
-6. It maps the active current project surface only; extracted secondary bundles such as `projects/vida-mobile/**` are out of default bootstrap scope unless the task explicitly targets them.
+2. This sidecar is the project agent-instructions overlay.
+3. It may carry project operating rules, local commands, coding/testing/release constraints, project-agent/team conventions, domain constraints, and project-document discovery pointers.
+4. The project docs map is a required section of this sidecar, not the sidecar's only purpose.
+5. It must not become a second framework owner map or a competing runtime/bootstrap carrier.
+6. Framework-owned discovery for active development bootstrap starts from bounded framework carriers referenced by canonical shorthand ids interpreted through `vida protocol view`.
+7. It maps the active current project surface only; extracted secondary bundles such as `projects/vida-mobile/**` are out of default bootstrap scope unless the task explicitly targets them.
 
 ## Project Canonical Maps
 
@@ -40,7 +41,7 @@ Purpose: provide the project docs map for the repository being developed on top 
 ## Bootstrap Read Path
 
 1. After `AGENTS.md`, read this sidecar immediately.
-2. Use this sidecar as the project docs map during active development bootstrap.
+2. Use this sidecar as the project agent-instructions overlay during active development bootstrap.
 3. The framework-owned protocol-view/bootstrap-router copy of root `AGENTS.md` used by the binary/runtime protocol-discovery path lives at:
    - `system-maps/bootstrap.router-guide`
 4. Framework-owned discovery should continue through bounded framework instruction-home surfaces such as:
@@ -84,7 +85,7 @@ Project-routing rule:
 ## Working Rule
 
 1. Use `AGENTS.md` for lane routing and hard invariants.
-2. Use this sidecar only for project docs discovery and project-document orientation.
+2. Use this sidecar for project-local agent instructions, project operating rules, and project-document orientation.
 3. Prefer the project canonical maps here over broad manual repo scanning when the task depends on project/product understanding.
 4. Documentation tooling and operator commands are mapped in `docs/process/documentation-tooling-map.md`.
 5. For documentation-shaped, spec-shaped, canonical-map, or runtime-law documentation work, activate the documentation tooling path early rather than treating it as a late optional step.
@@ -129,5 +130,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-04-04T20:12:10.229590098Z
+updated_at: 2026-04-30T22:15:50.4924193Z
 changelog_ref: AGENTS.sidecar.changelog.jsonl

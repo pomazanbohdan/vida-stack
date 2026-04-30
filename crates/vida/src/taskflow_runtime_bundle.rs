@@ -1131,6 +1131,7 @@ fn canonical_project_protocol_projection_status(status: Option<&str>) -> &'stati
         Some(value) if value == "blocked" => "blocked",
         Some(value) if value == "validated" => "validated",
         Some(value) if value == "executable" => "executable",
+        Some(value) if value == "canonical" => "canonical",
         Some(value) if value == "present" => "present",
         Some(value) if value == "missing" => "missing",
         _ => "blocked",
@@ -2640,6 +2641,10 @@ mod tests {
         assert_eq!(
             canonical_project_protocol_projection_status(Some(" validated ")),
             "validated"
+        );
+        assert_eq!(
+            canonical_project_protocol_projection_status(Some(" canonical ")),
+            "canonical"
         );
         assert_eq!(
             canonical_project_protocol_projection_status(Some(" present ")),

@@ -19,7 +19,8 @@ pub(crate) fn build_project_activator_host_environment(
         "template_materialized": host_cli_template_materialized,
         "materialization_required": host_cli_materialization_required,
         "runtime_template_root": host_cli_runtime_template_root,
-        "template_source_root": host_cli_template_source_root.map(|path| path.display().to_string()),
+        "template_source_root": host_cli_template_source_root
+            .map(|path| path.to_string_lossy().replace('\\', "/")),
         "default_host_agent_templates": default_host_agent_templates,
         "configuration_protocols": [
             "runtime-instructions/work.host-cli-agent-setup-protocol"

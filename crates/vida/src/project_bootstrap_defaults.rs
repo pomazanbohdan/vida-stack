@@ -60,6 +60,14 @@ pub(crate) const DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC: &str =
     "docs/process/codex-agent-configuration-guide.md";
 pub(crate) const DEFAULT_PROJECT_DOC_TOOLING_DOC: &str =
     "docs/process/documentation-tooling-map.md";
+pub(crate) const DEFAULT_PROJECT_ORCHESTRATOR_STARTUP_BUNDLE: &str =
+    "docs/process/project-orchestrator-startup-bundle.md";
+pub(crate) const DEFAULT_PROJECT_PACKET_AND_LANE_RUNTIME_CAPSULE: &str =
+    "docs/process/project-packet-and-lane-runtime-capsule.md";
+pub(crate) const DEFAULT_PROJECT_START_READINESS_RUNTIME_CAPSULE: &str =
+    "docs/process/project-start-readiness-runtime-capsule.md";
+pub(crate) const DEFAULT_PROJECT_PACKET_RENDERING_RUNTIME_CAPSULE: &str =
+    "docs/process/project-packet-rendering-runtime-capsule.md";
 pub(crate) const DEFAULT_PROJECT_RESEARCH_README: &str = "docs/research/README.md";
 pub(crate) const PROJECT_ACTIVATION_RECEIPT_LATEST: &str =
     ".vida/receipts/project-activation.latest.json";

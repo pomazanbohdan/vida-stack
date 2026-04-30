@@ -148,7 +148,7 @@ pub(crate) fn build_project_activator_activation_summary(
     }
     if input.config_has_placeholders {
         next_steps.push(
-            "run `vida project-activator` with the bounded activation interview inputs to record project identity, language policy, docs roots, and host CLI setup before normal work"
+            "run `vida project-activator --repair --json` or the bounded one-shot activation command to record project identity, language policy, docs roots, and host CLI setup before normal work"
                 .to_string(),
         );
     }
@@ -161,7 +161,7 @@ pub(crate) fn build_project_activator_activation_summary(
         if let Some(selected_system) = input.selected_host_cli_system {
             let display_name = host_cli_display_name(selected_system);
             next_steps.push(format!(
-                "materialize the selected host CLI template with `vida project-activator --host-cli-system {selected_system}`, then close and restart {display_name} so agent configuration becomes visible to the runtime environment",
+                "materialize the selected host CLI template with `vida project-activator --repair --host-cli-system {selected_system}`, then close and restart {display_name} so agent configuration becomes visible to the runtime environment",
             ));
         } else {
             next_steps.push(
@@ -172,13 +172,13 @@ pub(crate) fn build_project_activator_activation_summary(
     }
     if input.sidecar_has_placeholders {
         next_steps.push(
-            "replace placeholder project-doc pointers in `AGENTS.sidecar.md` before normal project work"
+            "replace placeholder project instruction/docs pointers in `AGENTS.sidecar.md`, or run `vida project-activator --repair --json` when safe defaults are acceptable"
                 .to_string(),
         );
     }
     if input.docs_missing {
         next_steps.push(
-            "materialize the minimum project-doc roots (`docs/project-root-map.md`, `docs/product/index.md`, `docs/process/README.md`, `docs/process/documentation-tooling-map.md`) or record an explicit activation override"
+            "materialize the minimum project-doc roots with `vida project-activator --repair --json` or record an explicit activation override"
                 .to_string(),
         );
     }

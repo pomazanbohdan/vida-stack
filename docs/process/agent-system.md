@@ -5,7 +5,7 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - default framework agent templates become available only after the selected host CLI template is materialized
 - the current supported host CLI systems are config-driven under `vida.config.yaml -> host_environment.systems`
 - framework template inventory may include multiple built-in host systems, but the active host-system list is owned by `vida.config.yaml -> host_environment.systems`
-- carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers` (Codex additionally keeps `host_environment.codex.agents` as tier catalog source)
+- carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers`; compatibility projections such as `host_environment.codex.agents` may exist but must not become a second canonical source
 - host CLI execution posture is owned by `vida.config.yaml -> host_environment.systems.<system>.execution_class` so internal vs external runtime handling does not depend on vendor id heuristics
 - canonical runtime outputs are `carrier_runtime` and `runtime_assignment`
 - `codex_multi_agent` and `codex_runtime_assignment` are compatibility aliases only and must not be treated as owner-law canonical fields
@@ -43,5 +43,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/agent-system.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-10T15:24:32Z
+updated_at: 2026-04-30T22:15:50.7658774Z
 changelog_ref: agent-system.changelog.jsonl

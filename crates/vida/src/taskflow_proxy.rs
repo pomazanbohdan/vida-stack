@@ -6970,6 +6970,9 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
     }
 
     if matches!(args.args.first().map(String::as_str), Some("consume")) {
+        if taskflow_consume::try_print_taskflow_consume_nested_help(&args.args) {
+            return ExitCode::SUCCESS;
+        }
         let consume_subcommand = args.args.get(1).map(String::as_str);
         if matches!(consume_subcommand, Some("continue" | "advance")) {
             let state_root = proxy_state_dir();

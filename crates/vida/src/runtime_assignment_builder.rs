@@ -1115,6 +1115,10 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
             "conversation_role": conversation_role,
             "selection_strategy": selection_strategy,
             "selection_rule": selection_rule,
+            "next_actions": [
+                "Add or enable a carrier under `vida.config.yaml -> host_environment.systems.<system>.carriers` that declares both the requested runtime_role and task_class.",
+                "Run `vida project-activator --repair --host-cli-system <system> --json` to refresh selected host materialization, then retry the runtime assignment preview."
+            ],
             "model_selection_enabled": true,
             "candidate_scope": candidate_scope,
             "rejected_candidates": rejected_candidates

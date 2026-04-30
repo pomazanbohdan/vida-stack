@@ -191,7 +191,7 @@ It owns:
 2. materializing the minimum model-visible framework/bootstrap surfaces required for the current project,
 3. creating `.vida/config/**`, `.vida/db/**`, `.vida/cache/**`, `.vida/framework/**`, `.vida/project/**`, and adjacent required runtime directories,
 4. scaffolding runtime configuration from canonical templates when absent,
-5. enforcing the bootstrap-carrier split around `AGENTS.md` and `AGENTS.sidecar.md`,
+5. enforcing the bootstrap-carrier split around `AGENTS.md` and the `AGENTS.sidecar.md` project agent-instructions overlay,
 6. importing required machine-readable framework/protocol payloads into the authoritative project-local DB,
 7. writing import and migration receipts,
 8. establishing the first valid project-local readiness state,
@@ -200,8 +200,8 @@ It owns:
 Bootstrap-carrier rule during `init`:
 
 1. `init` must materialize framework-owned `AGENTS.md` into the project root when it is absent,
-2. `init` must ensure `AGENTS.sidecar.md` exists as the project-doc bootstrap carrier,
-3. if a pre-existing root `AGENTS.md` mixes framework and project rules, `init` must preserve project-owned content by moving or normalizing it into `AGENTS.sidecar.md`,
+2. `init` must ensure `AGENTS.sidecar.md` exists as the project agent-instructions overlay with a project docs map section,
+3. if a pre-existing root `AGENTS.md` mixes framework and project rules, `init` must preserve project-owned content by moving or normalizing project instructions into `AGENTS.sidecar.md` and archiving framework-like legacy bootstrap content as inactive legacy evidence,
 4. after normalization, root `AGENTS.md` must remain framework-owned bootstrap only,
 5. `init` must not leave two competing bootstrap carriers in root scope,
 6. if `AGENTS.sidecar.md` is absent, `init` must create it rather than keeping project-routing rules embedded in `AGENTS.md`,
@@ -1071,5 +1071,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md
 created_at: '2026-03-12T21:25:00+02:00'
-updated_at: 2026-03-14T12:41:58.831722767Z
+updated_at: 2026-04-30T22:15:51.1458614Z
 changelog_ref: user-facing-runtime-flow-and-operating-loop-model.changelog.jsonl

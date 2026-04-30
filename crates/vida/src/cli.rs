@@ -14,7 +14,7 @@ const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  
 
 const DOCFLOW_LONG_ABOUT: &str = "Delegate to the DocFlow runtime family.\n\nDocFlow is the standalone documentation/readiness utility. Use it for documentation bootstrap, artifact init, validation, readiness checks, inventory, relations, and agent handoff instructions.";
 
-const DOCFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida docflow help\n  vida docflow init\n  vida docflow init --json\n  vida docflow init --help\n  vida docflow doctor --root .\n  vida docflow check-file --path <file>\n  vida docflow readiness-check --profile active-canon\n  vida docflow registry --root .\n\nInit contract:\n  `vida docflow init` without positional args prints agent bootstrap instructions.\n  `vida docflow init --json` prints the same contract as machine-readable JSON.\n  `vida docflow init <markdown_file> <artifact_path> <artifact_type> <change_note>` initializes a canonical markdown artifact.";
+const DOCFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida docflow help\n  vida docflow init\n  vida docflow init --json\n  vida docflow init --help\n  vida docflow repair-footer --help\n  vida docflow finalize-edit --help\n  vida docflow doctor --root .\n  vida docflow check-file --path <file>\n  vida docflow readiness-check --profile active-canon\n  vida docflow registry --root .\n\nInit/repair contract:\n  `vida docflow init` without positional args prints agent bootstrap instructions.\n  `vida docflow init --json` prints the same contract as machine-readable JSON.\n  `vida docflow init <markdown_file> <artifact_path> <artifact_type> <change_note>` initializes a canonical markdown artifact.\n  `vida docflow repair-footer <markdown_file>` initializes missing footer metadata on legacy markdown files.";
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
@@ -79,7 +79,9 @@ pub(crate) enum Command {
     Agent(AgentArgs),
     #[command(about = "resolve and render framework protocol/guide surfaces")]
     Protocol(ProtocolArgs),
-    #[command(about = "inspect project activation posture and bounded onboarding next steps")]
+    #[command(
+        about = "inspect or repair project activation posture and bounded onboarding next steps"
+    )]
     ProjectActivator(ProjectActivatorArgs),
     #[command(about = "record host-agent feedback and refresh local strategy state")]
     AgentFeedback(AgentFeedbackArgs),
@@ -944,7 +946,10 @@ pub(crate) struct InitArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct ProjectActivatorArgs {
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        help = "Explicit project activation state dir; defaults to the current project's authoritative .vida/data/state"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
     #[arg(long = "project-id")]
@@ -970,6 +975,12 @@ pub(crate) struct ProjectActivatorArgs {
 
     #[arg(long = "host-cli-system")]
     pub(crate) host_cli_system: Option<String>,
+
+    #[arg(
+        long = "repair",
+        help = "Materialize missing safe-default project activation/config/docs projections and selected host template when possible"
+    )]
+    pub(crate) repair: bool,
 
     #[arg(long = "json")]
     pub(crate) json: bool,

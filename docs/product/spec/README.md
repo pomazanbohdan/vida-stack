@@ -55,6 +55,7 @@ Active design docs:
 - `docs/product/spec/continue-post-main-carveout-with-next-design.md`
 - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
 - `docs/product/spec/model-provider-price-catalog-lifecycle-design.md`
+- `docs/product/spec/vida-migration-gap-repair-design.md`
 
 Current promoted runtime-control specs:
 
@@ -73,5 +74,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-24T16:11:52.331706955Z
+updated_at: 2026-04-30T22:16:37.515945Z
 changelog_ref: README.changelog.jsonl

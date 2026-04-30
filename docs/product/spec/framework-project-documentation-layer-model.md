@@ -160,7 +160,7 @@ Step 2:
 Rules:
 
 1. `AGENTS.md` is the framework bootstrap carrier,
-2. `AGENTS.sidecar.md` is the project docs bootstrap carrier,
+2. `AGENTS.sidecar.md` is the project agent-instructions overlay and contains the project docs map,
 3. framework map discovery must come from framework-owned map surfaces,
 4. project document discovery must come from the project docs map,
 5. neither map is optional during initialization.
@@ -225,5 +225,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/framework-project-documentation-layer-model.md
 created_at: '2026-03-10T05:25:00+02:00'
-updated_at: '2026-03-12T07:58:34+02:00'
+updated_at: 2026-04-30T22:15:51.0391388Z
 changelog_ref: framework-project-documentation-layer-model.changelog.jsonl

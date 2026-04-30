@@ -80,7 +80,90 @@ fn parse_taskflow_consume_final_args(
     Ok((as_json, mode, request_text))
 }
 
+fn requested_help(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h" | "help"))
+}
+
+fn print_consume_final_help() {
+    println!("VIDA TaskFlow consume final");
+    println!();
+    println!("Purpose:");
+    println!("  Create or validate the bounded final runtime-consumption handoff for one request.");
+    println!();
+    println!("Usage:");
+    println!("  vida taskflow consume final <request_text> [--preview | --validate-only] [--json]");
+    println!();
+    println!("Options:");
+    println!("  --preview        Render the handoff preview without execute-mode mutation.");
+    println!("  --validate-only  Validate the handoff path without execute-mode mutation.");
+    println!("  --json           Emit machine-readable output.");
+    println!("  -h, --help       Print help.");
+    println!();
+    println!("Remediation:");
+    println!("  If closure is blocked, run `vida taskflow consume bundle check --json` and follow its `next_actions`.");
+}
+
+fn print_consume_continue_help() {
+    println!("VIDA TaskFlow consume continue");
+    println!();
+    println!("Usage:");
+    println!("  vida taskflow consume continue [--run-id <run_id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]");
+    println!();
+    println!("Remediation:");
+    println!("  If resume is blocked, inspect `vida taskflow recovery latest --json`.");
+}
+
+fn print_consume_advance_help() {
+    println!("VIDA TaskFlow consume advance");
+    println!();
+    println!("Usage:");
+    println!("  vida taskflow consume advance [--run-id <run_id>] [--max-rounds <n>] [--json]");
+    println!();
+    println!("Remediation:");
+    println!("  If advance is blocked, inspect `vida taskflow recovery latest --json`.");
+}
+
+pub(crate) fn try_print_taskflow_consume_nested_help(args: &[String]) -> bool {
+    match args {
+        [head] if head == "consume" => {
+            super::print_taskflow_proxy_help(Some("consume"));
+            true
+        }
+        [head, flag] if head == "consume" && matches!(flag.as_str(), "--help" | "-h") => {
+            super::print_taskflow_proxy_help(Some("consume"));
+            true
+        }
+        [head, subcommand, request @ ..] if head == "consume" && subcommand == "final" => {
+            if requested_help(request) {
+                print_consume_final_help();
+                return true;
+            }
+            false
+        }
+        [head, subcommand, ..] if head == "consume" && subcommand == "continue" => {
+            if requested_help(args) {
+                print_consume_continue_help();
+                return true;
+            }
+            false
+        }
+        [head, subcommand, ..] if head == "consume" && subcommand == "advance" => {
+            if requested_help(args) {
+                print_consume_advance_help();
+                return true;
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
 pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
+    if try_print_taskflow_consume_nested_help(args) {
+        return ExitCode::SUCCESS;
+    }
+
     if let Some(exit) = super::taskflow_consume_bundle::run_taskflow_consume_bundle(args).await {
         return exit;
     }
@@ -95,6 +178,10 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         [head, subcommand, ..] if head == "consume" && subcommand == "continue" => {
+            if requested_help(args) {
+                print_consume_continue_help();
+                return ExitCode::SUCCESS;
+            }
             let (
                 as_json,
                 requested_run_id,
@@ -119,6 +206,10 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
             .await;
         }
         [head, subcommand, ..] if head == "consume" && subcommand == "advance" => {
+            if requested_help(args) {
+                print_consume_advance_help();
+                return ExitCode::SUCCESS;
+            }
             let (as_json, requested_run_id, max_rounds) =
                 match super::taskflow_consume_resume::parse_taskflow_consume_advance_args(args) {
                     Ok(parsed) => parsed,
@@ -136,6 +227,10 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
             .await
         }
         [head, subcommand, request @ ..] if head == "consume" && subcommand == "final" => {
+            if requested_help(request) {
+                print_consume_final_help();
+                return ExitCode::SUCCESS;
+            }
             let (as_json, consume_final_mode, request_text) =
                 match parse_taskflow_consume_final_args(request) {
                     Ok(parsed) => parsed,
@@ -1551,8 +1646,9 @@ mod tests {
         build_approval_delegation_evidence_gate, build_execution_preparation_evidence_gate,
         build_retrieval_policy_decision_gate, build_runtime_consumption_dispatch_receipt,
         fail_fast_state_store_open_with_timeout, normalize_runtime_consumption_statuses,
-        parse_taskflow_consume_final_args, ApprovalDelegationEvidenceGate, ConsumeFinalMode,
-        ExecutionPreparationEvidenceGate, RetrievalPolicyDecisionGate,
+        parse_taskflow_consume_final_args, try_print_taskflow_consume_nested_help,
+        ApprovalDelegationEvidenceGate, ConsumeFinalMode, ExecutionPreparationEvidenceGate,
+        RetrievalPolicyDecisionGate,
     };
     use std::time::Duration;
 
@@ -1583,6 +1679,23 @@ mod tests {
         assert!(!validate_json);
         assert_eq!(validate_mode, ConsumeFinalMode::ValidateOnly);
         assert_eq!(validate_request, "ship this");
+    }
+
+    #[test]
+    fn nested_consume_help_is_handled_before_async_final_surface() {
+        let final_help = vec![
+            "consume".to_string(),
+            "final".to_string(),
+            "--help".to_string(),
+        ];
+        let continue_help = vec![
+            "consume".to_string(),
+            "continue".to_string(),
+            "--help".to_string(),
+        ];
+
+        assert!(try_print_taskflow_consume_nested_help(&final_help));
+        assert!(try_print_taskflow_consume_nested_help(&continue_help));
     }
 
     #[test]

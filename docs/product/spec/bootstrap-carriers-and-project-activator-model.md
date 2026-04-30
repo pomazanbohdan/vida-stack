@@ -18,12 +18,12 @@ At the same time it must preserve the bootstrap-carrier split:
 1. `AGENTS.md`
    - framework bootstrap carrier
 2. `AGENTS.sidecar.md`
-   - project docs bootstrap carrier
+   - project agent-instructions overlay with a mandatory project docs map section
 
 Rule:
 
 1. `AGENTS.md` must route,
-2. `AGENTS.sidecar.md` must orient project docs,
+2. `AGENTS.sidecar.md` must orient project-local agent behavior and project docs,
 3. deeper project onboarding and activation must not be hidden inside ad hoc chat behavior.
 
 Carrier ownership rule:
@@ -63,7 +63,7 @@ Minimum routing content in `AGENTS.md`:
 2. determine the bounded bootstrap route,
 3. route to `vida orchestrator-init` or `vida agent-init` when those runtime surfaces are available,
 4. if project activation is pending, route to `vida project-activator` before ordinary project work,
-5. read `AGENTS.sidecar.md` as the project docs map after bootstrap routing establishes or confirms the project path,
+5. read `AGENTS.sidecar.md` as the project agent-instructions overlay after bootstrap routing establishes or confirms the project path,
 6. use bounded shorthand framework ids only when runtime bootstrap surfaces leave an edge case unresolved.
 
 Source-mode bridge rule:
@@ -176,7 +176,7 @@ It owns staged project onboarding and activation preparation.
 
 1. the project has not completed initial VIDA onboarding,
 2. project activation/config state is materially incomplete,
-3. the sidecar/project-doc structure is missing or too thin for lawful routing,
+3. the sidecar project-instruction/project-doc structure is missing or too thin for lawful routing,
 4. runtime cannot determine the project execution posture safely.
 
 Bootstrap-carrier rule:
@@ -284,11 +284,12 @@ The activator must:
 2. persist project-structure understanding into `AGENTS.sidecar.md`,
 3. create or refresh the project documentation map when enough project docs exist,
 4. make that sidecar/project-map path an explicit required read path for future project work.
+5. preserve project-local agent instructions in the sidecar instead of narrowing the sidecar to docs-map-only content.
 
 Rule:
 
 1. project structure must not remain only as transient chat understanding,
-2. it must become durable project-doc routing state.
+2. it must become durable project-agent and project-doc routing state.
 
 ## 11. Environment And Runtime Survey
 
@@ -440,5 +441,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/bootstrap-carriers-and-project-activator-model.md
 created_at: '2026-03-12T22:20:00+02:00'
-updated_at: 2026-04-03T19:00:00+03:00
+updated_at: 2026-04-30T22:15:50.9311252Z
 changelog_ref: bootstrap-carriers-and-project-activator-model.changelog.jsonl
