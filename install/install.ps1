@@ -343,6 +343,9 @@ if /I "%~1"=="upgrade" goto manage
 if /I "%~1"=="install" goto manage
 if /I "%~1"=="use" goto manage
 if /I "%~1"=="init" goto projectinit
+if /I "%~1"=="--help" goto runtimehelp
+if /I "%~1"=="-h" goto runtimehelp
+if /I "%~1"=="/?" goto runtimehelp
 if /I "%~1"=="root" (
   echo %VIDA_ROOT%
   exit /b 0
@@ -355,6 +358,9 @@ exit /b %ERRORLEVEL%
 :projectinit
 powershell -NoProfile -ExecutionPolicy Bypass -File "%VIDA_HOME%\installer\install.ps1" project-init -Root "%VIDA_HOME%" -BinDir "$BinDir"
 exit /b %ERRORLEVEL%
+:runtimehelp
+"%RUNTIME_BIN%" --help
+exit /b %ERRORLEVEL%
 "@ | Set-Content -LiteralPath $path -Encoding ASCII
     } else {
         @"
@@ -365,6 +371,18 @@ set "VIDA_ROOT=$Root\current"
 set "RUNTIME_BIN=%VIDA_ROOT%\bin\$Launcher.exe"
 if not exist "%RUNTIME_BIN%" set "RUNTIME_BIN=%VIDA_ROOT%\bin\$Launcher"
 if exist "%RUNTIME_BIN%" (
+  if /I "%~1"=="--help" (
+    "%RUNTIME_BIN%" --help
+    exit /b %ERRORLEVEL%
+  )
+  if /I "%~1"=="-h" (
+    "%RUNTIME_BIN%" -h
+    exit /b %ERRORLEVEL%
+  )
+  if /I "%~1"=="/?" (
+    "%RUNTIME_BIN%" --help
+    exit /b %ERRORLEVEL%
+  )
   "%RUNTIME_BIN%" %*
   exit /b %ERRORLEVEL%
 )

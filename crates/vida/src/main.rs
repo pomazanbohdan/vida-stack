@@ -96,6 +96,7 @@ mod temp_state;
 #[cfg(test)]
 mod test_cli_support;
 
+use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -233,7 +234,19 @@ use taskflow_spec_bootstrap::{
 use time::format_description::well_known::Rfc3339;
 #[tokio::main]
 async fn main() -> ExitCode {
-    run_root_command(Cli::parse()).await
+    run_root_command(Cli::parse_from(normalized_cli_args())).await
+}
+
+fn normalized_cli_args() -> Vec<String> {
+    env::args().map(normalize_cli_arg).collect()
+}
+
+fn normalize_cli_arg(arg: String) -> String {
+    match arg.as_str() {
+        "--HELP" | "--Help" | "/HELP" | "/Help" | "/help" | "/?" => "--help".to_string(),
+        "-H" => "-h".to_string(),
+        _ => arg,
+    }
 }
 
 #[cfg(test)]
@@ -327,5 +340,19 @@ mod tests {
         assert!(harness.path().join(".vida/runtime").is_dir());
         assert!(harness.path().join(".vida/scratchpad").is_dir());
         assert!(!harness.path().join("vida").exists());
+    }
+
+    #[test]
+    fn uppercase_help_flag_is_normalized_for_windows_operator_habit() {
+        let parsed = Cli::try_parse_from(["vida", "--help"])
+            .expect_err("canonical help should render clap display error");
+        let argv = ["vida".to_string(), "--HELP".to_string()]
+            .into_iter()
+            .map(normalize_cli_arg);
+        let normalized = Cli::try_parse_from(argv)
+            .expect_err("uppercase help should render clap display error");
+
+        assert_eq!(parsed.kind(), normalized.kind());
+        assert!(normalized.to_string().contains("Usage: vida"));
     }
 }
