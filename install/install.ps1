@@ -4,13 +4,14 @@ VIDA Windows installer.
 Usage:
   pwsh -ExecutionPolicy Bypass -File install.ps1 install
   pwsh -ExecutionPolicy Bypass -File install.ps1 upgrade -Version v0.9.0
+  pwsh -ExecutionPolicy Bypass -File install.ps1 install --bins taskflow --force
   pwsh -ExecutionPolicy Bypass -File install.ps1 doctor
 #>
 
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("install", "init", "upgrade", "use", "doctor", "help")]
+    [ValidateSet("install", "init", "project-init", "upgrade", "use", "doctor", "help")]
     [string] $Command = "help",
 
     [string] $Version,
@@ -18,10 +19,13 @@ param(
     [ValidateSet("auto", "windows-x86_64")]
     [string] $Target = "auto",
     [string] $Root,
+    [Alias("bin-dir")]
     [string] $BinDir,
     [string] $Bins,
+    [Alias("keep-releases")]
     [int] $KeepReleases = 3,
     [switch] $Force,
+    [Alias("dry-run")]
     [switch] $DryRun
 )
 
@@ -80,10 +84,11 @@ Options:
   -DryRun           Print planned actions without changing files.
 
 Examples:
-  irm https://github.com/pomazanbohdan/vida-stack/releases/latest/download/vida-install.ps1 -OutFile vida-install.ps1
+  irm https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.ps1 -OutFile vida-install.ps1
   pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install
-  pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 upgrade -Version v0.9.0
-  pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install -Bins vida,taskflow,docflow
+  pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 upgrade --version v0.9.0
+  pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install --bins taskflow --force
+  pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install --bins docflow --force
   pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 doctor
 "@
 }
@@ -97,10 +102,11 @@ function Normalize-Bins {
     $values = @()
     foreach ($item in ($clean -split ",")) {
         if (-not $item) { continue }
+        if ($item -eq "textflow") { $item = "taskflow" }
         if ($item -notin @("vida", "taskflow", "docflow")) {
-            Fail "Unsupported -Bins entry: $item. Allowed: vida,taskflow,docflow,all"
+            Fail "Unsupported -Bins entry: $item. Allowed: vida,taskflow,docflow,textflow,all"
         }
-        $values += $item
+        if ($values -notcontains $item) { $values += $item }
     }
     if ($values.Count -eq 0) { Fail "-Bins must include at least one launcher" }
     return $values
@@ -211,11 +217,74 @@ function Ensure-RuntimeConfigScaffold {
     Copy-Item -LiteralPath $template -Destination $targetConfig -Force
 }
 
+function Ensure-FeatureTemplateScaffold {
+    param([string] $ReleaseRoot)
+    $legacyTarget = Join-Path $ReleaseRoot "docs\product\spec\templates\feature-design-document.template.md"
+    $assetTarget = Join-Path $ReleaseRoot "install\assets\feature-design-document.template.md"
+    if ((Test-Path -LiteralPath $legacyTarget -PathType Leaf) -and (Test-Path -LiteralPath $assetTarget -PathType Leaf)) {
+        return
+    }
+
+    $templateSource = ""
+    if (Test-Path -LiteralPath $assetTarget -PathType Leaf) {
+        $templateSource = $assetTarget
+    } elseif ($PSCommandPath) {
+        $candidate = Join-Path ([System.IO.Path]::GetDirectoryName($PSCommandPath)) "..\docs\product\spec\templates\feature-design-document.template.md"
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $templateSource = [System.IO.Path]::GetFullPath($candidate) }
+    }
+
+    if (-not $templateSource) {
+        if ($DryRun) {
+            Write-Log "Would download feature design template for installed vida init compatibility"
+            return
+        }
+        $tempTemplate = Join-Path ([System.IO.Path]::GetTempPath()) ("vida-feature-template-" + [guid]::NewGuid().ToString("N") + ".md")
+        Download-File "https://raw.githubusercontent.com/$RepoSlug/main/docs/product/spec/templates/feature-design-document.template.md" $tempTemplate
+        $templateSource = $tempTemplate
+    }
+
+    foreach ($target in @($assetTarget, $legacyTarget)) {
+        if (Test-Path -LiteralPath $target -PathType Leaf) { continue }
+        if ($DryRun) {
+            Write-Log "Would scaffold feature design template into $target"
+            continue
+        }
+        New-Item -ItemType Directory -Force -Path ([System.IO.Path]::GetDirectoryName($target)) | Out-Null
+        Copy-Item -LiteralPath $templateSource -Destination $target -Force
+    }
+}
+
 function Get-RuntimeBinaryPath {
     param([string] $ReleaseRoot, [string] $Name)
     $exe = Join-Path $ReleaseRoot "bin\$Name.exe"
     if (Test-Path -LiteralPath $exe) { return $exe }
     return (Join-Path $ReleaseRoot "bin\$Name")
+}
+
+function Test-RuntimeAvailable {
+    param([string] $ReleaseRoot, [string] $Name)
+    $direct = Get-RuntimeBinaryPath $ReleaseRoot $Name
+    if (Test-Path -LiteralPath $direct -PathType Leaf) { return $true }
+    if ($Name -ne "vida") {
+        $vida = Get-RuntimeBinaryPath $ReleaseRoot "vida"
+        if (Test-Path -LiteralPath $vida -PathType Leaf) { return $true }
+    }
+    return $false
+}
+
+function Ensure-WindowsRuntimeBinaries {
+    param([string] $ReleaseRoot)
+    foreach ($runtime in @("vida", "taskflow", "docflow")) {
+        $plain = Join-Path $ReleaseRoot "bin\$runtime"
+        $exe = Join-Path $ReleaseRoot "bin\$runtime.exe"
+        if ((Test-Path -LiteralPath $plain -PathType Leaf) -and -not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            if ($DryRun) {
+                Write-Log "Would create Windows executable alias $exe"
+            } else {
+                Copy-Item -LiteralPath $plain -Destination $exe -Force
+            }
+        }
+    }
 }
 
 function Write-EnvironmentFiles {
@@ -273,6 +342,7 @@ if not exist "%RUNTIME_BIN%" set "RUNTIME_BIN=%VIDA_ROOT%\bin\vida"
 if /I "%~1"=="upgrade" goto manage
 if /I "%~1"=="install" goto manage
 if /I "%~1"=="use" goto manage
+if /I "%~1"=="init" goto projectinit
 if /I "%~1"=="root" (
   echo %VIDA_ROOT%
   exit /b 0
@@ -281,6 +351,9 @@ if /I "%~1"=="root" (
 exit /b %ERRORLEVEL%
 :manage
 powershell -NoProfile -ExecutionPolicy Bypass -File "%VIDA_HOME%\installer\install.ps1" %* -Root "%VIDA_HOME%" -BinDir "$BinDir"
+exit /b %ERRORLEVEL%
+:projectinit
+powershell -NoProfile -ExecutionPolicy Bypass -File "%VIDA_HOME%\installer\install.ps1" project-init -Root "%VIDA_HOME%" -BinDir "$BinDir"
 exit /b %ERRORLEVEL%
 "@ | Set-Content -LiteralPath $path -Encoding ASCII
     } else {
@@ -291,7 +364,13 @@ set "VIDA_HOME=$Root"
 set "VIDA_ROOT=$Root\current"
 set "RUNTIME_BIN=%VIDA_ROOT%\bin\$Launcher.exe"
 if not exist "%RUNTIME_BIN%" set "RUNTIME_BIN=%VIDA_ROOT%\bin\$Launcher"
-"%RUNTIME_BIN%" %*
+if exist "%RUNTIME_BIN%" (
+  "%RUNTIME_BIN%" %*
+  exit /b %ERRORLEVEL%
+)
+set "VIDA_BIN=%VIDA_ROOT%\bin\vida.exe"
+if not exist "%VIDA_BIN%" set "VIDA_BIN=%VIDA_ROOT%\bin\vida"
+"%VIDA_BIN%" $Launcher %*
 exit /b %ERRORLEVEL%
 "@ | Set-Content -LiteralPath $path -Encoding ASCII
     }
@@ -415,6 +494,8 @@ function Install-Release {
         Move-Item -LiteralPath $extractedRoot.FullName -Destination $releaseRoot
 
         Ensure-RuntimeConfigScaffold $releaseRoot
+        Ensure-FeatureTemplateScaffold $releaseRoot
+        Ensure-WindowsRuntimeBinaries $releaseRoot
         Install-ManagementScript $Tag
         Write-EnvironmentFiles
         Install-PathHook
@@ -461,8 +542,7 @@ function Invoke-Doctor {
     }
     if (Test-Path -LiteralPath $current -PathType Container) {
         foreach ($runtime in @("vida", "taskflow", "docflow")) {
-            $runtimePath = Get-RuntimeBinaryPath $current $runtime
-            if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+            if (-not (Test-RuntimeAvailable $current $runtime)) {
                 Write-Log "Missing bundled $runtime binary"
                 $missing = $true
             }
@@ -500,6 +580,7 @@ function Bootstrap-CurrentProject {
     Copy-ProjectTree (Join-Path $ReleaseRoot "vida") (Join-Path $projectRoot "vida") "framework protocol tree"
     Copy-ProjectTree (Join-Path $ReleaseRoot ".codex") (Join-Path $projectRoot ".codex") "project-local Codex configuration"
     Copy-ProjectFile (Join-Path $ReleaseRoot "install\assets\vida.config.yaml.template") (Join-Path $projectRoot "vida.config.yaml") "project runtime config scaffold"
+    Copy-ProjectFile (Join-Path $ReleaseRoot "install\assets\feature-design-document.template.md") (Join-Path $projectRoot "docs\product\spec\templates\feature-design-document.template.md") "feature design template"
     Write-Host ""
     Write-Host "Current project bootstrap is ready"
     Write-Host "Project root: $projectRoot"
@@ -523,6 +604,9 @@ switch ($Command) {
     "init" {
         $resolved = Resolve-Version
         Install-Release $resolved
+        Bootstrap-CurrentProject (Join-Path $Root "current")
+    }
+    "project-init" {
         Bootstrap-CurrentProject (Join-Path $Root "current")
     }
     "use" {

@@ -118,9 +118,17 @@ Windows PowerShell:
 ```powershell
 mkdir myproject
 cd myproject
-irm https://github.com/pomazanbohdan/vida-stack/releases/latest/download/vida-install.ps1 -OutFile vida-install.ps1
+irm https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.ps1 -OutFile vida-install.ps1
 pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install
 vida init
+```
+
+Windows PowerShell also supports Linux-style installer options:
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install --force
+pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install --bins taskflow --force
+pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install --bins docflow --force
 ```
 
 ### What the installer does

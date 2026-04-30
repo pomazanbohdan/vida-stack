@@ -226,7 +226,7 @@ jobs:
           $archive = Get-ChildItem -LiteralPath dist -Filter "vida-stack-v*-windows-x86_64.zip" | Select-Object -First 1
           if (-not $archive) { throw "Windows release zip was not generated" }
 
-          pwsh -NoProfile -ExecutionPolicy Bypass -File dist/vida-install.ps1 install -Archive $archive.FullName -Root $installRoot -BinDir $binDir -Force
+          pwsh -NoProfile -ExecutionPolicy Bypass -File dist/vida-install.ps1 install --archive $archive.FullName --root $installRoot --bin-dir $binDir --force
           if ($LASTEXITCODE -ne 0) { throw "Windows installer install failed" }
           pwsh -NoProfile -ExecutionPolicy Bypass -File dist/vida-install.ps1 doctor -Root $installRoot -BinDir $binDir
           if ($LASTEXITCODE -ne 0) { throw "Windows installer doctor failed" }
