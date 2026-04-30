@@ -4895,6 +4895,128 @@ mod tests {
         }
     }
 
+    fn run_on_large_test_stack(name: &str, test: impl FnOnce() + Send + 'static) {
+        let handle = thread::Builder::new()
+            .name(name.to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(test)
+            .expect("large-stack test thread should spawn");
+        if let Err(panic) = handle.join() {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
+    fn fake_codex_path(fake_bin: &Path) -> PathBuf {
+        #[cfg(windows)]
+        {
+            fake_bin.join("codex.ps1")
+        }
+        #[cfg(not(windows))]
+        {
+            fake_bin.join("codex")
+        }
+    }
+
+    fn prepend_to_path(path: &Path) -> String {
+        let original_path = env::var_os("PATH");
+        let paths = original_path
+            .as_deref()
+            .map(env::split_paths)
+            .into_iter()
+            .flatten();
+        env::join_paths(std::iter::once(path.to_path_buf()).chain(paths))
+            .expect("test PATH should join")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn make_fake_codex_executable(_path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(_path)
+                .expect("fake codex metadata should load")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(_path, perms).expect("fake codex should be executable");
+        }
+    }
+
+    fn configure_fake_codex_dispatch(project_root: &Path, fake_codex: &Path) {
+        #[cfg(windows)]
+        {
+            let config_path = project_root.join("vida.config.yaml");
+            let config = fs::read_to_string(&config_path).expect("config should exist");
+            let fake_codex = fake_codex.display().to_string().replace('\'', "''");
+            let updated = config.replace(
+                "        command: codex\n        static_args:\n          - exec\n          - --json\n",
+                &format!(
+                    "        command: pwsh\n        static_args:\n          - -NoProfile\n          - -ExecutionPolicy\n          - Bypass\n          - -File\n          - '{fake_codex}'\n"
+                ),
+            );
+            fs::write(&config_path, updated).expect("config should update fake codex dispatch");
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (project_root, fake_codex);
+        }
+    }
+
+    fn write_fake_codex_success(path: &Path, message: &str) {
+        #[cfg(windows)]
+        let script = format!(
+            "Write-Output '{{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}}'\r\nWrite-Output '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"{message}\"}}}}'\r\n"
+        );
+        #[cfg(not(windows))]
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}}'\nprintf '%s\\n' '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"{message}\"}}}}'\n"
+        );
+        fs::write(path, script).expect("fake codex should write");
+        make_fake_codex_executable(path);
+    }
+
+    fn write_fake_codex_timeout(path: &Path) {
+        #[cfg(windows)]
+        let script = "Write-Output '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\r\nStart-Sleep -Seconds 30\r\n";
+        #[cfg(not(windows))]
+        let script = "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\ntrap '' TERM\nsleep 30\n";
+        fs::write(path, script).expect("fake codex should write");
+        make_fake_codex_executable(path);
+    }
+
+    fn write_fake_codex_delayed_success(path: &Path) {
+        #[cfg(windows)]
+        let script = "Write-Output '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\r\nStart-Sleep -Seconds 2\r\nWrite-Output '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\r\n";
+        #[cfg(not(windows))]
+        let script = "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nsleep 2\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\n";
+        fs::write(path, script).expect("fake codex should write");
+        make_fake_codex_executable(path);
+    }
+
+    fn write_fake_codex_detached_timeout(path: &Path) {
+        #[cfg(windows)]
+        let script = "Write-Output '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\r\nStart-Process -WindowStyle Hidden pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 30'\r\nStart-Sleep -Seconds 30\r\n";
+        #[cfg(not(windows))]
+        let script = "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nsetsid sh -c 'sleep 30' &\nexit 0\n";
+        fs::write(path, script).expect("fake codex should write");
+        make_fake_codex_executable(path);
+    }
+
+    fn write_fake_codex_env_capture(path: &Path, env_capture: &Path) {
+        #[cfg(windows)]
+        let script = format!(
+            "Set-Content -LiteralPath '{capture}' -Value ([string]$env:HOME)\r\nAdd-Content -LiteralPath '{capture}' -Value ([string]$env:XDG_CONFIG_HOME)\r\nAdd-Content -LiteralPath '{capture}' -Value ([string]$env:XDG_DATA_HOME)\r\nAdd-Content -LiteralPath '{capture}' -Value ([string]$env:XDG_STATE_HOME)\r\nAdd-Content -LiteralPath '{capture}' -Value ([string]$env:XDG_CACHE_HOME)\r\nAdd-Content -LiteralPath '{capture}' -Value ([string]$env:TMPDIR)\r\nWrite-Output '{{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}}'\r\nWrite-Output '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}}}'\r\n",
+            capture = env_capture.display()
+        );
+        #[cfg(not(windows))]
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$HOME\" > \"{capture}\"\nprintf '%s\\n' \"$XDG_CONFIG_HOME\" >> \"{capture}\"\nprintf '%s\\n' \"$XDG_DATA_HOME\" >> \"{capture}\"\nprintf '%s\\n' \"$XDG_STATE_HOME\" >> \"{capture}\"\nprintf '%s\\n' \"$XDG_CACHE_HOME\" >> \"{capture}\"\nprintf '%s\\n' \"$TMPDIR\" >> \"{capture}\"\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}}'\nprintf '%s\\n' '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}}}'\n",
+            capture = env_capture.display()
+        );
+        fs::write(path, script).expect("fake codex should write");
+        make_fake_codex_executable(path);
+    }
+
     #[test]
     fn taskflow_consume_final_closure_admission_reports_admit() {
         let bundle_check = TaskflowConsumeBundleCheck {
@@ -6062,27 +6184,10 @@ mod tests {
 
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = fake_bin.join("codex");
-        fs::write(
-            &fake_codex,
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\n",
-        )
-        .expect("fake codex should write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake_codex)
-                .expect("fake codex metadata should load")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
-        }
-        let original_path = env::var("PATH").unwrap_or_default();
-        let patched_path = if original_path.is_empty() {
-            fake_bin.display().to_string()
-        } else {
-            format!("{}:{}", fake_bin.display(), original_path)
-        };
+        let fake_codex = fake_codex_path(&fake_bin);
+        write_fake_codex_success(&fake_codex, "internal-dispatch-ok");
+        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
         let state_root = harness_state_root(&harness);
@@ -6288,30 +6393,10 @@ mod tests {
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
         let env_capture = harness.path().join("internal-host-env.txt");
-        let fake_codex = fake_bin.join("codex");
-        fs::write(
-            &fake_codex,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$HOME\" > \"{capture}\"\nprintf '%s\\n' \"$XDG_CONFIG_HOME\" >> \"{capture}\"\nprintf '%s\\n' \"$XDG_DATA_HOME\" >> \"{capture}\"\nprintf '%s\\n' \"$XDG_STATE_HOME\" >> \"{capture}\"\nprintf '%s\\n' \"$XDG_CACHE_HOME\" >> \"{capture}\"\nprintf '%s\\n' \"$TMPDIR\" >> \"{capture}\"\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}}'\nprintf '%s\\n' '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}}}'\n",
-                capture = env_capture.display()
-            ),
-        )
-        .expect("fake codex should write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake_codex)
-                .expect("fake codex metadata should load")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
-        }
-        let original_path = env::var("PATH").unwrap_or_default();
-        let patched_path = if original_path.is_empty() {
-            fake_bin.display().to_string()
-        } else {
-            format!("{}:{}", fake_bin.display(), original_path)
-        };
+        let fake_codex = fake_codex_path(&fake_bin);
+        write_fake_codex_env_capture(&fake_codex, &env_capture);
+        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
         let state_root = harness_state_root(&harness);
@@ -6471,27 +6556,10 @@ mod tests {
 
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = fake_bin.join("codex");
-        fs::write(
-            &fake_codex,
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\n",
-        )
-        .expect("fake codex should write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake_codex)
-                .expect("fake codex metadata should load")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
-        }
-        let original_path = env::var("PATH").unwrap_or_default();
-        let patched_path = if original_path.is_empty() {
-            fake_bin.display().to_string()
-        } else {
-            format!("{}:{}", fake_bin.display(), original_path)
-        };
+        let fake_codex = fake_codex_path(&fake_bin);
+        write_fake_codex_success(&fake_codex, "internal-dispatch-ok");
+        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
         let state_root = harness_state_root(&harness);
@@ -6662,27 +6730,10 @@ mod tests {
 
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = fake_bin.join("codex");
-        fs::write(
-            &fake_codex,
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\n",
-        )
-        .expect("fake codex should write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake_codex)
-                .expect("fake codex metadata should load")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
-        }
-        let original_path = env::var("PATH").unwrap_or_default();
-        let patched_path = if original_path.is_empty() {
-            fake_bin.display().to_string()
-        } else {
-            format!("{}:{}", fake_bin.display(), original_path)
-        };
+        let fake_codex = fake_codex_path(&fake_bin);
+        write_fake_codex_success(&fake_codex, "internal-dispatch-ok");
+        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
         let state_root = harness_state_root(&harness);
@@ -6815,27 +6866,10 @@ mod tests {
 
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = fake_bin.join("codex");
-        fs::write(
-            &fake_codex,
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\n",
-        )
-        .expect("fake codex should write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake_codex)
-                .expect("fake codex metadata should load")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
-        }
-        let original_path = env::var("PATH").unwrap_or_default();
-        let patched_path = if original_path.is_empty() {
-            fake_bin.display().to_string()
-        } else {
-            format!("{}:{}", fake_bin.display(), original_path)
-        };
+        let fake_codex = fake_codex_path(&fake_bin);
+        write_fake_codex_success(&fake_codex, "internal-dispatch-ok");
+        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
         let state_root = harness_state_root(&harness);
@@ -7121,27 +7155,10 @@ mod tests {
 
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = fake_bin.join("codex");
-        fs::write(
-            &fake_codex,
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"analysis-validation-ok\"}}'\n",
-        )
-        .expect("fake codex should write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake_codex)
-                .expect("fake codex metadata should load")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
-        }
-        let original_path = env::var("PATH").unwrap_or_default();
-        let patched_path = if original_path.is_empty() {
-            fake_bin.display().to_string()
-        } else {
-            format!("{}:{}", fake_bin.display(), original_path)
-        };
+        let fake_codex = fake_codex_path(&fake_bin);
+        write_fake_codex_success(&fake_codex, "analysis-validation-ok");
+        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
         let state_root = harness_state_root(&harness);
@@ -7323,27 +7340,10 @@ mod tests {
 
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = fake_bin.join("codex");
-        fs::write(
-            &fake_codex,
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\ntrap '' TERM\nsleep 30\n",
-        )
-        .expect("fake codex should write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake_codex)
-                .expect("fake codex metadata should load")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
-        }
-        let original_path = env::var("PATH").unwrap_or_default();
-        let patched_path = if original_path.is_empty() {
-            fake_bin.display().to_string()
-        } else {
-            format!("{}:{}", fake_bin.display(), original_path)
-        };
+        let fake_codex = fake_codex_path(&fake_bin);
+        write_fake_codex_timeout(&fake_codex);
+        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
         let state_root = harness_state_root(&harness);
@@ -7490,278 +7490,272 @@ mod tests {
 
     #[test]
     fn taskflow_consume_continue_returns_prompt_blocked_receipt_for_internal_coach_timeout() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-        let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
-        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
+        run_on_large_test_stack(
+            "taskflow_consume_continue_returns_prompt_blocked_receipt_for_internal_coach_timeout",
+            || {
+                let runtime =
+                    tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+                let harness =
+                    TempStateHarness::new().expect("temp state harness should initialize");
+                let _cwd = guard_current_dir(harness.path());
+                let _vida_root_guard =
+                    EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
+                let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        wait_for_state_unlock(harness.path());
-        assert_eq!(
-            runtime.block_on(run(cli(&[
-                "project-activator",
-                "--project-id",
-                "test-project",
-                "--language",
-                "english",
-                "--host-cli-system",
-                "codex",
-                "--json"
-            ]))),
-            ExitCode::SUCCESS
-        );
-        wait_for_state_unlock(harness.path());
-        assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
-        wait_for_state_unlock(harness.path());
+                assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+                wait_for_state_unlock(harness.path());
+                assert_eq!(
+                    runtime.block_on(run(cli(&[
+                        "project-activator",
+                        "--project-id",
+                        "test-project",
+                        "--language",
+                        "english",
+                        "--host-cli-system",
+                        "codex",
+                        "--json"
+                    ]))),
+                    ExitCode::SUCCESS
+                );
+                wait_for_state_unlock(harness.path());
+                assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
+                wait_for_state_unlock(harness.path());
 
-        let config_path = harness.path().join("vida.config.yaml");
-        let config = fs::read_to_string(&config_path).expect("config should exist");
-        let updated = config.replace(
-            "      execution_class: internal\n",
-            "      execution_class: internal\n      max_runtime_seconds: 1\n",
-        );
-        fs::write(&config_path, updated).expect("config should update");
+                let config_path = harness.path().join("vida.config.yaml");
+                let config = fs::read_to_string(&config_path).expect("config should exist");
+                let updated = config.replace(
+                    "      execution_class: internal\n",
+                    "      execution_class: internal\n      max_runtime_seconds: 1\n",
+                );
+                fs::write(&config_path, updated).expect("config should update");
 
-        let fake_bin = harness.path().join("fake-bin");
-        fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = fake_bin.join("codex");
-        fs::write(
-            &fake_codex,
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\ntrap '' TERM\nsleep 30\n",
-        )
-        .expect("fake codex should write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake_codex)
-                .expect("fake codex metadata should load")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
-        }
-        let original_path = env::var("PATH").unwrap_or_default();
-        let patched_path = if original_path.is_empty() {
-            fake_bin.display().to_string()
-        } else {
-            format!("{}:{}", fake_bin.display(), original_path)
-        };
-        let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+                let fake_bin = harness.path().join("fake-bin");
+                fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
+                let fake_codex = fake_codex_path(&fake_bin);
+                write_fake_codex_timeout(&fake_codex);
+                configure_fake_codex_dispatch(harness.path(), &fake_codex);
+                let patched_path = prepend_to_path(&fake_bin);
+                let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
-        let run_id = "run-coach-timeout-continue";
-        let state_root = harness_state_root(&harness);
-        let store = runtime
-            .block_on(StateStore::open(state_root.clone()))
-            .expect("state store should open");
-        let mut status =
-            crate::taskflow_run_graph::default_run_graph_status(run_id, "coach", "delivery");
-        status.task_id = run_id.to_string();
-        status.active_node = "coach".to_string();
-        status.next_node = Some("verification".to_string());
-        status.status = "ready".to_string();
-        status.lifecycle_stage = "coach_active".to_string();
-        status.policy_gate = "single_task_scope_required".to_string();
-        status.handoff_state = "awaiting_coach".to_string();
-        status.context_state = "sealed".to_string();
-        status.checkpoint_kind = "execution_cursor".to_string();
-        status.resume_target = "dispatch.coach_lane".to_string();
-        status.recovery_ready = true;
-        runtime
-            .block_on(store.record_run_graph_status(&status))
-            .expect("run graph status should record");
-        let snapshot_dir = store.root().join("runtime-consumption");
-        fs::create_dir_all(&snapshot_dir).expect("runtime-consumption dir should exist");
-        let snapshot_path = snapshot_dir.join("final-2026-04-16T00-00-00Z.json");
-        let snapshot_path_string = snapshot_path.display().to_string();
-        let operator_contracts = crate::build_operator_contracts_envelope(
-            "pass",
-            Vec::new(),
-            Vec::new(),
-            serde_json::json!({
-                "runtime_consumption_latest_snapshot_path": snapshot_path_string.clone(),
-                "latest_run_graph_dispatch_receipt_id": run_id,
-                "latest_task_reconciliation_receipt_id": serde_json::Value::Null,
-                "consume_final_surface": "vida taskflow consume final",
-            }),
-        );
-        let failure_control_evidence =
-            crate::taskflow_consume_resume::build_failure_control_evidence(
-                run_id,
-                &snapshot_path_string,
-            );
-        fs::write(
-            &snapshot_path,
-            serde_json::json!({
-                "surface": "vida taskflow consume final",
-                "status": operator_contracts["status"].clone(),
-                "blocker_codes": operator_contracts["blocker_codes"].clone(),
-                "next_actions": operator_contracts["next_actions"].clone(),
-                "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                "release_admission": {
-                    "admitted": true,
-                    "status": "pass",
-                    "blockers": []
-                },
-                "operator_contracts": operator_contracts,
-                "payload": {
-                    "dispatch_receipt": {
-                        "run_id": run_id
-                    },
-                    "release_admission": {
-                        "admitted": true,
-                        "status": "pass",
-                        "blockers": []
-                    },
-                    "failure_control_evidence": failure_control_evidence.clone()
-                },
-                "failure_control_evidence": failure_control_evidence
-            })
-            .to_string(),
-        )
-        .expect("final snapshot should write");
-
-        let role_selection = RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "fixed".to_string(),
-            fallback_role: "orchestrator".to_string(),
-            request: "continue coach review".to_string(),
-            selected_role: "coach".to_string(),
-            conversational_mode: Some("development".to_string()),
-            single_task_only: true,
-            tracked_flow_entry: Some("dev-pack".to_string()),
-            allow_freeform_chat: false,
-            confidence: "high".to_string(),
-            matched_terms: vec!["continue".to_string(), "coach".to_string()],
-            compiled_bundle: serde_json::Value::Null,
-            execution_plan: json!({
-                "development_flow": {
-                    "dispatch_contract": {
-                        "execution_lane_sequence": ["implementer", "coach", "verification"],
-                        "implementer_activation": {
-                            "activation_agent_type": "junior",
-                            "activation_runtime_role": "worker"
+                let run_id = "run-coach-timeout-continue";
+                let state_root = harness_state_root(&harness);
+                let store = runtime
+                    .block_on(StateStore::open(state_root.clone()))
+                    .expect("state store should open");
+                let mut status = crate::taskflow_run_graph::default_run_graph_status(
+                    run_id, "coach", "delivery",
+                );
+                status.task_id = run_id.to_string();
+                status.active_node = "coach".to_string();
+                status.next_node = Some("verification".to_string());
+                status.status = "ready".to_string();
+                status.lifecycle_stage = "coach_active".to_string();
+                status.policy_gate = "single_task_scope_required".to_string();
+                status.handoff_state = "awaiting_coach".to_string();
+                status.context_state = "sealed".to_string();
+                status.checkpoint_kind = "execution_cursor".to_string();
+                status.resume_target = "dispatch.coach_lane".to_string();
+                status.recovery_ready = true;
+                runtime
+                    .block_on(store.record_run_graph_status(&status))
+                    .expect("run graph status should record");
+                let snapshot_dir = store.root().join("runtime-consumption");
+                fs::create_dir_all(&snapshot_dir).expect("runtime-consumption dir should exist");
+                let snapshot_path = snapshot_dir.join("final-2026-04-16T00-00-00Z.json");
+                let snapshot_path_string = snapshot_path.display().to_string();
+                let operator_contracts = crate::build_operator_contracts_envelope(
+                    "pass",
+                    Vec::new(),
+                    Vec::new(),
+                    serde_json::json!({
+                        "runtime_consumption_latest_snapshot_path": snapshot_path_string.clone(),
+                        "latest_run_graph_dispatch_receipt_id": run_id,
+                        "latest_task_reconciliation_receipt_id": serde_json::Value::Null,
+                        "consume_final_surface": "vida taskflow consume final",
+                    }),
+                );
+                let failure_control_evidence =
+                    crate::taskflow_consume_resume::build_failure_control_evidence(
+                        run_id,
+                        &snapshot_path_string,
+                    );
+                fs::write(
+                    &snapshot_path,
+                    serde_json::json!({
+                        "surface": "vida taskflow consume final",
+                        "status": operator_contracts["status"].clone(),
+                        "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                        "next_actions": operator_contracts["next_actions"].clone(),
+                        "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                        "release_admission": {
+                            "admitted": true,
+                            "status": "pass",
+                            "blockers": []
                         },
-                        "coach_activation": {
-                            "activation_agent_type": "middle",
-                            "activation_runtime_role": "coach"
+                        "operator_contracts": operator_contracts,
+                        "payload": {
+                            "dispatch_receipt": {
+                                "run_id": run_id
+                            },
+                            "release_admission": {
+                                "admitted": true,
+                                "status": "pass",
+                                "blockers": []
+                            },
+                            "failure_control_evidence": failure_control_evidence.clone()
                         },
-                        "verifier_activation": {
-                            "activation_agent_type": "senior",
-                            "activation_runtime_role": "verifier"
+                        "failure_control_evidence": failure_control_evidence
+                    })
+                    .to_string(),
+                )
+                .expect("final snapshot should write");
+
+                let role_selection = RuntimeConsumptionLaneSelection {
+                    ok: true,
+                    activation_source: "test".to_string(),
+                    selection_mode: "fixed".to_string(),
+                    fallback_role: "orchestrator".to_string(),
+                    request: "continue coach review".to_string(),
+                    selected_role: "coach".to_string(),
+                    conversational_mode: Some("development".to_string()),
+                    single_task_only: true,
+                    tracked_flow_entry: Some("dev-pack".to_string()),
+                    allow_freeform_chat: false,
+                    confidence: "high".to_string(),
+                    matched_terms: vec!["continue".to_string(), "coach".to_string()],
+                    compiled_bundle: serde_json::Value::Null,
+                    execution_plan: json!({
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "execution_lane_sequence": ["implementer", "coach", "verification"],
+                                "implementer_activation": {
+                                    "activation_agent_type": "junior",
+                                    "activation_runtime_role": "worker"
+                                },
+                                "coach_activation": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "coach"
+                                },
+                                "verifier_activation": {
+                                    "activation_agent_type": "senior",
+                                    "activation_runtime_role": "verifier"
+                                }
+                            }
                         }
-                    }
-                }
-            }),
-            reason: "test".to_string(),
-        };
-        runtime
-            .block_on(store.record_run_graph_dispatch_context(
-                &crate::state_store::RunGraphDispatchContext {
+                    }),
+                    reason: "test".to_string(),
+                };
+                runtime
+                    .block_on(
+                        store.record_run_graph_dispatch_context(
+                            &crate::state_store::RunGraphDispatchContext {
+                                run_id: run_id.to_string(),
+                                task_id: run_id.to_string(),
+                                request_text: "continue coach review".to_string(),
+                                role_selection: serde_json::to_value(&role_selection)
+                                    .expect("encode role selection"),
+                                recorded_at: "2026-04-16T00:00:00Z".to_string(),
+                            },
+                        ),
+                    )
+                    .expect("dispatch context should record");
+
+                let receipt = crate::state_store::RunGraphDispatchReceipt {
                     run_id: run_id.to_string(),
-                    task_id: run_id.to_string(),
-                    request_text: "continue coach review".to_string(),
-                    role_selection:
-                        serde_json::to_value(&role_selection).expect("encode role selection"),
+                    dispatch_target: "coach".to_string(),
+                    dispatch_status: "routed".to_string(),
+                    lane_status: "lane_running".to_string(),
+                    supersedes_receipt_id: None,
+                    exception_path_receipt_id: None,
+                    dispatch_kind: "agent_lane".to_string(),
+                    dispatch_surface: Some("vida taskflow consume continue".to_string()),
+                    dispatch_command: Some(format!(
+                        "vida taskflow consume continue --run-id {run_id} --json"
+                    )),
+                    dispatch_packet_path: None,
+                    dispatch_result_path: None,
+                    blocker_code: None,
+                    downstream_dispatch_target: Some("verification".to_string()),
+                    downstream_dispatch_command: Some("vida agent-init".to_string()),
+                    downstream_dispatch_note: Some("after review".to_string()),
+                    downstream_dispatch_ready: false,
+                    downstream_dispatch_blockers: vec!["pending_review_clean_evidence".to_string()],
+                    downstream_dispatch_packet_path: None,
+                    downstream_dispatch_status: None,
+                    downstream_dispatch_result_path: None,
+                    downstream_dispatch_trace_path: None,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: Some("coach".to_string()),
+                    downstream_dispatch_last_target: None,
+                    activation_agent_type: Some("middle".to_string()),
+                    activation_runtime_role: Some("coach".to_string()),
+                    selected_backend: Some("middle".to_string()),
                     recorded_at: "2026-04-16T00:00:00Z".to_string(),
-                },
-            ))
-            .expect("dispatch context should record");
+                };
+                let run_graph_bootstrap = serde_json::json!({ "run_id": run_id });
+                let handoff_plan = serde_json::json!({});
+                let ctx = RuntimeDispatchPacketContext::new(
+                    &state_root,
+                    &role_selection,
+                    &receipt,
+                    &handoff_plan,
+                    &run_graph_bootstrap,
+                );
+                let dispatch_packet_path =
+                    write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
+                let mut persisted_receipt = receipt.clone();
+                persisted_receipt.dispatch_packet_path = Some(dispatch_packet_path);
+                runtime
+                    .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
+                    .expect("dispatch receipt should record");
+                drop(store);
 
-        let receipt = crate::state_store::RunGraphDispatchReceipt {
-            run_id: run_id.to_string(),
-            dispatch_target: "coach".to_string(),
-            dispatch_status: "routed".to_string(),
-            lane_status: "lane_running".to_string(),
-            supersedes_receipt_id: None,
-            exception_path_receipt_id: None,
-            dispatch_kind: "agent_lane".to_string(),
-            dispatch_surface: Some("vida taskflow consume continue".to_string()),
-            dispatch_command: Some(format!(
-                "vida taskflow consume continue --run-id {run_id} --json"
-            )),
-            dispatch_packet_path: None,
-            dispatch_result_path: None,
-            blocker_code: None,
-            downstream_dispatch_target: Some("verification".to_string()),
-            downstream_dispatch_command: Some("vida agent-init".to_string()),
-            downstream_dispatch_note: Some("after review".to_string()),
-            downstream_dispatch_ready: false,
-            downstream_dispatch_blockers: vec!["pending_review_clean_evidence".to_string()],
-            downstream_dispatch_packet_path: None,
-            downstream_dispatch_status: None,
-            downstream_dispatch_result_path: None,
-            downstream_dispatch_trace_path: None,
-            downstream_dispatch_executed_count: 0,
-            downstream_dispatch_active_target: Some("coach".to_string()),
-            downstream_dispatch_last_target: None,
-            activation_agent_type: Some("middle".to_string()),
-            activation_runtime_role: Some("coach".to_string()),
-            selected_backend: Some("middle".to_string()),
-            recorded_at: "2026-04-16T00:00:00Z".to_string(),
-        };
-        let run_graph_bootstrap = serde_json::json!({ "run_id": run_id });
-        let handoff_plan = serde_json::json!({});
-        let ctx = RuntimeDispatchPacketContext::new(
-            &state_root,
-            &role_selection,
-            &receipt,
-            &handoff_plan,
-            &run_graph_bootstrap,
-        );
-        let dispatch_packet_path =
-            write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
-        let mut persisted_receipt = receipt.clone();
-        persisted_receipt.dispatch_packet_path = Some(dispatch_packet_path);
-        runtime
-            .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
-            .expect("dispatch receipt should record");
-        drop(store);
+                let started = Instant::now();
+                assert_eq!(
+                    runtime.block_on(run(cli(&[
+                        "taskflow", "consume", "continue", "--run-id", run_id, "--json",
+                    ]))),
+                    ExitCode::SUCCESS
+                );
+                wait_for_state_unlock(harness.path());
+                let elapsed = started.elapsed();
 
-        let started = Instant::now();
-        assert_eq!(
-            runtime.block_on(run(cli(&[
-                "taskflow", "consume", "continue", "--run-id", run_id, "--json",
-            ]))),
-            ExitCode::SUCCESS
+                let store = runtime
+                    .block_on(StateStore::open_existing(state_root.clone()))
+                    .expect("state store should reopen");
+                let persisted = runtime
+                    .block_on(store.run_graph_dispatch_receipt(run_id))
+                    .expect("dispatch receipt should load")
+                    .expect("dispatch receipt should exist");
+                assert!(
+                    elapsed < Duration::from_secs(6),
+                    "expected consume continue to return promptly on coach timeout, got {:?}",
+                    elapsed
+                );
+                assert_eq!(persisted.dispatch_status, "blocked");
+                assert_eq!(persisted.lane_status, "lane_blocked");
+                assert_eq!(
+                    persisted.blocker_code.as_deref(),
+                    Some("internal_activation_view_only")
+                );
+                let dispatch_result_path = persisted
+                    .dispatch_result_path
+                    .as_deref()
+                    .expect("dispatch result path should record");
+                let rendered = fs::read_to_string(dispatch_result_path)
+                    .expect("dispatch result artifact should load");
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&rendered).expect("dispatch result json should parse");
+                assert_eq!(parsed["status"], "blocked");
+                assert_eq!(parsed["execution_state"], "blocked");
+                assert_eq!(parsed["blocker_code"], "internal_activation_view_only");
+                assert_eq!(parsed["timeout_wrapper"]["timed_out"], true);
+                assert!(parsed["provider_error"]
+                    .as_str()
+                    .expect("provider error should render")
+                    .contains("timed out after 1s"));
+            },
         );
-        wait_for_state_unlock(harness.path());
-        let elapsed = started.elapsed();
-
-        let store = runtime
-            .block_on(StateStore::open_existing(state_root.clone()))
-            .expect("state store should reopen");
-        let persisted = runtime
-            .block_on(store.run_graph_dispatch_receipt(run_id))
-            .expect("dispatch receipt should load")
-            .expect("dispatch receipt should exist");
-        assert!(
-            elapsed < Duration::from_secs(6),
-            "expected consume continue to return promptly on coach timeout, got {:?}",
-            elapsed
-        );
-        assert_eq!(persisted.dispatch_status, "blocked");
-        assert_eq!(persisted.lane_status, "lane_blocked");
-        assert_eq!(
-            persisted.blocker_code.as_deref(),
-            Some("internal_activation_view_only")
-        );
-        let dispatch_result_path = persisted
-            .dispatch_result_path
-            .as_deref()
-            .expect("dispatch result path should record");
-        let rendered =
-            fs::read_to_string(dispatch_result_path).expect("dispatch result artifact should load");
-        let parsed: serde_json::Value =
-            serde_json::from_str(&rendered).expect("dispatch result json should parse");
-        assert_eq!(parsed["status"], "blocked");
-        assert_eq!(parsed["execution_state"], "blocked");
-        assert_eq!(parsed["blocker_code"], "internal_activation_view_only");
-        assert_eq!(parsed["timeout_wrapper"]["timed_out"], true);
-        assert!(parsed["provider_error"]
-            .as_str()
-            .expect("provider error should render")
-            .contains("timed out after 1s"));
     }
 
     #[test]
@@ -7802,27 +7796,10 @@ mod tests {
 
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = fake_bin.join("codex");
-        fs::write(
-            &fake_codex,
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nsetsid sh -c 'sleep 30' &\nexit 0\n",
-        )
-        .expect("fake codex should write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake_codex)
-                .expect("fake codex metadata should load")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
-        }
-        let original_path = env::var("PATH").unwrap_or_default();
-        let patched_path = if original_path.is_empty() {
-            fake_bin.display().to_string()
-        } else {
-            format!("{}:{}", fake_bin.display(), original_path)
-        };
+        let fake_codex = fake_codex_path(&fake_bin);
+        write_fake_codex_detached_timeout(&fake_codex);
+        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
         let state_root = harness_state_root(&harness);
@@ -7982,27 +7959,10 @@ mod tests {
 
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = fake_bin.join("codex");
-        fs::write(
-            &fake_codex,
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nsleep 2\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\n",
-        )
-        .expect("fake codex should write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake_codex)
-                .expect("fake codex metadata should load")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
-        }
-        let original_path = env::var("PATH").unwrap_or_default();
-        let patched_path = if original_path.is_empty() {
-            fake_bin.display().to_string()
-        } else {
-            format!("{}:{}", fake_bin.display(), original_path)
-        };
+        let fake_codex = fake_codex_path(&fake_bin);
+        write_fake_codex_delayed_success(&fake_codex);
+        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
         let state_root = harness_state_root(&harness);
@@ -8170,27 +8130,10 @@ mod tests {
 
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = fake_bin.join("codex");
-        fs::write(
-            &fake_codex,
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nsleep 2\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\n",
-        )
-        .expect("fake codex should write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake_codex)
-                .expect("fake codex metadata should load")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
-        }
-        let original_path = env::var("PATH").unwrap_or_default();
-        let patched_path = if original_path.is_empty() {
-            fake_bin.display().to_string()
-        } else {
-            format!("{}:{}", fake_bin.display(), original_path)
-        };
+        let fake_codex = fake_codex_path(&fake_bin);
+        write_fake_codex_delayed_success(&fake_codex);
+        configure_fake_codex_dispatch(harness.path(), &fake_codex);
+        let patched_path = prepend_to_path(&fake_bin);
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
         let state_root = harness_state_root(&harness);

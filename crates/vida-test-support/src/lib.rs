@@ -9,6 +9,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
 const DEFAULT_TIMEOUT_ARGS: [&str; 3] = ["-k", "5s", "120s"];
 pub const STATE_LOCK_ERROR_MESSAGE: &str = "LOCK is already locked";
 
@@ -28,9 +29,17 @@ fn process_lock() -> &'static RecoveringMutex {
 }
 
 pub fn bounded_binary_command(binary_path: impl AsRef<OsStr>) -> Command {
-    bounded_command(binary_path, DEFAULT_TIMEOUT_ARGS)
+    #[cfg(windows)]
+    {
+        Command::new(binary_path)
+    }
+    #[cfg(unix)]
+    {
+        bounded_command(binary_path, DEFAULT_TIMEOUT_ARGS)
+    }
 }
 
+#[cfg(unix)]
 pub fn bounded_command(
     program: impl AsRef<OsStr>,
     timeout_args: impl IntoIterator<Item = &'static str>,
@@ -39,6 +48,14 @@ pub fn bounded_command(
     command.args(timeout_args);
     command.arg(program);
     command
+}
+
+#[cfg(windows)]
+pub fn bounded_command(
+    program: impl AsRef<OsStr>,
+    _timeout_args: impl IntoIterator<Item = &'static str>,
+) -> Command {
+    Command::new(program)
 }
 
 pub fn simulated_state_lock_output() -> Output {

@@ -4798,7 +4798,8 @@ mod tests {
         assert!(!source_changelog.exists());
 
         let updated = fs::read_to_string(&destination).expect("destination markdown should exist");
-        assert!(updated.contains(&format!("source_path: {}", destination.to_string_lossy())));
+        let expected_destination = destination.to_string_lossy().replace('\\', "/");
+        assert!(updated.contains(&format!("source_path: {expected_destination}")));
         assert!(updated.contains("changelog_ref: a.changelog.jsonl"));
 
         let destination_changelog =
@@ -4807,7 +4808,7 @@ mod tests {
         assert!(destination_changelog.contains("\"event\":\"artifact_moved\""));
         assert!(destination_changelog.contains(&format!(
             "\"previous_source_path\":\"{}\"",
-            source.to_string_lossy()
+            source.to_string_lossy().replace('\\', "/")
         )));
 
         fs::remove_dir_all(root).expect("temp root should be removed");

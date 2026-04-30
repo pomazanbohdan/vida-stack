@@ -72,7 +72,8 @@ fn root_help_renders_as_binary() {
     assert!(output.status.success(), "{}", context.diagnostics(&output));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Standalone DocFlow CLI"));
-    assert!(stdout.contains("Usage: docflow <COMMAND>"));
+    assert!(stdout.contains("Usage: docflow"));
+    assert!(stdout.contains("<COMMAND>"));
     assert!(stdout.contains("init"));
     assert!(stdout.contains("readiness-check"));
 }

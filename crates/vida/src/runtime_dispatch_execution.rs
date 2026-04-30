@@ -240,6 +240,7 @@ fn execute_wrapped_command(
             })?;
         }
     }
+    #[cfg(unix)]
     let process_group_id = child.id();
     let child_stdout = child.stdout.take();
     let child_stderr = child.stderr.take();
