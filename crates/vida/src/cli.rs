@@ -186,7 +186,7 @@ pub(crate) struct ReleaseArgs {
 pub(crate) enum ReleaseCommand {
     #[command(
         about = "build and install target/release/vida to configured local binary paths",
-        long_about = "Build and install the VIDA release binary.\n\nBy default this runs `cargo build -p vida --release` and installs `target/release/vida` to both local and cargo bin targets. Use `--skip-build` with `--source-binary` and `--install-root` for deterministic smoke tests or controlled local installs."
+        long_about = "Build and install the VIDA release binary.\n\nBy default this runs `cargo build -p vida --release` and installs the platform release binary to both local and cargo bin targets. Use `--target path` to update the first `vida` found on PATH. Use `--skip-build` with `--source-binary` and `--install-root` for deterministic smoke tests or controlled local installs."
     )]
     Install(ReleaseInstallArgs),
 }
@@ -196,7 +196,7 @@ pub(crate) struct ReleaseInstallArgs {
     #[arg(
         long = "target",
         default_value = "all",
-        help = "Install target: all, local, or cargo"
+        help = "Install target: all, local, cargo, or path"
     )]
     pub(crate) target: String,
 
@@ -205,13 +205,13 @@ pub(crate) struct ReleaseInstallArgs {
 
     #[arg(
         long = "source-binary",
-        help = "Source vida binary path; defaults to target/release/vida"
+        help = "Source vida binary path; defaults to the platform release binary under target/release"
     )]
     pub(crate) source_binary: Option<PathBuf>,
 
     #[arg(
         long = "install-root",
-        help = "Root used for install paths; defaults to HOME"
+        help = "Root used for install paths; defaults to HOME/USERPROFILE"
     )]
     pub(crate) install_root: Option<PathBuf>,
 

@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use time::format_description::well_known::Rfc3339;
 
@@ -78,13 +78,15 @@ fn installed_launcher_binary_evidence(
     active_executable_path: &Path,
 ) -> Result<Vec<LauncherBinaryEvidence>, String> {
     let mut candidates = Vec::new();
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = std::path::PathBuf::from(home);
-        candidates.push(home.join(".local/bin/vida"));
-        candidates.push(home.join(".cargo/bin/vida"));
+    if let Some(home) = launcher_home_dir() {
+        push_launcher_home_candidates(&mut candidates, &home, ".local");
+        push_launcher_home_candidates(&mut candidates, &home, ".cargo");
     }
     candidates.push(active_executable_path.to_path_buf());
 
+    let active_canonical = active_executable_path
+        .canonicalize()
+        .unwrap_or_else(|_| active_executable_path.to_path_buf());
     let mut seen = std::collections::BTreeSet::new();
     let mut evidence = Vec::new();
     for candidate in candidates {
@@ -99,11 +101,39 @@ fn installed_launcher_binary_evidence(
         }
         evidence.push(LauncherBinaryEvidence {
             fingerprint: launcher_binary_fingerprint(&canonical)?,
-            active: canonical == active_executable_path,
+            active: canonical == active_canonical,
             path: canonical.display().to_string(),
         });
     }
     Ok(evidence)
+}
+
+fn launcher_home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .or_else(|| {
+            let drive = std::env::var_os("HOMEDRIVE")?;
+            let path = std::env::var_os("HOMEPATH")?;
+            let mut combined = std::ffi::OsString::from(drive);
+            combined.push(path);
+            Some(combined)
+        })
+        .map(PathBuf::from)
+}
+
+fn push_launcher_home_candidates(candidates: &mut Vec<PathBuf>, home: &Path, bin_root: &str) {
+    for file_name in launcher_vida_file_names() {
+        candidates.push(home.join(bin_root).join("bin").join(file_name));
+    }
+}
+
+fn launcher_vida_file_names() -> Vec<String> {
+    let canonical = format!("vida{}", std::env::consts::EXE_SUFFIX);
+    if canonical == "vida" {
+        vec![canonical]
+    } else {
+        vec![canonical, "vida".to_string()]
+    }
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -508,6 +538,7 @@ mod tests {
         doctor_launcher_summary_for_root, RuntimeConsumptionClosureAdmission,
         RuntimeConsumptionEvidence, CANONICAL_LAUNCHER_COMMAND,
     };
+    use std::path::PathBuf;
 
     #[test]
     fn docflow_receipt_evidence_derives_readiness_receipt_path_from_artifact_path() {
@@ -572,10 +603,11 @@ mod tests {
         assert_eq!(summary.taskflow_surface, "vida taskflow");
         assert_eq!(summary.active_executable_path, current_exe);
         assert!(!summary.active_executable_fingerprint.is_empty());
-        assert!(summary
-            .installed_binaries
-            .iter()
-            .any(|binary| binary.active && binary.path == summary.active_executable_path));
+        assert!(summary.installed_binaries.iter().any(|binary| binary.active
+            && PathBuf::from(&binary.path)
+                == PathBuf::from(&summary.active_executable_path)
+                    .canonicalize()
+                    .expect("active executable path should canonicalize")));
     }
 
     #[test]

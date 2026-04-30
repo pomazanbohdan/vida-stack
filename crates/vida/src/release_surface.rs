@@ -272,6 +272,7 @@ pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
     }
 }
 
+#[derive(Debug)]
 struct BlockedRelease {
     blocker_code: &'static str,
     next_action: String,
@@ -303,34 +304,110 @@ fn blocked_receipt(
 }
 
 fn default_source_binary_path() -> PathBuf {
-    PathBuf::from("target").join("release").join("vida")
+    PathBuf::from("target")
+        .join("release")
+        .join(vida_binary_file_name())
 }
 
 fn install_target_paths(
     requested_target: &str,
     install_root: Option<&Path>,
 ) -> Result<Vec<(String, PathBuf)>, BlockedRelease> {
-    let root = install_root
-        .map(Path::to_path_buf)
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        .ok_or(BlockedRelease {
-            blocker_code: "install_target_unresolved",
-            next_action: "Set HOME or pass `--install-root <path>`.".to_string(),
-            io_error: None,
-        })?;
+    let root = release_install_root(install_root);
+    let binary_name = vida_binary_file_name();
     match requested_target {
-        "all" => Ok(vec![
-            ("local".to_string(), root.join(".local/bin/vida")),
-            ("cargo".to_string(), root.join(".cargo/bin/vida")),
-        ]),
-        "local" => Ok(vec![("local".to_string(), root.join(".local/bin/vida"))]),
-        "cargo" => Ok(vec![("cargo".to_string(), root.join(".cargo/bin/vida"))]),
+        "all" => {
+            let root = root.ok_or_else(unresolved_install_target)?;
+            Ok(vec![
+                (
+                    "local".to_string(),
+                    root.join(".local").join("bin").join(&binary_name),
+                ),
+                (
+                    "cargo".to_string(),
+                    root.join(".cargo").join("bin").join(&binary_name),
+                ),
+            ])
+        }
+        "local" => {
+            let root = root.ok_or_else(unresolved_install_target)?;
+            Ok(vec![(
+                "local".to_string(),
+                root.join(".local").join("bin").join(binary_name),
+            )])
+        }
+        "cargo" => {
+            let root = root.ok_or_else(unresolved_install_target)?;
+            Ok(vec![(
+                "cargo".to_string(),
+                root.join(".cargo").join("bin").join(binary_name),
+            )])
+        }
+        "path" => resolve_vida_from_path_env(std::env::var_os("PATH"))
+            .map(|path| vec![("path".to_string(), path)])
+            .ok_or(BlockedRelease {
+                blocker_code: "install_target_unresolved",
+                next_action: "Ensure `vida` is on PATH, or pass `--target local|cargo` with `--install-root <path>`.".to_string(),
+                io_error: None,
+            }),
         _ => Err(BlockedRelease {
             blocker_code: "unsupported_install_target",
-            next_action: "Use `--target all`, `--target local`, or `--target cargo`.".to_string(),
+            next_action: "Use `--target all`, `--target local`, `--target cargo`, or `--target path`."
+                .to_string(),
             io_error: None,
         }),
     }
+}
+
+fn release_install_root(install_root: Option<&Path>) -> Option<PathBuf> {
+    install_root.map(Path::to_path_buf).or_else(user_home_dir)
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .or_else(|| {
+            let drive = std::env::var_os("HOMEDRIVE")?;
+            let path = std::env::var_os("HOMEPATH")?;
+            let mut combined = std::ffi::OsString::from(drive);
+            combined.push(path);
+            Some(combined)
+        })
+        .map(PathBuf::from)
+}
+
+fn unresolved_install_target() -> BlockedRelease {
+    BlockedRelease {
+        blocker_code: "install_target_unresolved",
+        next_action: "Set HOME/USERPROFILE or pass `--install-root <path>`.".to_string(),
+        io_error: None,
+    }
+}
+
+fn vida_binary_file_name() -> String {
+    format!("vida{}", std::env::consts::EXE_SUFFIX)
+}
+
+fn vida_path_candidate_names() -> Vec<String> {
+    let canonical = vida_binary_file_name();
+    if canonical == "vida" {
+        vec![canonical]
+    } else {
+        vec![canonical, "vida".to_string()]
+    }
+}
+
+fn resolve_vida_from_path_env(path_env: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let path_env = path_env?;
+    for dir in std::env::split_paths(&path_env) {
+        for file_name in vida_path_candidate_names() {
+            let candidate = dir.join(file_name);
+            if candidate.is_file() {
+                return Some(candidate.canonicalize().unwrap_or(candidate));
+            }
+        }
+    }
+    None
 }
 
 fn binary_fingerprint(path: &Path) -> Result<String, ReleaseIoErrorDetail> {
@@ -514,8 +591,58 @@ mod tests {
         assert!(help.contains("--json"));
         assert!(help.contains("--skip-build"));
         assert!(help.contains("--target"));
+        assert!(help.contains("path"));
         assert!(help.contains("--source-binary"));
         assert!(help.contains("--install-root"));
+    }
+
+    #[test]
+    fn release_install_default_source_binary_uses_platform_executable_suffix() {
+        assert_eq!(
+            default_source_binary_path(),
+            PathBuf::from("target")
+                .join("release")
+                .join(vida_binary_file_name())
+        );
+    }
+
+    #[test]
+    fn release_install_explicit_root_uses_platform_executable_suffix() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let paths = install_target_paths("local", Some(harness.path()))
+            .expect("local install target should resolve");
+
+        assert_eq!(
+            paths,
+            vec![(
+                "local".to_string(),
+                harness
+                    .path()
+                    .join(".local")
+                    .join("bin")
+                    .join(vida_binary_file_name())
+            )]
+        );
+    }
+
+    #[test]
+    fn release_install_path_target_resolves_first_vida_on_path() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let bin_dir = harness.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("path bin dir should write");
+        let expected = bin_dir.join(vida_binary_file_name());
+        fs::write(&expected, b"fake vida binary").expect("path vida should write");
+        let path_env = std::env::join_paths([bin_dir]).expect("path env should join");
+
+        let resolved =
+            resolve_vida_from_path_env(Some(path_env)).expect("path target should resolve");
+
+        assert_eq!(
+            resolved,
+            expected
+                .canonicalize()
+                .expect("expected path target should canonicalize")
+        );
     }
 
     #[test]
@@ -582,6 +709,11 @@ mod tests {
     }
 
     #[test]
+    fn release_install_blocks_unresolved_path_target() {
+        assert_eq!(resolve_vida_from_path_env(None), None);
+    }
+
+    #[test]
     fn release_install_create_dir_failure_records_precise_io_detail() {
         let harness = TempStateHarness::new().expect("temp harness should initialize");
         let source = harness.path().join("fake-vida");
@@ -607,7 +739,13 @@ mod tests {
         assert_eq!(detail.operation, "create_dir");
         assert_eq!(
             detail.target_path,
-            Some(install_root_file.join(".local/bin").display().to_string())
+            Some(
+                install_root_file
+                    .join(".local")
+                    .join("bin")
+                    .display()
+                    .to_string()
+            )
         );
         assert_eq!(detail.staging_path, None);
         assert!(!detail.error_kind.is_empty());
