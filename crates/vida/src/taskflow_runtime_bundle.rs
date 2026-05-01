@@ -5,11 +5,19 @@ use time::format_description::well_known::Rfc3339;
 use crate::taskflow_protocol_binding::TASKFLOW_PROTOCOL_BINDING_AUTHORITY;
 use crate::{
     build_project_activator_view, doctor_launcher_summary_for_root,
-    latest_final_runtime_consumption_snapshot_path, merge_project_activation_into_init_view,
-    read_or_sync_launcher_activation_snapshot,
-    runtime_consumption_state::latest_admissible_retrieval_trust_signal,
-    surface_render::operator_command_map, DoctorLauncherSummary, StateStore,
-    TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
+    latest_final_runtime_consumption_snapshot_path,
+    latest_recorded_final_runtime_consumption_snapshot_path,
+    merge_project_activation_into_init_view, read_or_sync_launcher_activation_snapshot,
+    runtime_consumption_state::{
+        latest_admissible_retrieval_trust_signal,
+        RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
+        RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
+        RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_RECORDED_FINAL_SNAPSHOT,
+        RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_RECORDED_FINAL,
+        RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
+    },
+    surface_render::operator_command_map,
+    DoctorLauncherSummary, StateStore, TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
 };
 
 use super::activation_status::{activation_status_is_pending, canonical_activation_status};
@@ -48,14 +56,32 @@ const RETRIEVAL_OPTIONAL_CONTEXT_BOUNDARY_REQUIRED: [&str; 3] = [
 
 fn runtime_bundle_retrieval_trust_evidence(
     runtime_consumption: &crate::runtime_consumption_state::RuntimeConsumptionSummary,
-    latest_final_snapshot_path: Option<&str>,
+    latest_admissible_final_snapshot_path: Option<&str>,
+    latest_recorded_final_snapshot_path: Option<&str>,
     protocol_binding_receipt_id: Option<&str>,
 ) -> serde_json::Value {
     latest_admissible_retrieval_trust_signal(
         runtime_consumption,
-        latest_final_snapshot_path,
+        latest_admissible_final_snapshot_path,
         protocol_binding_receipt_id,
     )
+    .or_else(|| {
+        let citation = latest_recorded_final_snapshot_path?.trim();
+        let acl = protocol_binding_receipt_id?.trim();
+        if citation.is_empty() || acl.is_empty() || runtime_consumption.final_snapshots == 0 {
+            return None;
+        }
+        Some(serde_json::json!({
+            "source": RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
+            "source_registry_ref": RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_RECORDED_FINAL,
+            "citation": citation,
+            "freshness": "recorded_final",
+            "freshness_posture": RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_RECORDED_FINAL_SNAPSHOT,
+            "acl": acl,
+            "acl_context": format!("{RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT}:{acl}"),
+            "acl_propagation": RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
+        }))
+    })
     .unwrap_or_else(|| serde_json::json!({}))
 }
 
@@ -152,6 +178,8 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
     );
     let runtime_consumption = crate::runtime_consumption_summary(store.root())?;
     let latest_final_snapshot_path = latest_final_runtime_consumption_snapshot_path(store.root())?;
+    let latest_recorded_final_snapshot_path =
+        latest_recorded_final_runtime_consumption_snapshot_path(store.root())?;
     let protocol_binding_receipt = store
         .latest_protocol_binding_receipt()
         .await
@@ -250,6 +278,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
     let retrieval_trust_evidence = runtime_bundle_retrieval_trust_evidence(
         &runtime_consumption,
         latest_final_snapshot_path.as_deref(),
+        latest_recorded_final_snapshot_path.as_deref(),
         protocol_binding_receipt
             .as_ref()
             .map(|receipt| receipt.receipt_id.as_str()),
@@ -2507,6 +2536,7 @@ mod tests {
         let evidence = runtime_bundle_retrieval_trust_evidence(
             &runtime_consumption,
             Some("/tmp/project/.vida/data/state/runtime-consumption/final-2.json"),
+            Some("/tmp/project/.vida/data/state/runtime-consumption/final-2.json"),
             Some("protocol-binding-receipt-2"),
         );
 
@@ -2559,6 +2589,7 @@ mod tests {
         let evidence = runtime_bundle_retrieval_trust_evidence(
             &runtime_consumption,
             Some("/tmp/project/.vida/data/state/runtime-consumption/final-8.json"),
+            Some("/tmp/project/.vida/data/state/runtime-consumption/final-7.json"),
             Some("protocol-binding-receipt-2"),
         );
 
@@ -2567,6 +2598,53 @@ mod tests {
             serde_json::json!("/tmp/project/.vida/data/state/runtime-consumption/final-8.json")
         );
         assert_eq!(evidence["freshness"], serde_json::json!("final"));
+    }
+
+    #[test]
+    fn runtime_bundle_retrieval_trust_evidence_falls_back_to_recorded_final_snapshot() {
+        let runtime_consumption = crate::runtime_consumption_state::RuntimeConsumptionSummary {
+            total_snapshots: 4,
+            bundle_snapshots: 1,
+            bundle_check_snapshots: 1,
+            final_snapshots: 2,
+            latest_kind: Some("bundle-check".to_string()),
+            latest_snapshot_path: Some(
+                "/tmp/project/.vida/data/state/runtime-consumption/bundle-check-9.json".to_string(),
+            ),
+        };
+
+        let evidence = runtime_bundle_retrieval_trust_evidence(
+            &runtime_consumption,
+            None,
+            Some("/tmp/project/.vida/data/state/runtime-consumption/final-blocked.json"),
+            Some("protocol-binding-receipt-2"),
+        );
+
+        assert_eq!(
+            evidence["source"],
+            serde_json::json!("runtime_consumption_snapshot_index")
+        );
+        assert_eq!(
+            evidence["source_registry_ref"],
+            serde_json::json!(
+                "runtime_consumption_snapshot_registry:latest_recorded_final_snapshot"
+            )
+        );
+        assert_eq!(
+            evidence["citation"],
+            serde_json::json!(
+                "/tmp/project/.vida/data/state/runtime-consumption/final-blocked.json"
+            )
+        );
+        assert_eq!(evidence["freshness"], serde_json::json!("recorded_final"));
+        assert_eq!(
+            evidence["freshness_posture"],
+            serde_json::json!("latest_recorded_final_snapshot")
+        );
+        assert_eq!(
+            evidence["acl_context"],
+            serde_json::json!("protocol_binding_receipt:protocol-binding-receipt-2")
+        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-version = "0.1.0"
+version = "0.9.3"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [workspace.dependencies]

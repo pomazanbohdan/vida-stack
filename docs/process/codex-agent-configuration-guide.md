@@ -70,10 +70,22 @@ Project-local Codex configuration should live under:
 3. `.codex/agents/middle.toml`
 4. `.codex/agents/senior.toml`
 5. `.codex/agents/architect.toml`
-6. `vida.config.yaml -> host_environment.systems.codex.carriers`
+6. `.codex/agents/development_*.toml`
+   - rendered internal dispatch-alias projections for Codex App host execution
+7. `.codex/templates/codex-app.config.toml`
+   - project-local Codex App multi-agent materialization template
+8. `.codex/templates/codex-cli.config.toml`
+   - legacy Codex CLI launcher/materialization template
+9. `vida.config.yaml -> host_environment.systems.codex.carriers`
    - canonical project-owned source of truth for carrier-tier metadata, rates, runtime-role fit, task-class fit, and profile-aware model selection metadata (`default_model_profile`, `model_profiles`)
-7. `vida.config.yaml -> host_environment.codex.agents`
+10. `vida.config.yaml -> host_environment.codex.agents`
    - compatibility projection for older Codex consumers; it must not become a second canonical carrier source.
+11. `vida.config.yaml -> host_environment.systems.codex.app`
+   - active Codex App materialization pointers for `.codex/config.toml`, `.codex/agents`, and the Codex App template.
+12. `vida.config.yaml -> host_environment.systems.codex.legacy_cli`
+   - legacy Codex CLI materialization pointer and feature requirements.
+13. `vida.config.yaml -> agent_system.subagents.internal_subagents.model_profiles`
+   - internal Codex App/host-subagent execution profiles for low, medium, high, and xhigh GPT-5.5 lanes.
 
 Layout rule:
 
@@ -81,13 +93,34 @@ Layout rule:
 2. `vida.config.yaml -> host_environment.systems.codex.carriers` owns carrier-tier/rate/runtime-role/task-class metadata,
    and also owns the canonical default-profile/model-profile catalog for each Codex carrier tier,
 3. `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` is the canonical internal alias registry for executor-local overlays and is not the primary project-visible agent model,
-4. `.codex/config.toml` is the rendered delegated carrier-tier registration surface, including thread/depth caps and per-role config-file mapping,
+4. `.codex/config.toml` is the rendered delegated carrier-tier registration surface, including thread/depth caps, carrier-tier mappings, and internal alias mappings,
 5. `.codex/agents/*.toml` are rendered host-executor surfaces and must not become the owner of tier or dispatch-alias policy,
 6. project activation should render `.codex/**` from the overlay catalog while preserving the framework-owned tier instruction bodies from the template source,
 7. project-visible agent activation should target the carrier tiers declared in `vida.config.yaml -> host_environment.systems.codex.carriers`; runtime role selection is carried separately in packet/runtime state instead of replacing the carrier identity,
 8. VIDA role/skill/profile/team meaning still comes from the project activation layer, not from Codex TOML alone.
 9. Role/profile/flow catalogs should be sourced from the agent-extension YAML registries; `vida.config.yaml` may narrow them, but runtime should not require duplicated id lists when the registries already define the active set.
 10. the root session is a bootstrap and coordination owner, not a separate long-lived local implementer role.
+
+## Current Environment Probe
+
+The 2026-05-01 Codex App environment probe for this repository showed:
+
+1. Codex App can launch an internal host subagent from the root session.
+2. The launched host subagent can read `AGENTS.md`, `AGENTS.sidecar.md`, and `.codex/config.toml` from `C:\project\vida-stack`.
+3. The launched host subagent reports root/orchestrator context rather than a receipt-backed VIDA delegated worker lane.
+4. `vida agent-init --role worker --json` renders an activation view for a worker lane but does not itself execute a packet or record completion evidence.
+5. `vida agent-init --role junior --json` is not a valid lane-role launch form; `junior` is a carrier id, while `worker`, `coach`, `verifier`, `prover`, `business_analyst`, `pm`, and `solution_architect` are runtime roles.
+6. For write-producing work, a Codex App host-agent launch is execution capability evidence only; lawful VIDA write ownership still requires receipt-backed delegated execution or an active exception takeover for the same bounded unit.
+7. `codex features list` reports the legacy CLI effective feature state; in this environment `multi_agent` is experimental and false unless the launcher passes `--enable multi_agent` or an equivalent config override.
+8. The main project config records `host_environment.systems.codex.app` for Codex App materialization and `host_environment.systems.codex.legacy_cli` for CLI launchers.
+9. `agent_system.subagents.internal_subagents` carries the same GPT-5.5 low/medium/high/xhigh model-profile ladder used by the visible carrier catalog and internal routing aliases.
+
+Operational conclusion:
+
+1. Use `vida taskflow consume agent-system --json` to inspect carrier catalog truth.
+2. Use `vida agent-init --role <runtime_role> --json` to inspect lane activation posture.
+3. Use Codex App host subagents as executor carriers only after the VIDA packet/runtime layer has selected the carrier and established lawful execution or exception evidence.
+4. Do not treat a visible Codex App subagent as a substitute for VIDA delegated execution evidence.
 
 ## Development Team Target
 
@@ -122,6 +155,13 @@ Internal dispatch aliases:
 2. it is not the primary visible agent model of the project,
 3. the primary visible agent model is the configured carrier catalog rendered from `vida.config.yaml`, not a Rust-hardcoded ladder,
 4. runtime role is activation-time state such as `worker`, `coach`, `verifier`, or `solution_architect`.
+5. the current rendered Codex App alias files are:
+   - `.codex/agents/development_specification.toml`
+   - `.codex/agents/development_execution_preparation.toml`
+   - `.codex/agents/development_implementer.toml`
+   - `.codex/agents/development_coach.toml`
+   - `.codex/agents/development_verifier.toml`
+   - `.codex/agents/development_escalation.toml`
 
 Ownership note:
 
@@ -269,6 +309,27 @@ Reasoning:
 1. one root orchestrator session may need to keep `junior`, `middle`, `senior`, and `architect` tiers available without overexpanding the shell,
 2. depth `2` permits bounded escalation without turning nested spawning into an unbounded tree.
 
+## Codex App And CLI Template Use
+
+The active repository carries two project-internal template surfaces:
+
+1. `.codex/templates/codex-app.config.toml`
+   - template for Codex App multi-agent configuration with `[features] multi_agent = true`, the four carrier tiers, and the six internal dispatch aliases.
+2. `.codex/templates/codex-cli.config.toml`
+   - template for legacy Codex CLI launcher/materialization code that needs explicit command flags, model refs, reasoning efforts, sandbox modes, and alias-to-profile routing.
+
+Use rule:
+
+1. `.codex/config.toml` is the active Codex App projection.
+2. `.codex/templates/codex-app.config.toml` is the repeatable template for regenerating that active projection.
+3. `.codex/templates/codex-cli.config.toml` is for launcher/runtime code that still speaks in CLI dispatch terms such as command, flags, profile, model, reasoning effort, and sandbox mode.
+4. Legacy CLI launchers should include `--enable multi_agent` while the CLI reports that feature as experimental and disabled by default.
+5. Main VIDA config should keep `host_environment.systems.codex.dispatch.feature_args` aligned with `.codex/templates/codex-cli.config.toml`.
+6. Main VIDA config should keep `agent_system.subagents.internal_subagents.model_profiles` aligned with the active low/medium/high/xhigh Codex model ladder.
+7. Both templates are derived from `vida.config.yaml` and `docs/process/agent-extensions/dispatch-aliases.yaml`.
+8. If carrier tier, model profile, runtime-role coverage, task-class coverage, or alias body changes, update the source-of-truth registry/config first and then refresh `.codex/**`.
+9. Do not edit a template to create new authority; templates exist to make Codex App and Codex CLI materialization repeatable.
+
 ## Mapping Into VIDA
 
 Codex role configuration should map into VIDA project activation like this:
@@ -306,8 +367,10 @@ The implementation order for Codex agents should be:
 1. define the development-team posture in project docs and project activation surfaces,
 2. add project-local `.codex/config.toml`,
 3. add tier-specific `.codex/agents/*.toml`,
-4. wire the same roles/profiles/teams into VIDA project activation,
-5. expose them through compiled runtime bundles only after validation passes.
+4. add internal dispatch-alias `.codex/agents/development_*.toml` projections when the alias registry exposes those aliases to Codex App,
+5. add `.codex/templates/codex-app.config.toml` and `.codex/templates/codex-cli.config.toml` when materialization must support both Codex App and legacy Codex CLI launchers,
+6. wire the same roles/profiles/teams into VIDA project activation,
+7. expose them through compiled runtime bundles only after validation passes.
 
 ## Current Status
 
@@ -316,7 +379,12 @@ At the current repository cut:
 1. project roles, skills, profiles, and flow sets already have active registry surfaces,
 2. team semantics already exist as product law,
 3. project-local Codex multi-agent configuration is materialized under `.codex/config.toml` and `.codex/agents/*.toml`,
-4. the first intended Codex-backed project team is the bounded four-tier ladder defined in this guide.
+4. the active carrier tiers use `gpt-5.5` with low, medium, high, and xhigh reasoning bands,
+5. internal dispatch aliases are materialized as `.codex/agents/development_*.toml`,
+6. Codex App and legacy Codex CLI materialization templates live under `.codex/templates/`,
+7. `vida.config.yaml` records the Codex App config path, Codex App template path, legacy CLI template path, and CLI multi-agent feature argument,
+8. `agent_system.subagents.internal_subagents` carries GPT-5.5 low, medium, high, and xhigh profiles for Codex App/host-subagent selection,
+9. the first intended Codex-backed project team is the bounded four-tier ladder defined in this guide.
 
 ## Routing
 
@@ -351,10 +419,10 @@ At the current repository cut:
 artifact_path: process/codex-agent-configuration-guide
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-14'
+artifact_revision: '2026-05-01'
 schema_version: '1'
 status: canonical
 source_path: docs/process/codex-agent-configuration-guide.md
 created_at: '2026-03-12T08:35:27+02:00'
-updated_at: 2026-04-30T22:15:50.8204953Z
+updated_at: 2026-05-01T13:27:00Z
 changelog_ref: codex-agent-configuration-guide.changelog.jsonl

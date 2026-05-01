@@ -38,8 +38,12 @@ pub(crate) const RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX: &str
     "runtime_consumption_snapshot_index";
 pub(crate) const RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL: &str =
     "runtime_consumption_snapshot_registry:latest_final_release_admission";
+pub(crate) const RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_RECORDED_FINAL: &str =
+    "runtime_consumption_snapshot_registry:latest_recorded_final_snapshot";
 pub(crate) const RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT: &str =
     "latest_final_release_admission_snapshot";
+pub(crate) const RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_RECORDED_FINAL_SNAPSHOT: &str =
+    "latest_recorded_final_snapshot";
 pub(crate) const RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT: &str =
     "protocol_binding_receipt";
 pub(crate) const RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE: &str =

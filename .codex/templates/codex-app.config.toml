@@ -1,3 +1,6 @@
+# VIDA Codex App multi-agent materialization template.
+# Authority remains vida.config.yaml plus docs/process/agent-extensions/dispatch-aliases.yaml.
+
 [features]
 multi_agent = true
 

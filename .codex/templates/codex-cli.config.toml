@@ -1,0 +1,68 @@
+# VIDA legacy Codex CLI launcher template.
+# This file is a project-internal template for launch/materialization tools, not a
+# second Codex authority surface.
+
+[dispatch]
+command = "codex"
+static_args = ["exec", "--json"]
+feature_args = ["--enable", "multi_agent"]
+workdir_flag = "-C"
+sandbox_flag = "-s"
+model_flag = "-m"
+reasoning_effort_flag = "-c"
+reasoning_effort_value_template = "model_reasoning_effort=\"{value}\""
+prompt_mode = "stdin"
+
+[profiles.junior]
+model = "gpt-5.5"
+model_reasoning_effort = "low"
+sandbox_mode = "workspace-write"
+config_file = "agents/junior.toml"
+
+[profiles.middle]
+model = "gpt-5.5"
+model_reasoning_effort = "medium"
+sandbox_mode = "workspace-write"
+config_file = "agents/middle.toml"
+
+[profiles.senior]
+model = "gpt-5.5"
+model_reasoning_effort = "high"
+sandbox_mode = "read-only"
+config_file = "agents/senior.toml"
+
+[profiles.architect]
+model = "gpt-5.5"
+model_reasoning_effort = "xhigh"
+sandbox_mode = "read-only"
+config_file = "agents/architect.toml"
+
+[aliases.development_specification]
+profile = "middle"
+runtime_role = "business_analyst"
+task_classes = ["specification"]
+
+[aliases.development_execution_preparation]
+profile = "architect"
+runtime_role = "solution_architect"
+task_classes = ["execution_preparation", "architecture"]
+
+[aliases.development_implementer]
+profile = "junior"
+runtime_role = "worker"
+task_classes = ["implementation", "delivery_task", "execution_block"]
+
+[aliases.development_coach]
+profile = "middle"
+runtime_role = "coach"
+task_classes = ["coach"]
+
+[aliases.development_verifier]
+profile = "senior"
+runtime_role = "verifier"
+task_classes = ["verification", "review", "quality_gate", "release_readiness"]
+
+[aliases.development_escalation]
+profile = "architect"
+runtime_role = "solution_architect"
+task_classes = ["architecture", "hard_escalation", "meta_analysis"]
