@@ -2493,10 +2493,11 @@ UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
         artifact_id: &str,
         required_follow_on: &[String],
     ) -> Result<(), StateStoreError> {
+        let artifact_id_literal = escape_surql_literal(artifact_id);
         self.db
             .query(format!(
                 "DELETE instruction_dependency_edge WHERE from_artifact = '{}';",
-                artifact_id
+                artifact_id_literal
             ))
             .await?;
 
@@ -5120,6 +5121,13 @@ hierarchy: framework,contracts
         assert_eq!(metadata.activation_class.as_deref(), Some("always_on"));
         assert_eq!(metadata.required_follow_on, vec!["next-one", "next-two"]);
         assert_eq!(metadata.hierarchy, vec!["framework", "contracts"]);
+    }
+
+    #[test]
+    fn escape_surql_literal_escapes_quotes_and_backslashes() {
+        let escaped = escape_surql_literal("artifact\\x'; DELETE instruction_artifact; --");
+
+        assert_eq!(escaped, "artifact\\\\x\\'; DELETE instruction_artifact; --");
     }
 
     #[test]
