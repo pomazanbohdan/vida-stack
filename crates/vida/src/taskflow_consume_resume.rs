@@ -415,11 +415,6 @@ async fn validate_run_graph_resume_state(
     let status = match store.run_graph_status(run_id).await {
         Ok(status) => status,
         Err(error) => {
-            let receipt_exists =
-                matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)));
-            if receipt_exists && resume_from_persisted_final_snapshot(store)? {
-                return Ok(());
-            }
             return Err(format!(
                 "Failed to read persisted run-graph state for `{run_id}`: {error}"
             ));
@@ -438,11 +433,7 @@ async fn validate_run_graph_resume_state(
     {
         return Ok(());
     }
-    match validate_run_graph_resume_gate(&status) {
-        Ok(()) => Ok(()),
-        Err(_error) if resume_from_persisted_final_snapshot(store)? => Ok(()),
-        Err(error) => Err(error),
-    }
+    validate_run_graph_resume_gate(&status)
 }
 
 fn persisted_dispatch_packet_lineage_task_id(packet: &serde_json::Value) -> Option<&str> {
@@ -965,11 +956,6 @@ async fn validate_run_graph_resume_state_for_downstream_packet(
     let status = match store.run_graph_status(run_id).await {
         Ok(status) => status,
         Err(error) => {
-            let receipt_exists =
-                matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)));
-            if receipt_exists && resume_from_persisted_final_snapshot(store)? {
-                return Ok(());
-            }
             return Err(format!(
                 "Failed to read persisted run-graph state for `{run_id}`: {error}"
             ));
@@ -6785,7 +6771,7 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn validate_run_graph_resume_state_accepts_persisted_receipt_lineage_when_summary_rows_are_missing(
+    async fn validate_run_graph_resume_state_rejects_persisted_receipt_lineage_when_run_graph_state_is_missing(
     ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -6874,12 +6860,16 @@ agent_system:
             .await
             .expect("persist dispatch receipt");
 
-        validate_run_graph_resume_state(&store, run_id)
+        let resume_error = validate_run_graph_resume_state(&store, run_id)
             .await
-            .expect("receipt lineage should allow resume validation");
-        validate_run_graph_resume_state_for_downstream_packet(&store, run_id)
-            .await
-            .expect("receipt lineage should allow downstream resume validation");
+            .expect_err("missing run-graph state must fail resume validation");
+        assert!(resume_error.contains("Failed to read persisted run-graph state"));
+
+        let downstream_resume_error =
+            validate_run_graph_resume_state_for_downstream_packet(&store, run_id)
+                .await
+                .expect_err("missing run-graph state must fail downstream resume validation");
+        assert!(downstream_resume_error.contains("Failed to read persisted run-graph state"));
 
         let _ = fs::remove_dir_all(&root);
     }
