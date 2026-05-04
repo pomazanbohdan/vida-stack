@@ -508,10 +508,7 @@ async fn validate_explicit_task_graph_binding_lineage_for_resume(
     let Some(packet_path) = receipt.dispatch_packet_path.as_deref() else {
         return Ok(());
     };
-    let packet = read_dispatch_packet(packet_path).or_else(|_| {
-        crate::read_json_file_if_present(std::path::Path::new(packet_path))
-            .ok_or_else(|| format!("Failed to read persisted dispatch packet `{packet_path}`"))
-    })?;
+    let packet = read_dispatch_packet(packet_path)?;
     validate_receipt_packet_pair(receipt, &packet, packet_path, "dispatch packet")?;
     let Some(lineage_task_id) = persisted_dispatch_packet_lineage_task_id(&packet) else {
         return Ok(());
@@ -1748,10 +1745,7 @@ async fn resume_inputs_from_downstream_packet(
     requested_run_id: Option<&str>,
     packet_path: &str,
 ) -> Result<ResumeInputs, String> {
-    let packet = read_dispatch_packet(packet_path).or_else(|_| {
-        crate::read_json_file_if_present(std::path::Path::new(packet_path))
-            .ok_or_else(|| format!("Failed to read persisted dispatch packet `{packet_path}`"))
-    })?;
+    let packet = read_dispatch_packet(packet_path)?;
     let run_id = packet
         .get("run_id")
         .and_then(serde_json::Value::as_str)
