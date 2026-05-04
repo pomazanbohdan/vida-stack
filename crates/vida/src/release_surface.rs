@@ -262,6 +262,7 @@ pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
     ];
     match Command::new("cargo")
         .args(["build", "-p", "vida", "--release"])
+        .current_dir(trusted_workspace_root())
         .status()
     {
         Ok(status) if status.success() => ReleaseBuildReceipt {
@@ -318,9 +319,18 @@ fn blocked_receipt(
 }
 
 fn default_source_binary_path() -> PathBuf {
-    PathBuf::from("target")
+    trusted_workspace_root()
+        .join("target")
         .join("release")
         .join(vida_binary_file_name())
+}
+
+fn trusted_workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("vida crate should be nested under workspace root")
+        .to_path_buf()
 }
 
 fn install_target_paths(
@@ -644,7 +654,8 @@ mod tests {
     fn release_install_default_source_binary_uses_platform_executable_suffix() {
         assert_eq!(
             default_source_binary_path(),
-            PathBuf::from("target")
+            trusted_workspace_root()
+                .join("target")
                 .join("release")
                 .join(vida_binary_file_name())
         );
