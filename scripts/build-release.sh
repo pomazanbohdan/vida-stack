@@ -100,17 +100,39 @@ copy_runtime_binary() {
   local binary_name="$1"
   local destination="$2"
   local source="$ROOT_DIR/target/release/$binary_name"
-  if [[ -f "$ROOT_DIR/target/release/${binary_name}.exe" ]]; then
+  if [[ "$WINDOWS_RELEASE" == "yes" && -f "$ROOT_DIR/target/release/${binary_name}.exe" ]]; then
     source="$ROOT_DIR/target/release/${binary_name}.exe"
   fi
   [[ -f "$source" ]] || fail "Missing built runtime binary: $source"
   cp "$source" "$destination"
   chmod +x "$destination"
+  if [[ -f "${source}.version" ]]; then
+    cp "${source}.version" "${destination}.version"
+  fi
+}
+
+verify_runtime_binary_version() {
+  local binary_label="$1"
+  local binary_path="$2"
+  local expected_version="${VERSION#v}"
+  local actual
+  [[ -x "$binary_path" || -f "$binary_path" ]] || fail "Missing packaged runtime binary: $binary_path"
+  actual="$("$binary_path" --version 2>/dev/null | head -n 1 | tr -d '\r' || true)"
+  if [[ -z "$actual" && "$WINDOWS_RELEASE" == "yes" && -f "${binary_path}.version" ]]; then
+    actual="$(head -n 1 "${binary_path}.version" | tr -d '\r')"
+  fi
+  if [[ "$actual" != "$binary_label $expected_version" ]]; then
+    fail "Packaged $binary_label version mismatch: expected '$binary_label $expected_version', got '${actual:-<no output>}' from $binary_path"
+  fi
 }
 
 copy_runtime_binary vida "$VIDA_BIN"
 copy_runtime_binary taskflow "$TASKFLOW_BIN"
 copy_runtime_binary docflow "$DOCFLOW_BIN"
+verify_runtime_binary_version vida "$VIDA_BIN"
+verify_runtime_binary_version taskflow "$TASKFLOW_BIN"
+verify_runtime_binary_version docflow "$DOCFLOW_BIN"
+rm -f "${VIDA_BIN}.version" "${TASKFLOW_BIN}.version" "${DOCFLOW_BIN}.version"
 cp "$ROOT_DIR/docs/framework/templates/vida.config.yaml.template" "$INSTALL_ASSETS_DIR/vida.config.yaml.template"
 cp "$ROOT_DIR/docs/product/spec/templates/feature-design-document.template.md" "$INSTALL_ASSETS_DIR/feature-design-document.template.md"
 

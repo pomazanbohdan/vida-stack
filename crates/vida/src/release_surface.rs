@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,6 +17,7 @@ pub(crate) struct ReleaseInstallReceipt {
     pub blocker_codes: Vec<String>,
     pub next_actions: Vec<String>,
     pub build: ReleaseBuildReceipt,
+    pub install_layout: Option<ReleaseInstallLayout>,
     pub source_binary_path: String,
     pub source_binary_fingerprint: Option<String>,
     pub requested_target: String,
@@ -37,6 +39,15 @@ pub(crate) struct ReleaseInstalledTarget {
     pub target: String,
     pub path: String,
     pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct ReleaseInstallLayout {
+    pub install_root: String,
+    pub current_root: String,
+    pub runtime_bin_dir: String,
+    pub env_file: String,
+    pub platform: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -91,6 +102,7 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         .clone()
         .unwrap_or_else(default_source_binary_path);
     let source_binary_path = source_binary.display().to_string();
+    let install_layout = release_install_layout(args.install_root.as_deref());
 
     let target_paths = match install_target_paths(&requested_target, args.install_root.as_deref()) {
         Ok(paths) => paths,
@@ -221,6 +233,7 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
                 .to_string(),
         ],
         build,
+        install_layout,
         source_binary_path,
         source_binary_fingerprint: Some(source_binary_fingerprint),
         requested_target,
@@ -294,6 +307,7 @@ fn blocked_receipt(
         blocker_codes: vec![blocked.blocker_code.to_string()],
         next_actions: vec![blocked.next_action],
         build,
+        install_layout: None,
         source_binary_path,
         source_binary_fingerprint: None,
         requested_target,
@@ -339,16 +353,32 @@ fn install_target_paths(
     }
 }
 
-fn release_install_root(install_root: Option<&Path>) -> Option<PathBuf> {
+pub(crate) fn release_install_layout(install_root: Option<&Path>) -> Option<ReleaseInstallLayout> {
+    let root = release_install_root(install_root)?;
+    let current_root = root.join("current");
+    let runtime_bin_dir = current_root.join("bin");
+    Some(ReleaseInstallLayout {
+        env_file: root.join(release_env_file_name()).display().to_string(),
+        install_root: root.display().to_string(),
+        current_root: current_root.display().to_string(),
+        runtime_bin_dir: runtime_bin_dir.display().to_string(),
+        platform: std::env::consts::OS.to_string(),
+    })
+}
+
+pub(crate) fn release_install_root(install_root: Option<&Path>) -> Option<PathBuf> {
     install_root
         .map(Path::to_path_buf)
         .or_else(default_release_install_root)
 }
 
-fn default_release_install_root() -> Option<PathBuf> {
+pub(crate) fn default_release_install_root() -> Option<PathBuf> {
+    if let Some(vida_home) = non_empty_env_var("VIDA_HOME") {
+        return Some(PathBuf::from(vida_home));
+    }
     #[cfg(windows)]
     {
-        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        if let Some(local_app_data) = non_empty_env_var("LOCALAPPDATA") {
             return Some(PathBuf::from(local_app_data).join("vida-stack"));
         }
     }
@@ -361,17 +391,33 @@ fn default_release_install_root() -> Option<PathBuf> {
     })
 }
 
+fn release_env_file_name() -> &'static str {
+    if cfg!(windows) {
+        "env.ps1"
+    } else {
+        "env.sh"
+    }
+}
+
 fn user_home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
+    non_empty_env_var("HOME")
+        .or_else(|| non_empty_env_var("USERPROFILE"))
         .or_else(|| {
-            let drive = std::env::var_os("HOMEDRIVE")?;
-            let path = std::env::var_os("HOMEPATH")?;
+            let drive = non_empty_env_var("HOMEDRIVE")?;
+            let path = non_empty_env_var("HOMEPATH")?;
             let mut combined = std::ffi::OsString::from(drive);
             combined.push(path);
             Some(combined)
         })
         .map(PathBuf::from)
+}
+
+fn non_empty_env_var(name: &str) -> Option<OsString> {
+    non_empty_os_string(std::env::var_os(name))
+}
+
+fn non_empty_os_string(value: Option<OsString>) -> Option<OsString> {
+    value.filter(|value| !value.is_empty())
 }
 
 fn unresolved_install_target() -> BlockedRelease {
@@ -382,7 +428,7 @@ fn unresolved_install_target() -> BlockedRelease {
     }
 }
 
-fn vida_binary_file_name() -> String {
+pub(crate) fn vida_binary_file_name() -> String {
     format!("vida{}", std::env::consts::EXE_SUFFIX)
 }
 
@@ -667,6 +713,57 @@ mod tests {
             Some(receipt.installed_targets[0].fingerprint.as_str())
         );
         assert!(PathBuf::from(&receipt.installed_targets[0].path).is_file());
+    }
+
+    #[test]
+    fn release_install_receipt_includes_explicit_cross_platform_layout() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let source = harness.path().join("fake-vida");
+        fs::write(&source, b"fake vida binary").expect("fake source should write");
+        let install_root = harness.path().join("install-root");
+
+        let receipt = release_install_receipt(&ReleaseInstallArgs {
+            target: "current".to_string(),
+            skip_build: true,
+            source_binary: Some(source),
+            install_root: Some(install_root.clone()),
+            json: true,
+        });
+
+        let layout = receipt
+            .install_layout
+            .as_ref()
+            .expect("successful current install should expose layout");
+        assert_eq!(layout.install_root, install_root.display().to_string());
+        assert_eq!(
+            layout.current_root,
+            install_root.join("current").display().to_string()
+        );
+        assert_eq!(
+            layout.runtime_bin_dir,
+            install_root
+                .join("current")
+                .join("bin")
+                .display()
+                .to_string()
+        );
+        assert!(layout
+            .env_file
+            .ends_with(if cfg!(windows) { "env.ps1" } else { "env.sh" }));
+        assert_eq!(layout.platform, std::env::consts::OS);
+    }
+
+    #[test]
+    fn release_install_env_helpers_ignore_empty_values() {
+        assert_eq!(super::non_empty_os_string(None), None);
+        assert_eq!(
+            super::non_empty_os_string(Some(std::ffi::OsString::new())),
+            None
+        );
+        assert_eq!(
+            super::non_empty_os_string(Some(std::ffi::OsString::from("configured"))),
+            Some(std::ffi::OsString::from("configured"))
+        );
     }
 
     #[test]

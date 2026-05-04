@@ -562,6 +562,7 @@ case ":\$PATH:" in
   *:"\$VIDA_ROOT/bin":*) ;;
   *) export PATH="\$VIDA_ROOT/bin:\$PATH" ;;
 esac
+hash -r 2>/dev/null || true
 EOF
 }
 

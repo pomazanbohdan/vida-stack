@@ -300,7 +300,8 @@ function Write-EnvironmentFiles {
 `$env:VIDA_HOME = if (`$env:VIDA_HOME) { `$env:VIDA_HOME } else { "$Root" }
 `$env:VIDA_ROOT = if (`$env:VIDA_ROOT) { `$env:VIDA_ROOT } else { Join-Path `$env:VIDA_HOME "current" }
 `$vidaRuntimeBin = Join-Path `$env:VIDA_ROOT "bin"
-if ((`$env:PATH -split ';') -notcontains `$vidaRuntimeBin) { `$env:PATH = "`$vidaRuntimeBin;`$env:PATH" }
+`$vidaPathParts = @(`$env:PATH -split ';' | Where-Object { `$_ })
+if (-not (`$vidaPathParts | Where-Object { [StringComparer]::OrdinalIgnoreCase.Equals(`$_, `$vidaRuntimeBin) })) { `$env:PATH = "`$vidaRuntimeBin;`$env:PATH" }
 "@ | Set-Content -LiteralPath $envPs1 -Encoding UTF8
     @"
 @echo off
@@ -315,10 +316,14 @@ function Install-PathHook {
         Write-Log "Would add $RuntimeBinDir to the user PATH"
         return
     }
+    $processParts = @($env:PATH -split ";" | Where-Object { $_ })
+    if (-not ($processParts | Where-Object { [StringComparer]::OrdinalIgnoreCase.Equals($_, $RuntimeBinDir) })) {
+        $env:PATH = "$RuntimeBinDir;$env:PATH"
+    }
     $current = [Environment]::GetEnvironmentVariable("Path", "User")
     if (-not $current) { $current = "" }
     $parts = $current -split ";" | Where-Object { $_ }
-    if ($parts -notcontains $RuntimeBinDir) {
+    if (-not ($parts | Where-Object { [StringComparer]::OrdinalIgnoreCase.Equals($_, $RuntimeBinDir) })) {
         $next = if ($current) { "$RuntimeBinDir;$current" } else { $RuntimeBinDir }
         [Environment]::SetEnvironmentVariable("Path", $next, "User")
         Write-Log "Added direct runtime binary directory to user PATH: $RuntimeBinDir"

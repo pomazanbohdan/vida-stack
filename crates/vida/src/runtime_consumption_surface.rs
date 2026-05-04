@@ -20,12 +20,24 @@ pub(crate) struct DoctorLauncherSummary {
     pub(crate) vida: String,
     pub(crate) project_root: String,
     pub(crate) taskflow_surface: String,
+    pub(crate) install_layout: Option<crate::release_surface::ReleaseInstallLayout>,
     pub(crate) active_executable_path: String,
     pub(crate) active_executable_fingerprint: String,
     pub(crate) installed_binaries: Vec<LauncherBinaryEvidence>,
+    pub(crate) path_resolution: LauncherPathResolution,
     pub(crate) divergent_installed_binaries: bool,
     pub(crate) status: String,
     pub(crate) next_actions: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize, Clone, PartialEq, Eq)]
+pub(crate) struct LauncherPathResolution {
+    pub(crate) command: String,
+    pub(crate) resolved_path: Option<String>,
+    pub(crate) expected_runtime_bin_dir: Option<String>,
+    pub(crate) expected_runtime_bin_on_path: bool,
+    pub(crate) active_executable_on_path: bool,
+    pub(crate) status: String,
 }
 
 pub(crate) fn doctor_launcher_summary_for_root(
@@ -34,7 +46,10 @@ pub(crate) fn doctor_launcher_summary_for_root(
     let active_executable_path = std::env::current_exe()
         .map_err(|error| format!("failed to resolve active vida executable: {error}"))?;
     let active_executable_fingerprint = launcher_binary_fingerprint(&active_executable_path)?;
+    let install_layout = crate::release_surface::release_install_layout(None);
     let installed_binaries = installed_launcher_binary_evidence(&active_executable_path)?;
+    let path_resolution =
+        launcher_path_resolution(&active_executable_path, install_layout.as_ref());
     let divergent_installed_binaries = installed_binaries
         .iter()
         .map(|entry| entry.fingerprint.as_str())
@@ -44,22 +59,30 @@ pub(crate) fn doctor_launcher_summary_for_root(
     let mut next_actions = Vec::new();
     if divergent_installed_binaries {
         next_actions.push(
-            "Installed `vida` binaries diverge by content; refresh the intended system binary and verify `command -v vida` before collecting runtime proofs.".to_string(),
+            "Installed `vida` binaries diverge by content; refresh the intended system binary and verify the shell resolves the expected runtime binary before collecting runtime proofs.".to_string(),
         );
     }
+    if path_resolution.status == "warn" {
+        next_actions.push(launcher_path_resolution_next_action(
+            install_layout.as_ref(),
+        ));
+    }
+    let status = if divergent_installed_binaries || path_resolution.status == "warn" {
+        "warn"
+    } else {
+        "pass"
+    };
     Ok(DoctorLauncherSummary {
         vida: CANONICAL_LAUNCHER_COMMAND.to_string(),
         project_root: project_root.display().to_string(),
         taskflow_surface: "vida taskflow".to_string(),
+        install_layout,
         active_executable_path: active_executable_path.display().to_string(),
         active_executable_fingerprint,
         installed_binaries,
+        path_resolution,
         divergent_installed_binaries,
-        status: if divergent_installed_binaries {
-            "warn".to_string()
-        } else {
-            "pass".to_string()
-        },
+        status: status.to_string(),
         next_actions,
     })
 }
@@ -78,7 +101,7 @@ fn installed_launcher_binary_evidence(
     active_executable_path: &Path,
 ) -> Result<Vec<LauncherBinaryEvidence>, String> {
     let mut candidates = Vec::new();
-    if let Some(root) = canonical_vida_install_root() {
+    if let Some(root) = crate::release_surface::release_install_root(None) {
         push_launcher_bin_candidates(&mut candidates, &root.join("current").join("bin"));
     }
     candidates.push(active_executable_path.to_path_buf());
@@ -107,37 +130,92 @@ fn installed_launcher_binary_evidence(
     Ok(evidence)
 }
 
-fn canonical_vida_install_root() -> Option<PathBuf> {
-    std::env::var_os("VIDA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            #[cfg(windows)]
-            {
-                if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-                    return Some(PathBuf::from(local_app_data).join("vida-stack"));
-                }
-            }
-            launcher_home_dir().map(|home| {
-                if cfg!(windows) {
-                    home.join("AppData").join("Local").join("vida-stack")
-                } else {
-                    home.join(".local").join("share").join("vida-stack")
-                }
-            })
-        })
+fn launcher_path_resolution(
+    active_executable_path: &Path,
+    install_layout: Option<&crate::release_surface::ReleaseInstallLayout>,
+) -> LauncherPathResolution {
+    let resolved =
+        resolve_command_from_path_env(CANONICAL_LAUNCHER_COMMAND, std::env::var_os("PATH"));
+    let expected_runtime_bin_dir = install_layout.map(|layout| layout.runtime_bin_dir.clone());
+    let expected_runtime_bin_on_path = expected_runtime_bin_dir
+        .as_ref()
+        .is_some_and(|dir| path_env_contains_dir(Path::new(dir), std::env::var_os("PATH")));
+    let active_executable_on_path = resolved
+        .as_ref()
+        .is_some_and(|path| same_path(path, active_executable_path));
+    let installed_active = install_layout.as_ref().is_some_and(|layout| {
+        path_is_under(active_executable_path, Path::new(&layout.current_root))
+    });
+    let status = if installed_active && !active_executable_on_path {
+        "warn"
+    } else {
+        "pass"
+    };
+    LauncherPathResolution {
+        command: CANONICAL_LAUNCHER_COMMAND.to_string(),
+        resolved_path: resolved.map(|path| path.display().to_string()),
+        expected_runtime_bin_dir,
+        expected_runtime_bin_on_path,
+        active_executable_on_path,
+        status: status.to_string(),
+    }
 }
 
-fn launcher_home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .or_else(|| {
-            let drive = std::env::var_os("HOMEDRIVE")?;
-            let path = std::env::var_os("HOMEPATH")?;
-            let mut combined = std::ffi::OsString::from(drive);
-            combined.push(path);
-            Some(combined)
-        })
-        .map(PathBuf::from)
+fn resolve_command_from_path_env(
+    command: &str,
+    path_env: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let path_env = path_env?;
+    let names = launcher_command_file_names(command);
+    for dir in std::env::split_paths(&path_env) {
+        for name in &names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate.canonicalize().unwrap_or(candidate));
+            }
+        }
+    }
+    None
+}
+
+fn path_env_contains_dir(dir: &Path, path_env: Option<std::ffi::OsString>) -> bool {
+    let Some(path_env) = path_env else {
+        return false;
+    };
+    std::env::split_paths(&path_env).any(|entry| same_path(&entry, dir))
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+    left == right
+}
+
+fn path_is_under(path: &Path, root: &Path) -> bool {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    path.starts_with(root)
+}
+
+fn launcher_path_resolution_next_action(
+    install_layout: Option<&crate::release_surface::ReleaseInstallLayout>,
+) -> String {
+    if cfg!(windows) {
+        if let Some(layout) = install_layout {
+            return format!(
+                "The active installed `vida` was launched directly, but this shell does not resolve it from PATH; run `. \"{}\"` in PowerShell or restart the host shell after installer PATH updates.",
+                layout.env_file
+            );
+        }
+        return "The active installed `vida` was launched directly, but this shell does not resolve it from PATH; source the installer env file or restart the host shell.".to_string();
+    }
+    if let Some(layout) = install_layout {
+        return format!(
+            "The active installed `vida` was launched directly, but this shell does not resolve it from PATH; run `source \"{}\"` or reload the shell profile installed by the Unix installer.",
+            layout.env_file
+        );
+    }
+    "The active installed `vida` was launched directly, but this shell does not resolve it from PATH; source the installer env file or reload the shell profile.".to_string()
 }
 
 fn push_launcher_bin_candidates(candidates: &mut Vec<PathBuf>, bin_root: &Path) {
@@ -147,11 +225,15 @@ fn push_launcher_bin_candidates(candidates: &mut Vec<PathBuf>, bin_root: &Path) 
 }
 
 fn launcher_vida_file_names() -> Vec<String> {
-    let canonical = format!("vida{}", std::env::consts::EXE_SUFFIX);
-    if canonical == "vida" {
+    launcher_command_file_names(CANONICAL_LAUNCHER_COMMAND)
+}
+
+fn launcher_command_file_names(command: &str) -> Vec<String> {
+    let canonical = format!("{command}{}", std::env::consts::EXE_SUFFIX);
+    if canonical == command {
         vec![canonical]
     } else {
-        vec![canonical, "vida".to_string()]
+        vec![canonical, command.to_string()]
     }
 }
 
@@ -627,6 +709,37 @@ mod tests {
                 == PathBuf::from(&summary.active_executable_path)
                     .canonicalize()
                     .expect("active executable path should canonicalize")));
+    }
+
+    #[test]
+    fn launcher_path_helpers_resolve_platform_command_without_user_hardcode() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-launcher-path-resolution-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin dir should write");
+        let binary = bin.join(crate::release_surface::vida_binary_file_name());
+        std::fs::write(&binary, b"fake vida").expect("fake vida should write");
+
+        let path_env = std::env::join_paths([bin.clone()]).expect("path env should join");
+
+        let resolved = super::resolve_command_from_path_env("vida", Some(path_env.clone()))
+            .expect("vida should resolve from synthetic PATH");
+        assert_eq!(
+            resolved,
+            binary
+                .canonicalize()
+                .expect("fake vida should canonicalize")
+        );
+        assert!(super::path_env_contains_dir(&bin, Some(path_env)));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

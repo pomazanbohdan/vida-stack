@@ -1571,6 +1571,22 @@ fn print_init_summary(project_root: &Path, activation_view: &serde_json::Value) 
         "activation status: {}",
         activation_view["status"].as_str().unwrap_or("unknown")
     );
+    if let Ok(launcher) = super::doctor_launcher_summary_for_root(project_root) {
+        println!("launcher status: {}", launcher.status);
+        if let Some(layout) = launcher.install_layout.as_ref() {
+            println!("install root: {}", layout.install_root);
+            println!("runtime bin: {}", layout.runtime_bin_dir);
+        }
+        if launcher.path_resolution.status == "warn" {
+            println!(
+                "path resolution: command `{}` is not resolving to this active runtime in the current shell",
+                launcher.path_resolution.command
+            );
+            for action in launcher.next_actions {
+                println!("launcher next step: {action}");
+            }
+        }
+    }
     if activation_view["activation_pending"]
         .as_bool()
         .unwrap_or(true)
