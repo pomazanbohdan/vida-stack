@@ -343,6 +343,28 @@ verify_archive_checksum() {
   )
 }
 
+validate_archive_member_paths() {
+  local archive_path="$1"
+  local member normalized
+
+  while IFS= read -r member; do
+    normalized="${member#./}"
+    [[ -n "$normalized" ]] || continue
+
+    if [[ "$normalized" == /* ]]; then
+      fail "Archive contains unsafe absolute path: ${member}"
+    fi
+
+    local segment
+    IFS='/' read -r -a segments <<< "$normalized"
+    for segment in "${segments[@]}"; do
+      if [[ "$segment" == ".." ]]; then
+        fail "Archive contains unsafe traversal path: ${member}"
+      fi
+    done
+  done < <(tar -tzf "$archive_path")
+}
+
 append_source_line() {
   local file="$1"
   local line="$2"
@@ -683,6 +705,7 @@ install_release() {
   verify_archive_checksum "$archive_path" "$checksum_path"
 
   if [[ "$DRY_RUN" == "yes" ]]; then
+    log "Would validate archive member paths"
     log "Would extract archive into temporary directory"
     log "Would install release into ${release_root}"
     log "Would activate ${current_link}"
@@ -690,6 +713,8 @@ install_release() {
     log "Would update shell hooks for bash/zsh"
     return 0
   fi
+
+  validate_archive_member_paths "$archive_path"
 
   mkdir -p "$extract_dir"
   tar -xzf "$archive_path" -C "$extract_dir"
