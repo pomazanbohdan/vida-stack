@@ -1372,8 +1372,9 @@ async fn recover_missing_first_dispatch_receipt(
         let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
             super::downstream_activation_fields(&role_selection, &dispatch_target);
         dispatch_receipt.dispatch_target = dispatch_target.clone();
-        dispatch_receipt.dispatch_status = "executed".to_string();
-        dispatch_receipt.lane_status = super::LaneStatus::LaneRunning.as_str().to_string();
+        dispatch_receipt.dispatch_status = "packet_ready".to_string();
+        dispatch_receipt.lane_status =
+            super::derive_lane_status("packet_ready", None, None).as_str().to_string();
         dispatch_receipt.dispatch_kind = dispatch_kind;
         dispatch_receipt.dispatch_surface = dispatch_surface;
         dispatch_receipt.dispatch_command =
