@@ -2496,7 +2496,7 @@ UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
         self.db
             .query(format!(
                 "DELETE instruction_dependency_edge WHERE from_artifact = '{}';",
-                artifact_id
+                escape_surql_literal(artifact_id)
             ))
             .await?;
 
