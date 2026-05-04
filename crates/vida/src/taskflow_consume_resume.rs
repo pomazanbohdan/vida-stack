@@ -1329,13 +1329,6 @@ async fn recover_missing_first_dispatch_receipt(
     let run_graph_bootstrap =
         match super::taskflow_run_graph::run_graph_dispatch_bootstrap_from_status(&status) {
             Ok(bootstrap) => bootstrap,
-            Err(_) if status.status != "completed" => serde_json::json!({
-                "status": "dispatch_init_ready",
-                "handoff_ready": true,
-                "run_id": status.run_id,
-                "latest_status": serde_json::to_value(&status)
-                    .map_err(|error| format!("Failed to encode status: {error}"))?,
-            }),
             Err(_) => return Ok(None),
         };
 
@@ -9748,6 +9741,84 @@ agent_system:
             .expect("receipt should be persisted");
         assert_eq!(persisted.dispatch_target, "analysis");
         assert_eq!(persisted.dispatch_status, "routed");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn recover_missing_first_dispatch_receipt_fails_closed_when_resume_gate_denies() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-missing-receipt-fail-closed-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let run_id = "run-missing-receipt-fail-closed";
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "implementation",
+            "implementation",
+        );
+        status.task_id = run_id.to_string();
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "implementation_active".to_string();
+        status.active_node = "planning".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Attempt resume after invalid status".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_context(&crate::state_store::RunGraphDispatchContext {
+                run_id: run_id.to_string(),
+                task_id: run_id.to_string(),
+                request_text: "Attempt resume after invalid status".to_string(),
+                role_selection: serde_json::to_value(&role_selection)
+                    .expect("encode role selection"),
+                recorded_at: "2026-04-21T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist run graph dispatch context");
+
+        let recovered = recover_missing_first_dispatch_receipt(&store, run_id)
+            .await
+            .expect("missing receipt recovery should evaluate safely");
+        assert!(
+            recovered.is_none(),
+            "resume-gate denial must not synthesize a dispatch receipt"
+        );
+        assert!(
+            store
+                .run_graph_dispatch_receipt(run_id)
+                .await
+                .expect("read dispatch receipt")
+                .is_none(),
+            "fail-closed recovery must not persist a new dispatch receipt"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
