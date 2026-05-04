@@ -233,9 +233,16 @@ jobs:
 
           $env:VIDA_HOME = $installRoot
           $env:VIDA_ROOT = Join-Path $installRoot "current"
-          $env:PATH = "$binDir;$env:PATH"
-          vida root | Out-File -FilePath (Join-Path $tmpRoot "vida-root.txt") -Encoding utf8
-          if ($LASTEXITCODE -ne 0) { throw "vida root failed" }
+          $runtimeBinDir = Join-Path $env:VIDA_ROOT "bin"
+          $env:PATH = "$runtimeBinDir;$env:PATH"
+          $vidaCommand = Get-Command vida -ErrorAction Stop
+          $expectedVida = [System.IO.Path]::GetFullPath((Join-Path $runtimeBinDir "vida.exe"))
+          $actualVida = [System.IO.Path]::GetFullPath($vidaCommand.Source)
+          if ($actualVida -ine $expectedVida) {
+            throw "vida did not resolve to the direct runtime binary: $($vidaCommand.Source)"
+          }
+          vida --version | Out-File -FilePath (Join-Path $tmpRoot "vida-version.txt") -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "vida version failed" }
           vida --help | Out-File -FilePath (Join-Path $tmpRoot "vida-help.txt") -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw "vida help failed" }
           taskflow help | Out-File -FilePath (Join-Path $tmpRoot "taskflow-help.txt") -Encoding utf8
@@ -253,7 +260,7 @@ jobs:
 
           Select-String -LiteralPath (Join-Path $tmpRoot "taskflow-help.txt") -Pattern "TaskFlow CLI"
           Select-String -LiteralPath (Join-Path $tmpRoot "docflow-help.txt") -Pattern "Standalone DocFlow CLI"
-          Select-String -LiteralPath (Join-Path $tmpRoot "vida-root.txt") -Pattern ([regex]::Escape((Join-Path $installRoot "current")))
+          Select-String -LiteralPath (Join-Path $tmpRoot "vida-version.txt") -Pattern "vida "
           if (-not (Test-Path -LiteralPath (Join-Path $projectDir "AGENTS.md"))) { throw "AGENTS.md was not bootstrapped" }
           if (-not (Test-Path -LiteralPath (Join-Path $projectDir "AGENTS.sidecar.md"))) { throw "AGENTS.sidecar.md was not bootstrapped" }
           if (-not (Test-Path -LiteralPath (Join-Path $projectDir "vida.config.yaml"))) { throw "vida.config.yaml was not bootstrapped" }
