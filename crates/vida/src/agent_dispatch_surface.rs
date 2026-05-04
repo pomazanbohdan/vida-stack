@@ -378,14 +378,19 @@ fn agent_init_command(
     state_dir: Option<&std::path::Path>,
     runtime_role: &str,
 ) -> String {
-    let mut command = if runtime_role.trim().is_empty() {
-        format!("vida agent-init --role worker {task_id} --json")
+    let runtime_role = if runtime_role.trim().is_empty() {
+        "worker"
     } else {
-        format!("vida agent-init --role {runtime_role} {task_id} --json")
+        runtime_role
     };
+    let mut command = format!(
+        "vida agent-init --role {} {} --json",
+        crate::shell_quote(runtime_role),
+        crate::shell_quote(task_id)
+    );
     if let Some(state_dir) = state_dir {
         command.push_str(" --state-dir ");
-        command.push_str(&state_dir.display().to_string());
+        command.push_str(&crate::shell_quote(&state_dir.display().to_string()));
     }
     command
 }
