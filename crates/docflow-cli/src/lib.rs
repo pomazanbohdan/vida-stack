@@ -3014,6 +3014,17 @@ fn changelog_path_for_path(
                 path.display()
             )
         })?;
+    let mut components = std::path::Path::new(&changelog_ref).components();
+    let valid_basename = matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    );
+    if !valid_basename {
+        return Err(format!(
+            "footer metadata has invalid changelog_ref (must be a safe basename): {}",
+            path.display()
+        ));
+    }
     Ok(path.with_file_name(changelog_ref))
 }
 
@@ -4594,6 +4605,28 @@ mod tests {
         fs::remove_dir_all(root).expect("temp root should be removed");
     }
 
+    #[test]
+    fn changelog_ref_must_be_safe_basename() {
+        let markdown = std::path::Path::new("docs/process/a.md");
+
+        let safe = vec![("changelog_ref".to_string(), "a.changelog.jsonl".to_string())];
+        let safe_path =
+            crate::changelog_path_for_path(markdown, &safe).expect("safe basename should pass");
+        assert_eq!(
+            safe_path,
+            std::path::Path::new("docs/process/a.changelog.jsonl")
+        );
+
+        let traversal = vec![("changelog_ref".to_string(), "../escape.jsonl".to_string())];
+        let traversal_err = crate::changelog_path_for_path(markdown, &traversal)
+            .expect_err("parent traversal must be rejected");
+        assert!(traversal_err.contains("invalid changelog_ref"));
+
+        let absolute = vec![("changelog_ref".to_string(), "/tmp/pwn.jsonl".to_string())];
+        let absolute_err = crate::changelog_path_for_path(markdown, &absolute)
+            .expect_err("absolute paths must be rejected");
+        assert!(absolute_err.contains("invalid changelog_ref"));
+    }
     #[test]
     fn readiness_command_reports_blocking_for_missing_footer() {
         let cli = Cli::parse_from([
