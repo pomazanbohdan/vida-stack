@@ -209,6 +209,20 @@ fn render_shell_environment_policy(policy: Option<&serde_json::Value>) -> Option
     if object.is_empty() {
         return None;
     }
+    let include_only_present = object
+        .get("include_only")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|values| !values.is_empty());
+    let effective_inherit = object
+        .get("inherit")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| {
+            if value.eq_ignore_ascii_case("all") && !include_only_present {
+                "none"
+            } else {
+                value
+            }
+        });
 
     let mut lines = vec!["[shell_environment_policy]".to_string()];
     for key in [
@@ -219,6 +233,15 @@ fn render_shell_environment_policy(policy: Option<&serde_json::Value>) -> Option
         let Some(value) = object.get(key) else {
             continue;
         };
+        if key == "inherit" {
+            if let Some(inherit) = effective_inherit {
+                lines.push(format!(
+                    "{key} = \"{}\"",
+                    escape_toml_basic_string(inherit)
+                ));
+            }
+            continue;
+        }
         match value {
             serde_json::Value::String(text) => {
                 lines.push(format!("{key} = \"{}\"", escape_toml_basic_string(text)))
