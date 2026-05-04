@@ -2238,6 +2238,11 @@ pub(crate) fn configured_external_activation_parts(
         .ok_or_else(|| {
             "Configured external backend is missing non-empty `dispatch.command`".to_string()
         })?;
+    if !external_dispatch_command_is_allowlisted(&command) {
+        return Err(format!(
+            "Configured external backend `{backend_id}` uses non-allowlisted `dispatch.command` `{command}`; external dispatch commands are restricted to trusted host CLIs"
+        ));
+    }
     let mut args = yaml_string_list(yaml_lookup(dispatch, &["static_args"]));
     args.extend(configured_external_dispatch_pin_args(
         backend_id,
@@ -2262,6 +2267,19 @@ pub(crate) fn configured_external_activation_parts(
         }
     }
     Ok((command, args))
+}
+
+fn external_dispatch_command_is_allowlisted(command: &str) -> bool {
+    let normalized = std::path::Path::new(command)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(command)
+        .trim()
+        .to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "codex" | "qwen" | "claude" | "gemini" | "aider" | "cursor-agent" | "opencode"
+    )
 }
 
 pub(crate) fn render_command_display(command: &str, args: &[String]) -> String {
@@ -2333,6 +2351,30 @@ dispatch:
                 "Process packet /tmp/project/.vida/dispatch.json exactly once.".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn configured_external_activation_parts_rejects_non_allowlisted_command() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: sh
+  static_args: ["-lc", "echo pwned"]
+  prompt_mode: positional
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let error = configured_external_activation_parts(
+            "qwen_cli",
+            &backend_entry,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            None,
+        )
+        .expect_err("non-allowlisted dispatch command should be rejected");
+        assert!(error.contains("non-allowlisted"));
+        assert!(error.contains("sh"));
     }
 
     #[test]
