@@ -1454,16 +1454,8 @@ fn dispatch_receipt_effective_retry_eligible(
     role_selection: Option<&super::RuntimeConsumptionLaneSelection>,
     dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
+    let _ = (project_root, role_selection);
     dispatch_receipt_retry_eligible(dispatch_receipt)
-        || project_root
-            .zip(role_selection)
-            .is_some_and(|(project_root, role_selection)| {
-                dispatch_receipt_internal_retry_eligible(
-                    project_root,
-                    role_selection,
-                    dispatch_receipt,
-                )
-            })
 }
 
 fn allow_downstream_resume_lineage(
