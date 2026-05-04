@@ -197,7 +197,17 @@ vida orchestrator-init --json
 
 This keeps the operator-facing `vida` in `~/.local/bin` on Unix-like systems or `~/.bun/bin` on Windows aligned with the release binary while preserving faster and more inspectable local proof runs on the debug build.
 
-On Windows, a full `cargo test` may be blocked by Application Control when Cargo tries to execute generated integration-test binaries under `target\debug\deps\*.exe`. Use `cargo test -p vida --no-run` for compile coverage and run targeted bin tests such as `cargo test -p vida --bin vida read_only_open -- --nocapture` unless the host policy allows those test executables.
+On Windows, Application Control, Smart App Control, or Device Guard may block any newly generated or downloaded executable, including Cargo build scripts under `target\debug\build\*\build-script-build.exe`, integration-test binaries under `target\debug\deps\*.exe`, and release binaries installed under `%LOCALAPPDATA%\vida-stack\current\bin`. If that policy is active, local Windows `cargo build`, `cargo test`, and installer smoke may fail before VIDA code runs. Use WSL/Linux or GitHub Actions for proof builds, or allowlist/sign the release binaries before making them the active system runtime.
+
+Known `v0.9.3` Windows host state from the 2026-05-01 release wave:
+
+1. GitHub release packaging and Windows installer smoke passed on `windows-latest`.
+2. The local Windows host installed `v0.9.3` under `%LOCALAPPDATA%\vida-stack\releases\v0.9.3`.
+3. The same local host's Smart App Control policy initially blocked newly installed `vida.exe`, `taskflow.exe`, and `docflow.exe`.
+4. A later explicit Windows installer run switched `%LOCALAPPDATA%\vida-stack\current` to `v0.9.3` and removed the stale PATH-shadowing `C:\Users\pomaz\.bun\bin\vida.exe` into a backup file.
+5. Smart App Control was then disabled on the local developer host by setting `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState=0` and refreshing Code Integrity with `CiTool.exe -r`.
+6. The Windows `vida.cmd`, `taskflow.cmd`, and `docflow.cmd` launchers now resolve and execute the `v0.9.3` active release.
+7. WSL on the same machine can also run `vida 0.9.3` and was used for local release proof.
 
 Fresh-state smoke after installing `vida.exe`:
 
@@ -394,10 +404,10 @@ For detailed rules, read [CONTRIBUTING.md](CONTRIBUTING.md).
 artifact_path: project/repository/readme
 artifact_type: repository_doc
 artifact_version: '1'
-artifact_revision: '2026-03-15'
+artifact_revision: '2026-05-01'
 schema_version: '1'
 status: canonical
 source_path: README.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-15T09:05:34+02:00'
+updated_at: '2026-05-01T15:20:00Z'
 changelog_ref: README.changelog.jsonl

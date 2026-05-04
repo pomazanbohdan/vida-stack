@@ -385,6 +385,55 @@ At the current repository cut:
 7. `vida.config.yaml` records the Codex App config path, Codex App template path, legacy CLI template path, and CLI multi-agent feature argument,
 8. `agent_system.subagents.internal_subagents` carries GPT-5.5 low, medium, high, and xhigh profiles for Codex App/host-subagent selection,
 9. the first intended Codex-backed project team is the bounded four-tier ladder defined in this guide.
+10. `v0.9.3` is the first release tag that packages this Codex App/internal-agent configuration wave.
+11. GitHub `Publish Release` for `v0.9.3` succeeded and published Linux, macOS, and Windows release archives.
+12. Local Windows installation may still be blocked by host Application Control or Device Guard policy even when the release artifacts are valid.
+13. On the observed Windows host, Device Guard blocked newly installed `vida.exe`, `taskflow.exe`, and `docflow.exe` from `%LOCALAPPDATA%\vida-stack\current\bin`.
+14. After an explicit installer run, `%LOCALAPPDATA%\vida-stack\current` points to `v0.9.3` and `.bun\bin\vida.exe` was moved aside so Windows resolves the installer-managed `vida.cmd`.
+15. The local developer host then disabled Smart App Control by setting `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState=0` and applying `CiTool.exe -r`; `vida --version`, `taskflow --help`, and `docflow --help` now execute through the Windows launchers.
+16. The runtime bundle retrieval-trust blocker found during the release wave was fixed by allowing bundle trust evidence to cite the latest recorded final snapshot when no admissible final snapshot exists yet.
+17. `vida taskflow consume bundle check --json` run through the WSL-built `0.9.3` binary returned `blocker_codes=[]` and `check.ok=true`.
+18. The broad Ubuntu CI `cargo test --workspace --locked -- --test-threads=1` still has a separate test-debt failure set in runtime-state/unit tests; release packaging, platform builds, and Windows installer smoke are green.
+
+## v0.9.3 Release Evidence
+
+Release tag:
+
+1. `v0.9.3`
+2. commit `3c5dee87`
+3. GitHub release URL: `https://github.com/pomazanbohdan/vida-stack/releases/tag/v0.9.3`
+
+Local proof surfaces:
+
+1. WSL `cargo test -p vida runtime_bundle_retrieval_trust_evidence -- --test-threads=1`
+   - result: 3 tests passed
+2. WSL `cargo run -p vida -- taskflow consume bundle check --json`
+   - result: `blocker_codes=[]`, `check.ok=true`
+3. WSL `bash scripts/build-release.sh v0.9.3`
+   - result: release archives generated under `dist/`
+4. Windows installer `upgrade -Version v0.9.3` and `use -Version v0.9.3`
+   - result: active junction points to `v0.9.3`, launchers regenerated, stale `.bun\bin\vida.exe` moved into backup
+5. Windows Smart App Control repair
+   - result: `VerifiedAndReputablePolicyState=0`, Code Integrity policy refresh finished, `vida --version` returns `vida 0.9.3`
+   - boundary: this disables Smart App Control on the local developer host; long-term release distribution should use trusted code signing or a managed App Control policy
+6. `codex features list --enable multi_agent`
+   - result: `multi_agent` reported `true`
+
+Remote proof surfaces:
+
+1. GitHub `Publish Release`
+   - result: success
+   - platform assets: Linux default, macOS arm64, Windows x86_64
+2. GitHub `CI`
+   - `Build Rust` passed on Ubuntu, macOS, and Windows
+   - `validate-windows-installer` passed
+   - `validate` failed in the broad unit-test step with existing runtime-state expectation drift
+
+Operator boundary:
+
+1. A published Windows archive is not enough to make local Windows execution lawful when Device Guard or Smart App Control blocks unsigned or untrusted newly downloaded binaries.
+2. Do not treat installer success as local runtime success until `vida --version`, `taskflow --help`, and `docflow --help` execute from the Windows launchers.
+3. For developer hosts, disabling Smart App Control can unblock local unsigned binaries, but the long-term distribution path should use trusted code signing or managed App Control allow policy.
 
 ## Routing
 
@@ -424,5 +473,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/codex-agent-configuration-guide.md
 created_at: '2026-03-12T08:35:27+02:00'
-updated_at: 2026-05-01T13:27:00Z
+updated_at: 2026-05-01T15:20:00Z
 changelog_ref: codex-agent-configuration-guide.changelog.jsonl

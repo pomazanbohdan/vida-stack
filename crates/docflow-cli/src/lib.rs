@@ -1183,12 +1183,22 @@ fn doctor_rows_for(
 }
 
 fn read_activation_protocol() -> std::io::Result<String> {
-    let base =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vida/config/instructions");
-    let candidates = [
-        base.join("bridge.instruction-activation-protocol.md"),
-        base.join("instruction-contracts/bridge.instruction-activation-protocol.md"),
+    let runtime_base = runtime_root().join("vida/config/instructions");
+    let installed_base = installed_root().map(|root| root.join("vida/config/instructions"));
+    let repo_base = repo_root().join("vida/config/instructions");
+    let mut candidates = vec![
+        runtime_base.join("bridge.instruction-activation-protocol.md"),
+        runtime_base.join("instruction-contracts/bridge.instruction-activation-protocol.md"),
     ];
+    if let Some(base) = installed_base {
+        candidates.push(base.join("bridge.instruction-activation-protocol.md"));
+        candidates
+            .push(base.join("instruction-contracts/bridge.instruction-activation-protocol.md"));
+    }
+    candidates.push(repo_base.join("bridge.instruction-activation-protocol.md"));
+    candidates
+        .push(repo_base.join("instruction-contracts/bridge.instruction-activation-protocol.md"));
+
     for path in candidates {
         if path.exists() {
             return fs::read_to_string(path);
@@ -1201,15 +1211,37 @@ fn read_activation_protocol() -> std::io::Result<String> {
 }
 
 fn read_protocol_index() -> std::io::Result<String> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vida/config/instructions/system-maps/protocol.index.md");
-    fs::read_to_string(path)
+    let mut candidates =
+        vec![runtime_root().join("vida/config/instructions/system-maps/protocol.index.md")];
+    if let Some(root) = installed_root() {
+        candidates.push(root.join("vida/config/instructions/system-maps/protocol.index.md"));
+    }
+    candidates.push(repo_root().join("vida/config/instructions/system-maps/protocol.index.md"));
+    for path in candidates {
+        if path.exists() {
+            return fs::read_to_string(path);
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "protocol index not found",
+    ))
 }
 
 fn repo_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .to_path_buf()
+}
+
+fn installed_root() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let root = exe.parent()?.parent()?.to_path_buf();
+    if root.join("vida/config/instructions").is_dir() {
+        Some(root)
+    } else {
+        None
+    }
 }
 
 fn runtime_root() -> std::path::PathBuf {
