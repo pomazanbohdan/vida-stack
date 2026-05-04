@@ -54,6 +54,7 @@ if ($env:VIDA_KEEP_RELEASES) { $KeepReleases = [int] $env:VIDA_KEEP_RELEASES }
 
 $Root = [System.IO.Path]::GetFullPath($Root)
 $BinDir = [System.IO.Path]::GetFullPath($BinDir)
+$RuntimeBinDir = [System.IO.Path]::GetFullPath((Join-Path $Root "current\bin"))
 
 function Write-Log {
     param([string] $Message)
@@ -77,8 +78,8 @@ Options:
   -Version TAG      Release tag to install. Defaults to latest.
   -Archive PATH     Local release zip instead of GitHub download.
   -Target TARGET    Release asset target: auto|windows-x86_64.
-  -BinDir PATH      Directory for launcher .cmd shims. Defaults to %LOCALAPPDATA%\vida-stack\bin.
-  -Bins LIST        Comma-separated launchers to expose: vida,taskflow,docflow,all.
+  -BinDir PATH      Legacy launcher directory to clean up. Direct binaries are exposed from %LOCALAPPDATA%\vida-stack\current\bin.
+  -Bins LIST        Comma-separated direct binaries to expose: vida,taskflow,docflow,all.
   -Root PATH        Install root. Defaults to %LOCALAPPDATA%\vida-stack.
   -Force            Overwrite an already installed release of the same version.
   -DryRun           Print planned actions without changing files.
@@ -298,105 +299,44 @@ function Write-EnvironmentFiles {
     @"
 `$env:VIDA_HOME = if (`$env:VIDA_HOME) { `$env:VIDA_HOME } else { "$Root" }
 `$env:VIDA_ROOT = if (`$env:VIDA_ROOT) { `$env:VIDA_ROOT } else { Join-Path `$env:VIDA_HOME "current" }
-if ((`$env:PATH -split ';') -notcontains "$BinDir") { `$env:PATH = "$BinDir;`$env:PATH" }
+`$vidaRuntimeBin = Join-Path `$env:VIDA_ROOT "bin"
+if ((`$env:PATH -split ';') -notcontains `$vidaRuntimeBin) { `$env:PATH = "`$vidaRuntimeBin;`$env:PATH" }
 "@ | Set-Content -LiteralPath $envPs1 -Encoding UTF8
     @"
 @echo off
 set "VIDA_HOME=$Root"
 set "VIDA_ROOT=$Root\current"
-set "PATH=$BinDir;%PATH%"
+set "PATH=%VIDA_ROOT%\bin;%PATH%"
 "@ | Set-Content -LiteralPath $envCmd -Encoding ASCII
 }
 
 function Install-PathHook {
     if ($DryRun) {
-        Write-Log "Would add $BinDir to the user PATH"
+        Write-Log "Would add $RuntimeBinDir to the user PATH"
         return
     }
     $current = [Environment]::GetEnvironmentVariable("Path", "User")
     if (-not $current) { $current = "" }
     $parts = $current -split ";" | Where-Object { $_ }
-    if ($parts -notcontains $BinDir) {
-        $next = if ($current) { "$current;$BinDir" } else { $BinDir }
+    if ($parts -notcontains $RuntimeBinDir) {
+        $next = if ($current) { "$RuntimeBinDir;$current" } else { $RuntimeBinDir }
         [Environment]::SetEnvironmentVariable("Path", $next, "User")
-        Write-Log "Added launcher directory to user PATH: $BinDir"
+        Write-Log "Added direct runtime binary directory to user PATH: $RuntimeBinDir"
     }
 }
 
-function Write-CmdWrapper {
-    param([string] $Launcher)
-    if ($DryRun) {
-        Write-Log "Would write launcher $BinDir\$Launcher.cmd"
-        return
-    }
-    New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-    $path = Join-Path $BinDir "$Launcher.cmd"
-    if ($Launcher -eq "vida") {
-        @"
-@echo off
-setlocal
-set "VIDA_HOME=$Root"
-set "VIDA_ROOT=$Root\current"
-set "RUNTIME_BIN=%VIDA_ROOT%\bin\vida.exe"
-if not exist "%RUNTIME_BIN%" set "RUNTIME_BIN=%VIDA_ROOT%\bin\vida"
-if /I "%~1"=="upgrade" goto manage
-if /I "%~1"=="install" goto manage
-if /I "%~1"=="use" goto manage
-if /I "%~1"=="init" goto projectinit
-if /I "%~1"=="--help" goto runtimehelp
-if /I "%~1"=="-h" goto runtimehelp
-if /I "%~1"=="/?" goto runtimehelp
-if /I "%~1"=="root" (
-  echo %VIDA_ROOT%
-  exit /b 0
-)
-"%RUNTIME_BIN%" %*
-exit /b %ERRORLEVEL%
-:manage
-powershell -NoProfile -ExecutionPolicy Bypass -File "%VIDA_HOME%\installer\install.ps1" %* -Root "%VIDA_HOME%" -BinDir "$BinDir"
-exit /b %ERRORLEVEL%
-:projectinit
-powershell -NoProfile -ExecutionPolicy Bypass -File "%VIDA_HOME%\installer\install.ps1" project-init -Root "%VIDA_HOME%" -BinDir "$BinDir"
-exit /b %ERRORLEVEL%
-:runtimehelp
-"%RUNTIME_BIN%" --help
-exit /b %ERRORLEVEL%
-"@ | Set-Content -LiteralPath $path -Encoding ASCII
-    } else {
-        @"
-@echo off
-setlocal
-set "VIDA_HOME=$Root"
-set "VIDA_ROOT=$Root\current"
-set "RUNTIME_BIN=%VIDA_ROOT%\bin\$Launcher.exe"
-if not exist "%RUNTIME_BIN%" set "RUNTIME_BIN=%VIDA_ROOT%\bin\$Launcher"
-if exist "%RUNTIME_BIN%" (
-  if /I "%~1"=="--help" (
-    "%RUNTIME_BIN%" --help
-    exit /b %ERRORLEVEL%
-  )
-  if /I "%~1"=="-h" (
-    "%RUNTIME_BIN%" -h
-    exit /b %ERRORLEVEL%
-  )
-  if /I "%~1"=="/?" (
-    "%RUNTIME_BIN%" --help
-    exit /b %ERRORLEVEL%
-  )
-  "%RUNTIME_BIN%" %*
-  exit /b %ERRORLEVEL%
-)
-set "VIDA_BIN=%VIDA_ROOT%\bin\vida.exe"
-if not exist "%VIDA_BIN%" set "VIDA_BIN=%VIDA_ROOT%\bin\vida"
-"%VIDA_BIN%" $Launcher %*
-exit /b %ERRORLEVEL%
-"@ | Set-Content -LiteralPath $path -Encoding ASCII
-    }
-}
-
-function Install-Wrappers {
+function Remove-LegacyWrappers {
     foreach ($launcher in @("vida", "taskflow", "docflow")) {
-        if (Test-BinSelected $launcher) { Write-CmdWrapper $launcher }
+        if (-not (Test-BinSelected $launcher)) { continue }
+        $wrapper = Join-Path $BinDir "$launcher.cmd"
+        if ($DryRun) {
+            Write-Log "Would remove legacy launcher wrapper $wrapper"
+            continue
+        }
+        if (Test-Path -LiteralPath $wrapper -PathType Leaf) {
+            Remove-Item -LiteralPath $wrapper -Force
+            Write-Log "Removed legacy launcher wrapper: $wrapper"
+        }
     }
 }
 
@@ -482,7 +422,7 @@ function Install-Release {
         Write-Log "Resolved release target: windows-x86_64"
         Write-Log "Resolved archive: $archiveBase.zip"
         Write-Log "Would install release into $releaseRoot"
-        Write-Log "Would install launchers into $BinDir"
+        Write-Log "Would expose direct runtime binaries from $RuntimeBinDir"
         return
     }
 
@@ -517,14 +457,14 @@ function Install-Release {
         Install-ManagementScript $Tag
         Write-EnvironmentFiles
         Install-PathHook
-        Install-Wrappers
         Set-CurrentRelease $releaseRoot
+        Remove-LegacyWrappers
         Cleanup-OldReleases
 
         Write-Log "Installed VIDA $Tag into $releaseRoot"
         Write-Log "Active release: $(Join-Path $Root "current")"
-        $launcherPaths = foreach ($selected in $SelectedBins) { Join-Path $BinDir "$selected.cmd" }
-        Write-Log "Launchers: $([string]::Join(', ', $launcherPaths))"
+        $directPaths = foreach ($selected in $SelectedBins) { Join-Path $RuntimeBinDir "$selected.exe" }
+        Write-Log "Direct binaries: $([string]::Join(', ', $directPaths))"
         Write-Host ""
         Write-Host "Try it now:"
         Write-Host "  . `"$Root\env.ps1`""
@@ -545,9 +485,9 @@ function Invoke-Doctor {
     }
     foreach ($launcher in @("vida", "taskflow", "docflow")) {
         if (Test-BinSelected $launcher) {
-            $wrapper = Join-Path $BinDir "$launcher.cmd"
-            if (-not (Test-Path -LiteralPath $wrapper -PathType Leaf)) {
-                Write-Log "Missing launcher: $wrapper"
+            $direct = Join-Path $RuntimeBinDir "$launcher.exe"
+            if (-not (Test-Path -LiteralPath $direct -PathType Leaf)) {
+                Write-Log "Missing direct runtime binary: $direct"
                 $missing = $true
             }
         }
@@ -585,7 +525,8 @@ function Use-Release {
         Fail "Installed release not found: $releaseRoot"
     }
     Set-CurrentRelease $releaseRoot
-    Install-Wrappers
+    Install-PathHook
+    Remove-LegacyWrappers
     Write-Log "Switched active VIDA release to $Tag"
 }
 

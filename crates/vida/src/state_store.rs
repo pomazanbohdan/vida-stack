@@ -395,6 +395,45 @@ mod tests {
         .join("\n")
     }
 
+    fn unique_temp_root(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
+    }
+
+    fn write_minimal_project_markers(project_root: &Path) {
+        fs::create_dir_all(project_root.join(".vida/config")).expect("create .vida/config");
+        fs::create_dir_all(project_root.join(".vida/db")).expect("create .vida/db");
+        fs::create_dir_all(project_root.join(".vida/project")).expect("create .vida/project");
+        fs::write(project_root.join("AGENTS.md"), "# Test agents\n").expect("write AGENTS.md");
+        fs::write(project_root.join("vida.config.yaml"), "project_id: test\n")
+            .expect("write vida.config.yaml");
+    }
+
+    fn write_minimal_framework_source_bundle(source_root: &Path, marker: &str) {
+        let framework_dir = source_root.join("framework");
+        fs::create_dir_all(&framework_dir).expect("create framework source dir");
+        fs::write(
+            framework_dir.join("agent-definition.md"),
+            format!(
+                "artifact_id: framework-agent-definition\nartifact_kind: agent_definition\nversion: 1\nownership_class: framework\nmutability_class: immutable\nactivation_class: always_on\nrequired_follow_on: framework-instruction-contract,framework-prompt-template-config\nhierarchy: framework\n\n{marker}\n"
+            ),
+        )
+        .expect("write agent definition");
+        fs::write(
+            framework_dir.join("instruction-contract.md"),
+            "artifact_id: framework-instruction-contract\nartifact_kind: instruction_contract\nversion: 1\nownership_class: framework\nmutability_class: immutable\nactivation_class: always_on\nhierarchy: framework\n",
+        )
+        .expect("write instruction contract");
+        fs::write(
+            framework_dir.join("prompt-template-config.md"),
+            "artifact_id: framework-prompt-template-config\nartifact_kind: prompt_template_configuration\nversion: 1\nownership_class: framework\nmutability_class: immutable\nactivation_class: always_on\nhierarchy: framework\n",
+        )
+        .expect("write prompt template config");
+    }
+
     #[test]
     fn parse_source_metadata_extracts_extended_fields() {
         let body = r#"
@@ -1028,6 +1067,69 @@ hierarchy: framework,contracts
         assert_eq!(second.imported_count, 0);
         assert_eq!(second.unchanged_count, 3);
         assert_eq!(second.updated_count, 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn ingest_relative_source_root_resolves_from_active_project_root() {
+        let root = unique_temp_root("vida-state-store-project-source-root");
+        let project_root = root.join("project");
+        let state_root = root.join("state");
+        write_minimal_project_markers(&project_root);
+        write_minimal_framework_source_bundle(
+            &project_root.join(DEFAULT_INSTRUCTION_SOURCE_ROOT),
+            "active-project-root-source-marker",
+        );
+
+        let _cwd = crate::test_cli_support::guard_current_dir(&project_root);
+        let store = StateStore::open(state_root).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed bundle");
+        let ingest = store
+            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .await
+            .expect("ingest source tree from active project root");
+        assert_eq!(ingest.imported_count, 3);
+
+        let artifact: Option<InstructionArtifactRow> = store
+            .db
+            .select(("instruction_artifact", "framework-agent-definition"))
+            .await
+            .expect("select ingested artifact");
+        let artifact = artifact.expect("agent definition artifact should exist");
+        assert!(artifact.body.contains("active-project-root-source-marker"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn ingest_accepts_absolute_source_root_without_project_resolution() {
+        let root = unique_temp_root("vida-state-store-absolute-source-root");
+        let source_root = root.join("absolute-framework-source");
+        let state_root = root.join("state");
+        write_minimal_framework_source_bundle(&source_root, "absolute-source-marker");
+
+        let store = StateStore::open(state_root).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed bundle");
+        let ingest = store
+            .ingest_instruction_source_tree(&source_root.display().to_string())
+            .await
+            .expect("ingest absolute source tree");
+        assert_eq!(ingest.imported_count, 3);
+
+        let artifact: Option<InstructionArtifactRow> = store
+            .db
+            .select(("instruction_artifact", "framework-agent-definition"))
+            .await
+            .expect("select ingested artifact");
+        let artifact = artifact.expect("agent definition artifact should exist");
+        assert!(artifact.body.contains("absolute-source-marker"));
 
         let _ = fs::remove_dir_all(&root);
     }

@@ -411,7 +411,7 @@ UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
         slice: &str,
         source_root: &str,
     ) -> Result<InstructionIngestSummary, StateStoreError> {
-        let root = repo_root().join(source_root);
+        let root = resolve_source_root_path(source_root);
         if !root.exists() {
             return Err(StateStoreError::MissingSourceRoot {
                 slice: slice.to_string(),
@@ -929,4 +929,15 @@ UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
 
         Ok(ordered)
     }
+}
+
+fn resolve_source_root_path(source_root: &str) -> PathBuf {
+    let source_root_path = PathBuf::from(source_root);
+    if source_root_path.is_absolute() {
+        return source_root_path;
+    }
+
+    crate::resolve_repo_root()
+        .map(|project_root| project_root.join(&source_root_path))
+        .unwrap_or_else(|_| repo_root().join(source_root_path))
 }
