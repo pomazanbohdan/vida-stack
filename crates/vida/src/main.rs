@@ -7927,13 +7927,35 @@ fn config_file_path() -> Result<PathBuf, String> {
     Ok(resolve_runtime_project_root()?.join("vida.config.yaml"))
 }
 
-fn resolve_overlay_path(root: &Path, path: &str) -> PathBuf {
-    let candidate = PathBuf::from(path);
+fn resolve_overlay_path(root: &Path, path: &str) -> Result<PathBuf, String> {
+    let candidate = Path::new(path);
     if candidate.is_absolute() {
-        candidate
-    } else {
-        root.join(candidate)
+        return Err(format!(
+            "registry path must stay within the project root: {path}"
+        ));
     }
+
+    let mut normalized = PathBuf::new();
+    for component in candidate.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(segment) => normalized.push(segment),
+            std::path::Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(format!(
+                        "registry path escapes project root via traversal: {path}"
+                    ));
+                }
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err(format!(
+                    "registry path must stay within the project root: {path}"
+                ));
+            }
+        }
+    }
+
+    Ok(root.join(normalized))
 }
 
 pub(crate) fn load_project_overlay_yaml() -> Result<serde_yaml::Value, String> {
@@ -9374,7 +9396,15 @@ fn load_registry_projection(
     let Some(path) = configured_path else {
         return Ok(serde_yaml::Value::Null);
     };
-    let registry_path = resolve_overlay_path(root, path);
+    let registry_path = match resolve_overlay_path(root, path) {
+        Ok(path) => path,
+        Err(error) => {
+            if require_registry_files {
+                return Err(error);
+            }
+            return Ok(serde_yaml::Value::Null);
+        }
+    };
     let sidecar_path = registry_sidecar_path(&registry_path);
     let base_registry = match read_yaml_file_checked(&registry_path) {
         Ok(value) => value,
@@ -14594,6 +14624,104 @@ mod tests {
         assert_eq!(bundle["project_roles"][0]["role_id"], "role_a");
         assert_eq!(bundle["project_profiles"][0]["profile_id"], "profile_a");
         assert_eq!(bundle["project_flows"][0]["flow_id"], "flow_a");
+    }
+
+    #[test]
+    fn compiled_agent_extension_bundle_rejects_absolute_registry_paths_when_required() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let root = harness.path();
+        fs::write(
+            root.join("vida.config.yaml"),
+            concat!(
+                "agent_extensions:
+",
+                "  enabled: true
+",
+                "  registries:
+",
+                "    roles: /etc/passwd
+",
+                "  validation:
+",
+                "    require_registry_files: true
+",
+            ),
+        )
+        .expect("overlay should exist");
+
+        let overlay =
+            read_yaml_file_checked(&root.join("vida.config.yaml")).expect("overlay should parse");
+        let error = build_compiled_agent_extension_bundle_for_root(&overlay, root)
+            .expect_err("absolute registry path should be rejected");
+        assert!(error.contains("must stay within the project root"));
+    }
+
+    #[test]
+    fn compiled_agent_extension_bundle_ignores_registry_traversal_when_not_required() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let root = harness.path();
+        fs::write(
+            root.join("vida.config.yaml"),
+            concat!(
+                "agent_extensions:
+",
+                "  enabled: true
+",
+                "  registries:
+",
+                "    roles: ../../outside.yaml
+",
+                "    skills: .vida/project/agent-extensions/skills.yaml
+",
+                "    profiles: .vida/project/agent-extensions/profiles.yaml
+",
+                "    flows: .vida/project/agent-extensions/flows.yaml
+",
+                "  enabled_project_roles: []
+",
+                "  enabled_project_skills: []
+",
+                "  enabled_project_profiles: []
+",
+                "  enabled_project_flows: []
+",
+                "  validation:
+",
+                "    require_registry_files: false
+",
+            ),
+        )
+        .expect("overlay should exist");
+        fs::create_dir_all(root.join(".vida/project/agent-extensions"))
+            .expect("runtime agent extensions dir should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/skills.yaml"),
+            "version: 1
+skills: []
+",
+        )
+        .expect("skills registry should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/profiles.yaml"),
+            "version: 1
+profiles: []
+",
+        )
+        .expect("profiles registry should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/flows.yaml"),
+            "version: 1
+flow_sets: []
+",
+        )
+        .expect("flows registry should exist");
+
+        let overlay =
+            read_yaml_file_checked(&root.join("vida.config.yaml")).expect("overlay should parse");
+        let bundle = build_compiled_agent_extension_bundle_for_root(&overlay, root)
+            .expect("bundle should compile when registry files are optional");
+
+        assert_eq!(bundle["project_roles"], serde_json::json!([]));
     }
 
     #[test]
