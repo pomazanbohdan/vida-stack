@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -12,9 +12,19 @@ fn escape_toml_basic_string(value: &str) -> String {
 
 fn rendered_host_runtime_agent_catalog(
     agent_catalog: &[serde_json::Value],
-    _named_lane_catalog: &[serde_json::Value],
+    named_lane_catalog: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
-    agent_catalog.to_vec()
+    let mut seen = HashSet::new();
+    let mut rows = Vec::new();
+    for row in agent_catalog.iter().chain(named_lane_catalog.iter()) {
+        let Some(role_id) = row["role_id"].as_str() else {
+            continue;
+        };
+        if seen.insert(role_id.to_string()) {
+            rows.push(row.clone());
+        }
+    }
+    rows
 }
 
 fn render_host_runtime_config_toml(
@@ -63,7 +73,14 @@ fn render_host_runtime_config_toml(
         lines.push(format!("config_file = \"agents/{role_id}.toml\""));
         lines.push(String::new());
     }
-    format!("{}\n", lines.join("\n"))
+    if let Some(policy) = agent_catalog
+        .iter()
+        .find_map(|row| render_shell_environment_policy(row.get("shell_environment_policy")))
+    {
+        lines.push(policy);
+        lines.push(String::new());
+    }
+    format!("{}\n", lines.join("\n").trim_end())
 }
 
 fn set_toml_scalar_line(contents: &str, key: &str, rendered_value: &str) -> String {
@@ -82,6 +99,12 @@ fn set_toml_scalar_line(contents: &str, key: &str, rendered_value: &str) -> Stri
         lines.push(replacement);
     }
     format!("{}\n", lines.join("\n"))
+}
+
+fn prepend_toml_scalar_line(contents: &str, key: &str, rendered_value: &str) -> String {
+    let contents = strip_toml_keys(contents, &[key]);
+    let contents = contents.trim_start();
+    format!("{key} = {rendered_value}\n{contents}")
 }
 
 fn extract_toml_multiline_string(contents: &str, key: &str) -> Option<String> {
@@ -152,24 +175,199 @@ fn strip_toml_keys(contents: &str, keys: &[&str]) -> String {
     format!("{}\n", lines.join("\n"))
 }
 
+fn strip_toml_tables(contents: &str, tables: &[&str]) -> String {
+    let mut lines = Vec::new();
+    let mut skipping = false;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        let table_match = tables.iter().any(|table| trimmed == format!("[{table}]"));
+        if table_match {
+            skipping = true;
+            continue;
+        }
+        if skipping && trimmed.starts_with('[') && trimmed.ends_with(']') {
+            skipping = false;
+        }
+        if !skipping {
+            lines.push(line.to_string());
+        }
+    }
+    format!("{}\n", lines.join("\n"))
+}
+
+fn toml_basic_string_list(values: &[serde_json::Value]) -> String {
+    values
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .map(|value| format!("\"{}\"", escape_toml_basic_string(value)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn render_shell_environment_policy(policy: Option<&serde_json::Value>) -> Option<String> {
+    let object = policy?.as_object()?;
+    if object.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec!["[shell_environment_policy]".to_string()];
+    for key in [
+        "inherit",
+        "experimental_use_profile",
+        "ignore_default_excludes",
+    ] {
+        let Some(value) = object.get(key) else {
+            continue;
+        };
+        match value {
+            serde_json::Value::String(text) => {
+                lines.push(format!("{key} = \"{}\"", escape_toml_basic_string(text)))
+            }
+            serde_json::Value::Bool(flag) => lines.push(format!("{key} = {flag}")),
+            _ => {}
+        }
+    }
+    for key in ["include_only", "exclude"] {
+        if let Some(values) = object.get(key).and_then(serde_json::Value::as_array) {
+            lines.push(format!("{key} = [{}]", toml_basic_string_list(values)));
+        }
+    }
+    if let Some(set) = object.get("set").and_then(serde_json::Value::as_object) {
+        if !set.is_empty() {
+            lines.push(String::new());
+            lines.push("[shell_environment_policy.set]".to_string());
+            let mut keys = set.keys().collect::<Vec<_>>();
+            keys.sort();
+            for key in keys {
+                if let Some(value) = set.get(key).and_then(serde_json::Value::as_str) {
+                    lines.push(format!(
+                        "\"{}\" = \"{}\"",
+                        escape_toml_basic_string(key),
+                        escape_toml_basic_string(value)
+                    ));
+                }
+            }
+        }
+    }
+
+    if lines.len() == 1 {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+fn json_string_array(value: &serde_json::Value) -> Vec<String> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn render_configured_carrier_developer_instructions(row: &serde_json::Value) -> Option<String> {
+    let role_id = row["role_id"].as_str()?.trim();
+    if role_id.is_empty() {
+        return None;
+    }
+    let tier = row["carrier_tier"]
+        .as_str()
+        .or_else(|| row["tier"].as_str())
+        .unwrap_or(role_id);
+    let runtime_role = row["default_runtime_role"].as_str().unwrap_or_default();
+    let runtime_roles = json_string_array(&row["runtime_roles"]);
+    let task_classes = json_string_array(&row["task_classes"]);
+
+    let mut posture = vec![format!("1. Carrier tier: {tier}.")];
+    if !runtime_role.is_empty() {
+        posture.push(format!(
+            "{}. Default runtime role: {runtime_role}.",
+            posture.len() + 1
+        ));
+    }
+    if !runtime_roles.is_empty() {
+        posture.push(format!(
+            "{}. Runtime roles: {}.",
+            posture.len() + 1,
+            runtime_roles.join(", ")
+        ));
+    }
+    if !task_classes.is_empty() {
+        posture.push(format!(
+            "{}. Default task classes: {}.",
+            posture.len() + 1,
+            task_classes.join(", ")
+        ));
+    }
+
+    let mut lines = vec![
+        format!("You are the VIDA {tier} Codex carrier."),
+        String::new(),
+        "Runtime posture:".to_string(),
+    ];
+    lines.extend(posture);
+    lines.extend([
+        String::new(),
+        "Boundaries:".to_string(),
+        "1. Treat `vida.config.yaml` and the configured agent-extension registries as authority; this TOML is only a Codex executor projection.".to_string(),
+        "2. Stay inside the active packet and runtime role selected by VIDA.".to_string(),
+        "3. Return explicit evidence, blockers, and residual risks instead of self-approving closure.".to_string(),
+    ]);
+    Some(lines.join("\n"))
+}
+
+fn current_host_platform_key() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "other"
+    }
+}
+
 fn compose_host_runtime_lane_developer_instructions(
     base_instructions: Option<&str>,
+    runtime_instructions: Option<&str>,
     lane_override: Option<&str>,
 ) -> Option<String> {
-    match (
-        base_instructions
-            .map(str::trim)
-            .filter(|value| !value.is_empty()),
-        lane_override
-            .map(str::trim)
-            .filter(|value| !value.is_empty()),
-    ) {
-        (Some(base), Some(overlay)) => Some(format!(
-            "{base}\n\nLane activation overlay:\n{overlay}\n\nFollow both layers: keep the carrier-tier posture and boundaries, then apply the lane-specific mission as the active role for this packet."
-        )),
-        (Some(base), None) => Some(base.to_string()),
-        (None, Some(overlay)) => Some(overlay.to_string()),
-        (None, None) => None,
+    let base = base_instructions
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let runtime = runtime_instructions
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let lane = lane_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let mut parts = Vec::new();
+    if let Some(base) = base {
+        parts.push(base.to_string());
+    }
+    let runtime_already_present = base
+        .zip(runtime)
+        .is_some_and(|(base, runtime)| base.contains(runtime));
+    if let Some(runtime) = runtime.filter(|_| !runtime_already_present) {
+        parts.push(format!("Host runtime bootstrap:\n{runtime}"));
+    }
+    if let Some(lane) = lane {
+        parts.push(format!("Lane activation overlay:\n{lane}"));
+    }
+
+    if parts.is_empty() {
+        None
+    } else if lane.is_some() && (base.is_some() || runtime.is_some()) {
+        parts.push("Follow all layers: keep the carrier-tier posture and boundaries, satisfy host runtime bootstrap before shell work, then apply the lane-specific mission as the active role for this packet.".to_string());
+        Some(parts.join("\n\n"))
+    } else {
+        Some(parts.join("\n\n"))
     }
 }
 
@@ -178,7 +376,7 @@ fn render_host_runtime_agent_toml(
     row: &serde_json::Value,
     template_contents: Option<&str>,
 ) -> Option<String> {
-    row["role_id"].as_str()?;
+    let role_id = row["role_id"].as_str()?;
     let model = row["model"]
         .as_str()
         .map(str::trim)
@@ -186,14 +384,32 @@ fn render_host_runtime_agent_toml(
     let reasoning_effort = row["model_reasoning_effort"]
         .as_str()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("medium");
+        .filter(|value| !value.is_empty())?;
     let sandbox_mode = row["sandbox_mode"].as_str().unwrap_or("workspace-write");
     let developer_instructions_override = row["developer_instructions"]
         .as_str()
         .filter(|value| !value.trim().is_empty());
+    let base_developer_instructions = render_configured_carrier_developer_instructions(row);
+    let runtime_developer_instructions = row["host_runtime_developer_instructions"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty());
+    let description = row["description"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(role_id);
     if let Some(template) = template_contents.filter(|value| !value.trim().is_empty()) {
-        let patched = set_toml_scalar_line(template, "model", &format!("\"{model}\""));
+        let patched = prepend_toml_scalar_line(
+            template,
+            "description",
+            &format!("\"{}\"", escape_toml_basic_string(description)),
+        );
+        let patched = prepend_toml_scalar_line(
+            &patched,
+            "name",
+            &format!("\"{}\"", escape_toml_basic_string(role_id)),
+        );
+        let patched = set_toml_scalar_line(&patched, "model", &format!("\"{model}\""));
         let patched = set_toml_scalar_line(
             &patched,
             "model_reasoning_effort",
@@ -201,11 +417,27 @@ fn render_host_runtime_agent_toml(
         );
         let patched =
             set_toml_scalar_line(&patched, "sandbox_mode", &format!("\"{sandbox_mode}\""));
+        let template_developer_instructions =
+            extract_toml_multiline_string(template, "developer_instructions");
         let patched = if let Some(instructions) = compose_host_runtime_lane_developer_instructions(
-            extract_toml_multiline_string(template, "developer_instructions").as_deref(),
+            base_developer_instructions
+                .as_deref()
+                .or(template_developer_instructions.as_deref()),
+            runtime_developer_instructions,
             developer_instructions_override,
         ) {
             set_toml_multiline_string(&patched, "developer_instructions", &instructions)
+        } else {
+            patched
+        };
+        let patched = strip_toml_tables(
+            &patched,
+            &["shell_environment_policy", "shell_environment_policy.set"],
+        );
+        let patched = if let Some(policy) =
+            render_shell_environment_policy(row.get("shell_environment_policy"))
+        {
+            format!("{}\n{policy}\n", patched.trim_end())
         } else {
             patched
         };
@@ -222,17 +454,35 @@ fn render_host_runtime_agent_toml(
         ));
     }
 
-    if let Some(instructions) =
-        compose_host_runtime_lane_developer_instructions(None, developer_instructions_override)
-    {
-        return Some(format!(
-            "model = \"{model}\"\nmodel_reasoning_effort = \"{reasoning_effort}\"\nsandbox_mode = \"{sandbox_mode}\"\ndeveloper_instructions = \"\"\"\n{instructions}\n\"\"\"\n"
-        ));
+    if let Some(instructions) = compose_host_runtime_lane_developer_instructions(
+        base_developer_instructions.as_deref(),
+        runtime_developer_instructions,
+        developer_instructions_override,
+    ) {
+        let mut body = format!(
+            "name = \"{}\"\ndescription = \"{}\"\nmodel = \"{model}\"\nmodel_reasoning_effort = \"{reasoning_effort}\"\nsandbox_mode = \"{sandbox_mode}\"\ndeveloper_instructions = \"\"\"\n{instructions}\n\"\"\"\n",
+            escape_toml_basic_string(role_id),
+            escape_toml_basic_string(description)
+        );
+        if let Some(policy) = render_shell_environment_policy(row.get("shell_environment_policy")) {
+            body.push('\n');
+            body.push_str(&policy);
+            body.push('\n');
+        }
+        return Some(body);
     }
 
-    Some(format!(
-        "model = \"{model}\"\nmodel_reasoning_effort = \"{reasoning_effort}\"\nsandbox_mode = \"{sandbox_mode}\"\n"
-    ))
+    let mut body = format!(
+        "name = \"{}\"\ndescription = \"{}\"\nmodel = \"{model}\"\nmodel_reasoning_effort = \"{reasoning_effort}\"\nsandbox_mode = \"{sandbox_mode}\"\n",
+        escape_toml_basic_string(role_id),
+        escape_toml_basic_string(description)
+    );
+    if let Some(policy) = render_shell_environment_policy(row.get("shell_environment_policy")) {
+        body.push('\n');
+        body.push_str(&policy);
+        body.push('\n');
+    }
+    Some(body)
 }
 
 pub(crate) fn render_host_runtime_template_from_catalog(
@@ -405,6 +655,60 @@ pub(crate) fn overlay_host_runtime_agent_catalog(
     else {
         return Vec::new();
     };
+    let platform_key = current_host_platform_key();
+    let runtime_developer_instructions = yaml_string(yaml_lookup(
+        config,
+        &[
+            "host_environment",
+            "systems",
+            "codex",
+            "app",
+            "platform_overrides",
+            platform_key,
+            "agent_bootstrap_instructions",
+        ],
+    ))
+    .or_else(|| {
+        yaml_string(yaml_lookup(
+            config,
+            &[
+                "host_environment",
+                "systems",
+                "codex",
+                "app",
+                "agent_bootstrap_instructions",
+            ],
+        ))
+    })
+    .unwrap_or_default();
+    let shell_environment_policy_source = yaml_lookup(
+        config,
+        &[
+            "host_environment",
+            "systems",
+            "codex",
+            "app",
+            "platform_overrides",
+            platform_key,
+            "shell_environment_policy",
+        ],
+    )
+    .or_else(|| {
+        yaml_lookup(
+            config,
+            &[
+                "host_environment",
+                "systems",
+                "codex",
+                "app",
+                "shell_environment_policy",
+            ],
+        )
+    })
+    .cloned()
+    .unwrap_or(serde_yaml::Value::Null);
+    let shell_environment_policy =
+        serde_json::to_value(shell_environment_policy_source).unwrap_or(serde_json::Value::Null);
     let mut rows = agents
         .iter()
         .filter_map(|(agent_id, value)| {
@@ -447,6 +751,8 @@ pub(crate) fn overlay_host_runtime_agent_catalog(
                 "default_runtime_role": yaml_string(yaml_lookup(value, &["default_runtime_role"])).unwrap_or_default(),
                 "runtime_roles": runtime_roles,
                 "task_classes": task_classes,
+                "host_runtime_developer_instructions": runtime_developer_instructions.clone(),
+                "shell_environment_policy": shell_environment_policy.clone(),
             }))
         })
         .collect::<Vec<_>>();
@@ -467,31 +773,250 @@ pub(crate) fn overlay_host_runtime_agent_catalog(
 
 #[cfg(test)]
 mod tests {
+    use crate::temp_state::TempStateHarness;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn project_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn configured_codex_config() -> serde_yaml::Value {
+        let config_path = project_root().join("vida.config.yaml");
+        let config_text =
+            fs::read_to_string(&config_path).expect("project vida.config.yaml should be readable");
+        serde_yaml::from_str(&config_text).expect("project vida.config.yaml should parse")
+    }
+
+    fn configured_codex_agent_catalog() -> Vec<serde_json::Value> {
+        let config = configured_codex_config();
+        let agent_catalog = super::overlay_host_runtime_agent_catalog(&config);
+        assert!(
+            !agent_catalog.is_empty(),
+            "project config should define host_environment.codex.agents"
+        );
+        agent_catalog
+    }
+
     #[test]
     fn host_runtime_agent_toml_requires_configured_model() {
-        let row = serde_json::json!({
-            "role_id": "worker",
-            "model_reasoning_effort": "low",
-            "sandbox_mode": "workspace-write"
-        });
+        let mut row = configured_codex_agent_catalog()
+            .into_iter()
+            .next()
+            .expect("configured carrier should exist");
+        row["model"] = serde_json::Value::Null;
+
+        assert!(super::render_host_runtime_agent_toml("Codex", &row, None).is_none());
+    }
+
+    #[test]
+    fn host_runtime_agent_toml_requires_configured_reasoning_effort() {
+        let mut row = configured_codex_agent_catalog()
+            .into_iter()
+            .next()
+            .expect("configured carrier should exist");
+        row["model_reasoning_effort"] = serde_json::Value::Null;
 
         assert!(super::render_host_runtime_agent_toml("Codex", &row, None).is_none());
     }
 
     #[test]
     fn host_runtime_agent_toml_renders_configured_model_without_builtin_default() {
-        let row = serde_json::json!({
-            "role_id": "worker",
-            "model": "configured-model",
-            "model_reasoning_effort": "low",
-            "sandbox_mode": "workspace-write"
-        });
+        let row = configured_codex_agent_catalog()
+            .into_iter()
+            .next()
+            .expect("configured carrier should exist");
+        let model = row["model"]
+            .as_str()
+            .expect("configured carrier should have model");
+        let effort = row["model_reasoning_effort"]
+            .as_str()
+            .expect("configured carrier should have reasoning effort");
 
         let rendered = super::render_host_runtime_agent_toml("Codex", &row, None)
             .expect("configured model should render");
 
-        assert!(rendered.contains("model = \"configured-model\""));
-        assert!(rendered.contains("model_reasoning_effort = \"low\""));
+        assert!(rendered.contains(&format!("model = \"{model}\"")));
+        assert!(rendered.contains(&format!("model_reasoning_effort = \"{effort}\"")));
+    }
+
+    #[test]
+    fn host_runtime_materialization_renders_configured_reasoning_profiles() {
+        let runtime_root = TempStateHarness::new().expect("runtime root should initialize");
+        let template_root = TempStateHarness::new().expect("template root should initialize");
+        fs::create_dir_all(template_root.path().join("agents"))
+            .expect("template agents dir should initialize");
+        fs::write(
+            template_root.path().join("config.toml"),
+            "[features]\nmulti_agent = true\n\n[agents]\nmax_threads = 4\nmax_depth = 2\n",
+        )
+        .expect("template config should write");
+
+        let agent_catalog = configured_codex_agent_catalog();
+
+        super::render_host_runtime_template_from_catalog(
+            "Codex App",
+            runtime_root.path(),
+            runtime_root.path(),
+            template_root.path(),
+            &agent_catalog,
+            &[],
+        )
+        .expect("host runtime projection should render");
+
+        let config = fs::read_to_string(runtime_root.path().join("config.toml"))
+            .expect("rendered config should be readable");
+        for row in &agent_catalog {
+            let role = row["role_id"]
+                .as_str()
+                .expect("configured carrier should have role_id");
+            assert!(
+                config.contains(&format!("[agents.{role}]")),
+                "rendered config should include configured carrier {role}"
+            );
+        }
+
+        for row in &agent_catalog {
+            let role = row["role_id"]
+                .as_str()
+                .expect("configured carrier should have role_id");
+            let model = row["model"]
+                .as_str()
+                .expect("configured carrier should have model");
+            let effort = row["model_reasoning_effort"]
+                .as_str()
+                .expect("configured carrier should have reasoning effort");
+            let rendered = fs::read_to_string(
+                runtime_root
+                    .path()
+                    .join("agents")
+                    .join(format!("{role}.toml")),
+            )
+            .expect("rendered agent toml should be readable");
+            assert!(rendered.contains(&format!("model = \"{model}\"")));
+            assert!(
+                rendered.contains(&format!("model_reasoning_effort = \"{effort}\"")),
+                "rendered {role} should carry configured reasoning effort"
+            );
+        }
+    }
+
+    #[test]
+    fn host_runtime_materialization_renders_configured_agent_command_bootstrap() {
+        let runtime_root = TempStateHarness::new().expect("runtime root should initialize");
+        let template_root = TempStateHarness::new().expect("template root should initialize");
+        fs::create_dir_all(template_root.path().join("agents"))
+            .expect("template agents dir should initialize");
+        fs::write(
+            template_root.path().join("config.toml"),
+            "[features]\nmulti_agent = true\n\n[agents]\nmax_threads = 4\nmax_depth = 2\n",
+        )
+        .expect("template config should write");
+
+        let config = configured_codex_config();
+        let Some(platform_config) = super::yaml_lookup(
+            &config,
+            &[
+                "host_environment",
+                "systems",
+                "codex",
+                "app",
+                "platform_overrides",
+                super::current_host_platform_key(),
+            ],
+        ) else {
+            let agent_catalog = super::overlay_host_runtime_agent_catalog(&config);
+            assert!(
+                agent_catalog.iter().all(|row| row["host_runtime_developer_instructions"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .is_empty()),
+                "platform without configured override should not inherit another platform bootstrap"
+            );
+            return;
+        };
+        let bootstrap = super::yaml_string(super::yaml_lookup(
+            platform_config,
+            &["agent_bootstrap_instructions"],
+        ))
+        .expect(
+            "project config should define platform-scoped Codex App agent bootstrap instructions",
+        );
+        let shell_inherit = super::yaml_string(super::yaml_lookup(
+            platform_config,
+            &["shell_environment_policy", "inherit"],
+        ))
+        .expect(
+            "project config should define platform-scoped Codex App shell environment inheritance",
+        );
+        let agent_catalog = super::overlay_host_runtime_agent_catalog(&config);
+        let alias_catalog = super::host_runtime_dispatch_alias_catalog_for_root(
+            &config,
+            &project_root(),
+            &agent_catalog,
+        )
+        .expect("project dispatch alias registry should resolve");
+        assert!(
+            !alias_catalog.is_empty(),
+            "project config should define Codex App dispatch aliases"
+        );
+
+        super::render_host_runtime_template_from_catalog(
+            "Codex App",
+            runtime_root.path(),
+            runtime_root.path(),
+            template_root.path(),
+            &agent_catalog,
+            &alias_catalog,
+        )
+        .expect("host runtime projection should render");
+
+        let config_toml = fs::read_to_string(runtime_root.path().join("config.toml"))
+            .expect("rendered config should be readable");
+        assert!(config_toml.contains("[shell_environment_policy]"));
+        assert!(config_toml.contains(&format!("inherit = \"{shell_inherit}\"")));
+
+        for row in &agent_catalog {
+            let role = row["role_id"]
+                .as_str()
+                .expect("configured carrier should have role_id");
+            let rendered = fs::read_to_string(
+                runtime_root
+                    .path()
+                    .join("agents")
+                    .join(format!("{role}.toml")),
+            )
+            .expect("rendered agent toml should be readable");
+            assert!(rendered.contains(&format!("name = \"{role}\"")));
+            assert!(rendered.contains("description = \""));
+            assert!(
+                rendered.contains(bootstrap.trim()),
+                "rendered {role} should carry configured host runtime bootstrap instructions"
+            );
+            assert!(rendered.contains("[shell_environment_policy]"));
+            assert!(rendered.contains(&format!("inherit = \"{shell_inherit}\"")));
+        }
+
+        for row in &alias_catalog {
+            let role = row["role_id"]
+                .as_str()
+                .expect("configured dispatch alias should have role_id");
+            let rendered = fs::read_to_string(
+                runtime_root
+                    .path()
+                    .join("agents")
+                    .join(format!("{role}.toml")),
+            )
+            .expect("rendered alias toml should be readable");
+            assert!(rendered.contains(&format!("name = \"{role}\"")));
+            assert!(rendered.contains("description = \""));
+            assert!(
+                rendered.contains(bootstrap.trim()),
+                "rendered alias {role} should carry configured host runtime bootstrap instructions"
+            );
+            assert!(rendered.contains("Lane activation overlay:"));
+            assert!(rendered.contains("[shell_environment_policy]"));
+        }
     }
 }
 

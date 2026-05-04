@@ -16,6 +16,80 @@ const DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS: u64 = 10;
 const COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS: u64 = 30;
 const LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS: u64 = 30;
 
+fn build_orchestrator_runtime_contract(
+    init_view: &serde_json::Value,
+    dev_team_readiness: &serde_json::Value,
+) -> serde_json::Value {
+    let activation_pending = init_view["project_activation"]["activation_pending"]
+        .as_bool()
+        .unwrap_or(false);
+    let default_topology =
+        init_view["project_activation"]["normal_work_defaults"]["default_agent_topology"].clone();
+    let configured_flows = dev_team_readiness["flows"].clone();
+    let configured_roles = dev_team_readiness["roles"].clone();
+    let next_lawful_dispatch_action = if activation_pending {
+        serde_json::json!({
+            "status": "blocked_pending_activation",
+            "surface": "vida project-activator",
+            "command": "vida project-activator --json",
+            "reason": "project activation must complete before normal dispatch"
+        })
+    } else {
+        serde_json::json!({
+            "status": "preview_required",
+            "surface": "vida agent dispatch-next",
+            "command": "vida agent dispatch-next --dev-team --json",
+            "reason": "review configured carrier/model/cost truth before any `vida agent-init` execution dispatch"
+        })
+    };
+    serde_json::json!({
+        "sticky_user_execution_intent": {
+            "agent_first_or_parallel_agent_execution_is_sticky": true,
+            "host_local_write_capability_is_not_authority": true,
+            "source_surfaces": [
+                "AGENTS.md",
+                "AGENTS.sidecar.md",
+                "vida status --json.root_session_write_guard"
+            ]
+        },
+        "allowed_topology": {
+            "default_agent_topology": default_topology,
+            "flows": configured_flows,
+            "roles": configured_roles,
+            "topology_source": "vida.config.yaml via dev_team_readiness"
+        },
+        "next_lawful_dispatch_action": next_lawful_dispatch_action,
+        "hard_warnings": [
+            "User requested agent-first earlier; root-local implementation is currently a policy violation unless explicitly superseded.",
+            "`vida agent-init` without `--execute-dispatch` is activation/view-only and is not delegated work completion."
+        ]
+    })
+}
+
+fn agent_init_dispatch_mode(
+    args: &AgentInitArgs,
+    selection: &serde_json::Value,
+) -> serde_json::Value {
+    let has_packet = args.dispatch_packet.is_some() || args.downstream_packet.is_some();
+    let mode = if args.execute_dispatch {
+        "execution_dispatch"
+    } else if has_packet {
+        "packet_activation_view_only"
+    } else {
+        "activation_view_only"
+    };
+    serde_json::json!({
+        "mode": mode,
+        "requested_execute_dispatch": args.execute_dispatch,
+        "has_packet_source": has_packet,
+        "selection_mode": selection["mode"].clone(),
+        "activation_view_only": !args.execute_dispatch,
+        "execution_dispatch": args.execute_dispatch,
+        "execution_evidence_required_for_completion": true,
+        "completion_requires_receipt_backed_execution": true,
+    })
+}
+
 async fn best_effort_record_agent_init_dispatch_timeout_receipt(
     state_root: &Path,
     run_graph_bootstrap: &serde_json::Value,
@@ -1629,7 +1703,7 @@ pub(crate) async fn run_boot(args: BootArgs) -> ExitCode {
 
     match tokio::time::timeout(
         std::time::Duration::from_secs(COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS),
-        StateStore::open(state_dir),
+        StateStore::open(state_dir.clone()),
     )
     .await
     {
@@ -1883,6 +1957,7 @@ pub(crate) async fn run_boot(args: BootArgs) -> ExitCode {
 pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
     let state_dir = args
         .state_dir
+        .clone()
         .unwrap_or_else(state_store::default_state_dir);
     let instruction_source_root = PathBuf::from(state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT);
     let framework_memory_source_root =
@@ -1890,7 +1965,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
 
     match tokio::time::timeout(
         std::time::Duration::from_secs(COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS),
-        StateStore::open(state_dir),
+        StateStore::open(state_dir.clone()),
     )
     .await
     {
@@ -1943,13 +2018,21 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                             &bundle.config_path,
                             &bundle.activation_bundle,
                         );
+                    let orchestrator_runtime_contract =
+                        build_orchestrator_runtime_contract(&init_view, &dev_team_readiness);
                     if args.json {
                         println!(
                             "{}",
                             serde_json::to_string_pretty(&serde_json::json!({
                                 "surface": "vida orchestrator-init",
+                                "state_read": {
+                                    "mode": "authoritative_open",
+                                    "lock_resilient": true,
+                                    "fallback": "degraded_lock_contention_surface"
+                                },
                                 "init": init_view,
                                 "dev_team_readiness": dev_team_readiness,
+                                "orchestrator_runtime_contract": orchestrator_runtime_contract,
                                 "runtime_bundle_summary": {
                                     "bundle_id": bundle.metadata["bundle_id"],
                                     "root_artifact_id": bundle.control_core["root_artifact_id"],
@@ -1978,6 +2061,14 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                             RenderMode::Plain,
                             "state dir",
                             &store.root().display().to_string(),
+                        );
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "next lawful dispatch",
+                            orchestrator_runtime_contract["next_lawful_dispatch_action"]
+                                ["command"]
+                                .as_str()
+                                .unwrap_or("vida agent dispatch-next --dev-team --json"),
                         );
                         print_compact_command_families(RenderMode::Plain, "vida orchestrator-init");
                         if init_view["project_activation"]["activation_pending"]
@@ -2120,14 +2211,28 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
             }
         }
         Ok(Err(error)) => {
+            if StateStore::message_is_lock_contention(&error.to_string()) {
+                return crate::status_surface::emit_degraded_read_lock_surface(
+                    "vida orchestrator-init",
+                    &state_dir,
+                    RenderMode::Plain,
+                    args.json,
+                    &error.to_string(),
+                );
+            }
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
         }
         Err(_) => {
-            eprintln!(
-                "Timed out opening authoritative state store for `vida orchestrator-init` after {COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS}s (cold authoritative state open timeout)"
-            );
-            ExitCode::from(1)
+            crate::status_surface::emit_degraded_read_lock_surface(
+                "vida orchestrator-init",
+                &state_dir,
+                RenderMode::Plain,
+                args.json,
+                &format!(
+                    "Timed out opening authoritative state store for `vida orchestrator-init` after {COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS}s (cold authoritative state open timeout)"
+                ),
+            )
         }
     }
 }
@@ -2135,6 +2240,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
 pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
     let state_dir = args
         .state_dir
+        .clone()
         .unwrap_or_else(state_store::default_state_dir);
 
     match tokio::time::timeout(
@@ -2282,12 +2388,14 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 &bundle.activation_bundle,
             );
             let activation_semantics = agent_init_activation_semantics(&selection);
+            let dispatch_mode = agent_init_dispatch_mode(&args, &selection);
             let surface_payload = build_agent_init_surface_payload(
                 &project_root,
                 &bundle.config_path,
                 init_view.clone(),
                 selection.clone(),
                 activation_semantics.clone(),
+                dispatch_mode.clone(),
                 serde_json::json!({
                     "bundle_id": bundle.metadata["bundle_id"],
                     "activation_source": bundle.activation_source,
@@ -2416,7 +2524,8 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-                let result_json = match serde_json::from_str::<serde_json::Value>(&result_body) {
+                let mut result_json = match serde_json::from_str::<serde_json::Value>(&result_body)
+                {
                     Ok(json) => json,
                     Err(error) => {
                         eprintln!(
@@ -2425,6 +2534,9 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+                if let Some(object) = result_json.as_object_mut() {
+                    object.insert("dispatch_mode".to_string(), dispatch_mode.clone());
+                }
                 if args.json {
                     println!(
                         "{}",
@@ -2463,6 +2575,9 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 );
                 if let Some(mode) = selection["mode"].as_str() {
                     print_surface_line(RenderMode::Plain, "mode", mode);
+                }
+                if let Some(mode) = surface_payload["dispatch_mode"]["mode"].as_str() {
+                    print_surface_line(RenderMode::Plain, "dispatch_mode", mode);
                 }
                 if let Some(path) = selection["dispatch_packet_path"].as_str() {
                     print_surface_line(RenderMode::Plain, "dispatch packet", path);
@@ -3103,6 +3218,7 @@ fn build_agent_init_surface_payload(
     init_view: serde_json::Value,
     selection: serde_json::Value,
     activation_semantics: serde_json::Value,
+    dispatch_mode: serde_json::Value,
     runtime_bundle_summary: serde_json::Value,
     activation_bundle: &serde_json::Value,
     dev_team_readiness: serde_json::Value,
@@ -3127,6 +3243,7 @@ fn build_agent_init_surface_payload(
         "surface": "vida agent-init",
         "init": init_view,
         "selection": selection,
+        "dispatch_mode": dispatch_mode,
         "activation_semantics": activation_semantics,
         "execution_truth": execution_truth,
         "backend_truth": backend_truth,
@@ -3223,6 +3340,15 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
         init_view,
         selection,
         activation_semantics,
+        serde_json::json!({
+            "mode": "packet_activation_view_only",
+            "requested_execute_dispatch": false,
+            "has_packet_source": true,
+            "activation_view_only": true,
+            "execution_dispatch": false,
+            "execution_evidence_required_for_completion": true,
+            "completion_requires_receipt_backed_execution": true,
+        }),
         serde_json::json!({
             "bundle_id": bundle.metadata["bundle_id"],
             "activation_source": bundle.activation_source,
@@ -3369,6 +3495,38 @@ mod agent_init_surface_tests {
     }
 
     #[test]
+    fn orchestrator_runtime_contract_exposes_sticky_intent_topology_and_next_action() {
+        let contract = build_orchestrator_runtime_contract(
+            &serde_json::json!({
+                "project_activation": {
+                    "activation_pending": false,
+                    "normal_work_defaults": {
+                        "default_agent_topology": ["junior", "middle", "senior"]
+                    }
+                }
+            }),
+            &serde_json::json!({
+                "flows": [{"flow_id": "default_delivery"}],
+                "roles": [{"role_id": "developer", "runtime_role": "worker"}]
+            }),
+        );
+
+        assert_eq!(
+            contract["sticky_user_execution_intent"]
+                ["agent_first_or_parallel_agent_execution_is_sticky"],
+            true
+        );
+        assert_eq!(
+            contract["allowed_topology"]["default_agent_topology"],
+            serde_json::json!(["junior", "middle", "senior"])
+        );
+        assert_eq!(
+            contract["next_lawful_dispatch_action"]["command"],
+            "vida agent dispatch-next --dev-team --json"
+        );
+    }
+
+    #[test]
     fn agent_init_surface_payload_exposes_execution_truth_selected_backend() {
         let role_selection = test_role_selection();
         let selection = agent_init_packet_selection(
@@ -3391,6 +3549,7 @@ mod agent_init_surface_tests {
             serde_json::json!({ "status": "ready" }),
             selection,
             serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({ "mode": "activation_view_only" }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
             &test_activation_bundle(),
             serde_json::json!({
@@ -3483,6 +3642,7 @@ mod agent_init_surface_tests {
             serde_json::json!({ "status": "ready" }),
             selection,
             serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({ "mode": "activation_view_only" }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
             &test_activation_bundle(),
             serde_json::json!({ "status": "ready", "roles": [] }),
@@ -3512,6 +3672,7 @@ mod agent_init_surface_tests {
                 "request_text": "repair"
             }),
             serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({ "mode": "activation_view_only" }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
             &test_activation_bundle(),
             serde_json::json!({
@@ -3530,6 +3691,7 @@ mod agent_init_surface_tests {
         );
 
         assert!(payload["execution_truth"].is_null());
+        assert_eq!(payload["dispatch_mode"]["mode"], "activation_view_only");
         assert_eq!(payload["backend_truth"]["selected_carrier_id"], "junior");
         assert_eq!(
             payload["backend_truth"]["selected_model_profile_id"],
@@ -3567,6 +3729,7 @@ mod agent_init_surface_tests {
             serde_json::json!({ "status": "ready" }),
             selection,
             serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({ "mode": "activation_view_only" }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
             &test_activation_bundle(),
             serde_json::json!({ "status": "ready", "roles": [] }),
@@ -3619,6 +3782,7 @@ mod agent_init_surface_tests {
             serde_json::json!({ "status": "ready" }),
             selection,
             serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({ "mode": "activation_view_only" }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
             &test_activation_bundle(),
             serde_json::json!({ "status": "ready", "roles": [] }),
@@ -3717,6 +3881,7 @@ mod agent_init_surface_tests {
             serde_json::json!({ "status": "ready" }),
             selection,
             serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({ "mode": "activation_view_only" }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
             &serde_json::json!({
                 "agent_system": {

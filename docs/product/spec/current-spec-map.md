@@ -258,6 +258,9 @@ Companion rule:
 38. [external-cli-carrier-hardening-design.md](external-cli-carrier-hardening-design.md)
    Config families: bounded external CLI carrier dispatch pinning, carrier readiness/status classification, normalized opencode/kilo/vibe project profiles, and operator-visible smoke-proof routing for sandbox/auth/model activation
    Registered path: `docs/product/spec/external-cli-carrier-hardening-design.md`
+39. [orchestrator-runtime-contract-hardening-design.md](orchestrator-runtime-contract-hardening-design.md)
+   Config families: bounded orchestrator/agent/lane/status runtime contract hardening, path-scoped exception takeover truth, preview planner output, carrier selection API, lock-resilient init reads, and Codex App agent cleanup release rollout
+   Registered path: `docs/product/spec/orchestrator-runtime-contract-hardening-design.md`
 36. [continuation-binding-fail-closed-hardening-design.md](continuation-binding-fail-closed-hardening-design.md)
    Config families: bounded continuation-binding fail-closed enforcement, explicit active-bounded-unit init/status surfaces, ambiguity blocker vocabulary, and generated host guidance against self-selecting adjacent work
    Registered path: `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
@@ -288,6 +291,9 @@ Companion rule:
 45. [coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md](coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md)
    Config families: coach-lane retry artifact law, explicit review-backend rotation before internal fallback, fresh runtime-dispatch packet materialization for lawful retries, and fail-closed prevention of identical same-packet timeout loops
    Registered path: `docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md`
+46. [codex-app-agent-lifecycle-cleanup-design.md](codex-app-agent-lifecycle-cleanup-design.md)
+   Config families: bounded Codex App agent lifecycle cleanup discipline, debug-safe `agent-init` startup rendering, configured reasoning-profile projection proof, and `.codex/**` materialization parity with `vida.config.yaml`
+   Registered path: `docs/product/spec/codex-app-agent-lifecycle-cleanup-design.md`
 46. [analysis-lane-can-close-implementation-without-write-evidence-design.md](analysis-lane-can-close-implementation-without-write-evidence-design.md)
    Config families: implementation completion truth, closure-candidate reconciliation gates, diagnostic-lane versus write-evidence law, and fail-closed prevention of closure-ready projection from read-only analysis execution
    Registered path: `docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md`

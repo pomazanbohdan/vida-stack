@@ -27,6 +27,7 @@ pub(crate) struct StatusOperatorContractInputs<'a> {
         Option<&'a crate::state_store::EffectiveBundleReceiptSummary>,
     pub(crate) root_session_write_guard_status: &'a str,
     pub(crate) root_local_write_allowed: bool,
+    pub(crate) root_local_write_allowed_for_only_these_paths: &'a serde_json::Value,
     pub(crate) activation_view_only_dispatch_blocker_active: bool,
     pub(crate) blocking_dispatch_blocker_code: Option<&'a str>,
 }
@@ -309,6 +310,7 @@ pub(crate) fn build_status_operator_contracts(
         "effective_instruction_bundle_receipt_id": inputs.effective_bundle_receipt.map(|receipt| receipt.receipt_id.clone()),
         "root_session_write_guard_status": inputs.root_session_write_guard_status,
         "root_local_write_allowed": inputs.root_local_write_allowed,
+        "root_local_write_allowed_for_only_these_paths": inputs.root_local_write_allowed_for_only_these_paths,
         "blocking_dispatch_blocker_code": inputs.blocking_dispatch_blocker_code,
     });
     let finalized = crate::operator_contracts::finalize_release1_operator_truth(
@@ -374,6 +376,7 @@ mod tests {
             effective_bundle_receipt: None,
             root_session_write_guard_status: "blocked_by_default",
             root_local_write_allowed: false,
+            root_local_write_allowed_for_only_these_paths: &serde_json::json!([]),
             activation_view_only_dispatch_blocker_active: true,
             blocking_dispatch_blocker_code: Some("internal_activation_view_only"),
         })
@@ -454,6 +457,7 @@ mod tests {
             effective_bundle_receipt: None,
             root_session_write_guard_status: "blocked_by_default",
             root_local_write_allowed: false,
+            root_local_write_allowed_for_only_these_paths: &serde_json::json!([]),
             activation_view_only_dispatch_blocker_active: false,
             blocking_dispatch_blocker_code: None,
         })

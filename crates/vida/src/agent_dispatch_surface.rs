@@ -1,6 +1,9 @@
 use std::process::ExitCode;
 
-use crate::{state_store, state_store::StateStore, AgentArgs, AgentCommand, AgentDispatchNextArgs};
+use crate::{
+    state_store, state_store::StateStore, AgentArgs, AgentCommand, AgentDispatchNextArgs,
+    AgentSelectArgs,
+};
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct AgentDispatchLaneSelectionTruth {
@@ -56,6 +59,8 @@ struct AgentDispatchNextPreview {
     next_actions: Vec<String>,
     execute_supported: bool,
     execution_attempted: bool,
+    parallelization_planner: serde_json::Value,
+    carrier_selection_api: serde_json::Value,
     source_surfaces: Vec<String>,
 }
 
@@ -65,11 +70,125 @@ fn agent_dispatch_source_surfaces() -> Vec<String> {
         "StateStore::scheduling_projection_scoped".to_string(),
         "vida taskflow graph-summary --json".to_string(),
         "vida taskflow scheduler dispatch --json".to_string(),
+        "vida agent select --runtime-role <role> --task-class <class> --json".to_string(),
         "build_taskflow_consume_bundle_payload.activation_bundle.agent_system.max_parallel_agents"
             .to_string(),
         "vida agent-init --role worker <task-id> --json".to_string(),
         "vida agent-init --role <runtime-role> <task-id> --json".to_string(),
     ]
+}
+
+fn build_parallelization_planner(
+    projection: &state_store::TaskSchedulingProjection,
+    lanes_requested: usize,
+    configured_max_parallel_agents: usize,
+) -> serde_json::Value {
+    let ready_parallel_safe = projection
+        .ready
+        .iter()
+        .filter(|candidate| candidate.ready_now && candidate.ready_parallel_safe)
+        .count();
+    let independent_failures = projection
+        .blocked
+        .iter()
+        .filter(|candidate| !candidate.ready_now)
+        .count();
+    let triggers = [
+        (
+            "coverage_or_test_expansion",
+            projection.ready.iter().any(|candidate| {
+                let title = candidate.task.title.to_ascii_lowercase();
+                let issue_type = candidate.task.issue_type.to_ascii_lowercase();
+                let labels = candidate
+                    .task
+                    .labels
+                    .iter()
+                    .map(|label| label.to_ascii_lowercase())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                title.contains("test")
+                    || title.contains("coverage")
+                    || issue_type.contains("verification")
+                    || labels.contains("verification")
+                    || labels.contains("quality")
+            }),
+        ),
+        (
+            "three_or_more_independent_failures",
+            independent_failures >= 3,
+        ),
+        (
+            "parallel_safe_ready_candidates",
+            ready_parallel_safe >= 2 && configured_max_parallel_agents > 1,
+        ),
+    ];
+    let active_triggers = triggers
+        .into_iter()
+        .filter_map(|(trigger, active)| active.then(|| trigger.to_string()))
+        .collect::<Vec<_>>();
+    let packet_proposals = projection
+        .ready
+        .iter()
+        .filter(|candidate| candidate.ready_now && candidate.ready_parallel_safe)
+        .take(lanes_requested.min(configured_max_parallel_agents.max(1)))
+        .map(|candidate| {
+            serde_json::json!({
+                "task_id": candidate.task.id,
+                "title": candidate.task.title,
+                "proposal_kind": "parallel_safe_dispatch_packet_preview",
+                "materializes_packet": false,
+                "next_surface": "vida agent-init",
+                "reason": "candidate is ready and parallel-safe under TaskFlow scheduling projection"
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "status": if packet_proposals.is_empty() { "no_packet_proposals" } else { "proposals_available" },
+        "mode": "preview_only",
+        "triggers": active_triggers,
+        "ready_parallel_safe_count": ready_parallel_safe,
+        "independent_failure_count": independent_failures,
+        "packet_proposals": packet_proposals,
+        "materializes_packets": false,
+        "next_action": if ready_parallel_safe > 0 {
+            "review selected lanes and launch with the shown `vida agent-init` command only after operator approval"
+        } else {
+            "add or unblock parallel-safe execution semantics before expecting planner proposals"
+        }
+    })
+}
+
+fn build_carrier_selection_api_descriptor(
+    activation_bundle: &serde_json::Value,
+) -> serde_json::Value {
+    let first_class = [
+        ("junior_test_writer", "worker", "verification"),
+        ("middle_analyst", "business_analyst", "specification"),
+        ("senior_verifier", "verifier", "verification"),
+    ]
+    .into_iter()
+    .map(|(api_id, runtime_role, task_class)| {
+        let assignment = crate::build_runtime_assignment_from_resolved_constraints(
+            activation_bundle,
+            "orchestrator",
+            task_class,
+            runtime_role,
+        );
+        serde_json::json!({
+            "api_id": api_id,
+            "runtime_role": runtime_role,
+            "task_class": task_class,
+            "selection": assignment,
+            "command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class} --json")
+        })
+    })
+    .collect::<Vec<_>>();
+    serde_json::json!({
+        "surface": "vida agent select",
+        "mode": "config_driven_runtime_assignment",
+        "first_class_carriers": first_class,
+        "manual_host_tool_choice_required": false,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -436,6 +555,12 @@ fn build_agent_dispatch_next_preview_standard(
             next_actions,
             execute_supported: false,
             execution_attempted: false,
+            parallelization_planner: build_parallelization_planner(
+                projection,
+                lanes_requested,
+                configured_max_parallel_agents,
+            ),
+            carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
             source_surfaces: agent_dispatch_source_surfaces(),
         };
     };
@@ -572,6 +697,12 @@ fn build_agent_dispatch_next_preview_standard(
         next_actions,
         execute_supported: false,
         execution_attempted: false,
+        parallelization_planner: build_parallelization_planner(
+            projection,
+            lanes_requested,
+            configured_max_parallel_agents,
+        ),
+        carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
         source_surfaces: agent_dispatch_source_surfaces(),
     }
 }
@@ -625,6 +756,12 @@ fn build_agent_dispatch_next_preview_dev_team(
             next_actions,
             execute_supported: false,
             execution_attempted: false,
+            parallelization_planner: build_parallelization_planner(
+                projection,
+                lanes_requested,
+                configured_max_parallel_agents,
+            ),
+            carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
             source_surfaces: agent_dispatch_source_surfaces(),
         };
     }
@@ -748,6 +885,12 @@ fn build_agent_dispatch_next_preview_dev_team(
         next_actions,
         execute_supported: false,
         execution_attempted: false,
+        parallelization_planner: build_parallelization_planner(
+            projection,
+            lanes_requested,
+            configured_max_parallel_agents,
+        ),
+        carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
         source_surfaces: agent_dispatch_source_surfaces(),
     }
 }
@@ -875,14 +1018,17 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
         "blocked"
     }
     .to_string();
+    let configured_parallel =
+        usize::try_from(plan.configured_max_parallel_agents).unwrap_or(usize::MAX);
+    let effective_parallel = usize::try_from(plan.max_parallel_agents).unwrap_or(usize::MAX);
+    let parallelization_planner =
+        build_parallelization_planner(&plan.scheduling, lanes_requested, effective_parallel);
     AgentDispatchNextPreview {
         status,
         mode: "preview".to_string(),
         lanes_requested,
-        configured_max_parallel_agents: usize::try_from(plan.configured_max_parallel_agents)
-            .unwrap_or(usize::MAX),
-        effective_max_parallel_agents: usize::try_from(plan.max_parallel_agents)
-            .unwrap_or(usize::MAX),
+        configured_max_parallel_agents: configured_parallel,
+        effective_max_parallel_agents: effective_parallel,
         lanes_selected: selected_lanes.len(),
         selected_lanes,
         blocked_candidates,
@@ -890,6 +1036,8 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
         next_actions,
         execute_supported: false,
         execution_attempted: false,
+        parallelization_planner,
+        carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
         source_surfaces: agent_dispatch_source_surfaces(),
     }
 }
@@ -897,6 +1045,75 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
 pub(crate) async fn run_agent(args: AgentArgs) -> ExitCode {
     match args.command {
         AgentCommand::DispatchNext(command) => run_agent_dispatch_next(command).await,
+        AgentCommand::Select(command) => run_agent_select(command).await,
+    }
+}
+
+async fn run_agent_select(command: AgentSelectArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    match StateStore::open_existing_read_only(state_dir.clone()).await {
+        Ok(store) => {
+            let activation_bundle = match crate::build_taskflow_consume_bundle_payload(&store).await
+            {
+                Ok(payload) => payload.activation_bundle,
+                Err(error) => {
+                    eprintln!("Failed to load activation bundle for carrier selection: {error}");
+                    return ExitCode::from(1);
+                }
+            };
+            let selection = crate::build_runtime_assignment_from_resolved_constraints(
+                &activation_bundle,
+                &command.conversation_role,
+                &command.task_class,
+                &command.runtime_role,
+            );
+            let status = if selection["enabled"].as_bool().unwrap_or(false) {
+                "pass"
+            } else {
+                "blocked"
+            };
+            let payload = serde_json::json!({
+                "surface": "vida agent select",
+                "status": status,
+                "mode": "config_driven_runtime_assignment",
+                "runtime_role": command.runtime_role,
+                "task_class": command.task_class,
+                "conversation_role": command.conversation_role,
+                "selection": selection,
+                "manual_host_tool_choice_required": false,
+                "source_surfaces": [
+                    "vida.config.yaml",
+                    "build_runtime_assignment_from_resolved_constraints",
+                    "carrier_runtime.roles"
+                ],
+            });
+            if command.json {
+                crate::print_json_pretty(&payload);
+            } else {
+                println!(
+                    "agent select: {}",
+                    payload["status"].as_str().unwrap_or("unknown")
+                );
+                if let Some(carrier) = payload["selection"]["selected_carrier_id"].as_str() {
+                    println!("selected carrier: {carrier}");
+                }
+                if let Some(profile) = payload["selection"]["selected_model_profile_id"].as_str() {
+                    println!("selected model profile: {profile}");
+                }
+            }
+            if status == "pass" {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
     }
 }
 
@@ -1576,6 +1793,24 @@ mod tests {
         assert!(preview.selected_lanes[1]
             .dispatch_command
             .contains("--state-dir /tmp/vida-state"));
+        assert_eq!(
+            preview.parallelization_planner["status"],
+            "proposals_available"
+        );
+        assert_eq!(
+            preview.parallelization_planner["materializes_packets"],
+            false
+        );
+        assert!(preview.parallelization_planner["packet_proposals"]
+            .as_array()
+            .is_some_and(|proposals| proposals.len() == 2));
+        assert_eq!(
+            preview.carrier_selection_api["surface"],
+            "vida agent select"
+        );
+        assert!(preview.carrier_selection_api["first_class_carriers"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["api_id"] == "senior_verifier")));
     }
 
     #[test]

@@ -228,6 +228,17 @@ host_environment:
         agents_dir: .codex/agents
         multi_agent: true
         internal_alias_projection: true
+        platform_overrides:
+          windows:
+            shell_environment_policy:
+              inherit: all
+            agent_bootstrap_instructions: |
+              VIDA command resolution for Windows Codex App:
+              1. Before invoking `vida`, first try `Get-Command vida -ErrorAction SilentlyContinue`.
+              2. If `vida` is not on PATH, resolve the installed production binary from `$env:LOCALAPPDATA\vida-stack\current\bin\vida.exe`.
+              3. If `LOCALAPPDATA` is missing but `USERPROFILE` is present, resolve `$env:USERPROFILE\AppData\Local\vida-stack\current\bin\vida.exe`.
+              4. When the installed production binary exists, prepend its parent directory to `$env:PATH` for the current process and invoke that binary or the refreshed `vida` command.
+              5. Treat `target\debug\vida.exe` and `target\release\vida.exe` as repository diagnostics only; do not use them as the production VIDA runtime unless the parent packet explicitly asks for diagnostic fallback.
       legacy_cli:
         enabled: true
         template_path: .codex/templates/codex-cli.config.toml

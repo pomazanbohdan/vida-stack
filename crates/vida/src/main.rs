@@ -232,9 +232,33 @@ use taskflow_spec_bootstrap::{
     execute_taskflow_bootstrap_spec_with_store, execute_work_packet_create_with_store,
 };
 use time::format_description::well_known::Rfc3339;
-#[tokio::main]
-async fn main() -> ExitCode {
-    run_root_command(Cli::parse_from(normalized_cli_args())).await
+
+const CLI_RUNTIME_THREAD_STACK_BYTES: usize = 32 * 1024 * 1024;
+
+fn main() -> ExitCode {
+    let args = normalized_cli_args();
+    match std::thread::Builder::new()
+        .name("vida-cli-runtime".to_string())
+        .stack_size(CLI_RUNTIME_THREAD_STACK_BYTES)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime should initialize");
+            runtime.block_on(run_root_command(Cli::parse_from(args)))
+        }) {
+        Ok(handle) => match handle.join() {
+            Ok(code) => code,
+            Err(_) => {
+                eprintln!("vida CLI runtime thread panicked");
+                ExitCode::from(1)
+            }
+        },
+        Err(error) => {
+            eprintln!("Failed to start vida CLI runtime thread: {error}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 fn normalized_cli_args() -> Vec<String> {

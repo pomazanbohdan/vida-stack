@@ -32,6 +32,7 @@ fn canonical_root_session_write_guard_defaults() -> serde_json::Value {
         "host_local_write_capability_is_not_authority": true,
         "local_write_requires_exception_path": true,
         "root_local_write_allowed": false,
+        "root_local_write_allowed_for_only_these_paths": [],
         "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
         "pre_write_checkpoint_required": true,
     })
@@ -146,6 +147,7 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
         "host_local_write_capability_is_not_authority": guard["host_local_write_capability_is_not_authority"].clone(),
         "local_write_requires_exception_path": guard["local_write_requires_exception_path"].clone(),
         "root_local_write_allowed": guard["root_local_write_allowed"].clone(),
+        "root_local_write_allowed_for_only_these_paths": guard["root_local_write_allowed_for_only_these_paths"].clone(),
         "required_exception_evidence": guard["required_exception_evidence"].clone(),
         "pre_write_checkpoint_required": guard["pre_write_checkpoint_required"].clone(),
         "blocking_dispatch_blocker_code": blocking_dispatch_blocker_code,
@@ -153,8 +155,33 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
     })
 }
 
+fn exception_takeover_owned_write_scope(
+    state_root: &Path,
+    latest_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> Vec<String> {
+    let Some(run_id) = latest_receipt.map(|receipt| receipt.run_id.as_str()) else {
+        return Vec::new();
+    };
+    let path = state_root
+        .join("lane-exception-path-metadata")
+        .join(format!("{run_id}.json"));
+    let Some(metadata) = crate::read_json_file_if_present(&path) else {
+        return Vec::new();
+    };
+    metadata["owned_write_scope"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 pub(crate) fn merge_live_exception_takeover_write_guard(
     mut guard: serde_json::Value,
+    state_root: &Path,
     latest_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     latest_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
 ) -> serde_json::Value {
@@ -200,6 +227,31 @@ pub(crate) fn merge_live_exception_takeover_write_guard(
             .map(|state| serde_json::Value::String(state.to_string()))
             .unwrap_or(serde_json::Value::Null),
     );
+    let owned_write_scope = exception_takeover_owned_write_scope(state_root, latest_receipt);
+    guard_obj.insert(
+        "root_local_write_allowed_for_only_these_paths".to_string(),
+        serde_json::json!(owned_write_scope),
+    );
+    guard_obj.insert(
+        "root_local_write_scope_warning".to_string(),
+        serde_json::Value::String(
+            "Exception takeover is never blanket root-local authority; writes are limited to the active exception metadata owned_write_scope."
+                .to_string(),
+        ),
+    );
+    if guard_obj
+        .get("explicit_user_ordered_agent_mode_is_sticky")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        guard_obj.insert(
+            "hard_warning".to_string(),
+            serde_json::Value::String(
+                "User requested agent-first earlier; root-local implementation is currently a policy violation unless explicitly superseded."
+                    .to_string(),
+            ),
+        );
+    }
     if exception_takeover_is_lawfully_active(latest_receipt, latest_recovery) {
         guard_obj.insert(
             "status".to_string(),
@@ -299,6 +351,9 @@ fn latest_dispatch_blocker_code_from_snapshot(snapshot: &serde_json::Value) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn sample_receipt() -> crate::state_store::RunGraphDispatchReceiptSummary {
         crate::state_store::RunGraphDispatchReceiptSummary {
@@ -367,6 +422,7 @@ mod tests {
         let guard = canonical_root_session_write_guard_defaults();
         let merged = merge_live_exception_takeover_write_guard(
             guard,
+            Path::new("."),
             Some(&sample_receipt()),
             Some(&sample_recovery("blocked_open_delegated_cycle")),
         );
@@ -381,6 +437,7 @@ mod tests {
         let guard = canonical_root_session_write_guard_defaults();
         let merged = merge_live_exception_takeover_write_guard(
             guard,
+            Path::new("."),
             Some(&sample_receipt()),
             Some(&sample_recovery("delegated_cycle_clear")),
         );
@@ -401,6 +458,7 @@ mod tests {
 
         let merged = merge_live_exception_takeover_write_guard(
             guard,
+            Path::new("."),
             Some(&receipt),
             Some(&sample_recovery("delegated_cycle_clear")),
         );
@@ -412,6 +470,48 @@ mod tests {
     }
 
     #[test]
+    fn merge_live_exception_takeover_write_guard_surfaces_owned_write_scope() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root =
+            std::env::temp_dir().join(format!("vida-write-scope-{}-{nanos}", std::process::id()));
+        let metadata_dir = root.join("lane-exception-path-metadata");
+        fs::create_dir_all(&metadata_dir).expect("metadata dir should create");
+        fs::write(
+            metadata_dir.join("run-1.json"),
+            serde_json::json!({
+                "owned_write_scope": [
+                    "crates/vida/src/init_surfaces.rs",
+                    "docs/product/spec/orchestrator-runtime-contract-hardening-design.md"
+                ]
+            })
+            .to_string(),
+        )
+        .expect("metadata should write");
+
+        let guard = canonical_root_session_write_guard_defaults();
+        let mut receipt = sample_receipt();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        let merged = merge_live_exception_takeover_write_guard(
+            guard,
+            &root,
+            Some(&receipt),
+            Some(&sample_recovery("delegated_cycle_clear")),
+        );
+
+        assert_eq!(
+            merged["root_local_write_allowed_for_only_these_paths"],
+            serde_json::json!([
+                "crates/vida/src/init_surfaces.rs",
+                "docs/product/spec/orchestrator-runtime-contract-hardening-design.md"
+            ])
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn merge_live_exception_takeover_write_guard_marks_superseded_exception_takeover_active() {
         let guard = canonical_root_session_write_guard_defaults();
         let mut receipt = sample_receipt();
@@ -420,6 +520,7 @@ mod tests {
 
         let merged = merge_live_exception_takeover_write_guard(
             guard,
+            Path::new("."),
             Some(&receipt),
             Some(&sample_recovery("blocked_open_delegated_cycle")),
         );

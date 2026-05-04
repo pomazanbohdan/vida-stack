@@ -144,6 +144,10 @@ pub(crate) enum AgentCommand {
         about = "preview next bounded agent dispatch lanes with carrier/model/cost selection truth from TaskFlow readiness"
     )]
     DispatchNext(AgentDispatchNextArgs),
+    #[command(
+        about = "select a configured carrier/model/reasoning profile for one runtime role and task class"
+    )]
+    Select(AgentSelectArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -175,6 +179,24 @@ pub(crate) struct AgentDispatchNextArgs {
         help = "Preview configured dev-team flow sequence from vida.config.yaml, including analyst, developer, duplication reviewer, final coach, tester/prover, and release closure"
     )]
     pub(crate) dev_team: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct AgentSelectArgs {
+    #[arg(long = "runtime-role", default_value = "worker")]
+    pub(crate) runtime_role: String,
+
+    #[arg(long = "task-class", default_value = "implementation")]
+    pub(crate) task_class: String,
+
+    #[arg(long = "conversation-role", default_value = "orchestrator")]
+    pub(crate) conversation_role: String,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1260,7 +1282,9 @@ mod tests {
         let Some(super::Command::Agent(agent_args)) = parsed.command else {
             panic!("agent command should parse");
         };
-        let crate::AgentCommand::DispatchNext(dispatch) = agent_args.command;
+        let crate::AgentCommand::DispatchNext(dispatch) = agent_args.command else {
+            panic!("agent dispatch-next command should parse");
+        };
         assert_eq!(dispatch.lanes, 4);
         assert_eq!(dispatch.scope.as_deref(), Some("audit-epic"));
         assert_eq!(
@@ -1285,9 +1309,32 @@ mod tests {
         let Some(super::Command::Agent(agent_args)) = dispatch_dev_team.command else {
             panic!("agent command should parse");
         };
-        let crate::AgentCommand::DispatchNext(dispatch_dev_team) = agent_args.command;
+        let crate::AgentCommand::DispatchNext(dispatch_dev_team) = agent_args.command else {
+            panic!("agent dispatch-next command should parse");
+        };
         assert!(dispatch_dev_team.dev_team);
         assert_eq!(dispatch_dev_team.lanes, 5);
+
+        let parsed_select = Cli::try_parse_from([
+            "vida",
+            "agent",
+            "select",
+            "--runtime-role",
+            "verifier",
+            "--task-class",
+            "verification",
+            "--json",
+        ])
+        .expect("agent select should parse");
+        let Some(super::Command::Agent(agent_args)) = parsed_select.command else {
+            panic!("agent command should parse");
+        };
+        let crate::AgentCommand::Select(select) = agent_args.command else {
+            panic!("agent select command should parse");
+        };
+        assert_eq!(select.runtime_role, "verifier");
+        assert_eq!(select.task_class, "verification");
+        assert!(select.json);
     }
 
     #[test]

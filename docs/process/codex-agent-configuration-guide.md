@@ -114,6 +114,7 @@ The 2026-05-01 Codex App environment probe for this repository showed:
 7. `codex features list` reports the legacy CLI effective feature state; in this environment `multi_agent` is experimental and false unless the launcher passes `--enable multi_agent` or an equivalent config override.
 8. The main project config records `host_environment.systems.codex.app` for Codex App materialization and `host_environment.systems.codex.legacy_cli` for CLI launchers.
 9. `agent_system.subagents.internal_subagents` carries the same GPT-5.5 low/medium/high/xhigh model-profile ladder used by the visible carrier catalog and internal routing aliases.
+10. On Windows Codex App, observed child-agent shells may miss PATH/core Windows environment inherited by a normal terminal; Windows-only recovery belongs under `vida.config.yaml -> host_environment.systems.codex.app.platform_overrides.windows`, not in global carrier definitions or non-Windows projections.
 
 Operational conclusion:
 
@@ -215,6 +216,16 @@ Normalization rule:
 15. sticky continuation intent does not authorize choosing `ready_head[0]`, the first ready task, or an adjacent slice by plausibility; continue only when the active bounded unit is explicit from user wording or runtime evidence.
 16. if `vida status --json` or `vida orchestrator-init --json` does not expose explicit `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, fail closed to an ambiguity report instead of continuing implementation.
 17. when recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
+
+Runtime contract hardening:
+
+1. `vida orchestrator-init --json` must expose `orchestrator_runtime_contract.sticky_user_execution_intent`, `orchestrator_runtime_contract.allowed_topology`, and `orchestrator_runtime_contract.next_lawful_dispatch_action` so Codex App and operators do not infer lane law from prose.
+2. `vida agent-init --json` must expose `dispatch_mode`; values ending in `activation_view_only` are not execution evidence and do not complete delegated work.
+3. `vida agent dispatch-next --json` is the preview-first planner surface and must expose `parallelization_planner` plus `carrier_selection_api`.
+4. `vida agent select --runtime-role <role> --task-class <class> --json` is the first-class carrier/model/reasoning selection API; it resolves from `vida.config.yaml` and registries, not from hardcoded Rust model names.
+5. `vida lane reclaim --completed --host-agents --json` is the idempotent cleanup surface for completed/stale VIDA-owned lane state. If Codex App still displays UI agent handles, host-app-visible close actions remain external until Codex exposes a stable close API.
+6. `root_local_write_allowed=true` is never blanket authority. Status and lane envelopes must also expose `root_local_write_allowed_for_only_these_paths` when exception takeover metadata exists.
+7. `orchestrator-init` must fail closed to degraded lock-contention output if the state store is locked, rather than crashing without a machine-readable next action.
 
 Coach separation rule:
 
@@ -384,16 +395,28 @@ At the current repository cut:
 6. Codex App and legacy Codex CLI materialization templates live under `.codex/templates/`,
 7. `vida.config.yaml` records the Codex App config path, Codex App template path, legacy CLI template path, and CLI multi-agent feature argument,
 8. `agent_system.subagents.internal_subagents` carries GPT-5.5 low, medium, high, and xhigh profiles for Codex App/host-subagent selection,
-9. the first intended Codex-backed project team is the bounded four-tier ladder defined in this guide.
-10. `v0.9.3` is the first release tag that packages this Codex App/internal-agent configuration wave.
-11. GitHub `Publish Release` for `v0.9.3` succeeded and published Linux, macOS, and Windows release archives.
-12. Local Windows installation may still be blocked by host Application Control or Device Guard policy even when the release artifacts are valid.
-13. On the observed Windows host, Device Guard blocked newly installed `vida.exe`, `taskflow.exe`, and `docflow.exe` from `%LOCALAPPDATA%\vida-stack\current\bin`.
-14. After an explicit installer run, `%LOCALAPPDATA%\vida-stack\current` points to `v0.9.3` and `.bun\bin\vida.exe` was moved aside so Windows resolves the installer-managed `vida.cmd`.
-15. The local developer host then disabled Smart App Control by setting `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState=0` and applying `CiTool.exe -r`; `vida --version`, `taskflow --help`, and `docflow --help` now execute through the Windows launchers.
-16. The runtime bundle retrieval-trust blocker found during the release wave was fixed by allowing bundle trust evidence to cite the latest recorded final snapshot when no admissible final snapshot exists yet.
-17. `vida taskflow consume bundle check --json` run through the WSL-built `0.9.3` binary returned `blocker_codes=[]` and `check.ok=true`.
-18. The broad Ubuntu CI `cargo test --workspace --locked -- --test-threads=1` still has a separate test-debt failure set in runtime-state/unit tests; release packaging, platform builds, and Windows installer smoke are green.
+9. Windows Codex App command-resolution bootstrap is platform-scoped under `host_environment.systems.codex.app.platform_overrides.windows`; Linux and macOS must not inherit Windows `%LOCALAPPDATA%` fallback unless they gain their own explicit platform override.
+10. Every standalone `.codex/agents/*.toml` projection must include `name`, `description`, and `developer_instructions`; Codex identifies custom agents by the `name` field, so `[agents.<id>]` in `.codex/config.toml` is not sufficient by itself.
+11. The first intended Codex-backed project team is the bounded four-tier ladder defined in this guide.
+12. Installer and init diagnostics must resolve the active install root from `VIDA_HOME`, then OS defaults (`%LOCALAPPDATA%\vida-stack` on Windows, `~/.local/share/vida-stack` on Unix-like systems); they must not embed a machine-specific user path.
+13. If a Windows host shell launches `vida.exe` directly while `vida` is not resolvable from the current process PATH, `status` / `orchestrator-init` should report a launcher warning and point to the generated installer env file or shell restart. This is a Windows/Codex App environment propagation issue, not a Linux installer regression.
+14. `v0.9.3` is the first release tag that packages this Codex App/internal-agent configuration wave.
+15. GitHub `Publish Release` for `v0.9.3` succeeded and published Linux, macOS, and Windows release archives.
+16. Local Windows installation may still be blocked by host Application Control or Device Guard policy even when the release artifacts are valid.
+17. On the observed Windows host, Device Guard blocked newly installed `vida.exe`, `taskflow.exe`, and `docflow.exe` from `%LOCALAPPDATA%\vida-stack\current\bin`.
+18. After an explicit installer run, `%LOCALAPPDATA%\vida-stack\current` points to `v0.9.3` and `.bun\bin\vida.exe` was moved aside so Windows resolves the installer-managed `vida.cmd`.
+19. The local developer host then disabled Smart App Control by setting `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState=0` and applying `CiTool.exe -r`; `vida --version`, `taskflow --help`, and `docflow --help` now execute through the Windows launchers.
+20. The runtime bundle retrieval-trust blocker found during the release wave was fixed by allowing bundle trust evidence to cite the latest recorded final snapshot when no admissible final snapshot exists yet.
+21. `vida taskflow consume bundle check --json` run through the WSL-built `0.9.3` binary returned `blocker_codes=[]` and `check.ok=true`.
+22. The broad Ubuntu CI `cargo test --workspace --locked -- --test-threads=1` still has a separate test-debt failure set in runtime-state/unit tests; release packaging, platform builds, and Windows installer smoke are green.
+
+## Development Session Materialization Boundary
+
+1. During active development, use `target/debug/vida.exe` for repo-local projection, activation, and smoke testing.
+2. Do not copy debug or release artifacts into `%LOCALAPPDATA%\vida-stack\current` during a debug-only development session.
+3. Updating the system-installed production VIDA binary is a separate release action and must remain explicit.
+4. Repeated repo-local `target/debug/vida.exe project-activator --repair --json` runs must be idempotent for `.codex/config.toml` and `.codex/agents/*.toml`; they must not duplicate bootstrap text, shell environment tables, or dispatch alias projections.
+5. After changing `.codex/agents/*.toml` schema fields such as `name` or `description`, restart Codex App before testing custom `agent_type` discovery.
 
 ## v0.9.3 Release Evidence
 
@@ -473,5 +496,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/codex-agent-configuration-guide.md
 created_at: '2026-03-12T08:35:27+02:00'
-updated_at: 2026-05-01T15:20:00Z
+updated_at: 2026-05-04T16:05:39.1055985Z
 changelog_ref: codex-agent-configuration-guide.changelog.jsonl

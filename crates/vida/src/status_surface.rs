@@ -321,6 +321,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 root_session_write_guard =
                     crate::status_surface_write_guard::merge_live_exception_takeover_write_guard(
                         root_session_write_guard,
+                        store.root(),
                         latest_run_graph_dispatch_receipt.as_ref(),
                         latest_run_graph_recovery.as_ref(),
                     );
@@ -396,6 +397,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 ["root_local_write_allowed"]
                                 .as_bool()
                                 .unwrap_or(false),
+                            root_local_write_allowed_for_only_these_paths:
+                                &root_session_write_guard
+                                    ["root_local_write_allowed_for_only_these_paths"],
                             activation_view_only_dispatch_blocker_active: root_session_write_guard
                                 ["activation_view_only_dispatch_blocker_active"]
                                 .as_bool()

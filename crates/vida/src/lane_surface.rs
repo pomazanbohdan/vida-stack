@@ -27,6 +27,21 @@ struct LaneEnvelope {
     exception_path_receipt_id: Option<String>,
     exception_path_metadata_path: Option<String>,
     exception_path_metadata: Option<ExceptionTakeoverMetadata>,
+    root_local_write_allowed_for_only_these_paths: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct LaneReclaimEnvelope {
+    surface: &'static str,
+    status: &'static str,
+    reclaim_mode: &'static str,
+    completed: bool,
+    host_agents: bool,
+    stale_scheduler_reservations_reclaimed: usize,
+    host_agent_reclaim_api_available: bool,
+    host_agent_reclaim_status: &'static str,
+    next_actions: Vec<String>,
+    blocker_codes: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -64,6 +79,11 @@ enum LaneCommand<'a> {
     Supersede {
         run_id: &'a str,
         receipt_id: &'a str,
+        as_json: bool,
+    },
+    Reclaim {
+        completed: bool,
+        host_agents: bool,
         as_json: bool,
     },
 }
@@ -134,7 +154,7 @@ impl ExceptionTakeoverMetadata {
 }
 
 fn lane_usage() -> &'static str {
-    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane complete <run-id> --receipt-id <id> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]"
+    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane complete <run-id> --receipt-id <id> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]"
 }
 
 fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
@@ -334,6 +354,27 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                 as_json,
             })
         }
+        [head, rest @ ..] if head == "reclaim" => {
+            let mut as_json = false;
+            let mut completed = false;
+            let mut host_agents = false;
+            for arg in rest {
+                match arg.as_str() {
+                    "--json" => as_json = true,
+                    "--completed" => completed = true,
+                    "--host-agents" => host_agents = true,
+                    _ => return Err(lane_usage().to_string()),
+                }
+            }
+            if !completed || !host_agents {
+                return Err(lane_usage().to_string());
+            }
+            Ok(LaneCommand::Reclaim {
+                completed,
+                host_agents,
+                as_json,
+            })
+        }
         _ => Err(lane_usage().to_string()),
     }
 }
@@ -382,6 +423,10 @@ fn build_lane_envelope(
         "latest_run_graph_dispatch_receipt_id": run_id.clone(),
         "exception_path_receipt_id": exception_path_receipt_id.clone(),
         "exception_path_metadata_path": exception_path_metadata_path.clone(),
+        "root_local_write_allowed_for_only_these_paths": exception_path_metadata
+            .as_ref()
+            .map(|metadata| metadata.owned_write_scope.clone())
+            .unwrap_or_default(),
         "dispatch_packet_path": dispatch_packet_path.clone(),
         "dispatch_result_path": dispatch_result_path.clone(),
         "downstream_dispatch_packet_path": downstream_dispatch_packet_path.clone(),
@@ -425,6 +470,10 @@ fn build_lane_envelope(
         supersedes_receipt_id,
         exception_path_receipt_id,
         exception_path_metadata_path,
+        root_local_write_allowed_for_only_these_paths: exception_path_metadata
+            .as_ref()
+            .map(|metadata| metadata.owned_write_scope.clone())
+            .unwrap_or_default(),
         exception_path_metadata,
     }
 }
@@ -650,6 +699,18 @@ fn emit_lane_envelope(envelope: &LaneEnvelope, as_json: bool) -> ExitCode {
             crate::RenderMode::Plain,
             "exception_reason_class",
             &metadata.reason_class,
+        );
+    }
+    if !envelope
+        .root_local_write_allowed_for_only_these_paths
+        .is_empty()
+    {
+        crate::print_surface_line(
+            crate::RenderMode::Plain,
+            "root_local_write_allowed_for_only_these_paths",
+            &envelope
+                .root_local_write_allowed_for_only_these_paths
+                .join(", "),
         );
     }
     crate::print_surface_line(
@@ -1256,6 +1317,54 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             );
             emit_lane_envelope(&envelope, as_json)
         }
+        LaneCommand::Reclaim {
+            completed,
+            host_agents,
+            as_json,
+        } => {
+            let reclaimed = match store.expire_stale_scheduler_dispatch_reservations().await {
+                Ok(count) => count,
+                Err(error) => {
+                    eprintln!("Failed to reclaim stale scheduler reservations: {error}");
+                    return ExitCode::from(1);
+                }
+            };
+            let envelope = LaneReclaimEnvelope {
+                surface: "vida lane reclaim",
+                status: "pass",
+                reclaim_mode: "completed_host_agents",
+                completed,
+                host_agents,
+                stale_scheduler_reservations_reclaimed: reclaimed,
+                host_agent_reclaim_api_available: false,
+                host_agent_reclaim_status: "runtime_reclaimed_state_only",
+                next_actions: vec![
+                    "Runtime state was reclaimed where VIDA owns the reservation state; close any completed Codex App UI agent handles through the host app when the app still displays them."
+                        .to_string(),
+                ],
+                blocker_codes: Vec::new(),
+            };
+            if crate::surface_render::print_surface_json(
+                &envelope,
+                as_json,
+                "lane reclaim surface should serialize",
+            ) {
+                return ExitCode::SUCCESS;
+            }
+            crate::print_surface_header(crate::RenderMode::Plain, envelope.surface);
+            crate::print_surface_line(crate::RenderMode::Plain, "status", envelope.status);
+            crate::print_surface_line(
+                crate::RenderMode::Plain,
+                "stale_scheduler_reservations_reclaimed",
+                &envelope.stale_scheduler_reservations_reclaimed.to_string(),
+            );
+            crate::print_surface_line(
+                crate::RenderMode::Plain,
+                "host_agent_reclaim_status",
+                envelope.host_agent_reclaim_status,
+            );
+            ExitCode::SUCCESS
+        }
     }
 }
 
@@ -1446,6 +1555,25 @@ mod tests {
             LaneCommand::Supersede {
                 run_id: "run-1",
                 receipt_id: "receipt-1",
+                as_json: true
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_lane_reclaim_supports_completed_host_agents_json() {
+        let args = vec![
+            "reclaim".to_string(),
+            "--completed".to_string(),
+            "--host-agents".to_string(),
+            "--json".to_string(),
+        ];
+        let command = parse_lane_args(&args).expect("lane reclaim should parse");
+        assert!(matches!(
+            command,
+            LaneCommand::Reclaim {
+                completed: true,
+                host_agents: true,
                 as_json: true
             }
         ));

@@ -703,6 +703,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             root_session_write_guard =
                 crate::status_surface_write_guard::merge_live_exception_takeover_write_guard(
                     root_session_write_guard,
+                    store.root(),
                     latest_run_graph_dispatch_receipt.as_ref(),
                     latest_run_graph_recovery.as_ref(),
                 );

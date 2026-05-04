@@ -344,10 +344,8 @@ fn project_bound_taskflow_consume_final_with_timeout(
     request: &str,
 ) -> std::process::Output {
     run_command_with_state_lock_retry(|| {
-        let mut command = Command::new("timeout");
-        command.args(["-k", "5s", "20s"]);
+        let mut command = support::bounded_command(env!("CARGO_BIN_EXE_vida"), ["-k", "5s", "20s"]);
         command
-            .arg(env!("CARGO_BIN_EXE_vida"))
             .args(["taskflow", "consume", "final", request, "--json"])
             .current_dir(project_root)
             .env_remove("VIDA_ROOT")
@@ -607,9 +605,7 @@ where
 {
     let mut last = None;
     for _ in 0..3 {
-        let mut command = Command::new("timeout");
-        command.args(timeout_args);
-        command.arg(env!("CARGO_BIN_EXE_vida"));
+        let mut command = bounded_vida_command(timeout_args);
         build(&mut command);
         let output = command.output().expect(expectation);
         if is_retryable_temporary_failure(&output) {
@@ -632,15 +628,28 @@ where
 {
     retry_with_backoff(
         &mut || {
-            let mut command = Command::new("timeout");
-            command.args(timeout_args);
-            command.arg(env!("CARGO_BIN_EXE_vida"));
+            let mut command = bounded_vida_command(timeout_args);
             build(&mut command);
             command.output().expect(expectation)
         },
         MAX_BOOT_RETRY_ATTEMPTS,
         |output, _| is_state_lock_error(output),
     )
+}
+
+fn bounded_vida_command(timeout_args: &[&str]) -> Command {
+    #[cfg(windows)]
+    {
+        let _ = timeout_args;
+        Command::new(env!("CARGO_BIN_EXE_vida"))
+    }
+    #[cfg(unix)]
+    {
+        let mut command = Command::new("timeout");
+        command.args(timeout_args);
+        command.arg(env!("CARGO_BIN_EXE_vida"));
+        command
+    }
 }
 
 fn run_protocol_binding_check_with_timeout(state_dir: &std::path::Path) -> std::process::Output {
@@ -12728,12 +12737,8 @@ fn memory_surface_reports_effective_bundle() {
     assert!(boot.status.success());
 
     let output = run_command_with_state_lock_retry(|| {
-        let mut command = Command::new("timeout");
-        command
-            .args(["-k", "5s", "20s"])
-            .arg(env!("CARGO_BIN_EXE_vida"))
-            .arg("memory")
-            .env("VIDA_STATE_DIR", &state_dir);
+        let mut command = support::bounded_command(env!("CARGO_BIN_EXE_vida"), ["-k", "5s", "20s"]);
+        command.arg("memory").env("VIDA_STATE_DIR", &state_dir);
         command
     });
     assert!(output.status.success());
