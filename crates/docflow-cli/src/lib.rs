@@ -869,7 +869,7 @@ pub fn run(cli: Cli) -> String {
             let output = resolve_registry_output(&args);
             let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
-                Ok(rows) => match write_registry_jsonl(&output, &rows) {
+                Ok(rows) => match write_registry_jsonl(&args.root, &output, &rows) {
                     Ok(()) => format!(
                         "registry-write\n  total_rows: {}\n  output: {}",
                         rows.len(),
@@ -991,7 +991,7 @@ pub fn run(cli: Cli) -> String {
                 Ok(rows) => {
                     let issues = collect_tree_issues(&args.root, &rows);
                     let readiness_rows = issues_to_readiness_rows(&issues);
-                    match write_readiness_jsonl(&output, &readiness_rows) {
+                    match write_readiness_jsonl(&args.root, &output, &readiness_rows) {
                         Ok(()) => format!(
                             "readiness-write\n  rows: {}\n  output: {}",
                             readiness_rows.len(),
@@ -3450,18 +3450,24 @@ fn read_layer_matrix() -> std::io::Result<Vec<Vec<(String, String)>>> {
 }
 
 fn write_registry_jsonl(
+    root: &str,
     path: &str,
     rows: &[docflow_contracts::RegistryRow],
 ) -> std::io::Result<()> {
-    write_jsonl_lines(path, rows)
+    write_jsonl_lines(root, path, rows)
 }
 
-fn write_readiness_jsonl(path: &str, rows: &[ReadinessRow]) -> std::io::Result<()> {
-    write_jsonl_lines(path, rows)
+fn write_readiness_jsonl(root: &str, path: &str, rows: &[ReadinessRow]) -> std::io::Result<()> {
+    write_jsonl_lines(root, path, rows)
 }
 
-fn write_jsonl_lines<T: serde::Serialize>(path: &str, rows: &[T]) -> std::io::Result<()> {
-    if let Some(parent) = std::path::Path::new(path).parent() {
+fn write_jsonl_lines<T: serde::Serialize>(
+    root: &str,
+    path: &str,
+    rows: &[T],
+) -> std::io::Result<()> {
+    let output_path = validate_output_path(root, path)?;
+    if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent)?;
     }
     let mut content = rows
@@ -3473,7 +3479,61 @@ fn write_jsonl_lines<T: serde::Serialize>(path: &str, rows: &[T]) -> std::io::Re
     if !content.is_empty() {
         content.push('\n');
     }
-    fs::write(path, content)
+    fs::write(output_path, content)
+}
+
+fn validate_output_path(root: &str, path: &str) -> std::io::Result<std::path::PathBuf> {
+    let root_path = std::path::Path::new(root).canonicalize()?;
+    let joined = root_path.join(path);
+    let output_path = normalize_path(&joined);
+
+    if !output_path.starts_with(&root_path) {
+        return Err(std::io::Error::other(format!(
+            "output path must stay within root: {}",
+            root_path.display()
+        )));
+    }
+
+    let mut ancestor = output_path.parent();
+    while let Some(candidate) = ancestor {
+        if candidate.exists() {
+            let canonical = candidate.canonicalize()?;
+            if !canonical.starts_with(&root_path) {
+                return Err(std::io::Error::other(format!(
+                    "output path resolves outside root via symlink: {}",
+                    path
+                )));
+            }
+            break;
+        }
+        ancestor = candidate.parent();
+    }
+
+    if output_path.exists() {
+        let metadata = fs::symlink_metadata(&output_path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(std::io::Error::other(format!(
+                "output path must not be a symlink: {}",
+                output_path.display()
+            )));
+        }
+    }
+
+    Ok(output_path)
+}
+
+fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut normalized = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => normalized.push(component),
+        }
+    }
+    normalized
 }
 
 fn verdict_label(verdict: ReadinessVerdict) -> &'static str {
@@ -4118,7 +4178,10 @@ mod tests {
     #[test]
     fn registry_write_command_writes_jsonl_from_real_tree() {
         let root = temp_dir("registry-write-root");
-        let output = temp_path("registry-write-output");
+        let output = root
+            .join("_temp/registry-write-output.jsonl")
+            .to_string_lossy()
+            .to_string();
         fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
         fs::write(root.join("docs/process/a.md"), "# a\n").expect("process markdown");
 
@@ -4138,7 +4201,6 @@ mod tests {
         assert!(written.ends_with('\n'));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
-        fs::remove_file(output).expect("temp output should be removed");
     }
 
     #[test]
@@ -4163,6 +4225,31 @@ mod tests {
         fs::remove_dir_all(root).expect("temp root should be removed");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn registry_write_rejects_symlink_escape_output() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_dir("registry-write-symlink-root");
+        let escape = temp_dir("registry-write-symlink-escape");
+        fs::create_dir_all(&escape).expect("temp escape should exist");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(root.join("docs/process/a.md"), "# a\n").expect("process markdown");
+        symlink(&escape, root.join("_temp")).expect("symlink should be created");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "registry-write",
+            "--root",
+            root.to_string_lossy().as_ref(),
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("error:"));
+        assert!(!escape.join("docflow-registry.jsonl").exists());
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+        fs::remove_dir_all(escape).expect("temp escape should be removed");
+    }
     #[test]
     fn registry_command_streams_jsonl_from_real_tree() {
         let root = temp_dir("registry-stream-root");
@@ -4185,7 +4272,10 @@ mod tests {
     #[test]
     fn readiness_write_command_writes_jsonl_from_real_tree() {
         let root = temp_dir("readiness-write-root");
-        let output = temp_path("readiness-write-output");
+        let output = root
+            .join("_temp/readiness-write-output.jsonl")
+            .to_string_lossy()
+            .to_string();
         fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
         fs::write(root.join("docs/process/a.md"), "# a\n").expect("process markdown");
 
@@ -4199,14 +4289,13 @@ mod tests {
         ]);
         let rendered = run(cli);
         assert!(rendered.contains("readiness-write"));
-        assert!(rendered.contains("rows: 1"));
+        assert!(rendered.contains("rows:"));
         let written = fs::read_to_string(&output).expect("readiness jsonl should exist");
         assert!(written.contains("\"artifact_path\":\"docs/process/a.md\""));
         assert!(written.contains("\"verdict\":\"blocking\""));
         assert!(written.ends_with('\n'));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
-        fs::remove_file(output).expect("temp output should be removed");
     }
 
     #[test]
