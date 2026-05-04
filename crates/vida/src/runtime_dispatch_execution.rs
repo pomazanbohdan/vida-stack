@@ -885,6 +885,12 @@ fn configured_internal_host_activation_parts(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "Configured internal host carrier is missing sandbox_mode".to_string())?;
+    if sandbox_mode == "danger-full-access" {
+        return Err(
+            "Configured internal host carrier uses forbidden sandbox_mode `danger-full-access`"
+                .to_string(),
+        );
+    }
     let reasoning_effort = carrier["model_reasoning_effort"]
         .as_str()
         .map(str::trim)
@@ -2150,6 +2156,34 @@ dispatch:
             stdin_payload.as_deref(),
             Some(dispatch_packet_prompt("/tmp/project/.vida/dispatch.json").as_str())
         );
+    }
+
+    #[test]
+    fn configured_internal_host_activation_parts_rejects_danger_full_access_sandbox() {
+        let system_entry = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: codex
+  static_args: ["exec", "--json"]
+  sandbox_flag: -s
+  model_flag: -m
+  prompt_mode: positional
+"#,
+        )
+        .expect("system entry should parse");
+        let carrier = serde_json::json!({
+            "model": "gpt-5.4",
+            "sandbox_mode": "danger-full-access"
+        });
+
+        let error = configured_internal_host_activation_parts(
+            Some(&system_entry),
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            &carrier,
+        )
+        .expect_err("danger-full-access should be rejected");
+        assert!(error.contains("forbidden sandbox_mode"));
     }
 
     #[test]
