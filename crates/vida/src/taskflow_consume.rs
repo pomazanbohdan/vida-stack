@@ -587,12 +587,21 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 store.root(),
                             )
                             .is_some();
+                        let allow_automatic_dispatch_execution =
+                            super::taskflow_task_bridge::infer_project_root_from_state_root(
+                                store.root(),
+                            )
+                            .map(|project_root| {
+                                super::runtime_dispatch_state::runtime_host_execution_contract_allows_automatic_dispatch_execution(&project_root)
+                            })
+                            .unwrap_or(true);
                         let state_root = store.root().to_path_buf();
                         drop(store);
                         if !consume_final_mode.is_read_only()
                             && direct_consumption_ready
                             && dispatch_receipt.dispatch_status == "routed"
                             && allow_taskflow_pack_execution
+                            && allow_automatic_dispatch_execution
                         {
                             if let Err(error) = super::execute_and_record_dispatch_receipt(
                                 &state_root,
