@@ -85,7 +85,7 @@ Options:
   -DryRun           Print planned actions without changing files.
 
 Examples:
-  irm https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.ps1 -OutFile vida-install.ps1
+  irm https://github.com/pomazanbohdan/vida-stack/releases/latest/download/vida-install.ps1 -OutFile vida-install.ps1
   pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install
   pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 upgrade --version v0.9.0
   pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install --bins taskflow --force
@@ -236,12 +236,10 @@ function Ensure-FeatureTemplateScaffold {
 
     if (-not $templateSource) {
         if ($DryRun) {
-            Write-Log "Would download feature design template for installed vida init compatibility"
+            Write-Log "Would fail: release is missing feature design template scaffold"
             return
         }
-        $tempTemplate = Join-Path ([System.IO.Path]::GetTempPath()) ("vida-feature-template-" + [guid]::NewGuid().ToString("N") + ".md")
-        Download-File "https://raw.githubusercontent.com/$RepoSlug/main/docs/product/spec/templates/feature-design-document.template.md" $tempTemplate
-        $templateSource = $tempTemplate
+        Fail "Installed release is missing feature design template scaffold (install/assets/feature-design-document.template.md). Reinstall or choose a newer release."
     }
 
     foreach ($target in @($assetTarget, $legacyTarget)) {
