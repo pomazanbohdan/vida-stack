@@ -1178,6 +1178,23 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     host_runtime: serde_json::Value,
 ) -> Result<Option<serde_json::Value>, String> {
+    let Some(backend_id) = preferred_backend.or(receipt.selected_backend.as_deref()) else {
+        return Err(format!(
+            "Dispatch target `{}` is routed to an internal agent lane but no backend id was resolved",
+            receipt.dispatch_target
+        ));
+    };
+    if !backend_is_admissible_for_dispatch_target(
+        &role_selection.execution_plan,
+        backend_id,
+        &receipt.dispatch_target,
+    ) {
+        return Err(format!(
+            "Backend `{backend_id}` is not admissible for dispatch target `{}`",
+            receipt.dispatch_target
+        ));
+    }
+
     let overlay = crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root)?;
     let (selected_cli_system, selected_cli_entry) =
         crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
