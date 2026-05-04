@@ -3172,12 +3172,10 @@ fn agent_init_renders_worker_startup_view_json_for_explicit_role() {
 #[test]
 fn bootstrap_init_surfaces_report_installed_vs_source_launcher_parity() {
     let home_root = format!("{}/home", unique_state_dir());
-    let local_vida = format!("{home_root}/.local/bin/vida");
-    let cargo_vida = format!("{home_root}/.cargo/bin/vida");
-    fs::create_dir_all(format!("{home_root}/.local/bin")).expect("local bin dir should exist");
-    fs::create_dir_all(format!("{home_root}/.cargo/bin")).expect("cargo bin dir should exist");
-    copy_executable(env!("CARGO_BIN_EXE_vida"), &local_vida);
-    copy_executable(env!("CARGO_BIN_EXE_vida"), &cargo_vida);
+    let current_vida = format!("{home_root}/.local/share/vida-stack/current/bin/vida");
+    fs::create_dir_all(format!("{home_root}/.local/share/vida-stack/current/bin"))
+        .expect("current bin dir should exist");
+    copy_executable(env!("CARGO_BIN_EXE_vida"), &current_vida);
 
     for (project_id, project_name, args) in [
         (
@@ -3229,8 +3227,8 @@ fn bootstrap_init_surfaces_report_installed_vs_source_launcher_parity() {
             .as_array()
             .expect("installed binary evidence should render");
         assert!(
-            installed.len() >= 3,
-            "HOME-installed copies and active source binary should be reported: {installed:?}"
+            installed.len() >= 2,
+            "canonical current/bin copy and active source binary should be reported: {installed:?}"
         );
         let installed_paths = installed
             .iter()
@@ -3242,8 +3240,7 @@ fn bootstrap_init_surfaces_report_installed_vs_source_launcher_parity() {
                     .to_string()
             })
             .collect::<std::collections::BTreeSet<_>>();
-        assert!(installed_paths.contains(&local_vida));
-        assert!(installed_paths.contains(&cargo_vida));
+        assert!(installed_paths.contains(&current_vida));
         assert_eq!(
             installed
                 .iter()

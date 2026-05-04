@@ -154,7 +154,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
                 )
         });
     let continuation_binding =
-        crate::continuation_binding_summary::build_continuation_binding_summary(
+        crate::continuation_binding_summary::build_continuation_binding_summary_with_idle_policy(
             explicit_continuation_binding.as_ref(),
             latest_run_graph_status.as_ref(),
             latest_run_graph_recovery.as_ref(),
@@ -164,6 +164,9 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
                 .flatten()
                 .as_deref(),
             continuation_binding_evidence_ambiguous,
+            task_store.open_count == 0
+                && task_store.in_progress_count == 0
+                && task_store.ready_count == 0,
         );
     let taskflow_active_candidates = store
         .list_tasks(Some("in_progress"), true)

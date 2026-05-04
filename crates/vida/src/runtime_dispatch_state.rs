@@ -39,6 +39,26 @@ use crate::taskflow_run_graph::{
 
 use super::*;
 
+pub(crate) fn normalize_persisted_runtime_path(path: &str) -> std::path::PathBuf {
+    let trimmed = path.trim();
+    #[cfg(windows)]
+    {
+        if let Some(rest) = trimmed.strip_prefix("/mnt/") {
+            let mut parts = rest.splitn(2, '/');
+            if let (Some(drive), Some(tail)) = (parts.next(), parts.next()) {
+                if drive.len() == 1 && drive.as_bytes()[0].is_ascii_alphabetic() {
+                    let mut normalized = String::new();
+                    normalized.push_str(&drive.to_ascii_uppercase());
+                    normalized.push_str(":\\");
+                    normalized.push_str(&tail.replace('/', "\\"));
+                    return std::path::PathBuf::from(normalized);
+                }
+            }
+        }
+    }
+    std::path::PathBuf::from(trimmed)
+}
+
 const DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS: u64 = 10;
 const DEFAULT_INTERNAL_HOST_HANDOFF_TIMEOUT_SECONDS: u64 = 240;
@@ -3274,7 +3294,8 @@ fn decode_receipt_packet_context(
             receipt.run_id
         )
     })?;
-    let body = std::fs::read_to_string(packet_path).map_err(|error| {
+    let normalized_packet_path = normalize_persisted_runtime_path(packet_path);
+    let body = std::fs::read_to_string(&normalized_packet_path).map_err(|error| {
         format!("Failed to read persisted dispatch packet `{packet_path}`: {error}")
     })?;
     let packet = serde_json::from_str::<serde_json::Value>(&body).map_err(|error| {

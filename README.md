@@ -172,7 +172,8 @@ Linux/macOS:
 
 ```bash
 cargo build -p vida --release
-install -m 755 target/release/vida ~/.local/bin/vida
+install -D -m 755 target/release/vida ~/.local/share/vida-stack/current/bin/vida
+export PATH="$HOME/.local/share/vida-stack/current/bin:$PATH"
 cargo test -p vida -- --nocapture
 ```
 
@@ -191,11 +192,11 @@ cargo test -p vida --bin vida read_only_open -- --nocapture
 
 # Build and install the operator-facing launcher from the release profile.
 cargo build --release -p vida
-Copy-Item .\target\release\vida.exe "$env:USERPROFILE\.bun\bin\vida.exe" -Force
+Copy-Item .\target\release\vida.exe "$env:LOCALAPPDATA\vida-stack\current\bin\vida.exe" -Force
 vida orchestrator-init --json
 ```
 
-This keeps the operator-facing `vida` in `~/.local/bin` on Unix-like systems or `~/.bun/bin` on Windows aligned with the release binary while preserving faster and more inspectable local proof runs on the debug build.
+This keeps the operator-facing `vida` in `~/.local/share/vida-stack/current/bin` on Unix-like systems or `%LOCALAPPDATA%\vida-stack\current\bin` on Windows aligned with the release binary while preserving faster and more inspectable local proof runs on the debug build.
 
 On Windows, Application Control, Smart App Control, or Device Guard may block any newly generated or downloaded executable, including Cargo build scripts under `target\debug\build\*\build-script-build.exe`, integration-test binaries under `target\debug\deps\*.exe`, and release binaries installed under `%LOCALAPPDATA%\vida-stack\current\bin`. If that policy is active, local Windows `cargo build`, `cargo test`, and installer smoke may fail before VIDA code runs. Use WSL/Linux or GitHub Actions for proof builds, or allowlist/sign the release binaries before making them the active system runtime.
 

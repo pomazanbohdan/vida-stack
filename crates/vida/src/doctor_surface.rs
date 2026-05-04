@@ -116,14 +116,19 @@ fn trace_evidence_blocker_codes(
     protocol_binding: &crate::state_store::ProtocolBindingSummary,
     effective_instruction_bundle: &crate::state_store::EffectiveInstructionBundle,
     effective_bundle_receipt_id: &str,
+    idle_terminal_run: bool,
 ) -> Vec<String> {
     let mut blocker_codes = Vec::new();
 
-    if latest_task_reconciliation.is_none()
-        || runtime_consumption.total_snapshots == 0
-        || latest_run_graph_dispatch_receipt.is_none()
-        || protocol_binding.total_receipts == 0
-    {
+    let missing_root_trace = if idle_terminal_run {
+        runtime_consumption.total_snapshots == 0 || protocol_binding.total_receipts == 0
+    } else {
+        latest_task_reconciliation.is_none()
+            || runtime_consumption.total_snapshots == 0
+            || latest_run_graph_dispatch_receipt.is_none()
+            || protocol_binding.total_receipts == 0
+    };
+    if missing_root_trace {
         blocker_codes.push(blocker_code_str(BlockerCode::TraceMissing).to_string());
     }
 
@@ -153,6 +158,7 @@ fn build_trace_evidence_summary(
     protocol_binding: &crate::state_store::ProtocolBindingSummary,
     effective_instruction_bundle: &crate::state_store::EffectiveInstructionBundle,
     effective_bundle_receipt_id: &str,
+    idle_terminal_run: bool,
 ) -> (serde_json::Value, Vec<String>, Vec<String>) {
     let blocker_codes = trace_evidence_blocker_codes(
         latest_task_reconciliation,
@@ -161,6 +167,7 @@ fn build_trace_evidence_summary(
         protocol_binding,
         effective_instruction_bundle,
         effective_bundle_receipt_id,
+        idle_terminal_run,
     );
     let next_actions = if blocker_codes.is_empty() {
         Vec::new()
@@ -252,6 +259,7 @@ fn doctor_operator_blocker_codes(
     latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
     memory_governance: Option<&crate::state_store::RunGraphMemoryGovernanceProjection>,
+    no_active_taskflow_work: bool,
     trace_evidence_blocker_codes: Vec<String>,
 ) -> Vec<String> {
     let mut operator_blocker_codes: Vec<String> = Vec::new();
@@ -327,9 +335,13 @@ fn doctor_operator_blocker_codes(
         operator_blocker_codes
             .push(blocker_code_str(BlockerCode::MissingRootSessionWriteGuard).to_string());
     }
-    if latest_run_graph_recovery
-        .as_ref()
-        .is_some_and(|summary| !summary.recovery_ready)
+    if !no_active_taskflow_work
+        && latest_run_graph_recovery.as_ref().is_some_and(|summary| {
+            !summary.recovery_ready
+                && !(summary.resume_status == "completed"
+                    && summary.lifecycle_stage == "closure_complete"
+                    && summary.resume_target == "none")
+        })
     {
         operator_blocker_codes
             .push(blocker_code_str(BlockerCode::RecoveryReadinessBlocked).to_string());
@@ -722,6 +734,20 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 &effective_instruction_bundle,
                 latest_effective_bundle_receipt.as_ref(),
             );
+            let no_active_taskflow_work = task_store.open_count == 0
+                && task_store.in_progress_count == 0
+                && task_store.ready_count == 0;
+            let idle_terminal_run = no_active_taskflow_work
+                && latest_run_graph_status.as_ref().is_some_and(|status| {
+                    status.status == "completed"
+                        && status.lifecycle_stage == "closure_complete"
+                        && status
+                            .next_node
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .is_none()
+                });
             let (trace_evidence, trace_evidence_blocker_codes, trace_evidence_next_actions) =
                 build_trace_evidence_summary(
                     latest_task_reconciliation.as_ref(),
@@ -730,6 +756,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     &protocol_binding,
                     &effective_instruction_bundle,
                     effective_bundle_receipt_id.as_str(),
+                    idle_terminal_run,
                 );
             let retrieval_trust_signal =
                 super::runtime_consumption_state::latest_admissible_retrieval_trust_signal(
@@ -756,6 +783,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     latest_run_graph_dispatch_receipt.as_ref(),
                     latest_principal_delegation.as_ref(),
                     latest_memory_governance.as_ref(),
+                    no_active_taskflow_work,
                     trace_evidence_blocker_codes,
                 );
                 let mut operator_next_actions = doctor_operator_next_actions(
@@ -1391,6 +1419,7 @@ mod tests {
             &protocol_binding,
             &effective_instruction_bundle,
             effective_bundle_receipt_id.as_str(),
+            false,
         );
 
         assert_eq!(trace_evidence["status"], "pass");
@@ -1444,6 +1473,7 @@ mod tests {
             &protocol_binding,
             &effective_instruction_bundle,
             effective_bundle_receipt_id.as_str(),
+            false,
         );
 
         assert_eq!(trace_evidence["status"], "pass");
@@ -1478,6 +1508,7 @@ mod tests {
             &protocol_binding,
             &effective_instruction_bundle,
             effective_bundle_receipt_id.as_str(),
+            false,
         );
 
         assert_eq!(trace_evidence["status"], "blocked");

@@ -316,43 +316,23 @@ fn install_target_paths(
     let root = release_install_root(install_root);
     let binary_name = vida_binary_file_name();
     match requested_target {
-        "all" => {
-            let root = root.ok_or_else(unresolved_install_target)?;
-            Ok(vec![
-                (
-                    "local".to_string(),
-                    root.join(".local").join("bin").join(&binary_name),
-                ),
-                (
-                    "cargo".to_string(),
-                    root.join(".cargo").join("bin").join(&binary_name),
-                ),
-            ])
-        }
-        "local" => {
+        "current" | "all" | "local" | "cargo" => {
             let root = root.ok_or_else(unresolved_install_target)?;
             Ok(vec![(
-                "local".to_string(),
-                root.join(".local").join("bin").join(binary_name),
-            )])
-        }
-        "cargo" => {
-            let root = root.ok_or_else(unresolved_install_target)?;
-            Ok(vec![(
-                "cargo".to_string(),
-                root.join(".cargo").join("bin").join(binary_name),
+                "current".to_string(),
+                root.join("current").join("bin").join(binary_name),
             )])
         }
         "path" => resolve_vida_from_path_env(std::env::var_os("PATH"))
             .map(|path| vec![("path".to_string(), path)])
             .ok_or(BlockedRelease {
                 blocker_code: "install_target_unresolved",
-                next_action: "Ensure `vida` is on PATH, or pass `--target local|cargo` with `--install-root <path>`.".to_string(),
+                next_action: "Ensure `vida` is on PATH, or pass `--target current` with `--install-root <path>`.".to_string(),
                 io_error: None,
             }),
         _ => Err(BlockedRelease {
             blocker_code: "unsupported_install_target",
-            next_action: "Use `--target all`, `--target local`, `--target cargo`, or `--target path`."
+            next_action: "Use `--target current` or `--target path`."
                 .to_string(),
             io_error: None,
         }),
@@ -360,7 +340,25 @@ fn install_target_paths(
 }
 
 fn release_install_root(install_root: Option<&Path>) -> Option<PathBuf> {
-    install_root.map(Path::to_path_buf).or_else(user_home_dir)
+    install_root
+        .map(Path::to_path_buf)
+        .or_else(default_release_install_root)
+}
+
+fn default_release_install_root() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            return Some(PathBuf::from(local_app_data).join("vida-stack"));
+        }
+    }
+    user_home_dir().map(|home| {
+        if cfg!(windows) {
+            home.join("AppData").join("Local").join("vida-stack")
+        } else {
+            home.join(".local").join("share").join("vida-stack")
+        }
+    })
 }
 
 fn user_home_dir() -> Option<PathBuf> {
@@ -609,16 +607,16 @@ mod tests {
     #[test]
     fn release_install_explicit_root_uses_platform_executable_suffix() {
         let harness = TempStateHarness::new().expect("temp harness should initialize");
-        let paths = install_target_paths("local", Some(harness.path()))
-            .expect("local install target should resolve");
+        let paths = install_target_paths("current", Some(harness.path()))
+            .expect("current install target should resolve");
 
         assert_eq!(
             paths,
             vec![(
-                "local".to_string(),
+                "current".to_string(),
                 harness
                     .path()
-                    .join(".local")
+                    .join("current")
                     .join("bin")
                     .join(vida_binary_file_name())
             )]
@@ -646,13 +644,13 @@ mod tests {
     }
 
     #[test]
-    fn release_install_skip_build_installs_fake_binary_to_local_target() {
+    fn release_install_skip_build_installs_fake_binary_to_current_target() {
         let harness = TempStateHarness::new().expect("temp harness should initialize");
         let source = harness.path().join("fake-vida");
         fs::write(&source, b"fake vida binary").expect("fake source should write");
 
         let receipt = release_install_receipt(&ReleaseInstallArgs {
-            target: "local".to_string(),
+            target: "current".to_string(),
             skip_build: true,
             source_binary: Some(source.clone()),
             install_root: Some(harness.path().join("install-root")),
@@ -663,7 +661,7 @@ mod tests {
         assert_eq!(receipt.build.status, "skipped");
         assert_eq!(receipt.io_error, None);
         assert_eq!(receipt.installed_targets.len(), 1);
-        assert_eq!(receipt.installed_targets[0].target, "local");
+        assert_eq!(receipt.installed_targets[0].target, "current");
         assert_eq!(
             receipt.source_binary_fingerprint.as_deref(),
             Some(receipt.installed_targets[0].fingerprint.as_str())
@@ -675,7 +673,7 @@ mod tests {
     fn release_install_skip_build_blocks_missing_source_binary() {
         let harness = TempStateHarness::new().expect("temp harness should initialize");
         let receipt = release_install_receipt(&ReleaseInstallArgs {
-            target: "local".to_string(),
+            target: "current".to_string(),
             skip_build: true,
             source_binary: Some(harness.path().join("missing-vida")),
             install_root: Some(harness.path().join("install-root")),
@@ -723,7 +721,7 @@ mod tests {
             .expect("blocking file should write");
 
         let receipt = release_install_receipt(&ReleaseInstallArgs {
-            target: "local".to_string(),
+            target: "current".to_string(),
             skip_build: true,
             source_binary: Some(source),
             install_root: Some(install_root_file.clone()),
@@ -741,7 +739,7 @@ mod tests {
             detail.target_path,
             Some(
                 install_root_file
-                    .join(".local")
+                    .join("current")
                     .join("bin")
                     .display()
                     .to_string()

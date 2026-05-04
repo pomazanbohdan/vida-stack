@@ -173,6 +173,26 @@ pub(crate) fn build_continuation_binding_summary(
     terminal_consume_continue_run_id: Option<&str>,
     evidence_ambiguous: bool,
 ) -> serde_json::Value {
+    build_continuation_binding_summary_with_idle_policy(
+        explicit_binding,
+        latest_run_graph_status,
+        latest_run_graph_recovery,
+        latest_run_graph_dispatch_receipt,
+        terminal_consume_continue_run_id,
+        evidence_ambiguous,
+        false,
+    )
+}
+
+pub(crate) fn build_continuation_binding_summary_with_idle_policy(
+    explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
+    latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+    latest_run_graph_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    terminal_consume_continue_run_id: Option<&str>,
+    evidence_ambiguous: bool,
+    terminal_completed_without_next_unit_is_idle: bool,
+) -> serde_json::Value {
     let active_run_id = latest_run_graph_status.map(|status| status.run_id.as_str());
     let delegated_cycle_open = latest_run_graph_recovery
         .is_some_and(|recovery| recovery.delegation_gate.delegated_cycle_open);
@@ -235,6 +255,32 @@ pub(crate) fn build_continuation_binding_summary(
                 .is_none();
 
         if run_graph_status_is_blocked(&status.status) {
+            if terminal_completed_without_next_unit_is_idle && !delegated_cycle_open {
+                return serde_json::json!({
+                    "status": "idle",
+                    "continuation_allowed": false,
+                    "continuation_required_now": false,
+                    "active_bounded_unit": serde_json::Value::Null,
+                    "binding_source": serde_json::Value::Null,
+                    "why_this_unit": format!(
+                        "Latest run `{}` is blocked, but no active TaskFlow work is present.",
+                        status.run_id
+                    ),
+                    "primary_path": "idle_project_ready",
+                    "sequential_vs_parallel_posture": "not_applicable_no_active_work",
+                    "pause_boundary_gate": "allowed_no_active_work",
+                    "ambiguity_reason": serde_json::Value::Null,
+                    "stale_blocked_run_graph_status": {
+                        "task_id": status.task_id,
+                        "run_id": status.run_id,
+                        "active_node": status.active_node,
+                        "status": status.status,
+                        "lifecycle_stage": status.lifecycle_stage,
+                    },
+                    "next_actions": []
+                });
+            }
+
             if let Some(binding) = explicit_binding {
                 if active_exception_takeover_binding_matches_status(
                     binding,
@@ -363,6 +409,25 @@ pub(crate) fn build_continuation_binding_summary(
                     }
                 }
             }
+        }
+
+        if terminal_completed_without_next_unit_is_idle && terminal_completed_without_next_unit {
+            return serde_json::json!({
+                "status": "idle",
+                "continuation_allowed": false,
+                "continuation_required_now": false,
+                "active_bounded_unit": serde_json::Value::Null,
+                "binding_source": serde_json::Value::Null,
+                "why_this_unit": format!(
+                    "Latest run `{}` is closure_complete and no active TaskFlow work is present.",
+                    status.run_id
+                ),
+                "primary_path": "idle_project_ready",
+                "sequential_vs_parallel_posture": "not_applicable_no_active_work",
+                "pause_boundary_gate": "allowed_no_active_work",
+                "ambiguity_reason": serde_json::Value::Null,
+                "next_actions": []
+            });
         }
 
         return serde_json::json!({
@@ -543,7 +608,7 @@ pub(crate) fn add_taskflow_active_work_truth(
 mod tests {
     use super::{
         add_taskflow_active_work_truth, build_continuation_binding_summary,
-        taskflow_active_candidates_from_tasks,
+        build_continuation_binding_summary_with_idle_policy, taskflow_active_candidates_from_tasks,
     };
 
     fn task_record(task_id: &str, status: &str) -> crate::state_store::TaskRecord {
@@ -708,6 +773,37 @@ mod tests {
                     .is_some_and(|value| value.contains("resolve the blocker"))
             })
         }));
+    }
+
+    #[test]
+    fn blocked_latest_run_graph_status_is_idle_when_taskflow_has_no_active_work() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-bounded-slice-material-owned-app-chrome",
+            "runtime-bounded-slice-material-owned-app-chrome",
+            "analysis",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+
+        let summary = build_continuation_binding_summary_with_idle_policy(
+            None,
+            Some(&status),
+            None,
+            None,
+            None,
+            false,
+            true,
+        );
+
+        assert_eq!(summary["status"], "idle");
+        assert_eq!(summary["continuation_allowed"], false);
+        assert_eq!(summary["active_bounded_unit"], serde_json::Value::Null);
+        assert_eq!(summary["primary_path"], "idle_project_ready");
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+        assert_eq!(
+            summary["stale_blocked_run_graph_status"]["run_id"],
+            "runtime-bounded-slice-material-owned-app-chrome"
+        );
     }
 
     #[test]

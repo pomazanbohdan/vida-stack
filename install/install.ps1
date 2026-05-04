@@ -340,6 +340,26 @@ function Remove-LegacyWrappers {
     }
 }
 
+function Remove-LegacyVidaBinaryTargets {
+    $homeDir = [Environment]::GetFolderPath("UserProfile")
+    if (-not $homeDir) { return }
+    foreach ($legacy in @(
+        (Join-Path $homeDir ".local\bin\vida.exe"),
+        (Join-Path $homeDir ".local\bin\vida"),
+        (Join-Path $homeDir ".cargo\bin\vida.exe"),
+        (Join-Path $homeDir ".cargo\bin\vida")
+    )) {
+        if ($DryRun) {
+            Write-Log "Would remove legacy VIDA binary target $legacy"
+            continue
+        }
+        if (Test-Path -LiteralPath $legacy -PathType Leaf) {
+            Remove-Item -LiteralPath $legacy -Force
+            Write-Log "Removed legacy VIDA binary target: $legacy"
+        }
+    }
+}
+
 function Install-ManagementScript {
     param([string] $Tag)
     $installerDir = Join-Path $Root "installer"
@@ -459,6 +479,7 @@ function Install-Release {
         Install-PathHook
         Set-CurrentRelease $releaseRoot
         Remove-LegacyWrappers
+        Remove-LegacyVidaBinaryTargets
         Cleanup-OldReleases
 
         Write-Log "Installed VIDA $Tag into $releaseRoot"
@@ -527,6 +548,7 @@ function Use-Release {
     Set-CurrentRelease $releaseRoot
     Install-PathHook
     Remove-LegacyWrappers
+    Remove-LegacyVidaBinaryTargets
     Write-Log "Switched active VIDA release to $Tag"
 }
 

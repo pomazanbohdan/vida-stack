@@ -39,8 +39,8 @@ Options:
   --version TAG      Release tag to install. Defaults to latest.
   --archive PATH     Local release archive instead of GitHub download.
   --target TARGET    Release asset target: auto|linux-default|macos-arm64|windows-x86_64.
-  --bin-dir PATH     Directory for launcher scripts. Defaults to ~/.local/bin.
-  --bins LIST        Comma-separated launchers to expose: vida,taskflow,docflow,all.
+  --bin-dir PATH     Legacy launcher directory to clean up. Direct binaries are exposed from <root>/current/bin.
+  --bins LIST        Comma-separated direct binaries to expose: vida,taskflow,docflow,all.
   --root PATH        Install root. Defaults to ~/.local/share/vida-stack.
   --force            Overwrite an already installed release of the same version.
   --dry-run          Print planned actions without changing files.
@@ -66,10 +66,10 @@ print_install_summary() {
   local release_root="$2"
   local current_link="$3"
   local env_file="$4"
-  local launcher_summary
+  local binary_summary
   local action_label="installed"
   local action_emoji="🎉"
-  launcher_summary="$(selected_launcher_paths)"
+  binary_summary="$(selected_launcher_paths)"
 
   case "$COMMAND" in
     upgrade)
@@ -87,7 +87,7 @@ print_install_summary() {
 ${action_emoji} VIDA ${version} ${action_label} successfully
 ✅ Active release: ${current_link}
 📦 Release root: ${release_root}
-🧭 Launchers: ${launcher_summary}
+🧭 Direct binaries: ${binary_summary}
 🔧 Shell env: ${env_file}
 🩹 Active patch line: ${version}
 
@@ -385,7 +385,7 @@ normalize_install_bins() {
         ;;
     esac
   done
-  ((${#normalized[@]} > 0)) || fail "--bins must include at least one launcher"
+  ((${#normalized[@]} > 0)) || fail "--bins must include at least one binary"
   INSTALL_BINS="$(IFS=','; printf '%s' "${normalized[*]}")"
 }
 
@@ -401,7 +401,7 @@ selected_launcher_paths() {
   local values=()
   for launcher in vida taskflow docflow; do
     if install_bin_selected "$launcher"; then
-      values+=("${BIN_DIR}/${launcher}")
+      values+=("${INSTALL_ROOT}/current/bin/${launcher}")
     fi
   done
   (IFS=', '; printf '%s' "${values[*]}")
@@ -559,8 +559,8 @@ write_env_file() {
 export VIDA_HOME="\${VIDA_HOME:-$INSTALL_ROOT}"
 export VIDA_ROOT="\${VIDA_ROOT:-\$VIDA_HOME/current}"
 case ":\$PATH:" in
-  *:"$BIN_DIR":*) ;;
-  *) export PATH="$BIN_DIR:\$PATH" ;;
+  *:"\$VIDA_ROOT/bin":*) ;;
+  *) export PATH="\$VIDA_ROOT/bin:\$PATH" ;;
 esac
 EOF
 }
@@ -621,88 +621,21 @@ install_profile_hooks() {
   printf '  %s\n' "$source_line"
 }
 
-write_wrapper() {
-  local path="$1"
-  local body="$2"
-  mkdir -p "$(dirname "$path")"
-  cat > "$path" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-$body
-EOF
-  chmod +x "$path"
-}
-
-write_standalone_wrapper() {
-  local launcher="$1"
-  write_wrapper "$BIN_DIR/${launcher}" '
-VIDA_HOME="'"$INSTALL_ROOT"'"
-VIDA_ROOT="$VIDA_HOME/current"
-RUNTIME_BIN="$VIDA_ROOT/bin/'"$launcher"'"
-
-if [[ -x "$RUNTIME_BIN" ]]; then
-  exec "$RUNTIME_BIN" "$@"
-else
-  cat <<'\''USAGE'\''
-Standalone runtime binary is missing.
-USAGE
-fi
-'
-}
-
-install_wrappers() {
-  if install_bin_selected vida; then
-    write_wrapper "$BIN_DIR/vida" '
-VIDA_HOME="'"$INSTALL_ROOT"'"
-VIDA_ROOT="$VIDA_HOME/current"
-RUNTIME_BIN="$VIDA_ROOT/bin/vida"
-
-runtime_usage() {
-  if [[ -x "$RUNTIME_BIN" ]]; then
-    "$RUNTIME_BIN" --help
-  else
-    cat <<'\''USAGE'\''
-VIDA runtime binary is missing.
-USAGE
-  fi
-}
-
-usage() {
-  runtime_usage
-  cat <<'\''USAGE'\''
-
-Installer management:
-  vida upgrade [--version TAG]
-  vida use --version TAG
-  vida install [--version TAG]
-  vida root
-USAGE
-}
-
-sub="${1:-help}"
-case "$sub" in
-  upgrade|install|use)
-    exec "$VIDA_HOME/installer/install.sh" "$sub" --root "$VIDA_HOME" --bin-dir "'"$BIN_DIR"'" "${@:2}"
-    ;;
-  root)
-    printf "%s\n" "$VIDA_ROOT"
-    ;;
-  help|--help|-h)
-    usage
-    ;;
-  *)
-    exec "$RUNTIME_BIN" "$@"
-    ;;
-esac
-'
-  fi
-
-  if install_bin_selected taskflow; then
-    write_standalone_wrapper taskflow
-  fi
-  if install_bin_selected docflow; then
-    write_standalone_wrapper docflow
-  fi
+remove_legacy_wrappers() {
+  for launcher in vida taskflow docflow; do
+    if ! install_bin_selected "$launcher"; then
+      continue
+    fi
+    local wrapper="${BIN_DIR}/${launcher}"
+    if [[ "$DRY_RUN" == "yes" ]]; then
+      log "Would remove legacy launcher wrapper ${wrapper}"
+      continue
+    fi
+    if [[ -f "$wrapper" ]]; then
+      rm -f "$wrapper"
+      log "Removed legacy launcher wrapper: ${wrapper}"
+    fi
+  done
 }
 
 prepare_python_env() {
@@ -907,7 +840,7 @@ install_release() {
     log "Would extract archive into temporary directory"
     log "Would install release into ${release_root}"
     log "Would activate ${current_link}"
-    log "Would install launchers: $(selected_launcher_paths)"
+    log "Would expose direct runtime binaries: $(selected_launcher_paths)"
     log "Would update shell hooks for bash/zsh"
     return 0
   fi
@@ -931,7 +864,7 @@ install_release() {
   ensure_runtime_config_scaffold "$release_root"
   write_env_file "$env_file"
   install_profile_hooks "$env_file"
-  install_wrappers
+  remove_legacy_wrappers
   bootstrap_protocol_binding "$release_root"
   activate_release "$release_root" "$current_link"
   cleanup_old_releases "$releases_dir"
@@ -939,7 +872,7 @@ install_release() {
   log "Installed VIDA ${version} into ${release_root}"
   log "Active release: ${current_link}"
   log "Release target: ${TARGET_ASSET_LABEL}"
-  log "Launchers: $(selected_launcher_paths)"
+  log "Direct binaries: $(selected_launcher_paths)"
   print_install_summary "$version" "$release_root" "$current_link" "$env_file"
 }
 
@@ -948,13 +881,13 @@ doctor() {
   local missing=0
   [[ -L "$current_link" || -d "$current_link" ]] || { log "Missing active release link: $current_link"; missing=1; }
   if install_bin_selected vida; then
-    [[ -x "${BIN_DIR}/vida" ]] || { log "Missing launcher: ${BIN_DIR}/vida"; missing=1; }
+    [[ -x "${current_link}/bin/vida" ]] || { log "Missing direct runtime binary: ${current_link}/bin/vida"; missing=1; }
   fi
   if install_bin_selected taskflow; then
-    [[ -x "${BIN_DIR}/taskflow" ]] || { log "Missing launcher: ${BIN_DIR}/taskflow"; missing=1; }
+    [[ -x "${current_link}/bin/taskflow" ]] || { log "Missing direct runtime binary: ${current_link}/bin/taskflow"; missing=1; }
   fi
   if install_bin_selected docflow; then
-    [[ -x "${BIN_DIR}/docflow" ]] || { log "Missing launcher: ${BIN_DIR}/docflow"; missing=1; }
+    [[ -x "${current_link}/bin/docflow" ]] || { log "Missing direct runtime binary: ${current_link}/bin/docflow"; missing=1; }
   fi
   [[ -f "${INSTALL_ROOT}/env.sh" ]] || { log "Missing env file: ${INSTALL_ROOT}/env.sh"; missing=1; }
   [[ -x "${INSTALL_ROOT}/installer/install.sh" ]] || { log "Missing installer management script: ${INSTALL_ROOT}/installer/install.sh"; missing=1; }
@@ -981,7 +914,7 @@ use_release() {
   local release_root="${INSTALL_ROOT}/releases/${version}"
   [[ -d "$release_root" ]] || fail "Installed release not found: ${release_root}"
   activate_release "$release_root" "${INSTALL_ROOT}/current"
-  install_wrappers
+  remove_legacy_wrappers
   log "Switched active VIDA release to ${version}"
 }
 

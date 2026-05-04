@@ -268,6 +268,16 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 receipt,
                             )
                         });
+                let task_store = match store.task_store_summary().await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("Failed to read task store summary: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+                let no_active_taskflow_work = task_store.open_count == 0
+                    && task_store.in_progress_count == 0
+                    && task_store.ready_count == 0;
                 let explicit_continuation_binding = match store
                     .latest_explicit_run_graph_continuation_binding()
                     .await
@@ -279,7 +289,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                 };
                 let continuation_binding =
-                    crate::continuation_binding_summary::build_continuation_binding_summary(
+                    crate::continuation_binding_summary::build_continuation_binding_summary_with_idle_policy(
                         explicit_continuation_binding.as_ref(),
                         latest_run_graph_status.as_ref(),
                         latest_run_graph_recovery.as_ref(),
@@ -292,6 +302,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             || latest_run_graph_dispatch_receipt_signal_ambiguous
                             || latest_run_graph_dispatch_receipt_summary_inconsistent
                             || latest_run_graph_dispatch_receipt_checkpoint_leakage,
+                        no_active_taskflow_work,
                     );
                 let continuation_binding_ambiguous =
                     continuation_binding["status"].as_str() == Some("ambiguous");

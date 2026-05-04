@@ -333,7 +333,7 @@ Proven command:
 
 1. `bash scripts/build-release.sh`
 2. `cargo build -p vida --release`
-3. `install -m 755 target/release/vida ~/.local/bin/vida`
+3. `install -D -m 755 target/release/vida ~/.local/share/vida-stack/current/bin/vida`
 4. `cargo test -p vida -- --nocapture`
 
 Proven release outputs:
@@ -342,7 +342,7 @@ Proven release outputs:
 2. `dist/vida-stack-v0.2.1.zip`
 3. `dist/vida-install.sh`
 4. `dist/vida-stack-v0.2.1.manifest.json`
-5. `~/.local/bin/vida` may be refreshed from `target/release/vida` for the active local system launcher
+5. `~/.local/share/vida-stack/current/bin/vida` may be refreshed from `target/release/vida` for the active local system launcher
 
 Current release-manifest contract:
 

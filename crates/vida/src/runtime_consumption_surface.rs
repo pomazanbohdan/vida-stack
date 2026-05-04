@@ -78,9 +78,8 @@ fn installed_launcher_binary_evidence(
     active_executable_path: &Path,
 ) -> Result<Vec<LauncherBinaryEvidence>, String> {
     let mut candidates = Vec::new();
-    if let Some(home) = launcher_home_dir() {
-        push_launcher_home_candidates(&mut candidates, &home, ".local");
-        push_launcher_home_candidates(&mut candidates, &home, ".cargo");
+    if let Some(root) = canonical_vida_install_root() {
+        push_launcher_bin_candidates(&mut candidates, &root.join("current").join("bin"));
     }
     candidates.push(active_executable_path.to_path_buf());
 
@@ -108,6 +107,26 @@ fn installed_launcher_binary_evidence(
     Ok(evidence)
 }
 
+fn canonical_vida_install_root() -> Option<PathBuf> {
+    std::env::var_os("VIDA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            #[cfg(windows)]
+            {
+                if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+                    return Some(PathBuf::from(local_app_data).join("vida-stack"));
+                }
+            }
+            launcher_home_dir().map(|home| {
+                if cfg!(windows) {
+                    home.join("AppData").join("Local").join("vida-stack")
+                } else {
+                    home.join(".local").join("share").join("vida-stack")
+                }
+            })
+        })
+}
+
 fn launcher_home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -121,9 +140,9 @@ fn launcher_home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn push_launcher_home_candidates(candidates: &mut Vec<PathBuf>, home: &Path, bin_root: &str) {
+fn push_launcher_bin_candidates(candidates: &mut Vec<PathBuf>, bin_root: &Path) {
     for file_name in launcher_vida_file_names() {
-        candidates.push(home.join(bin_root).join("bin").join(file_name));
+        candidates.push(bin_root.join(file_name));
     }
 }
 

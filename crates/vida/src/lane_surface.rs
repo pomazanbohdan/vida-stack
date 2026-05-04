@@ -824,7 +824,8 @@ fn lane_mutation_status_guard(
 }
 
 fn read_lane_packet(path: &str) -> Result<serde_json::Value, String> {
-    let raw = std::fs::read_to_string(path)
+    let normalized_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(path);
+    let raw = std::fs::read_to_string(&normalized_path)
         .map_err(|error| format!("Failed to read persisted lane packet `{path}`: {error}"))?;
     serde_json::from_str(&raw)
         .map_err(|error| format!("Failed to decode persisted lane packet `{path}`: {error}"))
