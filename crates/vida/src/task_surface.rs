@@ -2013,7 +2013,6 @@ fn task_close_git_automation_receipt(
     task: Option<&state_store::TaskRecord>,
 ) -> TaskCloseGitAutomationReceipt {
     let explicit_files = task_close_commit_file_strings(command, task);
-    let has_explicit_commit_files = !command.commit_files.is_empty();
     let commit_message = command.commit_message.clone().or_else(|| {
         command
             .commit
@@ -2058,17 +2057,13 @@ fn task_close_git_automation_receipt(
                     .into_iter()
                     .filter(|path| !path_is_explicitly_owned(path, &explicit_files))
                     .collect();
-                if !has_explicit_commit_files {
-                    if !ambiguous.is_empty() {
-                        return blocked_task_close_git_receipt(
-                            explicit_files,
-                            commit_message,
-                            "dirty_ownership_ambiguous",
-                            "Clean unrelated dirty files or include only the owned paths with repeated `--commit-file` values.",
-                        );
-                    }
-                } else {
-                    ignored_dirty_files = ambiguous;
+                if !ambiguous.is_empty() {
+                    return blocked_task_close_git_receipt(
+                        explicit_files,
+                        commit_message,
+                        "dirty_ownership_ambiguous",
+                        "Clean unrelated dirty files or include only the owned paths with repeated `--commit-file` values.",
+                    );
                 }
             }
             Err(_) => {
