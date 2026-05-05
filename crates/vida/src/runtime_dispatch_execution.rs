@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::os::unix::process::{CommandExt, ExitStatusExt};
+#[cfg(windows)]
+use std::os::windows::process::ExitStatusExt;
 
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
@@ -294,6 +296,10 @@ fn execute_wrapped_command(
                 if Instant::now() >= deadline {
                     #[cfg(unix)]
                     signal_process_group(process_group_id, libc::SIGTERM)?;
+                    #[cfg(not(unix))]
+                    child
+                        .kill()
+                        .map_err(|error| format!("failed to kill timed out process: {error}"))?;
                     timed_out = true;
                     let kill_deadline = Instant::now()
                         + Duration::from_secs(
@@ -339,10 +345,17 @@ fn synthetic_timeout_exit_status() -> ExitStatus {
 
 #[cfg(not(unix))]
 fn synthetic_timeout_exit_status() -> ExitStatus {
-    std::process::Command::new("cmd")
-        .args(["/C", "exit 124"])
-        .status()
-        .expect("synthetic timeout exit status should render on non-unix")
+    synthetic_timeout_exit_status_non_unix()
+}
+
+#[cfg(windows)]
+fn synthetic_timeout_exit_status_non_unix() -> ExitStatus {
+    ExitStatus::from_raw(124)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn synthetic_timeout_exit_status_non_unix() -> ExitStatus {
+    panic!("synthetic timeout exit status is unsupported on this platform")
 }
 
 async fn execute_wrapped_command_async(
