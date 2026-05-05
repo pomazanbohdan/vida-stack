@@ -364,10 +364,13 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
             let has_blocker_keyword = blocker_keywords
                 .iter()
                 .any(|keyword| normalized.contains(keyword));
+            let starts_with_blocked_status = blocker_keywords
+                .iter()
+                .any(|keyword| normalized.starts_with(&format!("{keyword}:")));
             let has_meta_keyword = meta_keywords
                 .iter()
                 .any(|keyword| normalized.contains(keyword));
-            if has_blocker_keyword && has_meta_keyword {
+            if has_blocker_keyword && has_meta_keyword && !starts_with_blocked_status {
                 Some(normalized)
             } else {
                 None
@@ -1222,6 +1225,29 @@ mod tests {
         assert_eq!(score, 35);
         assert_eq!(inference["outcome"], "failure");
         assert_eq!(inference["failure_markers"], serde_json::json!(["blocked"]));
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_blocked_prefix_with_meta_keywords() {
+        let reason = "Blocked: cargo test failed";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_approval_prefix_with_meta_keywords() {
+        let reason = "Awaiting_approval: return to operator with proof artifact";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some((
+                "awaiting_approval",
+                crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str()
+            ))
+        );
     }
 
     #[test]
