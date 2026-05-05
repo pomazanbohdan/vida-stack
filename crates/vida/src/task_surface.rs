@@ -4074,16 +4074,22 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
-                    let dependencies =
-                        StateStore::reverse_dependencies_from_rows(&rows, &command.task_id);
-                    print_task_dependencies(
-                        command.render,
-                        "vida task reverse-deps",
-                        &command.task_id,
-                        &dependencies,
-                        command.json,
-                    );
-                    ExitCode::SUCCESS
+                    match StateStore::reverse_dependencies_from_rows(&rows, &command.task_id) {
+                        Ok(dependencies) => {
+                            print_task_dependencies(
+                                command.render,
+                                "vida task reverse-deps",
+                                &command.task_id,
+                                &dependencies,
+                                command.json,
+                            );
+                            ExitCode::SUCCESS
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to read reverse dependencies from snapshot: {error}");
+                            ExitCode::from(1)
+                        }
+                    }
                 }
                 Err(error) => {
                     eprintln!("Failed to open authoritative state store: {error}");
