@@ -1,5 +1,7 @@
 use super::*;
 use serde_json::Deserializer;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 impl StateStore {
     pub(crate) fn canonical_task_snapshot_path_for_state_root(state_root: &Path) -> PathBuf {
@@ -419,8 +421,31 @@ impl StateStore {
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(target_path, body)?;
+        Self::write_jsonl_export_file(target_path, body.as_bytes())?;
         Ok(self.all_tasks().await?.len())
+    }
+
+    fn write_jsonl_export_file(target_path: &Path, body: &[u8]) -> Result<(), StateStoreError> {
+        if fs::symlink_metadata(target_path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "refusing to write task export to symlink path: {}",
+                    target_path.display()
+                ),
+            });
+        }
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut file = options.open(target_path)?;
+        std::io::Write::write_all(&mut file, body)?;
+        Ok(())
     }
 
     pub async fn list_tasks(
@@ -1327,6 +1352,8 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+    #[cfg(unix)]
+    use std::{io::ErrorKind, os::unix::fs::symlink};
 
     #[tokio::test]
     async fn close_task_refreshes_run_graph_continuation_binding_to_closure() {
@@ -1534,6 +1561,38 @@ mod tests {
         assert!(checkpoint_record.is_none());
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_writer_rejects_symlink_target() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-task-export-symlink-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let exports_dir = root.join(".vida/exports");
+        fs::create_dir_all(&exports_dir).expect("create exports dir");
+        let target_path = exports_dir.join("tasks.snapshot.jsonl");
+        let victim_path = root.join("victim");
+        fs::write(&victim_path, "original").expect("write victim");
+        symlink(&victim_path, &target_path).expect("create symlink");
+
+        let error = StateStore::write_jsonl_export_file(&target_path, br#"{"id":"T-1"}"#)
+            .expect_err("symlink write should be rejected");
+        assert!(
+            matches!(
+                error,
+                StateStoreError::InvalidTaskRecord { reason }
+                if reason.contains("refusing to write task export to symlink path")
+            ) || matches!(error, StateStoreError::Io(io_error) if io_error.kind() == ErrorKind::FilesystemLoop)
+        );
+        let victim_after = fs::read_to_string(&victim_path).expect("read victim");
+        assert_eq!(victim_after, "original");
     }
 
     #[tokio::test]
