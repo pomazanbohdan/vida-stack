@@ -74,7 +74,11 @@ pub(super) fn state_schema_document() -> String {
 
 impl StateStore {
     pub(crate) fn error_is_lock_contention(error: &StateStoreError) -> bool {
-        Self::message_is_lock_contention(&error.to_string())
+        match error {
+            StateStoreError::Io(io_error) => AuthoritativeOpenGuard::is_lock_contention_error(io_error),
+            StateStoreError::Db(db_error) => Self::message_is_lock_contention(&db_error.to_string()),
+            _ => false,
+        }
     }
 
     pub(crate) fn message_is_lock_contention(message: &str) -> bool {
@@ -217,6 +221,7 @@ impl StateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[tokio::test]
@@ -277,5 +282,11 @@ mod tests {
             .expect("second read-only task should not panic");
         assert!(second_result.is_ok());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn error_is_lock_contention_ignores_non_lock_errors() {
+        let error = StateStoreError::MissingStateDir(PathBuf::from("/tmp/vida-lock-missing-state"));
+        assert!(!StateStore::error_is_lock_contention(&error));
     }
 }
