@@ -670,6 +670,42 @@ ensure_runtime_config_scaffold() {
   cp "$template_path" "$target_config"
 }
 
+ensure_feature_template_scaffold() {
+  local release_root="$1"
+  local legacy_target="$release_root/docs/product/spec/templates/feature-design-document.template.md"
+  local framework_target="$release_root/docs/framework/templates/feature-design-document.template.md"
+  local asset_target="$release_root/install/assets/feature-design-document.template.md"
+  local template_path=""
+
+  if [[ -f "$legacy_target" && -f "$framework_target" && -f "$asset_target" ]]; then
+    return 0
+  fi
+
+  for candidate in "$asset_target" "$framework_target" "$legacy_target"; do
+    if [[ -f "$candidate" ]]; then
+      template_path="$candidate"
+      break
+    fi
+  done
+
+  if [[ -z "$template_path" ]]; then
+    fail "Missing feature design template: expected ${asset_target}, ${framework_target}, or ${legacy_target}"
+  fi
+
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    log "Would scaffold feature design template surfaces from ${template_path}"
+    return 0
+  fi
+
+  for target in "$asset_target" "$framework_target" "$legacy_target"; do
+    if [[ -f "$target" ]]; then
+      continue
+    fi
+    mkdir -p "$(dirname "$target")"
+    cp "$template_path" "$target"
+  done
+}
+
 copy_project_file() {
   local source_path="$1"
   local target_path="$2"
@@ -725,6 +761,7 @@ bootstrap_current_project() {
   copy_project_tree "$release_root/vida" "$project_root/vida" "framework protocol tree"
   copy_project_tree "$release_root/.codex" "$project_root/.codex" "project-local Codex configuration"
   copy_project_file "$template_path" "$project_root/vida.config.yaml" "project runtime config scaffold"
+  copy_project_file "$release_root/install/assets/feature-design-document.template.md" "$project_root/docs/product/spec/templates/feature-design-document.template.md" "feature design template"
 
   if [[ "$DRY_RUN" != "yes" ]]; then
     print_project_init_summary "$project_root"
@@ -863,6 +900,7 @@ install_release() {
   prepare_python_env "$release_root"
   install_management_script "$version" "$installer_dir"
   ensure_runtime_config_scaffold "$release_root"
+  ensure_feature_template_scaffold "$release_root"
   write_env_file "$env_file"
   install_profile_hooks "$env_file"
   remove_legacy_wrappers
@@ -902,6 +940,10 @@ doctor() {
     [[ -f "${current_link}/AGENTS.sidecar.md" ]] || { log "Missing packaged project sidecar scaffold"; missing=1; }
     [[ -f "${current_link}/vida.config.yaml" ]] || { log "Missing scaffolded runtime config: ${current_link}/vida.config.yaml"; missing=1; }
     [[ -f "${current_link}/install/assets/vida.config.yaml.template" ]] || { log "Missing packaged runtime config template: ${current_link}/install/assets/vida.config.yaml.template"; missing=1; }
+    [[ -f "${current_link}/install/assets/feature-design-document.template.md" ]] || { log "Missing packaged feature design template asset: ${current_link}/install/assets/feature-design-document.template.md"; missing=1; }
+    [[ -f "${current_link}/docs/framework/templates/feature-design-document.template.md" ]] || { log "Missing framework feature design template: ${current_link}/docs/framework/templates/feature-design-document.template.md"; missing=1; }
+    [[ -d "${current_link}/vida/config/instructions/bundles/framework-source" ]] || { log "Missing framework-source bundle: ${current_link}/vida/config/instructions/bundles/framework-source"; missing=1; }
+    [[ -d "${current_link}/vida/config/instructions/bundles/framework-memory-source" ]] || { log "Missing framework-memory-source bundle: ${current_link}/vida/config/instructions/bundles/framework-memory-source"; missing=1; }
   fi
 
   if [[ "$missing" -eq 1 ]]; then

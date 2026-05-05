@@ -1846,19 +1846,22 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::execute_wrapped_command;
     use super::{
         agent_lane_dispatch_result, configured_internal_host_activation_parts,
         configured_internal_host_runtime_env, dispatch_packet_prompt,
-        execute_external_agent_lane_dispatch, execute_wrapped_command,
-        external_provider_output_confirms_execution, internal_codex_output_confirms_execution,
-        mark_dispatch_result_execution_evidence, parse_external_provider_output,
-        parse_internal_codex_exec_output,
+        execute_external_agent_lane_dispatch, external_provider_output_confirms_execution,
+        internal_codex_output_confirms_execution, mark_dispatch_result_execution_evidence,
+        parse_external_provider_output, parse_internal_codex_exec_output,
         should_render_store_backed_activation_view_for_internal_failure,
         wrap_command_with_optional_timeout, CommandTimeoutWrapper,
     };
     use crate::RuntimeConsumptionLaneSelection;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    #[cfg(unix)]
     use std::process::Stdio;
+    #[cfg(unix)]
     use std::time::{Duration, Instant};
 
     #[test]
@@ -2045,7 +2048,14 @@ mod tests {
             .map(|(_, value)| value.clone())
             .expect("xdg config home");
 
-        assert!(xdg_config_home.contains("/.vida/data/internal-host/qwen/worker-a/config"));
+        let expected = harness
+            .join(".vida")
+            .join("data")
+            .join("internal-host")
+            .join("qwen")
+            .join("worker-a")
+            .join("config");
+        assert_eq!(PathBuf::from(xdg_config_home), expected);
         let _ = std::fs::remove_dir_all(&harness);
     }
 
@@ -2620,6 +2630,7 @@ agent_system:
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn execute_wrapped_command_times_out_when_descendant_keeps_pipe_open() {
         let wrapped = wrap_command_with_optional_timeout(
@@ -2638,6 +2649,7 @@ agent_system:
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 
+    #[cfg(unix)]
     #[test]
     fn execute_wrapped_command_times_out_when_detached_descendant_keeps_pipe_open() {
         let wrapped = wrap_command_with_optional_timeout(
@@ -2985,7 +2997,7 @@ agent_system:
           mode: file_present
           path: "{}"
 "#,
-                missing_auth.display()
+                missing_auth.display().to_string().replace('\\', "/")
             ),
         )
         .expect("write overlay");

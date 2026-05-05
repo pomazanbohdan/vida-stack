@@ -1083,6 +1083,20 @@ fn validate_project_activator_mutation_state_dir(
     Ok(resolved_state_dir)
 }
 
+fn repair_project_activation_assets(project_root: &Path) -> Result<(), String> {
+    let bootstrap_source_root = super::init_surfaces::resolve_init_bootstrap_source_root();
+    let (instruction_source_root, framework_memory_source_root) =
+        super::init_surfaces::default_init_instruction_bundle_source_roots(&bootstrap_source_root);
+    super::init_surfaces::materialize_framework_instruction_bundles(
+        project_root,
+        &instruction_source_root,
+        &framework_memory_source_root,
+    )
+    .and_then(|()| super::init_surfaces::ensure_runtime_home(project_root))
+    .and_then(|()| super::init_surfaces::write_runtime_agent_extension_projections(project_root))
+    .and_then(|()| super::init_surfaces::materialize_project_docs_scaffold(project_root))
+}
+
 pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> ExitCode {
     let project_root = match std::env::current_dir() {
         Ok(path) => path,
@@ -1104,6 +1118,12 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         || args.reasoning_language.is_some()
         || args.documentation_language.is_some()
         || args.todo_protocol_language.is_some();
+    if args.repair {
+        if let Err(error) = repair_project_activation_assets(&project_root) {
+            eprintln!("Project activation repair failed closed before state bootstrap: {error}");
+            return ExitCode::from(1);
+        }
+    }
     let activation_store = if activation_mutation_requested {
         let state_dir = args
             .state_dir
@@ -1244,15 +1264,11 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         }
     }
     if args.repair {
-        if let Err(error) = super::init_surfaces::ensure_runtime_home(&project_root)
-            .and_then(|()| {
-                super::init_surfaces::write_runtime_agent_extension_projections(&project_root)
-            })
-            .and_then(|()| super::init_surfaces::materialize_project_docs_scaffold(&project_root))
-        {
+        if let Err(error) = repair_project_activation_assets(&project_root) {
             eprintln!("Project activation repair failed closed: {error}");
             return ExitCode::from(1);
         }
+        changed_files.push("vida/config/instructions/bundles/**".to_string());
         changed_files.push(".vida/**".to_string());
         changed_files.push("docs/**".to_string());
     }
@@ -1765,10 +1781,9 @@ fn apply_project_activation_answers(
         ),
         (
             project_root.join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE),
-            fs::read_to_string(
-                resolve_init_bootstrap_source_root()
-                    .join("docs/framework/templates/feature-design-document.template.md"),
-            )
+            fs::read_to_string(super::init_surfaces::resolve_feature_design_template_source(
+                &resolve_init_bootstrap_source_root(),
+            )?)
             .map_err(|error| {
                 format!("Failed to read framework feature-design template source: {error}")
             })?,

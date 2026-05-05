@@ -221,15 +221,24 @@ function Ensure-RuntimeConfigScaffold {
 function Ensure-FeatureTemplateScaffold {
     param([string] $ReleaseRoot)
     $legacyTarget = Join-Path $ReleaseRoot "docs\product\spec\templates\feature-design-document.template.md"
+    $frameworkTarget = Join-Path $ReleaseRoot "docs\framework\templates\feature-design-document.template.md"
     $assetTarget = Join-Path $ReleaseRoot "install\assets\feature-design-document.template.md"
-    if ((Test-Path -LiteralPath $legacyTarget -PathType Leaf) -and (Test-Path -LiteralPath $assetTarget -PathType Leaf)) {
+    if ((Test-Path -LiteralPath $legacyTarget -PathType Leaf) -and (Test-Path -LiteralPath $frameworkTarget -PathType Leaf) -and (Test-Path -LiteralPath $assetTarget -PathType Leaf)) {
         return
     }
 
     $templateSource = ""
     if (Test-Path -LiteralPath $assetTarget -PathType Leaf) {
         $templateSource = $assetTarget
+    } elseif (Test-Path -LiteralPath $frameworkTarget -PathType Leaf) {
+        $templateSource = $frameworkTarget
+    } elseif (Test-Path -LiteralPath $legacyTarget -PathType Leaf) {
+        $templateSource = $legacyTarget
     } elseif ($PSCommandPath) {
+        $candidate = Join-Path ([System.IO.Path]::GetDirectoryName($PSCommandPath)) "..\docs\framework\templates\feature-design-document.template.md"
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $templateSource = [System.IO.Path]::GetFullPath($candidate) }
+    }
+    if (-not $templateSource -and $PSCommandPath) {
         $candidate = Join-Path ([System.IO.Path]::GetDirectoryName($PSCommandPath)) "..\docs\product\spec\templates\feature-design-document.template.md"
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { $templateSource = [System.IO.Path]::GetFullPath($candidate) }
     }
@@ -244,7 +253,7 @@ function Ensure-FeatureTemplateScaffold {
         $templateSource = $tempTemplate
     }
 
-    foreach ($target in @($assetTarget, $legacyTarget)) {
+    foreach ($target in @($assetTarget, $frameworkTarget, $legacyTarget)) {
         if (Test-Path -LiteralPath $target -PathType Leaf) { continue }
         if ($DryRun) {
             Write-Log "Would scaffold feature design template into $target"
@@ -531,7 +540,7 @@ function Invoke-Doctor {
                 $missing = $true
             }
         }
-        foreach ($path in @(".codex\config.toml", "AGENTS.sidecar.md", "vida.config.yaml", "install\assets\vida.config.yaml.template")) {
+        foreach ($path in @(".codex\config.toml", "AGENTS.sidecar.md", "vida.config.yaml", "install\assets\vida.config.yaml.template", "install\assets\feature-design-document.template.md", "docs\framework\templates\feature-design-document.template.md", "vida\config\instructions\bundles\framework-source", "vida\config\instructions\bundles\framework-memory-source")) {
             $candidate = Join-Path $current $path
             if (-not (Test-Path -LiteralPath $candidate)) {
                 Write-Log "Missing packaged surface: $candidate"

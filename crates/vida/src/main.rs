@@ -363,7 +363,14 @@ mod tests {
         assert!(harness.path().join(".vida/receipts").is_dir());
         assert!(harness.path().join(".vida/runtime").is_dir());
         assert!(harness.path().join(".vida/scratchpad").is_dir());
-        assert!(!harness.path().join("vida").exists());
+        assert!(harness
+            .path()
+            .join("vida/config/instructions/bundles/framework-source")
+            .is_dir());
+        assert!(harness
+            .path()
+            .join("vida/config/instructions/bundles/framework-memory-source")
+            .is_dir());
     }
 
     #[test]

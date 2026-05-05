@@ -17,6 +17,7 @@ pub(crate) struct ReleaseInstallReceipt {
     pub blocker_codes: Vec<String>,
     pub next_actions: Vec<String>,
     pub build: ReleaseBuildReceipt,
+    pub asset_update: ReleaseAssetUpdateReceipt,
     pub install_layout: Option<ReleaseInstallLayout>,
     pub source_binary_path: String,
     pub source_binary_fingerprint: Option<String>,
@@ -32,6 +33,12 @@ pub(crate) struct ReleaseBuildReceipt {
     pub skipped: bool,
     pub command: Option<Vec<String>>,
     pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct ReleaseAssetUpdateReceipt {
+    pub status: String,
+    pub refreshed_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -225,13 +232,59 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         });
     }
 
+    let asset_update = if installed_targets
+        .iter()
+        .any(|target| target.target == "current")
+    {
+        let current_root = match install_layout.as_ref() {
+            Some(layout) => PathBuf::from(&layout.current_root),
+            None => {
+                return blocked_receipt(
+                    requested_target,
+                    source_binary_path,
+                    build,
+                    BlockedRelease {
+                        blocker_code: "release_asset_materialization_failed",
+                        next_action:
+                            "Resolve the current install layout and rerun `vida release install --json`."
+                                .to_string(),
+                        io_error: None,
+                    },
+                );
+            }
+        };
+        match materialize_release_runtime_assets(&current_root) {
+            Ok(update) => update,
+            Err(io_error) => {
+                return blocked_receipt(
+                    requested_target,
+                    source_binary_path,
+                    build,
+                    BlockedRelease {
+                        blocker_code: "release_asset_materialization_failed",
+                        next_action: io_error.next_action_hint.clone(),
+                        io_error: Some(io_error),
+                    },
+                );
+            }
+        }
+    } else {
+        ReleaseAssetUpdateReceipt {
+            status: "skipped_non_current_target".to_string(),
+            refreshed_paths: Vec::new(),
+        }
+    };
+
     ReleaseInstallReceipt {
         status: "pass".to_string(),
         blocker_codes: Vec::new(),
         next_actions: vec![
             "Run `vida --help` from a new shell and verify the expected binary is first on PATH."
                 .to_string(),
+            "Run `vida init` in downstream projects to refresh framework-owned project assets."
+                .to_string(),
         ],
+        asset_update,
         build,
         install_layout,
         source_binary_path,
@@ -307,6 +360,10 @@ fn blocked_receipt(
         blocker_codes: vec![blocked.blocker_code.to_string()],
         next_actions: vec![blocked.next_action],
         build,
+        asset_update: ReleaseAssetUpdateReceipt {
+            status: "not_started".to_string(),
+            refreshed_paths: Vec::new(),
+        },
         install_layout: None,
         source_binary_path,
         source_binary_fingerprint: None,
@@ -321,6 +378,148 @@ fn default_source_binary_path() -> PathBuf {
     PathBuf::from("target")
         .join("release")
         .join(vida_binary_file_name())
+}
+
+fn release_asset_source_root() -> PathBuf {
+    let repo_root = crate::repo_runtime_root();
+    if crate::init_surfaces::looks_like_init_bootstrap_source_root(&repo_root) {
+        return repo_root;
+    }
+    crate::init_surfaces::resolve_init_bootstrap_source_root()
+}
+
+fn materialize_release_runtime_assets(
+    current_root: &Path,
+) -> Result<ReleaseAssetUpdateReceipt, ReleaseIoErrorDetail> {
+    let source_root = release_asset_source_root();
+    let mut refreshed_paths = Vec::new();
+
+    copy_release_tree_replace(
+        &source_root.join("vida/config"),
+        &current_root.join("vida/config"),
+        &mut refreshed_paths,
+        "vida/config",
+    )?;
+    if source_root.join(".codex").is_dir() {
+        copy_release_tree_replace(
+            &source_root.join(".codex"),
+            &current_root.join(".codex"),
+            &mut refreshed_paths,
+            ".codex",
+        )?;
+    }
+    if source_root.join("install/assets").is_dir() {
+        copy_release_tree_replace(
+            &source_root.join("install/assets"),
+            &current_root.join("install/assets"),
+            &mut refreshed_paths,
+            "install/assets",
+        )?;
+    }
+    if source_root.join("docs/framework/templates").is_dir() {
+        copy_release_tree_replace(
+            &source_root.join("docs/framework/templates"),
+            &current_root.join("docs/framework/templates"),
+            &mut refreshed_paths,
+            "docs/framework/templates",
+        )?;
+    }
+    if source_root.join("docs/product/spec/templates").is_dir() {
+        copy_release_tree_replace(
+            &source_root.join("docs/product/spec/templates"),
+            &current_root.join("docs/product/spec/templates"),
+            &mut refreshed_paths,
+            "docs/product/spec/templates",
+        )?;
+    }
+
+    copy_release_file_replace(
+        &crate::init_surfaces::resolve_init_agents_source(&source_root)
+            .map_err(|error| release_asset_error("resolve_agents_source", current_root, error))?,
+        &current_root.join("AGENTS.md"),
+        &mut refreshed_paths,
+        "AGENTS.md",
+    )?;
+    copy_release_file_replace(
+        &crate::init_surfaces::resolve_init_sidecar_source(&source_root)
+            .map_err(|error| release_asset_error("resolve_sidecar_source", current_root, error))?,
+        &current_root.join("AGENTS.sidecar.md"),
+        &mut refreshed_paths,
+        "AGENTS.sidecar.md",
+    )?;
+    let config_template =
+        crate::init_surfaces::resolve_init_config_template_source(&source_root)
+            .map_err(|error| release_asset_error("resolve_config_template", current_root, error))?;
+    copy_release_file_replace(
+        &config_template,
+        &current_root.join("install/assets/vida.config.yaml.template"),
+        &mut refreshed_paths,
+        "install/assets/vida.config.yaml.template",
+    )?;
+    if !current_root.join("vida.config.yaml").exists() {
+        copy_release_file_replace(
+            &config_template,
+            &current_root.join("vida.config.yaml"),
+            &mut refreshed_paths,
+            "vida.config.yaml",
+        )?;
+    }
+    copy_release_file_replace(
+        &crate::init_surfaces::resolve_feature_design_template_source(&source_root).map_err(
+            |error| release_asset_error("resolve_feature_template", current_root, error),
+        )?,
+        &current_root.join("install/assets/feature-design-document.template.md"),
+        &mut refreshed_paths,
+        "install/assets/feature-design-document.template.md",
+    )?;
+
+    refreshed_paths.sort();
+    refreshed_paths.dedup();
+    Ok(ReleaseAssetUpdateReceipt {
+        status: "refreshed".to_string(),
+        refreshed_paths,
+    })
+}
+
+fn copy_release_tree_replace(
+    source_root: &Path,
+    target_root: &Path,
+    refreshed_paths: &mut Vec<String>,
+    label: &str,
+) -> Result<(), ReleaseIoErrorDetail> {
+    crate::init_surfaces::copy_tree_replace(source_root, target_root)
+        .map_err(|error| release_asset_error("copy_tree", target_root, error))?;
+    refreshed_paths.push(label.to_string());
+    Ok(())
+}
+
+fn copy_release_file_replace(
+    source: &Path,
+    target: &Path,
+    refreshed_paths: &mut Vec<String>,
+    label: &str,
+) -> Result<(), ReleaseIoErrorDetail> {
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| io_error_detail("create_dir", Some(parent), None, &error))?;
+    }
+    fs::copy(source, target)
+        .map_err(|error| io_error_detail("copy", Some(target), None, &error))?;
+    refreshed_paths.push(label.to_string());
+    Ok(())
+}
+
+fn release_asset_error(
+    operation: &'static str,
+    target_path: &Path,
+    error: String,
+) -> ReleaseIoErrorDetail {
+    synthetic_io_error_detail(
+        operation,
+        Some(target_path),
+        None,
+        &format!("{error}. Refresh release runtime assets from the source repository."),
+    )
 }
 
 fn install_target_paths(
@@ -706,6 +905,20 @@ mod tests {
         assert_eq!(receipt.status, "pass");
         assert_eq!(receipt.build.status, "skipped");
         assert_eq!(receipt.io_error, None);
+        assert_eq!(receipt.asset_update.status, "refreshed");
+        assert!(receipt
+            .asset_update
+            .refreshed_paths
+            .iter()
+            .any(|path| path == "vida/config"));
+        assert!(harness
+            .path()
+            .join("install-root/current/vida/config/instructions/bundles/framework-source")
+            .is_dir());
+        assert!(harness
+            .path()
+            .join("install-root/current/install/assets/feature-design-document.template.md")
+            .is_file());
         assert_eq!(receipt.installed_targets.len(), 1);
         assert_eq!(receipt.installed_targets[0].target, "current");
         assert_eq!(
