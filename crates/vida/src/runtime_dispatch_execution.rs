@@ -23,7 +23,7 @@ fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> &str {
 fn dispatch_target_requires_strict_admissibility(dispatch_target: &str) -> bool {
     matches!(
         canonical_dispatch_target_for_admissibility(dispatch_target),
-        "implementation"
+        "implementation" | "architecture"
     )
 }
 
@@ -2825,6 +2825,29 @@ agent_system:
                 "implementer"
             ),
             "implementer lane should fail closed when canonical implementation key is absent"
+        );
+    }
+
+    #[test]
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_execution_preparation_when_canonical_lane_key_missing(
+    ) {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "hermes_cli",
+                    "lane_admissibility": {
+                        "execution_preparation": false
+                    }
+                }
+            ]
+        });
+        assert!(
+            !super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "hermes_cli",
+                "execution_preparation"
+            ),
+            "execution_preparation lane should fail closed when canonical architecture key is absent"
         );
     }
 
