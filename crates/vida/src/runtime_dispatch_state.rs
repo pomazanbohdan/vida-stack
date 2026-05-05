@@ -3174,12 +3174,32 @@ async fn tracked_implementer_task_closed(
         .unwrap_or(false)
 }
 
+const TRACKED_DESIGN_DOC_MAX_BYTES: u64 = 256 * 1024;
+
 fn tracked_design_doc_finalized(role_selection: &RuntimeConsumptionLaneSelection) -> bool {
     let Some(path) = tracked_design_doc_path(role_selection) else {
         return false;
     };
-    std::fs::read_to_string(path)
-        .map(|contents| contents.contains("Status: `approved`"))
+
+    let resolved_path = normalize_persisted_runtime_path(path);
+
+    let metadata = match std::fs::symlink_metadata(&resolved_path) {
+        Ok(metadata) => metadata,
+        Err(_) => return false,
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    if metadata.len() > TRACKED_DESIGN_DOC_MAX_BYTES {
+        return false;
+    }
+
+    std::fs::read_to_string(&resolved_path)
+        .map(|contents| {
+            contents.lines().any(|line| {
+                line.trim().eq_ignore_ascii_case("Status: `approved`")
+            })
+        })
         .unwrap_or(false)
 }
 
