@@ -2979,7 +2979,10 @@ fn build_taskflow_graph_explain_payload(
         } else {
             serde_json::json!({
                 "surface": "vida task deps",
-                "command": format!("vida task deps {} --json", candidate.task.id),
+                "command": format!(
+                    "vida task deps {} --json",
+                    crate::shell_quote(&candidate.task.id)
+                ),
                 "reason": "task is blocked by open graph dependencies"
             })
         }
@@ -5533,6 +5536,31 @@ mod tests {
         assert_eq!(
             blocked_payload["next_lawful_action"]["surface"],
             "vida task deps"
+        );
+        assert_eq!(
+            blocked_payload["next_lawful_action"]["command"],
+            "vida task deps blocked --json"
+        );
+
+        let malicious = task("blocked; touch /tmp/pwn #", "mal", "open", 4, &[], Vec::new());
+        let projection_malicious = TaskSchedulingProjection {
+            current_task_id: None,
+            ready: vec![],
+            blocked: vec![scheduling_candidate(
+                malicious,
+                false,
+                false,
+                false,
+                vec![],
+                vec!["graph_blocked"],
+            )],
+            parallel_candidates_after_current: vec![],
+        };
+        let malicious_payload =
+            super::build_taskflow_graph_explain_payload(&projection_malicious, None, None);
+        assert_eq!(
+            malicious_payload["next_lawful_action"]["command"],
+            "vida task deps 'blocked; touch /tmp/pwn #' --json"
         );
 
         let missing_payload =
