@@ -282,15 +282,6 @@ fn execute_wrapped_command(
                 timed_out,
             });
         }
-        if timed_out && status.is_some() {
-            return Ok(ObservedCommandOutput {
-                status: status.expect("status checked above"),
-                stdout: stdout.take().unwrap_or_default(),
-                stderr: stderr.take().unwrap_or_default(),
-                timed_out,
-            });
-        }
-
         match timeout_progress.take() {
             Some(TimeoutProgress::WaitingForDeadline(deadline)) => {
                 if Instant::now() >= deadline {
