@@ -3045,26 +3045,10 @@ pub(crate) fn dispatch_receipt_has_execution_evidence(
 ) -> bool {
     match receipt.dispatch_status.as_str() {
         "executed" => {
-            let dispatch_path_has_evidence =
-                receipt_result_path_has_execution_evidence(receipt.dispatch_result_path.as_deref());
-            let downstream_path_has_evidence = receipt_result_path_has_execution_evidence(
-                receipt.downstream_dispatch_result_path.as_deref(),
-            );
-            if dispatch_path_has_evidence || downstream_path_has_evidence {
-                return true;
-            }
-            receipt
-                .dispatch_result_path
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .is_none()
-                && receipt
-                    .downstream_dispatch_result_path
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .is_none()
+            receipt_result_path_has_execution_evidence(receipt.dispatch_result_path.as_deref())
+                || receipt_result_path_has_execution_evidence(
+                    receipt.downstream_dispatch_result_path.as_deref(),
+                )
         }
         "packet_ready" => {
             receipt.blocker_code.is_none()
