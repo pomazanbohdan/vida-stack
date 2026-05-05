@@ -3532,7 +3532,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         && runtime_binding
                             .map(|binding| !task_exists_for_binding(&tasks, binding))
                             .unwrap_or(false);
-                    let scoped_runtime_binding = if runtime_binding_task_missing_in_explicit_scope {
+                    let pre_scoped_runtime_binding = if runtime_binding_task_missing_in_explicit_scope {
                         None
                     } else {
                         runtime_binding
@@ -3540,7 +3540,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     let projection = match store
                         .scheduling_projection_scoped(
                             command.scope.as_deref(),
-                            scoped_runtime_binding.map(|binding| binding.task_id.as_str()),
+                            pre_scoped_runtime_binding.map(|binding| binding.task_id.as_str()),
                         )
                         .await
                     {
@@ -3549,6 +3549,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             eprintln!("Failed to compute lawful continuation candidates: {error}");
                             return ExitCode::from(1);
                         }
+                    };
+                    let scoped_runtime_binding = match (command.scope.as_deref(), pre_scoped_runtime_binding) {
+                        (Some(_), Some(binding))
+                            if projection.current_task_id.as_deref() != Some(binding.task_id.as_str()) =>
+                        {
+                            None
+                        }
+                        _ => pre_scoped_runtime_binding,
                     };
                     let mut ready_task_candidates = projection
                         .ready
