@@ -451,13 +451,20 @@ fn vida_path_candidate_names() -> Vec<String> {
     }
 }
 
+
+fn path_candidate_is_safe_file(candidate: &Path) -> bool {
+    fs::symlink_metadata(candidate)
+        .map(|metadata| metadata.file_type().is_file())
+        .unwrap_or(false)
+}
+
 fn resolve_vida_from_path_env(path_env: Option<std::ffi::OsString>) -> Option<PathBuf> {
     let path_env = path_env?;
     for dir in std::env::split_paths(&path_env) {
         for file_name in vida_path_candidate_names() {
             let candidate = dir.join(file_name);
-            if candidate.is_file() {
-                return Some(candidate.canonicalize().unwrap_or(candidate));
+            if path_candidate_is_safe_file(&candidate) {
+                return Some(candidate);
             }
         }
     }
@@ -692,12 +699,7 @@ mod tests {
         let resolved =
             resolve_vida_from_path_env(Some(path_env)).expect("path target should resolve");
 
-        assert_eq!(
-            resolved,
-            expected
-                .canonicalize()
-                .expect("expected path target should canonicalize")
-        );
+        assert_eq!(resolved, expected);
     }
 
     #[test]
@@ -817,6 +819,24 @@ mod tests {
     #[test]
     fn release_install_blocks_unresolved_path_target() {
         assert_eq!(resolve_vida_from_path_env(None), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn release_install_path_target_ignores_symlink_entries() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let path_dir = harness.path().join("path-bin");
+        fs::create_dir_all(&path_dir).expect("path dir should write");
+
+        let target_file = harness.path().join("unrelated-file");
+        fs::write(&target_file, b"unrelated").expect("target file should write");
+
+        let symlink_path = path_dir.join(vida_binary_file_name());
+        std::os::unix::fs::symlink(&target_file, &symlink_path).expect("symlink should write");
+
+        let path_env = std::env::join_paths([path_dir]).expect("path env should join");
+
+        assert_eq!(resolve_vida_from_path_env(Some(path_env)), None);
     }
 
     #[test]
