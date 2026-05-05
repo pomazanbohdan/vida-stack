@@ -12563,6 +12563,62 @@ mod tests {
     }
 
     #[test]
+    fn write_runtime_dispatch_result_omits_lane_receipt_for_in_flight_execution() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-executing-dispatch".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/implementer-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        let path = write_runtime_dispatch_result(
+            harness.path(),
+            &receipt,
+            &serde_json::json!({
+                "surface": "vida agent-init",
+                "status": "pass",
+                "execution_state": "executing",
+                "note": "handoff started"
+            }),
+        )
+        .expect("dispatch result should write");
+
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&path).expect("dispatch result should be readable"),
+        )
+        .expect("dispatch result should decode");
+
+        assert_eq!(artifact["artifact_kind"], "runtime_dispatch_result");
+        assert_eq!(artifact["execution_state"], "executing");
+        assert!(artifact.get("lane_execution_receipt_artifact").is_none());
+    }
+
+    #[test]
     fn dispatch_receipt_has_execution_evidence_rejects_activation_view_only_result() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let result_path = harness
@@ -14961,15 +15017,17 @@ fn write_runtime_dispatch_result(
                 serde_json::json!(packet_path),
             );
         }
-        object.insert(
-            "lane_execution_receipt_artifact".to_string(),
-            canonical_lane_execution_receipt_artifact_json(
-                receipt,
-                body,
-                &recorded_at,
-                &result_path_display,
-            ),
-        );
+        if is_terminal_dispatch_execution_state(body) {
+            object.insert(
+                "lane_execution_receipt_artifact".to_string(),
+                canonical_lane_execution_receipt_artifact_json(
+                    receipt,
+                    body,
+                    &recorded_at,
+                    &result_path_display,
+                ),
+            );
+        }
         let executed_agent_lane = receipt.dispatch_kind == "agent_lane"
             && json_string(body.get("execution_state")).as_deref() == Some("executed")
             && receipt
@@ -15099,6 +15157,13 @@ fn canonical_lane_receipt_carrier_id(
         .or_else(|| receipt.activation_agent_type.clone())
         .or_else(|| receipt.dispatch_surface.clone())
         .unwrap_or_else(|| "taskflow_state_store".to_string())
+}
+
+fn is_terminal_dispatch_execution_state(body: &serde_json::Value) -> bool {
+    matches!(
+        json_string(body.get("execution_state")).as_deref(),
+        Some("executed" | "blocked")
+    )
 }
 
 fn canonical_lane_execution_receipt_artifact_json(
