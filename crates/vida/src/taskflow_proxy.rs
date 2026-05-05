@@ -1704,6 +1704,8 @@ fn build_taskflow_next_decision(
         dispatch,
         terminal_consume_continue_run_id,
     );
+    let active_exception_takeover_continuation =
+        active_exception_takeover_evidence && latest_run_graph_status_blocked;
     let terminal_consume_continue_without_next_unit = latest_run_graph_status
         .zip(terminal_consume_continue_run_id)
         .is_some_and(|(status, run_id)| status.run_id == run_id);
@@ -1715,7 +1717,7 @@ fn build_taskflow_next_decision(
             && !explicit_task_binding_matches_status(explicit_binding, latest_run_graph_status);
     let admissibility_gate = if recovery_holds_active_bound_run {
         "delegated_cycle_runtime_gate".to_string()
-    } else if active_exception_takeover_evidence {
+    } else if active_exception_takeover_continuation {
         "active_exception_takeover_continuation".to_string()
     } else if terminal_consume_continue_without_next_unit {
         "terminal_continue_snapshot_without_next_bounded_unit".to_string()
@@ -1734,7 +1736,7 @@ fn build_taskflow_next_decision(
         ready_head: ready_head.clone(),
         admissible_now: !(recovery_holds_active_bound_run
             || active_exception_takeover_binding
-            || (active_exception_takeover_evidence && latest_run_graph_status_blocked)
+            || active_exception_takeover_continuation
             || terminal_consume_continue_without_next_unit
             || latest_run_graph_status_blocks_admission
             || completed_without_explicit_next_unit),
@@ -1795,7 +1797,7 @@ fn build_taskflow_next_decision(
                     Some(next_action),
                 )
             }
-        } else if active_exception_takeover_evidence {
+        } else if active_exception_takeover_continuation {
             let run_id = latest_run_graph_status
                 .map(|status| status.run_id.as_str())
                 .unwrap_or("<run-id>");
