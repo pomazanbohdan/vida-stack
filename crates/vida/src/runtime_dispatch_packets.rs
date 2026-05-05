@@ -143,12 +143,19 @@ pub(crate) fn tracked_design_doc_owned_paths(tracked_design_doc_path: Option<&st
 pub(crate) fn tracked_design_doc_bounded_file_set_paths(
     tracked_design_doc_path: Option<&str>,
 ) -> Vec<String> {
+    const MAX_TRACKED_DESIGN_DOC_BYTES: u64 = 1_048_576;
     let Some(path) = tracked_design_doc_path
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
         return Vec::new();
     };
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Vec::new();
+    };
+    if !metadata.is_file() || metadata.len() > MAX_TRACKED_DESIGN_DOC_BYTES {
+        return Vec::new();
+    }
     let Ok(contents) = std::fs::read_to_string(path) else {
         return Vec::new();
     };

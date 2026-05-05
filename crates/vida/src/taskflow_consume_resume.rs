@@ -1121,10 +1121,7 @@ fn normalize_runtime_dispatch_packet(packet: &mut serde_json::Value) -> bool {
     else {
         return false;
     };
-    let derived_implementer_owned_paths = derive_implementer_owned_paths(packet);
-    let derived_specification_owned_paths =
-        derive_specification_owned_paths_from_tracked_design_doc(packet);
-    let Some(active_packet) = packet.get_mut(&packet_template_kind) else {
+    let Some(active_packet) = packet.get(&packet_template_kind) else {
         return false;
     };
     if active_packet.is_null() {
@@ -1132,6 +1129,14 @@ fn normalize_runtime_dispatch_packet(packet: &mut serde_json::Value) -> bool {
     }
     let missing_owned_paths = !packet_nonempty_string_array(active_packet, "owned_paths");
     let missing_scope_paths = !packet_has_owned_or_read_only_paths(active_packet);
+    let derived_implementer_owned_paths = missing_owned_paths
+        .then(|| derive_implementer_owned_paths(packet))
+        .flatten();
+    let derived_specification_owned_paths =
+        derive_specification_owned_paths_from_tracked_design_doc(packet);
+    let Some(active_packet) = packet.get_mut(&packet_template_kind) else {
+        return false;
+    };
     let Some(active_packet_object) = active_packet.as_object_mut() else {
         return false;
     };
