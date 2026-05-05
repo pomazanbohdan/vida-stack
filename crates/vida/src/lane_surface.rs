@@ -908,6 +908,43 @@ fn read_lane_packet(path: &str) -> Result<serde_json::Value, String> {
         .map_err(|error| format!("Failed to decode persisted lane packet `{path}`: {error}"))
 }
 
+fn canonicalize_for_lane_packet_validation(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    std::fs::canonicalize(path).map_err(|error| {
+        format!(
+            "Failed to canonicalize lane packet path `{}`: {error}",
+            path.display()
+        )
+    })
+}
+
+fn validate_lane_packet_path(
+    state_root: &std::path::Path,
+    run_id: &str,
+    packet_path: &str,
+    takeover_active: bool,
+) -> Result<std::path::PathBuf, String> {
+    let normalized = crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
+    let canonical_packet_path = canonicalize_for_lane_packet_validation(&normalized)?;
+    let allowed_downstream_dir = canonicalize_for_lane_packet_validation(
+        &state_root.join("runtime-consumption/downstream-dispatch-packets"),
+    )?;
+    if canonical_packet_path.starts_with(&allowed_downstream_dir) {
+        return Ok(canonical_packet_path);
+    }
+    if takeover_active {
+        let allowed_dispatch_dir = canonicalize_for_lane_packet_validation(
+            &state_root.join("runtime-consumption/dispatch-packets"),
+        )?;
+        if canonical_packet_path.starts_with(&allowed_dispatch_dir) {
+            return Ok(canonical_packet_path);
+        }
+    }
+    Err(format!(
+        "Lane `{run_id}` packet path `{}` is outside VIDA runtime packet directories.",
+        canonical_packet_path.display()
+    ))
+}
+
 fn write_lane_packet(path: &str, packet: &serde_json::Value) -> Result<(), String> {
     let encoded = serde_json::to_string_pretty(packet)
         .map_err(|error| format!("Failed to encode persisted lane packet `{path}`: {error}"))?;
@@ -1097,13 +1134,32 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 );
                 return ExitCode::from(2);
             };
-            let mut packet = match read_lane_packet(&packet_path) {
+            let validated_packet_path = match validate_lane_packet_path(
+                store.root(),
+                run_id,
+                &packet_path,
+                takeover_active,
+            ) {
+                Ok(path) => path,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let validated_packet_path = validated_packet_path.display().to_string();
+            let mut packet = match read_lane_packet(&validated_packet_path) {
                 Ok(packet) => packet,
                 Err(error) => {
                     eprintln!("{error}");
                     return ExitCode::from(1);
                 }
             };
+            if packet.get("run_id").and_then(serde_json::Value::as_str) != Some(run_id) {
+                eprintln!(
+                    "Lane `{run_id}` packet `{validated_packet_path}` does not belong to the requested run."
+                );
+                return ExitCode::from(2);
+            }
             let completed_target = packet
                 .get("downstream_dispatch_active_target")
                 .and_then(serde_json::Value::as_str)
@@ -1118,7 +1174,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     run_id,
                     &completed_target,
                     receipt_id,
-                    &packet_path,
+                    &validated_packet_path,
                 ) {
                     Ok(path) => path,
                     Err(error) => {
@@ -1182,7 +1238,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             packet["downstream_lane_status"] = serde_json::json!(downstream_dispatch_status);
             packet["downstream_dispatch_active_target"] =
                 serde_json::json!(receipt.downstream_dispatch_active_target.clone());
-            if let Err(error) = write_lane_packet(&packet_path, &packet) {
+            if let Err(error) = write_lane_packet(&validated_packet_path, &packet) {
                 eprintln!("{error}");
                 return ExitCode::from(1);
             }
