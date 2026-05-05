@@ -59,9 +59,29 @@ fn build_orchestrator_runtime_contract(
             "topology_source": "vida.config.yaml via dev_team_readiness"
         },
         "next_lawful_dispatch_action": next_lawful_dispatch_action,
+        "execution_evidence_contract": {
+            "agent_init_without_execute_dispatch": "activation_view_only",
+            "activation_view_is_execution_evidence": false,
+            "activation_view_completes_delegated_work": false,
+            "delegated_work_completion_requires": "receipt_backed_execution_evidence",
+            "missing_execution_evidence_semantics": "non_executing_bridge_blocker"
+        },
+        "write_and_continuation_authority_contract": {
+            "root_local_write_allowed_is_blanket_authority": false,
+            "exception_takeover_authority": "path_scoped_owned_write_scope_only",
+            "root_write_scope_field": "vida status --json.root_session_write_guard.root_local_write_allowed_for_only_these_paths",
+            "continuation_binding_is_independent_of_exception_write_scope": true,
+            "continuation_requires_explicit_fields": [
+                "active_bounded_unit",
+                "why_this_unit",
+                "sequential_vs_parallel_posture"
+            ],
+            "scoped_exception_takeover_does_not_select_next_work": true
+        },
         "hard_warnings": [
             "User requested agent-first earlier; root-local implementation is currently a policy violation unless explicitly superseded.",
-            "`vida agent-init` without `--execute-dispatch` is activation/view-only and is not delegated work completion."
+            "`vida agent-init` without `--execute-dispatch` is activation/view-only and is not delegated work completion.",
+            "`root_local_write_allowed=true` is path-scoped exception authority only; continuation still requires an explicit bounded-unit binding."
         ]
     })
 }
@@ -85,8 +105,14 @@ fn agent_init_dispatch_mode(
         "selection_mode": selection["mode"].clone(),
         "activation_view_only": !args.execute_dispatch,
         "execution_dispatch": args.execute_dispatch,
+        "activation_view_is_execution_evidence": false,
+        "activation_view_completes_delegated_work": false,
         "execution_evidence_required_for_completion": true,
         "completion_requires_receipt_backed_execution": true,
+        "required_completion_evidence": "receipt_backed_execution_evidence",
+        "missing_execution_evidence_semantics": "non_executing_bridge_blocker",
+        "root_session_write_authority_granted": false,
+        "continuation_authority_granted": false,
     })
 }
 
@@ -3524,6 +3550,24 @@ mod agent_init_surface_tests {
             contract["next_lawful_dispatch_action"]["command"],
             "vida agent dispatch-next --dev-team --json"
         );
+        assert_eq!(
+            contract["execution_evidence_contract"]["activation_view_is_execution_evidence"],
+            false
+        );
+        assert_eq!(
+            contract["execution_evidence_contract"]["delegated_work_completion_requires"],
+            "receipt_backed_execution_evidence"
+        );
+        assert_eq!(
+            contract["write_and_continuation_authority_contract"]
+                ["root_local_write_allowed_is_blanket_authority"],
+            false
+        );
+        assert_eq!(
+            contract["write_and_continuation_authority_contract"]
+                ["continuation_binding_is_independent_of_exception_write_scope"],
+            true
+        );
     }
 
     #[test]
@@ -3692,6 +3736,22 @@ mod agent_init_surface_tests {
 
         assert!(payload["execution_truth"].is_null());
         assert_eq!(payload["dispatch_mode"]["mode"], "activation_view_only");
+        assert_eq!(
+            payload["dispatch_mode"]["activation_view_is_execution_evidence"],
+            false
+        );
+        assert_eq!(
+            payload["dispatch_mode"]["required_completion_evidence"],
+            "receipt_backed_execution_evidence"
+        );
+        assert_eq!(
+            payload["dispatch_mode"]["root_session_write_authority_granted"],
+            false
+        );
+        assert_eq!(
+            payload["dispatch_mode"]["continuation_authority_granted"],
+            false
+        );
         assert_eq!(payload["backend_truth"]["selected_carrier_id"], "junior");
         assert_eq!(
             payload["backend_truth"]["selected_model_profile_id"],

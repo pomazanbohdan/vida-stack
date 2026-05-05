@@ -220,12 +220,15 @@ Normalization rule:
 Runtime contract hardening:
 
 1. `vida orchestrator-init --json` must expose `orchestrator_runtime_contract.sticky_user_execution_intent`, `orchestrator_runtime_contract.allowed_topology`, and `orchestrator_runtime_contract.next_lawful_dispatch_action` so Codex App and operators do not infer lane law from prose.
-2. `vida agent-init --json` must expose `dispatch_mode`; values ending in `activation_view_only` are not execution evidence and do not complete delegated work.
-3. `vida agent dispatch-next --json` is the preview-first planner surface and must expose `parallelization_planner` plus `carrier_selection_api`.
-4. `vida agent select --runtime-role <role> --task-class <class> --json` is the first-class carrier/model/reasoning selection API; it resolves from `vida.config.yaml` and registries, not from hardcoded Rust model names.
-5. `vida lane reclaim --completed --host-agents --json` is the idempotent cleanup surface for completed/stale VIDA-owned lane state. If Codex App still displays UI agent handles, host-app-visible close actions remain external until Codex exposes a stable close API.
-6. `root_local_write_allowed=true` is never blanket authority. Status and lane envelopes must also expose `root_local_write_allowed_for_only_these_paths` when exception takeover metadata exists.
-7. `orchestrator-init` must fail closed to degraded lock-contention output if the state store is locked, rather than crashing without a machine-readable next action.
+2. `vida orchestrator-init --json` must expose `orchestrator_runtime_contract.execution_evidence_contract`; it is the machine-readable rule that `agent-init` activation views are not execution evidence and cannot complete delegated work.
+3. `vida orchestrator-init --json` must expose `orchestrator_runtime_contract.write_and_continuation_authority_contract`; it is the machine-readable rule that scoped exception takeover write authority does not select, bind, or continue the next bounded unit.
+4. `vida agent-init --json` must expose `dispatch_mode`; values ending in `activation_view_only` are not execution evidence and do not complete delegated work.
+5. `dispatch_mode` must explicitly report `activation_view_is_execution_evidence=false`, `required_completion_evidence=receipt_backed_execution_evidence`, `root_session_write_authority_granted=false`, and `continuation_authority_granted=false`.
+6. `vida agent dispatch-next --json` is the preview-first planner surface and must expose `parallelization_planner` plus `carrier_selection_api`.
+7. `vida agent select --runtime-role <role> --task-class <class> --json` is the first-class carrier/model/reasoning selection API; it resolves from `vida.config.yaml` and registries, not from hardcoded Rust model names.
+8. `vida lane reclaim --completed --host-agents --json` is the idempotent cleanup surface for completed/stale VIDA-owned lane state. If Codex App still displays UI agent handles, host-app-visible close actions remain external until Codex exposes a stable close API.
+9. `root_local_write_allowed=true` is never blanket authority. Status and lane envelopes must also expose `root_local_write_allowed_for_only_these_paths` when exception takeover metadata exists.
+10. `orchestrator-init` must fail closed to degraded lock-contention output if the state store is locked, rather than crashing without a machine-readable next action.
 
 Coach separation rule:
 
