@@ -79,16 +79,25 @@ fn consume_continue_state_access_blocker_code(error: &str) -> &'static str {
 
 fn consume_continue_lock_diagnostics(state_root: &Path) -> serde_json::Value {
     let lock_path = state_root.join("LOCK");
-    let metadata = std::fs::metadata(&lock_path).ok();
+    let metadata = std::fs::symlink_metadata(&lock_path).ok();
+    let lock_is_symlink = metadata
+        .as_ref()
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false);
     let modified_unix_seconds = metadata
         .as_ref()
+        .filter(|_| !lock_is_symlink)
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_secs());
     serde_json::json!({
         "lock_path": lock_path,
-        "lock_exists": lock_path.exists(),
-        "lock_file_size": metadata.as_ref().map(std::fs::Metadata::len),
+        "lock_exists": metadata.is_some(),
+        "lock_is_symlink": lock_is_symlink,
+        "lock_file_size": metadata
+            .as_ref()
+            .filter(|_| !lock_is_symlink)
+            .map(std::fs::Metadata::len),
         "lock_modified_unix_seconds": modified_unix_seconds,
     })
 }
