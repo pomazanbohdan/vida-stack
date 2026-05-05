@@ -435,16 +435,18 @@ pub(crate) fn resolve_host_cli_template_source(
     let template_relative = registry_entry
         .and_then(host_cli_system_template_root)
         .ok_or_else(|| format!("No template_root configured for host CLI `{cli_system}`"))?;
+    let template_relative_path = Path::new(&template_relative);
+    if template_relative_path.is_absolute()
+        || template_relative_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "Invalid template_root `{template_relative}` for host CLI `{cli_system}`: must be a relative path without parent traversal"
+        ));
+    }
     let primary_root = resolve_init_bootstrap_source_root();
-    let fallback_root = super::repo_runtime_root();
-    let candidates = if fallback_root == primary_root {
-        vec![primary_root.join(&template_relative)]
-    } else {
-        vec![
-            primary_root.join(&template_relative),
-            fallback_root.join(&template_relative),
-        ]
-    };
+    let candidates = vec![primary_root.join(template_relative_path)];
     for candidate in &candidates {
         if candidate.is_dir() {
             return Ok(candidate.clone());
