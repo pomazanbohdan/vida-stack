@@ -15687,6 +15687,25 @@ pub(crate) fn normalize_stale_in_flight_dispatch_receipt(
     Ok(true)
 }
 
+fn safe_dispatch_result_run_id(run_id: &str) -> String {
+    let trimmed = run_id.trim();
+    if trimmed.is_empty() {
+        return "run".to_string();
+    }
+    let sanitized: String = trimmed
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => ch,
+            _ => '_',
+        })
+        .collect();
+    if sanitized.chars().any(|ch| ch != '_') {
+        sanitized
+    } else {
+        "run".to_string()
+    }
+}
+
 pub(crate) fn write_runtime_lane_completion_result(
     state_root: &Path,
     run_id: &str,
@@ -15699,11 +15718,12 @@ pub(crate) fn write_runtime_lane_completion_result(
         .join("dispatch-results");
     std::fs::create_dir_all(&result_dir)
         .map_err(|error| format!("Failed to create dispatch-results directory: {error}"))?;
+    let safe_run_id = safe_dispatch_result_run_id(run_id);
     let ts = time::OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .expect("rfc3339 timestamp should render")
         .replace(':', "-");
-    let result_path = result_dir.join(format!("{run_id}-{ts}.json"));
+    let result_path = result_dir.join(format!("{safe_run_id}-{ts}.json"));
     let body = serde_json::json!({
         "artifact_kind": "runtime_lane_completion_result",
         "status": "pass",
