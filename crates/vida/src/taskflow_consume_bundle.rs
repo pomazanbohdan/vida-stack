@@ -783,7 +783,47 @@ pub(crate) fn build_dev_team_readiness(
     config_path: &str,
     activation_bundle: &serde_json::Value,
 ) -> serde_json::Value {
+    const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
     let source_paths = dev_team_source_paths(config_path, None);
+    let config_metadata = match std::fs::symlink_metadata(config_path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return serde_json::json!({
+                "status": "config_unreadable",
+                "configured": false,
+                "enabled": serde_json::Value::Null,
+                "roles": [],
+                "sequence": [],
+                "flows": [],
+                "blockers": [format!("dev_team_config_unreadable: {error}")],
+                "source_paths": source_paths,
+            });
+        }
+    };
+    if !config_metadata.file_type().is_file() {
+        return serde_json::json!({
+            "status": "config_unreadable",
+            "configured": false,
+            "enabled": serde_json::Value::Null,
+            "roles": [],
+            "sequence": [],
+            "flows": [],
+            "blockers": ["dev_team_config_unreadable: expected_regular_file"],
+            "source_paths": source_paths,
+        });
+    }
+    if config_metadata.len() > MAX_CONFIG_BYTES {
+        return serde_json::json!({
+            "status": "config_unreadable",
+            "configured": false,
+            "enabled": serde_json::Value::Null,
+            "roles": [],
+            "sequence": [],
+            "flows": [],
+            "blockers": [format!("dev_team_config_unreadable: config_too_large ({} bytes)", config_metadata.len())],
+            "source_paths": source_paths,
+        });
+    }
     let config_text = match std::fs::read_to_string(config_path) {
         Ok(text) => text,
         Err(error) => {
@@ -1872,6 +1912,29 @@ dev_team:
             readiness["blockers"],
             serde_json::json!(["missing_dev_team_config"])
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_dev_team_readiness_rejects_symlinked_config_path() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        let target_path = harness.path().join("actual-config.yaml");
+        std::fs::write(&target_path, "project:\n  id: demo\n").expect("target config should write");
+        std::os::unix::fs::symlink(&target_path, &config_path)
+            .expect("symlinked config should be created");
+
+        let readiness = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &serde_json::json!({}),
+        );
+
+        assert_eq!(readiness["status"], "config_unreadable");
+        assert!(readiness["blockers"]
+            .as_array()
+            .expect("readiness blockers should be array")
+            .iter()
+            .any(|entry| entry == "dev_team_config_unreadable: expected_regular_file"));
     }
 
     #[test]
