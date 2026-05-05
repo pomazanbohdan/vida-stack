@@ -72,6 +72,26 @@ pub(crate) fn load_or_initialize_prompt_lifecycle_state(project_root: &Path) -> 
     })
 }
 
+fn ensure_prompt_lifecycle_registry_root(
+    value: serde_json::Value,
+    recorded_at: Option<&str>,
+) -> serde_json::Value {
+    if value.is_object() {
+        value
+    } else {
+        serde_json::json!({
+            "schema_version": 1,
+            "updated_at": recorded_at
+                .map(str::to_string)
+                .unwrap_or_else(|| time::OffsetDateTime::now_utc()
+                    .format(&Rfc3339)
+                    .expect("rfc3339 timestamp should render")),
+            "store_path": PROMPT_LIFECYCLE_STATE,
+            "workflows": {}
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct HostAgentFeedbackInput<'a> {
     pub(crate) agent_id: &'a str,
@@ -320,7 +340,10 @@ fn persist_prompt_lifecycle_baseline(
     feedback_event: &serde_json::Value,
     recorded_at: &str,
 ) -> Result<(), String> {
-    let mut registry = load_or_initialize_prompt_lifecycle_state(project_root);
+    let mut registry = ensure_prompt_lifecycle_registry_root(
+        load_or_initialize_prompt_lifecycle_state(project_root),
+        Some(recorded_at),
+    );
     if !registry["workflows"].is_object() {
         registry["workflows"] = serde_json::json!({});
     }
@@ -721,9 +744,12 @@ pub(crate) fn build_carrier_pricing_policy(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::{
         append_host_agent_observability_event, load_or_initialize_host_agent_observability_state,
-        load_or_initialize_prompt_lifecycle_state, HostAgentFeedbackInput,
+        load_or_initialize_prompt_lifecycle_state, prompt_lifecycle_state_path,
+        HostAgentFeedbackInput,
     };
     use crate::temp_state::TempStateHarness;
 
@@ -811,6 +837,45 @@ mod tests {
         assert_eq!(
             event["safety_baseline"]["defect_cluster"],
             "prompt_regression"
+        );
+    }
+
+    #[test]
+    fn append_host_agent_observability_event_recovers_from_non_object_prompt_lifecycle_registry() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let path = prompt_lifecycle_state_path(harness.path());
+        fs::write(&path, "[]").expect("malformed but valid registry should write");
+
+        let input = HostAgentFeedbackInput {
+            agent_id: "junior",
+            score: 78,
+            outcome: "success",
+            task_class: "implementation",
+            notes: Some("recovery test"),
+            source: "vida agent-feedback",
+            task_id: Some("task-3"),
+            task_display_id: None,
+            task_title: Some("Recovery Task"),
+            runtime_role: Some("implementer"),
+            selected_tier: Some("junior"),
+            estimated_task_price_units: Some(2),
+            lifecycle_state: Some("promoted"),
+            effective_score: Some(78),
+            reason: None,
+        };
+
+        let event = append_host_agent_observability_event(harness.path(), &input)
+            .expect("event should record");
+        assert_eq!(
+            event["prompt_lifecycle_baseline"]["workflow_class"],
+            "delegated_development_packet"
+        );
+
+        let prompt_lifecycle = load_or_initialize_prompt_lifecycle_state(harness.path());
+        assert!(prompt_lifecycle.is_object());
+        assert_eq!(
+            prompt_lifecycle["workflows"]["delegated_development_packet"]["lifecycle_state"],
+            "draft"
         );
     }
 }
