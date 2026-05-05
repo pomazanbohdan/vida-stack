@@ -987,6 +987,29 @@ impl StateStore {
         } = request;
         let mut task = self.show_task(task_id).await?;
         if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
+            if status == "closed" {
+                let tasks = self.all_tasks().await?;
+                let open_children = tasks
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.id != task_id
+                            && candidate.status != "closed"
+                            && candidate.dependencies.iter().any(|dependency| {
+                                dependency.edge_type == "parent-child"
+                                    && dependency.depends_on_id == task_id
+                            })
+                    })
+                    .map(|candidate| candidate.id.clone())
+                    .collect::<Vec<_>>();
+                if !open_children.is_empty() {
+                    return Err(StateStoreError::InvalidTaskRecord {
+                        reason: format!(
+                            "cannot close task `{task_id}` while open child tasks exist: {}",
+                            open_children.join(", ")
+                        ),
+                    });
+                }
+            }
             task.status = status.to_string();
             if status == "closed" {
                 if task.closed_at.is_none() {
