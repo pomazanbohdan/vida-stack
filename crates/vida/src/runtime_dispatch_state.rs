@@ -2753,6 +2753,51 @@ host_environment:
             true
         );
     }
+    #[test]
+    fn internal_host_carrier_id_takes_precedence_over_external_backend_id_collision() {
+        let overlay = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      runtime_root: .codex
+      carriers:
+        junior:
+          model: gpt-5.4
+          sandbox_mode: workspace-write
+          model_reasoning_effort: low
+agent_system:
+  subagents:
+    junior:
+      enabled: true
+      subagent_backend_class: external_cli
+      dispatch:
+        command: hermes
+"#,
+        )
+        .expect("overlay should parse");
+
+        let dispatch = runtime_agent_lane_dispatch_from_overlay(
+            Some(&overlay),
+            "codex",
+            "internal",
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            Some("junior"),
+            None,
+        );
+
+        assert_eq!(dispatch.surface, "vida agent-init");
+        assert_eq!(dispatch.backend_dispatch["backend_class"], "internal");
+        assert_eq!(dispatch.backend_dispatch["backend_id"], "junior");
+        assert_eq!(
+            dispatch.backend_dispatch["policy_selected_internal_backend"],
+            true
+        );
+    }
 }
 
 fn runtime_agent_lane_dispatch_from_overlay(
@@ -2786,6 +2831,26 @@ fn runtime_agent_lane_dispatch_from_overlay(
                 .then(|| backend_id.to_string())
         });
     if selected_execution_class != "external" {
+        if let Some(backend_id) = preferred_backend
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .filter(|backend_id| {
+                configured_internal_host_carrier_exists(overlay, selected_cli_system, backend_id)
+            })
+        {
+            return RuntimeAgentLaneDispatch {
+                surface: "vida agent-init".to_string(),
+                activation_command: agent_init_command,
+                backend_dispatch: serde_json::json!({
+                    "selected_cli_system": selected_cli_system,
+                    "selected_execution_class": selected_execution_class,
+                    "backend_class": "internal",
+                    "backend_id": backend_id,
+                    "selected_model_profile_id": preferred_model_profile_id,
+                    "policy_selected_internal_backend": true,
+                }),
+            };
+        }
         if let Some((backend_id, backend_entry)) = preferred_external_backend {
             return RuntimeAgentLaneDispatch {
                 surface: format!("external_cli:{backend_id}"),
