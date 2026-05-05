@@ -594,7 +594,13 @@ impl StateStore {
     pub(crate) fn reverse_dependencies_from_rows(
         rows: &[TaskRecord],
         task_id: &str,
-    ) -> Vec<TaskDependencyStatus> {
+    ) -> Result<Vec<TaskDependencyStatus>, StateStoreError> {
+        if !rows.iter().any(|task| task.id == task_id) {
+            return Err(StateStoreError::MissingTask {
+                task_id: task_id.to_string(),
+            });
+        }
+
         let by_id = rows
             .iter()
             .map(|task| (task.id.clone(), task))
@@ -635,7 +641,7 @@ impl StateStore {
                 .unwrap_or_else(|| "missing".to_string());
         }
 
-        reverse
+        Ok(reverse)
     }
 
     pub async fn blocked_tasks(&self) -> Result<Vec<BlockedTaskRecord>, StateStoreError> {
