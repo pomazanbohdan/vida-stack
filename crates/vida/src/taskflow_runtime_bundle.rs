@@ -754,38 +754,12 @@ fn runtime_roots_equivalent(left: &str, right: &str) -> bool {
 
 fn bundle_project_root(
     state_root: &Path,
-    activation_source_config_path: &str,
+    _activation_source_config_path: &str,
 ) -> Result<PathBuf, String> {
     if let Some(project_root) =
         crate::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
     {
         return Ok(project_root);
-    }
-
-    let activation_source_config_path = activation_source_config_path.trim();
-    if !activation_source_config_path.is_empty() {
-        let config_path = Path::new(activation_source_config_path);
-        if config_path.exists() {
-            let source_root = if config_path.is_file() {
-                config_path.parent().unwrap_or(config_path)
-            } else {
-                config_path
-            };
-
-            if crate::looks_like_project_root(source_root)
-                && std::fs::metadata(source_root.join(".vida"))
-                    .map(|metadata| metadata.is_dir())
-                    .unwrap_or(false)
-            {
-                return Ok(source_root.to_path_buf());
-            }
-
-            if let Some(project_root) =
-                crate::taskflow_task_bridge::infer_project_root_from_state_root(source_root)
-            {
-                return Ok(project_root);
-            }
-        }
     }
 
     Err(format!(
@@ -2850,8 +2824,8 @@ mod tests {
     }
 
     #[test]
-    fn bundle_project_root_prefers_activation_source_config_root_when_state_root_non_project_bound()
-    {
+    fn bundle_project_root_blocks_activation_source_config_fallback_when_state_root_non_project_bound(
+    ) {
         use std::time::{SystemTime, UNIX_EPOCH};
 
         let unique = SystemTime::now()
@@ -2887,9 +2861,9 @@ mod tests {
             .expect("project root .vida should be created");
         std::fs::write(&config_path, "test").expect("config fixture should be written");
 
-        let selected = bundle_project_root(&state_root, config_path.to_string_lossy().as_ref())
-            .expect("config root fallback should resolve project root");
-        assert_eq!(selected, config_root);
+        let error = bundle_project_root(&state_root, config_path.to_string_lossy().as_ref())
+            .expect_err("config-path fallback must not override authoritative state-root trust");
+        assert!(error.contains("no DB-backed project root is available"));
 
         std::fs::remove_dir_all(&root).ok();
     }
