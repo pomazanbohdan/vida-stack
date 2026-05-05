@@ -16031,16 +16031,13 @@ async fn persist_failed_dispatch_handoff_state(
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     execution_error: &str,
 ) -> Result<(), String> {
-    let failure_result = runtime_dispatch_result(
-        receipt,
-        serde_json::json!({
-            "surface": receipt.dispatch_surface.clone().unwrap_or_else(|| "vida agent-init".to_string()),
-            "status": "blocked",
-            "execution_state": "blocked",
-            "blocker_code": "dispatch_execution_handoff_failed",
-            "blocker_message": execution_error,
-        }),
-    );
+    let failure_result = serde_json::json!({
+        "surface": receipt.dispatch_surface.clone().unwrap_or_else(|| "vida agent-init".to_string()),
+        "status": "blocked",
+        "execution_state": "blocked",
+        "blocker_code": "dispatch_execution_handoff_failed",
+        "blocker_message": execution_error,
+    });
     let dispatch_result_path = write_runtime_dispatch_result(state_root, receipt, &failure_result)?;
     receipt.dispatch_result_path = Some(dispatch_result_path);
     receipt.dispatch_status = "blocked".to_string();
@@ -16052,7 +16049,6 @@ async fn persist_failed_dispatch_handoff_state(
     .as_str()
     .to_string();
     receipt.blocker_code = Some("dispatch_execution_handoff_failed".to_string());
-    refresh_downstream_dispatch_preview_truth(role_selection, run_graph_bootstrap, receipt);
 
     let store = tokio::time::timeout(
         std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
@@ -16068,6 +16064,17 @@ async fn persist_failed_dispatch_handoff_state(
     .map_err(|error| {
         format!("Failed to reopen authoritative state store after dispatch handoff failure: {error}")
     })?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
+        refresh_downstream_dispatch_preview(&store, role_selection, run_graph_bootstrap, receipt),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "Timed out refreshing downstream dispatch preview after dispatch handoff failure after {}s",
+            DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS
+        )
+    })??;
     if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
         if let Ok(status) = store.run_graph_status(&run_id).await {
             let blocked_status =
