@@ -4,6 +4,49 @@ use serde_json::Deserializer;
 use std::os::unix::fs::OpenOptionsExt;
 
 impl StateStore {
+    async fn validate_task_display_id_alias(
+        &self,
+        task_id: &str,
+        display_id: Option<&str>,
+    ) -> Result<Option<String>, StateStoreError> {
+        let normalized_display_id = display_id.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        let Some(display_id) = normalized_display_id.as_deref() else {
+            return Ok(None);
+        };
+
+        let tasks = self.all_tasks().await?;
+        for task in tasks {
+            if task.id == task_id {
+                continue;
+            }
+            if task.id == display_id {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "task `{task_id}` display_id `{display_id}` conflicts with task id `{}`",
+                        task.id
+                    ),
+                });
+            }
+            if task.display_id.as_deref() == Some(display_id) {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "task `{task_id}` display_id `{display_id}` conflicts with task `{}` display_id",
+                        task.id
+                    ),
+                });
+            }
+        }
+
+        Ok(Some(display_id.to_string()))
+    }
+
     pub(crate) fn canonical_task_snapshot_path_for_state_root(state_root: &Path) -> PathBuf {
         if let Some(project_root) =
             crate::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
@@ -351,7 +394,11 @@ impl StateStore {
                 });
             }
 
-            let content = TaskContent::from(record);
+            let normalized_display_id = self
+                .validate_task_display_id_alias(&task_id, record.display_id.as_deref())
+                .await?;
+            let mut content = TaskContent::from(record);
+            content.display_id = normalized_display_id;
             let existing: Option<TaskStorageRowStored> =
                 self.db.select(("task", task_id.as_str())).await?;
             match existing {
@@ -884,14 +931,9 @@ impl StateStore {
                 Some(trimmed.to_string())
             }
         });
-        let normalized_display_id = display_id.and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
+        let normalized_display_id = self
+            .validate_task_display_id_alias(task_id, display_id)
+            .await?;
         if let Some(parent_id) = normalized_parent_id.as_deref() {
             if self.show_task(parent_id).await.is_err() {
                 return Err(StateStoreError::MissingTask {
