@@ -10,6 +10,13 @@ fn escape_toml_basic_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+fn is_safe_role_id(role_id: &str) -> bool {
+    !role_id.trim().is_empty()
+        && role_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
 fn rendered_host_runtime_agent_catalog(
     agent_catalog: &[serde_json::Value],
     named_lane_catalog: &[serde_json::Value],
@@ -20,6 +27,9 @@ fn rendered_host_runtime_agent_catalog(
         let Some(role_id) = row["role_id"].as_str() else {
             continue;
         };
+        if !is_safe_role_id(role_id) {
+            continue;
+        }
         if seen.insert(role_id.to_string()) {
             rows.push(row.clone());
         }
@@ -739,6 +749,9 @@ pub(crate) fn overlay_host_runtime_agent_catalog(
                 serde_yaml::Value::String(text) if !text.trim().is_empty() => text.trim(),
                 _ => return None,
             };
+            if !is_safe_role_id(role_id) {
+                return None;
+            }
             let runtime_roles = yaml_string_list(yaml_lookup(value, &["runtime_roles"]));
             let task_classes = yaml_string_list(yaml_lookup(value, &["task_classes"]));
             let rate = yaml_string(yaml_lookup(value, &["rate"]))
