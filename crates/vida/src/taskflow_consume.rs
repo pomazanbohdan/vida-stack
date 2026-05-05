@@ -1217,37 +1217,35 @@ fn decode_execution_preparation_artifacts(
         && (artifact_json
             .map(|value| super::json_bool(value.get("handoff_ready"), false))
             .unwrap_or_else(|| super::json_bool(run_graph_bootstrap.get("handoff_ready"), false)));
+    let legacy_packet_ready = super::json_bool(
+        run_graph_bootstrap.get("execution_preparation_handoff_packet_ready"),
+        false,
+    ) || run_graph_bootstrap
+        .get("execution_preparation_packet_path")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let legacy_evidence_ready = super::json_bool(
+        run_graph_bootstrap.get("execution_preparation_evidence_ready"),
+        false,
+    ) || run_graph_bootstrap["evidence"]["execution_preparation"]["status"].as_str() == Some("ready")
+        || run_graph_bootstrap["evidence"]["execution_preparation"]["ready"]
+            .as_bool()
+            .unwrap_or(false);
+
     let developer_handoff_packet = DeveloperHandoffPacketArtifact {
         path: nonempty_json_string(packet_json.and_then(|value| value.get("path"))).or_else(|| {
             nonempty_json_string(run_graph_bootstrap.get("execution_preparation_packet_path"))
         }),
         ready: packet_json
-            .map(|value| super::json_bool(value.get("ready"), false))
-            .unwrap_or_else(|| {
-                super::json_bool(
-                    run_graph_bootstrap.get("execution_preparation_handoff_packet_ready"),
-                    false,
-                ) || run_graph_bootstrap
-                    .get("execution_preparation_packet_path")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|value| !value.trim().is_empty())
-                    .unwrap_or(false)
-            }),
+            .map(|value| super::json_bool(value.get("ready"), false) || legacy_packet_ready)
+            .unwrap_or(legacy_packet_ready),
         status: nonempty_json_string(packet_json.and_then(|value| value.get("status"))),
     };
     let execution_preparation_evidence = ExecutionPreparationEvidenceArtifact {
         ready: evidence_json
-            .map(|value| super::json_bool(value.get("ready"), false))
-            .unwrap_or_else(|| {
-                super::json_bool(
-                    run_graph_bootstrap.get("execution_preparation_evidence_ready"),
-                    false,
-                ) || run_graph_bootstrap["evidence"]["execution_preparation"]["status"].as_str()
-                    == Some("ready")
-                    || run_graph_bootstrap["evidence"]["execution_preparation"]["ready"]
-                        .as_bool()
-                        .unwrap_or(false)
-            }),
+            .map(|value| super::json_bool(value.get("ready"), false) || legacy_evidence_ready)
+            .unwrap_or(legacy_evidence_ready),
         status: nonempty_json_string(evidence_json.and_then(|value| value.get("status"))).or_else(
             || {
                 nonempty_json_string(
@@ -2302,6 +2300,18 @@ mod tests {
 
         let taskflow_handoff_plan = serde_json::json!({
             "handoff_ready": true,
+            "execution_preparation_artifacts": {
+                "handoff_ready": true,
+                "developer_handoff_packet": {
+                    "ready": false,
+                    "status": "pending_developer_handoff_packet",
+                    "path": null
+                },
+                "execution_preparation_evidence": {
+                    "ready": false,
+                    "status": "pending_execution_preparation_evidence"
+                }
+            }
         });
         let run_graph_bootstrap = serde_json::json!({
             "handoff_ready": true,
