@@ -792,15 +792,31 @@ fn exception_takeover_metadata_dir(state_root: &Path) -> PathBuf {
     state_root.join("lane-exception-path-metadata")
 }
 
-fn exception_takeover_metadata_path(state_root: &Path, run_id: &str) -> PathBuf {
-    exception_takeover_metadata_dir(state_root).join(format!("{run_id}.json"))
+fn exception_takeover_metadata_filename(run_id: &str) -> Result<String, String> {
+    if run_id.is_empty() {
+        return Err("Run id cannot be empty for exception takeover metadata.".to_string());
+    }
+    if !run_id
+        .chars()
+        .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
+    {
+        return Err(format!(
+            "Run id `{run_id}` contains unsupported characters for exception takeover metadata filename."
+        ));
+    }
+    Ok(format!("{run_id}.json"))
+}
+
+fn exception_takeover_metadata_path(state_root: &Path, run_id: &str) -> Result<PathBuf, String> {
+    let file_name = exception_takeover_metadata_filename(run_id)?;
+    Ok(exception_takeover_metadata_dir(state_root).join(file_name))
 }
 
 fn read_exception_takeover_metadata(
     state_root: &Path,
     run_id: &str,
 ) -> Result<Option<ExceptionTakeoverMetadata>, String> {
-    let path = exception_takeover_metadata_path(state_root, run_id);
+    let path = exception_takeover_metadata_path(state_root, run_id)?;
     if !path.exists() {
         return Ok(None);
     }
@@ -833,7 +849,7 @@ fn write_exception_takeover_metadata(
             dir.display()
         )
     })?;
-    let path = exception_takeover_metadata_path(state_root, run_id);
+    let path = exception_takeover_metadata_path(state_root, run_id)?;
     let encoded = serde_json::to_string_pretty(metadata).map_err(|error| {
         format!(
             "Failed to encode exception takeover metadata `{}`: {error}",
@@ -963,7 +979,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             };
             let recovery = store.run_graph_recovery_summary(&summary.run_id).await.ok();
             let exception_path_metadata_path =
-                exception_takeover_metadata_path(store.root(), &summary.run_id);
+                match exception_takeover_metadata_path(store.root(), &summary.run_id) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
             let exception_path_metadata =
                 match read_exception_takeover_metadata(store.root(), &summary.run_id) {
                     Ok(metadata) => metadata,
@@ -1004,7 +1026,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             };
             let recovery = store.run_graph_recovery_summary(run_id).await.ok();
             let exception_path_metadata_path =
-                exception_takeover_metadata_path(store.root(), run_id);
+                match exception_takeover_metadata_path(store.root(), run_id) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
             let exception_path_metadata =
                 match read_exception_takeover_metadata(store.root(), run_id) {
                     Ok(metadata) => metadata,
@@ -1196,7 +1224,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
             let truth = derive_lane_show_truth(&updated_summary, recovery.as_ref());
             let exception_path_metadata_path =
-                exception_takeover_metadata_path(store.root(), run_id);
+                match exception_takeover_metadata_path(store.root(), run_id) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
             let envelope = build_lane_envelope(
                 updated_summary,
                 status,
@@ -1234,12 +1268,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 eprintln!("{error}");
                 return ExitCode::from(2);
             }
-            receipt.exception_path_receipt_id = Some(receipt_id.to_string());
-            receipt.lane_status = explicit_lane_status_for_receipt(&receipt, recovery.as_ref());
-            if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
-                eprintln!("Failed to persist exception takeover receipt: {error}");
-                return ExitCode::from(1);
-            }
             let metadata_path =
                 match write_exception_takeover_metadata(store.root(), run_id, &metadata) {
                     Ok(path) => path,
@@ -1248,6 +1276,12 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+            receipt.exception_path_receipt_id = Some(receipt_id.to_string());
+            receipt.lane_status = explicit_lane_status_for_receipt(&receipt, recovery.as_ref());
+            if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
+                eprintln!("Failed to persist exception takeover receipt: {error}");
+                return ExitCode::from(1);
+            }
             let updated_summary =
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
             let truth = derive_lane_show_truth(&updated_summary, recovery.as_ref());
@@ -1294,7 +1328,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             let updated_summary =
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
             let exception_path_metadata_path =
-                exception_takeover_metadata_path(store.root(), run_id);
+                match exception_takeover_metadata_path(store.root(), run_id) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
             let exception_path_metadata =
                 match read_exception_takeover_metadata(store.root(), run_id) {
                     Ok(metadata) => metadata,
@@ -1787,7 +1827,8 @@ mod tests {
             Some("receipt-1")
         );
         assert_eq!(after.lane_status, "lane_exception_recorded");
-        let metadata_path = exception_takeover_metadata_path(&root, run_id);
+        let metadata_path =
+            exception_takeover_metadata_path(&root, run_id).expect("exception path metadata path");
         let metadata = read_exception_takeover_metadata(&root, run_id)
             .expect("read persisted exception takeover metadata")
             .expect("exception takeover metadata should exist");
@@ -1926,7 +1967,9 @@ mod tests {
             .expect("receipt should exist");
         assert_eq!(after.exception_path_receipt_id, None);
         assert!(
-            !exception_takeover_metadata_path(&root, run_id).exists(),
+            !exception_takeover_metadata_path(&root, run_id)
+                .expect("exception path metadata path")
+                .exists(),
             "superseded mutation must not persist exception takeover metadata"
         );
 
