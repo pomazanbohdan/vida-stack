@@ -747,11 +747,14 @@ pub(crate) fn exception_takeover_state(
     if !has_evidence_id(exception_path_receipt_id) {
         return ExceptionTakeoverState::NotRecorded;
     }
-    if has_evidence_id(supersedes_receipt_id) {
-        return ExceptionTakeoverState::ActiveTakeover;
-    }
     if local_exception_takeover_gate
-        .is_some_and(|gate| gate.trim() != "blocked_open_delegated_cycle")
+        .is_some_and(|gate| gate.trim() == "blocked_open_delegated_cycle")
+    {
+        return ExceptionTakeoverState::ReceiptRecorded;
+    }
+    if has_evidence_id(supersedes_receipt_id)
+        || local_exception_takeover_gate
+            .is_some_and(|gate| gate.trim() != "blocked_open_delegated_cycle")
     {
         return ExceptionTakeoverState::ActiveTakeover;
     }
@@ -2666,6 +2669,14 @@ mod tests {
                 Some("receipt-1"),
                 Some("supersede-1"),
                 Some("blocked_open_delegated_cycle")
+            ),
+            ExceptionTakeoverState::ReceiptRecorded
+        );
+        assert_eq!(
+            exception_takeover_state(
+                Some("receipt-1"),
+                Some("supersede-1"),
+                Some("delegated_cycle_clear")
             ),
             ExceptionTakeoverState::ActiveTakeover
         );
