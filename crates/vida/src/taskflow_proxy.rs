@@ -719,7 +719,6 @@ async fn scheduler_execute_packet_backed_dispatch(
     state_dir: &Path,
     task_id: &str,
     run_id: &str,
-    expected_dispatch_packet_path: Option<&str>,
     reservation_id: &str,
 ) -> Result<SchedulerPacketDispatchResult, String> {
     let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
@@ -738,13 +737,6 @@ async fn scheduler_execute_packet_backed_dispatch(
     }
     let run_id = artifacts.run_id.clone();
     let dispatch_packet_path = artifacts.dispatch_packet_path.clone();
-    if let Some(expected_dispatch_packet_path) = expected_dispatch_packet_path {
-        if dispatch_packet_path != expected_dispatch_packet_path {
-            return Err(format!(
-                "scheduler packet dispatch path mismatch for task `{task_id}` run `{run_id}`: gate verified `{expected_dispatch_packet_path}`, materialized `{dispatch_packet_path}`"
-            ));
-        }
-    }
     store
         .mark_scheduler_dispatch_reservation_executing(
             reservation_id,
@@ -920,13 +912,10 @@ async fn persist_scheduler_execute_receipt(
                     reservation.task_id
                 )
             })?;
-            let packet_backed_dispatch_packet_path =
-                reservation_gate.dispatch_packet_path.as_deref();
             let packet_result = scheduler_execute_packet_backed_dispatch(
                 state_dir,
                 &reservation.task_id,
                 packet_backed_run_id,
-                packet_backed_dispatch_packet_path,
                 &reservation.reservation_id,
             )
             .await;
