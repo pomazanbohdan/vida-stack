@@ -928,6 +928,10 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
     let mut blocker_codes = plan.blocker_codes.clone();
     let mut next_actions = plan.next_actions.clone();
     let mut selected_lanes = Vec::new();
+    if lanes_requested == 0 {
+        blocker_codes.push("invalid_lanes_requested".to_string());
+        next_actions.push("Pass `--lanes <n>` with n >= 1.".to_string());
+    }
     let blocked_candidates = plan
         .rejected_candidates
         .iter()
@@ -1011,6 +1015,9 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
                 .to_string(),
         );
     }
+    if lanes_requested == 0 {
+        selected_lanes.clear();
+    }
 
     let status = if blocker_codes.is_empty() {
         "pass"
@@ -1020,7 +1027,11 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
     .to_string();
     let configured_parallel =
         usize::try_from(plan.configured_max_parallel_agents).unwrap_or(usize::MAX);
-    let effective_parallel = usize::try_from(plan.max_parallel_agents).unwrap_or(usize::MAX);
+    let effective_parallel = if lanes_requested == 0 {
+        0
+    } else {
+        usize::try_from(plan.max_parallel_agents).unwrap_or(usize::MAX)
+    };
     let parallelization_planner =
         build_parallelization_planner(&plan.scheduling, lanes_requested, effective_parallel);
     AgentDispatchNextPreview {
