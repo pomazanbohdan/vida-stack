@@ -304,8 +304,8 @@ fn scheduler_reservation_preview(
         conflict_domain: task.conflict_domain.clone(),
         command: format!(
             "vida agent-init --role worker {} --state-dir {} --json",
-            task.id,
-            state_dir.display()
+            crate::shell_quote(&task.id),
+            crate::shell_quote(&state_dir.display().to_string())
         ),
         state_dir: state_dir.display().to_string(),
         reservation_status: if execute_requested {
