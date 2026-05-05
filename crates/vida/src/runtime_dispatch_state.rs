@@ -4857,6 +4857,7 @@ mod tests {
     use crate::state_store::CreateTaskRequest;
     use crate::state_store::RunGraphDispatchReceipt;
     use crate::temp_state::TempStateHarness;
+    use crate::test_cli_support::guard_current_dir;
     use crate::{run, Cli};
     use clap::Parser;
     use serde_json::json;
@@ -4868,48 +4869,6 @@ mod tests {
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-    struct RecoveringMutex(Mutex<()>);
-
-    impl RecoveringMutex {
-        fn lock(&self) -> MutexGuard<'_, ()> {
-            self.0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-        }
-    }
-
-    fn current_dir_lock() -> &'static RecoveringMutex {
-        static LOCK: OnceLock<RecoveringMutex> = OnceLock::new();
-        LOCK.get_or_init(|| RecoveringMutex(Mutex::new(())))
-    }
-
-    struct CurrentDirGuard {
-        _lock: MutexGuard<'static, ()>,
-        original: PathBuf,
-    }
-
-    impl CurrentDirGuard {
-        fn change_to(path: &Path) -> Self {
-            let lock = current_dir_lock().lock();
-            let original = env::current_dir().expect("current dir should resolve");
-            env::set_current_dir(path).expect("current dir should change");
-            Self {
-                _lock: lock,
-                original,
-            }
-        }
-    }
-
-    impl Drop for CurrentDirGuard {
-        fn drop(&mut self) {
-            env::set_current_dir(&self.original).expect("current dir should restore");
-        }
-    }
-
-    fn guard_current_dir(path: &Path) -> CurrentDirGuard {
-        CurrentDirGuard::change_to(path)
-    }
 
     fn harness_state_root(harness: &TempStateHarness) -> PathBuf {
         harness.path().join(crate::state_store::default_state_dir())
