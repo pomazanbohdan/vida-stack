@@ -118,7 +118,7 @@ Windows PowerShell:
 ```powershell
 mkdir myproject
 cd myproject
-irm https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.ps1 -OutFile vida-install.ps1
+irm https://github.com/pomazanbohdan/vida-stack/releases/latest/download/vida-install.ps1 -OutFile vida-install.ps1
 pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install
 vida init
 ```
