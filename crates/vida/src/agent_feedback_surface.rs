@@ -292,8 +292,6 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "canonical close blocked feedback derivation",
             "blocker keyword matching",
             "blocked reason detection",
-            "concrete blocked task outcomes",
-            "blocked task outcomes",
             "failure evidence",
             "concrete blocked reasons",
             "top-level blocked/actionable",
@@ -1134,9 +1132,6 @@ mod tests {
             .iter()
             .any(|phrase| phrase == "actionable blocked output"));
         assert!(ignored.iter().any(|phrase| phrase == "genuinely blocked"));
-        assert!(ignored
-            .iter()
-            .any(|phrase| phrase == "concrete blocked task outcomes"));
         assert!(ignored.iter().any(|phrase| phrase == "failure evidence"));
     }
 
