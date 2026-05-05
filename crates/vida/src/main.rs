@@ -97,6 +97,7 @@ mod temp_state;
 mod test_cli_support;
 
 use std::env;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -261,14 +262,16 @@ fn main() -> ExitCode {
     }
 }
 
-fn normalized_cli_args() -> Vec<String> {
-    env::args().map(normalize_cli_arg).collect()
+fn normalized_cli_args() -> Vec<OsString> {
+    env::args_os().map(normalize_cli_arg).collect()
 }
 
-fn normalize_cli_arg(arg: String) -> String {
-    match arg.as_str() {
-        "--HELP" | "--Help" | "/HELP" | "/Help" | "/help" | "/?" => "--help".to_string(),
-        "-H" => "-h".to_string(),
+fn normalize_cli_arg(arg: OsString) -> OsString {
+    match arg.to_str() {
+        Some("--HELP" | "--Help" | "/HELP" | "/Help" | "/help" | "/?") => {
+            OsString::from("--help")
+        }
+        Some("-H") => OsString::from("-h"),
         _ => arg,
     }
 }
