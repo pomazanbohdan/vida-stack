@@ -133,22 +133,38 @@ pub(crate) fn request_has_explicit_owned_scope(request_text: &str) -> bool {
 }
 
 pub(crate) fn tracked_design_doc_owned_paths(tracked_design_doc_path: Option<&str>) -> Vec<String> {
-    tracked_design_doc_path
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| vec![value.to_string()])
-        .unwrap_or_default()
+    let mut owned_paths = Vec::new();
+    if let Some(path) = tracked_design_doc_path {
+        let normalized = trim_owned_scope_path_candidate(path);
+        if !normalized.is_empty()
+            && normalized.contains('/')
+            && normalized.contains('.')
+            && !normalized.starts_with('/')
+            && !normalized.starts_with("./")
+            && !normalized.starts_with("../")
+        {
+            owned_paths.push(normalized);
+        }
+    }
+    owned_paths
 }
 
 pub(crate) fn tracked_design_doc_bounded_file_set_paths(
     tracked_design_doc_path: Option<&str>,
 ) -> Vec<String> {
+    const MAX_TRACKED_DESIGN_DOC_BYTES: u64 = 1_048_576;
     let Some(path) = tracked_design_doc_path
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
         return Vec::new();
     };
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Vec::new();
+    };
+    if !metadata.is_file() || metadata.len() > MAX_TRACKED_DESIGN_DOC_BYTES {
+        return Vec::new();
+    }
     let Ok(contents) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
@@ -427,4 +443,24 @@ pub(crate) fn runtime_escalation_packet(run_id: &str, dispatch_target: &str) -> 
         "handoff_task_class": TASK_CLASS_ARCHITECTURE,
         "handoff_selection": "runtime_selected_tier",
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tracked_design_doc_owned_paths;
+
+    #[test]
+    fn tracked_design_doc_owned_paths_rejects_absolute_and_traversal_paths() {
+        assert!(tracked_design_doc_owned_paths(Some("/tmp/evil.md")).is_empty());
+        assert!(tracked_design_doc_owned_paths(Some("../outside.md")).is_empty());
+        assert!(tracked_design_doc_owned_paths(Some("./local.md")).is_empty());
+    }
+
+    #[test]
+    fn tracked_design_doc_owned_paths_accepts_project_relative_doc_path() {
+        assert_eq!(
+            tracked_design_doc_owned_paths(Some(" docs/product/spec/example.md ")),
+            vec!["docs/product/spec/example.md".to_string()]
+        );
+    }
 }

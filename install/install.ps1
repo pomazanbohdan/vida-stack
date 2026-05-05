@@ -85,7 +85,7 @@ Options:
   -DryRun           Print planned actions without changing files.
 
 Examples:
-  irm https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.ps1 -OutFile vida-install.ps1
+  irm https://github.com/pomazanbohdan/vida-stack/releases/latest/download/vida-install.ps1 -OutFile vida-install.ps1
   pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install
   pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 upgrade --version v0.9.0
   pwsh -ExecutionPolicy Bypass -File .\vida-install.ps1 install --bins taskflow --force
@@ -221,30 +221,37 @@ function Ensure-RuntimeConfigScaffold {
 function Ensure-FeatureTemplateScaffold {
     param([string] $ReleaseRoot)
     $legacyTarget = Join-Path $ReleaseRoot "docs\product\spec\templates\feature-design-document.template.md"
+    $frameworkTarget = Join-Path $ReleaseRoot "docs\framework\templates\feature-design-document.template.md"
     $assetTarget = Join-Path $ReleaseRoot "install\assets\feature-design-document.template.md"
-    if ((Test-Path -LiteralPath $legacyTarget -PathType Leaf) -and (Test-Path -LiteralPath $assetTarget -PathType Leaf)) {
+    if ((Test-Path -LiteralPath $legacyTarget -PathType Leaf) -and (Test-Path -LiteralPath $frameworkTarget -PathType Leaf) -and (Test-Path -LiteralPath $assetTarget -PathType Leaf)) {
         return
     }
 
     $templateSource = ""
     if (Test-Path -LiteralPath $assetTarget -PathType Leaf) {
         $templateSource = $assetTarget
+    } elseif (Test-Path -LiteralPath $frameworkTarget -PathType Leaf) {
+        $templateSource = $frameworkTarget
+    } elseif (Test-Path -LiteralPath $legacyTarget -PathType Leaf) {
+        $templateSource = $legacyTarget
     } elseif ($PSCommandPath) {
+        $candidate = Join-Path ([System.IO.Path]::GetDirectoryName($PSCommandPath)) "..\docs\framework\templates\feature-design-document.template.md"
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $templateSource = [System.IO.Path]::GetFullPath($candidate) }
+    }
+    if (-not $templateSource -and $PSCommandPath) {
         $candidate = Join-Path ([System.IO.Path]::GetDirectoryName($PSCommandPath)) "..\docs\product\spec\templates\feature-design-document.template.md"
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { $templateSource = [System.IO.Path]::GetFullPath($candidate) }
     }
 
     if (-not $templateSource) {
         if ($DryRun) {
-            Write-Log "Would download feature design template for installed vida init compatibility"
+            Write-Log "Would fail: release is missing feature design template scaffold"
             return
         }
-        $tempTemplate = Join-Path ([System.IO.Path]::GetTempPath()) ("vida-feature-template-" + [guid]::NewGuid().ToString("N") + ".md")
-        Download-File "https://raw.githubusercontent.com/$RepoSlug/main/docs/product/spec/templates/feature-design-document.template.md" $tempTemplate
-        $templateSource = $tempTemplate
+        Fail "Installed release is missing feature design template scaffold (install/assets/feature-design-document.template.md). Reinstall or choose a newer release."
     }
 
-    foreach ($target in @($assetTarget, $legacyTarget)) {
+    foreach ($target in @($assetTarget, $frameworkTarget, $legacyTarget)) {
         if (Test-Path -LiteralPath $target -PathType Leaf) { continue }
         if ($DryRun) {
             Write-Log "Would scaffold feature design template into $target"
@@ -531,7 +538,7 @@ function Invoke-Doctor {
                 $missing = $true
             }
         }
-        foreach ($path in @(".codex\config.toml", "AGENTS.sidecar.md", "vida.config.yaml", "install\assets\vida.config.yaml.template")) {
+        foreach ($path in @(".codex\config.toml", "AGENTS.sidecar.md", "vida.config.yaml", "install\assets\vida.config.yaml.template", "install\assets\feature-design-document.template.md", "docs\framework\templates\feature-design-document.template.md", "vida\config\instructions\bundles\framework-source", "vida\config\instructions\bundles\framework-memory-source")) {
             $candidate = Join-Path $current $path
             if (-not (Test-Path -LiteralPath $candidate)) {
                 Write-Log "Missing packaged surface: $candidate"

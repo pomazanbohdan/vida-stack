@@ -10,6 +10,9 @@ thread_local! {
     static TEST_PROXY_STATE_DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
         const { std::cell::RefCell::new(None) };
 }
+#[cfg(test)]
+static TEST_PROXY_STATE_DIR_OVERRIDE_GLOBAL: std::sync::Mutex<Option<PathBuf>> =
+    std::sync::Mutex::new(None);
 
 pub(crate) fn taskflow_native_state_root(project_root: &Path) -> PathBuf {
     project_root.join(crate::state_store::default_state_dir())
@@ -18,6 +21,14 @@ pub(crate) fn taskflow_native_state_root(project_root: &Path) -> PathBuf {
 pub(crate) fn proxy_state_dir() -> PathBuf {
     #[cfg(test)]
     if let Some(path) = TEST_PROXY_STATE_DIR_OVERRIDE.with_borrow(|path| path.clone()) {
+        return path;
+    }
+    #[cfg(test)]
+    if let Some(path) = TEST_PROXY_STATE_DIR_OVERRIDE_GLOBAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+    {
         return path;
     }
     std::env::var_os("VIDA_STATE_DIR")
@@ -32,8 +43,11 @@ pub(crate) fn proxy_state_dir() -> PathBuf {
 #[cfg(test)]
 pub(crate) fn set_test_proxy_state_dir_override(path: Option<PathBuf>) {
     TEST_PROXY_STATE_DIR_OVERRIDE.with_borrow_mut(|current| {
-        *current = path;
+        *current = path.clone();
     });
+    *TEST_PROXY_STATE_DIR_OVERRIDE_GLOBAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = path;
 }
 
 pub(crate) fn infer_project_root_from_state_root(state_root: &Path) -> Option<PathBuf> {
@@ -111,13 +125,18 @@ pub(crate) fn enforce_execution_preparation_contract_gate(state_root: &Path) -> 
                 .to_string(),
         );
     }
-    if contract["status"]
+    let canonical_status = contract["status"]
         .as_str()
-        .and_then(canonical_release1_contract_status_str)
-        .is_none()
-    {
+        .and_then(canonical_release1_contract_status_str);
+    if canonical_status.is_none() {
         return Err(
             "execution_preparation_gate_blocked: release-1 operator contract has invalid status"
+                .to_string(),
+        );
+    }
+    if canonical_status != Some("pass") {
+        return Err(
+            "execution_preparation_gate_blocked: release-1 operator contract is not admitted"
                 .to_string(),
         );
     }
@@ -302,25 +321,15 @@ mod tests {
     }
 
     #[test]
-    fn execution_preparation_contract_gate_accepts_release1_canonical_and_compat_statuses() {
+    fn execution_preparation_contract_gate_accepts_only_admitted_release1_statuses() {
         let cases = [
-            ("pass", "final-pass.json", Vec::new(), Vec::new()),
-            (
-                "blocked",
-                "final-blocked.json",
-                vec!["migration_required".to_string()],
-                vec!["Complete required migration before normal operation.".to_string()],
-            ),
-            ("ok", "final-ok.json", Vec::new(), Vec::new()),
-            (
-                "block",
-                "final-block.json",
-                vec!["migration_required".to_string()],
-                vec!["Complete required migration before normal operation.".to_string()],
-            ),
+            ("pass", "final-pass.json", true),
+            ("ok", "final-ok.json", true),
+            ("blocked", "final-blocked.json", false),
+            ("block", "final-block.json", false),
         ];
 
-        for (status, file_name, blocker_codes, next_actions) in cases {
+        for (status, file_name, admitted) in cases {
             let root = std::env::temp_dir().join(format!(
                 "vida-taskflow-bridge-release1-operator-contract-gate-{}-{}-{}",
                 std::process::id(),
@@ -329,6 +338,14 @@ mod tests {
             ));
             let snapshot_dir = root.join("runtime-consumption");
             fs::create_dir_all(&snapshot_dir).expect("create snapshot dir");
+            let (blocker_codes, next_actions) = if admitted {
+                (Vec::new(), Vec::new())
+            } else {
+                (
+                    vec!["migration_required".to_string()],
+                    vec!["Complete required migration before normal operation.".to_string()],
+                )
+            };
             let operator_contracts = crate::build_operator_contracts_envelope(
                 status,
                 blocker_codes,
@@ -368,10 +385,12 @@ mod tests {
                 serde_json::to_string_pretty(&snapshot).expect("serialize snapshot"),
             )
             .expect("write runtime consumption snapshot");
-            assert_eq!(
-                enforce_execution_preparation_contract_gate(root.as_path()),
-                Ok(())
-            );
+            let result = enforce_execution_preparation_contract_gate(root.as_path());
+            if admitted {
+                assert_eq!(result, Ok(()));
+            } else {
+                assert!(result.is_err());
+            }
 
             let _ = fs::remove_dir_all(&root);
         }

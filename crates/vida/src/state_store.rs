@@ -835,6 +835,91 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
+    async fn update_task_rejects_closed_status_when_open_child_exists() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-update-task-close-open-child-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels: Vec<String> = Vec::new();
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "vida-root",
+                title: "Root",
+                display_id: None,
+                description: "root",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create root task");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "vida-child",
+                title: "Child",
+                display_id: None,
+                description: "child",
+                issue_type: "task",
+                status: "open",
+                priority: 2,
+                parent_id: Some("vida-root"),
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create child task");
+
+        let error = store
+            .update_task(UpdateTaskRequest {
+                task_id: "vida-root",
+                status: Some("closed"),
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: None,
+            })
+            .await
+            .expect_err("updating parent to closed with open child should fail");
+        match error {
+            StateStoreError::InvalidTaskRecord { reason } => {
+                assert!(reason.contains("cannot close task `vida-root`"));
+                assert!(reason.contains("vida-child"));
+            }
+            other => panic!("expected InvalidTaskRecord, got {other}"),
+        }
+
+        let root_task = store.show_task("vida-root").await.expect("show root");
+        assert_eq!(root_task.status, "open");
+        assert!(root_task.closed_at.is_none());
+
+        drop(store);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn update_task_reparents_without_losing_non_parent_dependencies() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1440,6 +1525,8 @@ hierarchy: framework,contracts
             std::process::id(),
             nanos
         ));
+        let source_root = root.join("framework-source");
+        write_minimal_framework_source_bundle(&source_root, "missing-runtime-root-marker");
 
         let store = StateStore::open(root.clone()).await.expect("open store");
         store
@@ -1447,7 +1534,7 @@ hierarchy: framework,contracts
             .await
             .expect("seed framework bundle");
         store
-            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .ingest_instruction_source_tree(&source_root.display().to_string())
             .await
             .expect("ingest source tree");
         let _: Option<InstructionRuntimeStateRow> = store
@@ -2598,6 +2685,27 @@ hierarchy: framework,contracts
         let mut receipt = sample_dispatch_receipt_with_status("executed");
         receipt.run_id = "run-shared-contract-flow".to_string();
         receipt.lane_status = "lane_running".to_string();
+        let result_path = root.join("run-shared-contract-flow-result.json");
+        fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "pass",
+                "activation_semantics": {
+                    "activation_kind": "execution_evidence",
+                    "view_only": false,
+                    "executes_packet": true,
+                    "records_completion_receipt": true
+                },
+                "execution_evidence": {
+                    "status": "recorded",
+                    "receipt_backed": true
+                }
+            }))
+            .expect("encode dispatch result"),
+        )
+        .expect("write dispatch result");
+        receipt.dispatch_result_path = Some(result_path.display().to_string());
         receipt.downstream_dispatch_target = Some("docflow".to_string());
         receipt.downstream_dispatch_ready = true;
         receipt.downstream_dispatch_blockers = vec![

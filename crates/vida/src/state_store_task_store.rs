@@ -1,7 +1,52 @@
 use super::*;
 use serde_json::Deserializer;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 impl StateStore {
+    async fn validate_task_display_id_alias(
+        &self,
+        task_id: &str,
+        display_id: Option<&str>,
+    ) -> Result<Option<String>, StateStoreError> {
+        let normalized_display_id = display_id.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        let Some(display_id) = normalized_display_id.as_deref() else {
+            return Ok(None);
+        };
+
+        let tasks = self.all_tasks().await?;
+        for task in tasks {
+            if task.id == task_id {
+                continue;
+            }
+            if task.id == display_id {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "task `{task_id}` display_id `{display_id}` conflicts with task id `{}`",
+                        task.id
+                    ),
+                });
+            }
+            if task.display_id.as_deref() == Some(display_id) {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "task `{task_id}` display_id `{display_id}` conflicts with task `{}` display_id",
+                        task.id
+                    ),
+                });
+            }
+        }
+
+        Ok(Some(display_id.to_string()))
+    }
+
     pub(crate) fn canonical_task_snapshot_path_for_state_root(state_root: &Path) -> PathBuf {
         if let Some(project_root) =
             crate::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
@@ -77,6 +122,39 @@ impl StateStore {
                     .expect("rfc3339 timestamp should render"),
             }));
         }
+        let existing: Option<crate::state_store::RunGraphContinuationBinding> = self
+            .db
+            .select(("run_graph_continuation_binding", status.run_id.as_str()))
+            .await?;
+        if let Some(existing) = existing {
+            let existing_task_id = existing.active_bounded_unit["task_id"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if existing.binding_source == "explicit_continuation_bind_task"
+                && existing_task_id == Some(closed_task_id)
+            {
+                return Ok(Some(crate::state_store::RunGraphContinuationBinding {
+                    run_id: status.run_id.clone(),
+                    task_id: status.task_id.clone(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "run_graph_task",
+                        "task_id": status.task_id,
+                        "run_id": status.run_id,
+                        "active_node": status.active_node,
+                    }),
+                    binding_source: "task_close_reconcile".to_string(),
+                    why_this_unit: "Closing the explicitly bound next task returned continuation to the owning run-graph task.".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only".to_string(),
+                    request_text: None,
+                    recorded_at: time::OffsetDateTime::now_utc()
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .expect("rfc3339 timestamp should render"),
+                }));
+            }
+        }
 
         Ok(None)
     }
@@ -84,16 +162,15 @@ impl StateStore {
     pub(crate) fn run_graph_status_allows_task_close_closure_binding(
         status: &RunGraphStatus,
     ) -> bool {
-        matches!(
-            status.status.as_str(),
-            "ready" | "in_progress" | "completed"
-        ) && !matches!(
-            status.lifecycle_stage.as_str(),
-            "analysis_blocked"
-                | "implementation_blocked"
-                | "verification_blocked"
-                | "closure_blocked"
-        ) && status.next_node.is_none()
+        matches!(status.status.as_str(), "completed")
+            && !matches!(
+                status.lifecycle_stage.as_str(),
+                "analysis_blocked"
+                    | "implementation_blocked"
+                    | "verification_blocked"
+                    | "closure_blocked"
+            )
+            && status.next_node.is_none()
             && status.handoff_state == "none"
             && status.resume_target == "none"
     }
@@ -298,12 +375,22 @@ impl StateStore {
         for row in explicit_binding_rows {
             affected_run_ids.insert(row.run_id);
         }
+        let mut all_binding_query = self
+            .db
+            .query("SELECT * FROM run_graph_continuation_binding;")
+            .await?;
+        let all_bindings: Vec<crate::state_store::RunGraphContinuationBinding> =
+            all_binding_query.take(0)?;
+        for binding in all_bindings {
+            if binding.active_bounded_unit["kind"].as_str() == Some("task_graph_task")
+                && binding.active_bounded_unit["task_id"].as_str() == Some(task_id)
+            {
+                affected_run_ids.insert(binding.run_id);
+            }
+        }
 
         for run_id in affected_run_ids {
             let status = self.run_graph_status(&run_id).await?;
-            if status.task_id == task_id {
-                self.record_run_graph_status(&status).await?;
-            }
             let Some(binding) = self
                 .build_task_close_reconciled_binding(&status, task_id)
                 .await?
@@ -319,6 +406,9 @@ impl StateStore {
                     .await?
             {
                 continue;
+            }
+            if status.task_id == task_id {
+                self.record_run_graph_status(&status).await?;
             }
             self.record_run_graph_continuation_binding(&binding).await?;
         }
@@ -349,7 +439,11 @@ impl StateStore {
                 });
             }
 
-            let content = TaskContent::from(record);
+            let normalized_display_id = self
+                .validate_task_display_id_alias(&task_id, record.display_id.as_deref())
+                .await?;
+            let mut content = TaskContent::from(record);
+            content.display_id = normalized_display_id;
             let existing: Option<TaskStorageRowStored> =
                 self.db.select(("task", task_id.as_str())).await?;
             match existing {
@@ -419,8 +513,31 @@ impl StateStore {
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(target_path, body)?;
+        Self::write_jsonl_export_file(target_path, body.as_bytes())?;
         Ok(self.all_tasks().await?.len())
+    }
+
+    fn write_jsonl_export_file(target_path: &Path, body: &[u8]) -> Result<(), StateStoreError> {
+        if fs::symlink_metadata(target_path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "refusing to write task export to symlink path: {}",
+                    target_path.display()
+                ),
+            });
+        }
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut file = options.open(target_path)?;
+        std::io::Write::write_all(&mut file, body)?;
+        Ok(())
     }
 
     pub async fn list_tasks(
@@ -594,7 +711,13 @@ impl StateStore {
     pub(crate) fn reverse_dependencies_from_rows(
         rows: &[TaskRecord],
         task_id: &str,
-    ) -> Vec<TaskDependencyStatus> {
+    ) -> Result<Vec<TaskDependencyStatus>, StateStoreError> {
+        if !rows.iter().any(|task| task.id == task_id) {
+            return Err(StateStoreError::MissingTask {
+                task_id: task_id.to_string(),
+            });
+        }
+
         let by_id = rows
             .iter()
             .map(|task| (task.id.clone(), task))
@@ -635,7 +758,7 @@ impl StateStore {
                 .unwrap_or_else(|| "missing".to_string());
         }
 
-        reverse
+        Ok(reverse)
     }
 
     pub async fn blocked_tasks(&self) -> Result<Vec<BlockedTaskRecord>, StateStoreError> {
@@ -859,14 +982,9 @@ impl StateStore {
                 Some(trimmed.to_string())
             }
         });
-        let normalized_display_id = display_id.and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
+        let normalized_display_id = self
+            .validate_task_display_id_alias(task_id, display_id)
+            .await?;
         if let Some(parent_id) = normalized_parent_id.as_deref() {
             if self.show_task(parent_id).await.is_err() {
                 return Err(StateStoreError::MissingTask {
@@ -962,6 +1080,29 @@ impl StateStore {
         } = request;
         let mut task = self.show_task(task_id).await?;
         if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
+            if status == "closed" {
+                let tasks = self.all_tasks().await?;
+                let open_children = tasks
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.id != task_id
+                            && candidate.status != "closed"
+                            && candidate.dependencies.iter().any(|dependency| {
+                                dependency.edge_type == "parent-child"
+                                    && dependency.depends_on_id == task_id
+                            })
+                    })
+                    .map(|candidate| candidate.id.clone())
+                    .collect::<Vec<_>>();
+                if !open_children.is_empty() {
+                    return Err(StateStoreError::InvalidTaskRecord {
+                        reason: format!(
+                            "cannot close task `{task_id}` while open child tasks exist: {}",
+                            open_children.join(", ")
+                        ),
+                    });
+                }
+            }
             task.status = status.to_string();
             if status == "closed" {
                 if task.closed_at.is_none() {
@@ -1327,6 +1468,8 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+    #[cfg(unix)]
+    use std::{io::ErrorKind, os::unix::fs::symlink};
 
     #[tokio::test]
     async fn close_task_refreshes_run_graph_continuation_binding_to_closure() {
@@ -1440,6 +1583,26 @@ mod tests {
             .expect("encode implementer packet"),
         )
         .expect("write implementer packet");
+        let implementer_result_path = packet_dir.join("run-close-task-implementer-result.json");
+        fs::write(
+            &implementer_result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "pass",
+                "activation_semantics": {
+                    "activation_kind": "execution_evidence",
+                    "view_only": false,
+                    "executes_packet": true,
+                    "records_completion_receipt": true
+                },
+                "execution_evidence": {
+                    "status": "recorded",
+                    "receipt_backed": true
+                }
+            }))
+            .expect("encode implementer result"),
+        )
+        .expect("write implementer result");
         store
             .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
                 run_id: "run-close-task".to_string(),
@@ -1452,7 +1615,7 @@ mod tests {
                 dispatch_surface: Some("vida agent-init".to_string()),
                 dispatch_command: Some("vida agent-init --dispatch-packet /tmp/implementer.json --execute-dispatch --json".to_string()),
                 dispatch_packet_path: Some(implementer_packet_path.display().to_string()),
-                dispatch_result_path: Some("/tmp/implementer-result.json".to_string()),
+                dispatch_result_path: Some(implementer_result_path.display().to_string()),
                 blocker_code: None,
                 downstream_dispatch_target: Some("coach".to_string()),
                 downstream_dispatch_command: Some("vida agent-init".to_string()),
@@ -1534,6 +1697,38 @@ mod tests {
         assert!(checkpoint_record.is_none());
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_writer_rejects_symlink_target() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-task-export-symlink-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let exports_dir = root.join(".vida/exports");
+        fs::create_dir_all(&exports_dir).expect("create exports dir");
+        let target_path = exports_dir.join("tasks.snapshot.jsonl");
+        let victim_path = root.join("victim");
+        fs::write(&victim_path, "original").expect("write victim");
+        symlink(&victim_path, &target_path).expect("create symlink");
+
+        let error = StateStore::write_jsonl_export_file(&target_path, br#"{"id":"T-1"}"#)
+            .expect_err("symlink write should be rejected");
+        assert!(
+            matches!(
+                error,
+                StateStoreError::InvalidTaskRecord { reason }
+                if reason.contains("refusing to write task export to symlink path")
+            ) || matches!(error, StateStoreError::Io(io_error) if io_error.kind() == ErrorKind::FilesystemLoop)
+        );
+        let victim_after = fs::read_to_string(&victim_path).expect("read victim");
+        assert_eq!(victim_after, "original");
     }
 
     #[tokio::test]

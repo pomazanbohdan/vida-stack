@@ -690,61 +690,12 @@ mod tests {
     use crate::launcher_activation_snapshot::pack_router_keywords_json;
     use crate::project_activator_surface::read_yaml_file_checked;
     use crate::temp_state::TempStateHarness;
+    use crate::test_cli_support::{cli, guard_current_dir};
     use crate::{build_compiled_agent_extension_bundle_for_root, run, Cli};
     use clap::Parser;
-    use std::env;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::process::ExitCode;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
-
-    struct RecoveringMutex(Mutex<()>);
-
-    impl RecoveringMutex {
-        fn lock(&self) -> MutexGuard<'_, ()> {
-            self.0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-        }
-    }
-
-    fn current_dir_lock() -> &'static RecoveringMutex {
-        static LOCK: OnceLock<RecoveringMutex> = OnceLock::new();
-        LOCK.get_or_init(|| RecoveringMutex(Mutex::new(())))
-    }
-
-    struct CurrentDirGuard {
-        _lock: MutexGuard<'static, ()>,
-        original: PathBuf,
-    }
-
-    impl CurrentDirGuard {
-        fn change_to(path: &Path) -> Self {
-            let lock = current_dir_lock().lock();
-            let original = env::current_dir().expect("current dir should resolve");
-            env::set_current_dir(path).expect("current dir should change");
-            Self {
-                _lock: lock,
-                original,
-            }
-        }
-    }
-
-    impl Drop for CurrentDirGuard {
-        fn drop(&mut self) {
-            env::set_current_dir(&self.original).expect("current dir should restore");
-        }
-    }
-
-    fn guard_current_dir(path: &Path) -> CurrentDirGuard {
-        CurrentDirGuard::change_to(path)
-    }
-
-    fn cli(args: &[&str]) -> Cli {
-        let mut argv = vec!["vida"];
-        argv.extend(args.iter().copied());
-        Cli::parse_from(argv)
-    }
 
     #[test]
     fn summarize_agent_route_prefers_explicit_executor_fields() {

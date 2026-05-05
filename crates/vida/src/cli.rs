@@ -52,6 +52,7 @@ impl TaskHandoffStatusArg {
 #[derive(Parser, Debug)]
 #[command(
     name = "vida",
+    bin_name = "vida",
     version = env!("CARGO_PKG_VERSION"),
     disable_help_subcommand = true,
     about = "VIDA Binary Foundation",
@@ -970,6 +971,7 @@ pub(crate) struct InitArgs {
 pub(crate) struct ProjectActivatorArgs {
     #[arg(
         long = "state-dir",
+        env = "VIDA_STATE_DIR",
         help = "Explicit project activation state dir; defaults to the current project's authoritative .vida/data/state"
     )]
     pub(crate) state_dir: Option<PathBuf>,

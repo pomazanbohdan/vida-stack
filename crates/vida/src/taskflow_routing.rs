@@ -318,8 +318,8 @@ pub(crate) fn selected_backend_from_execution_plan_route(
     route: &serde_json::Value,
 ) -> Option<String> {
     runtime_assignment_backend_for_route(execution_plan, route)
-        .or_else(|| activation_backend_from_route(route))
         .or_else(|| explicit_executor_backend_from_route(route))
+        .or_else(|| activation_backend_from_route(route))
         .or_else(|| route_backend_value(route, "fallback_executor_backend"))
         .or_else(|| route_backend_value(route, "fanout_executor_backends"))
         .or_else(|| legacy_route_backend_hint(route))

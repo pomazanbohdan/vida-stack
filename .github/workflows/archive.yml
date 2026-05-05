@@ -33,11 +33,6 @@ jobs:
             suffix: 'windows-x86_64'
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
       - name: Resolve release tag
         shell: bash
         run: |
@@ -52,6 +47,12 @@ jobs:
             exit 1
           fi
           echo "RELEASE_TAG=${release_tag}" >> "$GITHUB_ENV"
+
+      - name: Check out repository at release tag
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -105,11 +106,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
       - name: Resolve release tag
         shell: bash
         run: |
@@ -124,6 +120,12 @@ jobs:
             exit 1
           fi
           echo "RELEASE_TAG=${release_tag}" >> "$GITHUB_ENV"
+
+      - name: Check out repository at release tag
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Download all packaged assets
         uses: actions/download-artifact@v6

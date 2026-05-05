@@ -792,15 +792,31 @@ fn exception_takeover_metadata_dir(state_root: &Path) -> PathBuf {
     state_root.join("lane-exception-path-metadata")
 }
 
-fn exception_takeover_metadata_path(state_root: &Path, run_id: &str) -> PathBuf {
-    exception_takeover_metadata_dir(state_root).join(format!("{run_id}.json"))
+fn exception_takeover_metadata_filename(run_id: &str) -> Result<String, String> {
+    if run_id.is_empty() {
+        return Err("Run id cannot be empty for exception takeover metadata.".to_string());
+    }
+    if !run_id
+        .chars()
+        .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
+    {
+        return Err(format!(
+            "Run id `{run_id}` contains unsupported characters for exception takeover metadata filename."
+        ));
+    }
+    Ok(format!("{run_id}.json"))
+}
+
+fn exception_takeover_metadata_path(state_root: &Path, run_id: &str) -> Result<PathBuf, String> {
+    let file_name = exception_takeover_metadata_filename(run_id)?;
+    Ok(exception_takeover_metadata_dir(state_root).join(file_name))
 }
 
 fn read_exception_takeover_metadata(
     state_root: &Path,
     run_id: &str,
 ) -> Result<Option<ExceptionTakeoverMetadata>, String> {
-    let path = exception_takeover_metadata_path(state_root, run_id);
+    let path = exception_takeover_metadata_path(state_root, run_id)?;
     if !path.exists() {
         return Ok(None);
     }
@@ -833,7 +849,7 @@ fn write_exception_takeover_metadata(
             dir.display()
         )
     })?;
-    let path = exception_takeover_metadata_path(state_root, run_id);
+    let path = exception_takeover_metadata_path(state_root, run_id)?;
     let encoded = serde_json::to_string_pretty(metadata).map_err(|error| {
         format!(
             "Failed to encode exception takeover metadata `{}`: {error}",
@@ -890,6 +906,58 @@ fn read_lane_packet(path: &str) -> Result<serde_json::Value, String> {
         .map_err(|error| format!("Failed to read persisted lane packet `{path}`: {error}"))?;
     serde_json::from_str(&raw)
         .map_err(|error| format!("Failed to decode persisted lane packet `{path}`: {error}"))
+}
+
+fn canonicalize_for_lane_packet_validation(
+    path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    if path.exists() {
+        return std::fs::canonicalize(path).map_err(|error| {
+            format!(
+                "Failed to canonicalize lane packet path `{}`: {error}",
+                path.display()
+            )
+        });
+    }
+    let Some(parent) = path.parent().filter(|parent| *parent != path) else {
+        return Err(format!(
+            "Failed to canonicalize lane packet path `{}`: no existing parent",
+            path.display()
+        ));
+    };
+    let canonical_parent = canonicalize_for_lane_packet_validation(parent)?;
+    Ok(path
+        .file_name()
+        .map(|file_name| canonical_parent.join(file_name))
+        .unwrap_or(canonical_parent))
+}
+
+fn validate_lane_packet_path(
+    state_root: &std::path::Path,
+    run_id: &str,
+    packet_path: &str,
+    takeover_active: bool,
+) -> Result<std::path::PathBuf, String> {
+    let normalized = crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
+    let canonical_packet_path = canonicalize_for_lane_packet_validation(&normalized)?;
+    let allowed_downstream_dir = canonicalize_for_lane_packet_validation(
+        &state_root.join("runtime-consumption/downstream-dispatch-packets"),
+    )?;
+    if canonical_packet_path.starts_with(&allowed_downstream_dir) {
+        return Ok(canonical_packet_path);
+    }
+    if takeover_active {
+        let allowed_dispatch_dir = canonicalize_for_lane_packet_validation(
+            &state_root.join("runtime-consumption/dispatch-packets"),
+        )?;
+        if canonical_packet_path.starts_with(&allowed_dispatch_dir) {
+            return Ok(canonical_packet_path);
+        }
+    }
+    Err(format!(
+        "Lane `{run_id}` packet path `{}` is outside VIDA runtime packet directories.",
+        canonical_packet_path.display()
+    ))
 }
 
 fn write_lane_packet(path: &str, packet: &serde_json::Value) -> Result<(), String> {
@@ -963,7 +1031,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             };
             let recovery = store.run_graph_recovery_summary(&summary.run_id).await.ok();
             let exception_path_metadata_path =
-                exception_takeover_metadata_path(store.root(), &summary.run_id);
+                match exception_takeover_metadata_path(store.root(), &summary.run_id) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
             let exception_path_metadata =
                 match read_exception_takeover_metadata(store.root(), &summary.run_id) {
                     Ok(metadata) => metadata,
@@ -1004,7 +1078,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             };
             let recovery = store.run_graph_recovery_summary(run_id).await.ok();
             let exception_path_metadata_path =
-                exception_takeover_metadata_path(store.root(), run_id);
+                match exception_takeover_metadata_path(store.root(), run_id) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
             let exception_path_metadata =
                 match read_exception_takeover_metadata(store.root(), run_id) {
                     Ok(metadata) => metadata,
@@ -1069,13 +1149,32 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 );
                 return ExitCode::from(2);
             };
-            let mut packet = match read_lane_packet(&packet_path) {
+            let validated_packet_path = match validate_lane_packet_path(
+                store.root(),
+                run_id,
+                &packet_path,
+                takeover_active,
+            ) {
+                Ok(path) => path,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let validated_packet_path = validated_packet_path.display().to_string();
+            let mut packet = match read_lane_packet(&validated_packet_path) {
                 Ok(packet) => packet,
                 Err(error) => {
                     eprintln!("{error}");
                     return ExitCode::from(1);
                 }
             };
+            if packet.get("run_id").and_then(serde_json::Value::as_str) != Some(run_id) {
+                eprintln!(
+                    "Lane `{run_id}` packet `{validated_packet_path}` does not belong to the requested run."
+                );
+                return ExitCode::from(2);
+            }
             let completed_target = packet
                 .get("downstream_dispatch_active_target")
                 .and_then(serde_json::Value::as_str)
@@ -1090,7 +1189,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     run_id,
                     &completed_target,
                     receipt_id,
-                    &packet_path,
+                    &validated_packet_path,
                 ) {
                     Ok(path) => path,
                     Err(error) => {
@@ -1154,7 +1253,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             packet["downstream_lane_status"] = serde_json::json!(downstream_dispatch_status);
             packet["downstream_dispatch_active_target"] =
                 serde_json::json!(receipt.downstream_dispatch_active_target.clone());
-            if let Err(error) = write_lane_packet(&packet_path, &packet) {
+            if let Err(error) = write_lane_packet(&validated_packet_path, &packet) {
                 eprintln!("{error}");
                 return ExitCode::from(1);
             }
@@ -1196,7 +1295,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
             let truth = derive_lane_show_truth(&updated_summary, recovery.as_ref());
             let exception_path_metadata_path =
-                exception_takeover_metadata_path(store.root(), run_id);
+                match exception_takeover_metadata_path(store.root(), run_id) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
             let envelope = build_lane_envelope(
                 updated_summary,
                 status,
@@ -1234,12 +1339,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 eprintln!("{error}");
                 return ExitCode::from(2);
             }
-            receipt.exception_path_receipt_id = Some(receipt_id.to_string());
-            receipt.lane_status = explicit_lane_status_for_receipt(&receipt, recovery.as_ref());
-            if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
-                eprintln!("Failed to persist exception takeover receipt: {error}");
-                return ExitCode::from(1);
-            }
             let metadata_path =
                 match write_exception_takeover_metadata(store.root(), run_id, &metadata) {
                     Ok(path) => path,
@@ -1248,6 +1347,12 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+            receipt.exception_path_receipt_id = Some(receipt_id.to_string());
+            receipt.lane_status = explicit_lane_status_for_receipt(&receipt, recovery.as_ref());
+            if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
+                eprintln!("Failed to persist exception takeover receipt: {error}");
+                return ExitCode::from(1);
+            }
             let updated_summary =
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
             let truth = derive_lane_show_truth(&updated_summary, recovery.as_ref());
@@ -1294,7 +1399,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             let updated_summary =
                 crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
             let exception_path_metadata_path =
-                exception_takeover_metadata_path(store.root(), run_id);
+                match exception_takeover_metadata_path(store.root(), run_id) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
             let exception_path_metadata =
                 match read_exception_takeover_metadata(store.root(), run_id) {
                     Ok(metadata) => metadata,
@@ -1377,6 +1488,12 @@ mod tests {
     fn lane_surface_test_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn acquire_lane_surface_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        lane_surface_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn lane_complete_role_selection(dev_task_id: &str) -> crate::RuntimeConsumptionLaneSelection {
@@ -1668,9 +1785,7 @@ mod tests {
 
     #[tokio::test]
     async fn lane_show_run_fails_closed_for_exception_recorded_open_cycle() {
-        let _guard = lane_surface_test_lock()
-            .lock()
-            .expect("lane surface test lock should acquire");
+        let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1720,9 +1835,7 @@ mod tests {
 
     #[tokio::test]
     async fn lane_exception_takeover_records_receipt_without_activating_local_write() {
-        let _guard = lane_surface_test_lock()
-            .lock()
-            .expect("lane surface test lock should acquire");
+        let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1787,7 +1900,8 @@ mod tests {
             Some("receipt-1")
         );
         assert_eq!(after.lane_status, "lane_exception_recorded");
-        let metadata_path = exception_takeover_metadata_path(&root, run_id);
+        let metadata_path =
+            exception_takeover_metadata_path(&root, run_id).expect("exception path metadata path");
         let metadata = read_exception_takeover_metadata(&root, run_id)
             .expect("read persisted exception takeover metadata")
             .expect("exception takeover metadata should exist");
@@ -1805,9 +1919,7 @@ mod tests {
 
     #[tokio::test]
     async fn lane_exception_takeover_stays_recorded_until_explicit_supersession_exists() {
-        let _guard = lane_surface_test_lock()
-            .lock()
-            .expect("lane surface test lock should acquire");
+        let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1871,9 +1983,7 @@ mod tests {
 
     #[tokio::test]
     async fn lane_exception_takeover_rejects_superseded_lane_mutation() {
-        let _guard = lane_surface_test_lock()
-            .lock()
-            .expect("lane surface test lock should acquire");
+        let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1926,7 +2036,9 @@ mod tests {
             .expect("receipt should exist");
         assert_eq!(after.exception_path_receipt_id, None);
         assert!(
-            !exception_takeover_metadata_path(&root, run_id).exists(),
+            !exception_takeover_metadata_path(&root, run_id)
+                .expect("exception path metadata path")
+                .exists(),
             "superseded mutation must not persist exception takeover metadata"
         );
 
@@ -1935,9 +2047,7 @@ mod tests {
 
     #[tokio::test]
     async fn lane_supersede_activates_exception_takeover_for_recorded_exception_receipt() {
-        let _guard = lane_surface_test_lock()
-            .lock()
-            .expect("lane surface test lock should acquire");
+        let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -2008,9 +2118,7 @@ mod tests {
 
     #[tokio::test]
     async fn lane_show_run_blocks_admissible_takeover_until_supersession_receipt_exists() {
-        let _guard = lane_surface_test_lock()
-            .lock()
-            .expect("lane surface test lock should acquire");
+        let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -2064,9 +2172,7 @@ mod tests {
 
     #[tokio::test]
     async fn lane_complete_records_receipt_backed_downstream_completion_evidence() {
-        let _guard = lane_surface_test_lock()
-            .lock()
-            .expect("lane surface test lock should acquire");
+        let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -2214,9 +2320,7 @@ mod tests {
 
     #[tokio::test]
     async fn lane_complete_accepts_active_exception_takeover_with_root_dispatch_packet_evidence() {
-        let _guard = lane_surface_test_lock()
-            .lock()
-            .expect("lane surface test lock should acquire");
+        let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -2402,9 +2506,13 @@ mod tests {
             result_json["completion_receipt_id"],
             "completion-exception-1"
         );
+        let source_dispatch_packet_path = result_json["source_dispatch_packet_path"]
+            .as_str()
+            .expect("completion result should record source dispatch packet path");
         assert_eq!(
-            result_json["source_dispatch_packet_path"],
-            packet_path.display().to_string()
+            std::path::PathBuf::from(source_dispatch_packet_path),
+            std::fs::canonicalize(&packet_path)
+                .expect("source dispatch packet should canonicalize")
         );
         assert_eq!(
             after.dispatch_result_path.as_deref(),

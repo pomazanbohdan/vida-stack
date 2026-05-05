@@ -378,14 +378,19 @@ fn agent_init_command(
     state_dir: Option<&std::path::Path>,
     runtime_role: &str,
 ) -> String {
-    let mut command = if runtime_role.trim().is_empty() {
-        format!("vida agent-init --role worker {task_id} --json")
+    let runtime_role = if runtime_role.trim().is_empty() {
+        "worker"
     } else {
-        format!("vida agent-init --role {runtime_role} {task_id} --json")
+        runtime_role
     };
+    let mut command = format!(
+        "vida agent-init --role {} {} --json",
+        crate::shell_quote(runtime_role),
+        crate::shell_quote(task_id)
+    );
     if let Some(state_dir) = state_dir {
         command.push_str(" --state-dir ");
-        command.push_str(&state_dir.display().to_string());
+        command.push_str(&crate::shell_quote(&state_dir.display().to_string()));
     }
     command
 }
@@ -928,6 +933,10 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
     let mut blocker_codes = plan.blocker_codes.clone();
     let mut next_actions = plan.next_actions.clone();
     let mut selected_lanes = Vec::new();
+    if lanes_requested == 0 {
+        blocker_codes.push("invalid_lanes_requested".to_string());
+        next_actions.push("Pass `--lanes <n>` with n >= 1.".to_string());
+    }
     let blocked_candidates = plan
         .rejected_candidates
         .iter()
@@ -1011,6 +1020,9 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
                 .to_string(),
         );
     }
+    if lanes_requested == 0 {
+        selected_lanes.clear();
+    }
 
     let status = if blocker_codes.is_empty() {
         "pass"
@@ -1020,7 +1032,11 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
     .to_string();
     let configured_parallel =
         usize::try_from(plan.configured_max_parallel_agents).unwrap_or(usize::MAX);
-    let effective_parallel = usize::try_from(plan.max_parallel_agents).unwrap_or(usize::MAX);
+    let effective_parallel = if lanes_requested == 0 {
+        0
+    } else {
+        usize::try_from(plan.max_parallel_agents).unwrap_or(usize::MAX)
+    };
     let parallelization_planner =
         build_parallelization_planner(&plan.scheduling, lanes_requested, effective_parallel);
     AgentDispatchNextPreview {

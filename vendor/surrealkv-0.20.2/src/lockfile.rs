@@ -66,14 +66,20 @@ impl LockFile {
 	/// Acquires the lock, returning an error if the database is already in use
 	#[cfg(not(target_arch = "wasm32"))]
 	pub fn acquire(&mut self) -> Result<()> {
-		// Try to open the lock file with create flag
-		let file = OpenOptions::new()
-			.read(true)
-			.write(true)
-			.create(true)
-			.truncate(true)
-			.open(&self.path)
-			.map_err(|e| Error::Io(Arc::new(e)))?;
+		// Refuse to operate on a symlink lock path.
+		if let Ok(meta) = std::fs::symlink_metadata(&self.path) {
+			if meta.file_type().is_symlink() {
+				return Err(Error::Other(format!(
+					"Refusing to acquire lock on symlink path: {}",
+					self.path.display()
+				)));
+			}
+		}
+
+		// Open without truncate first; lock acquisition must succeed before mutation.
+		let mut options = OpenOptions::new();
+		options.read(true).write(true).create(true);
+		let file = options.open(&self.path).map_err(|e| Error::Io(Arc::new(e)))?;
 
 		// Try to lock the file exclusively using fs2
 		file.try_lock_exclusive().map_err(|e| match e.kind() {

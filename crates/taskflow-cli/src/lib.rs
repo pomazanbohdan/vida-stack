@@ -140,7 +140,7 @@ fn resolve_runtime_project_root() -> Result<PathBuf, String> {
         .map_err(|error| format!("Failed to resolve current directory: {error}"))?;
     find_project_root(&cwd).ok_or_else(|| {
         format!(
-            "Unable to resolve VIDA project root from `{}`. Run from a project containing `vida.config.yaml`, `AGENTS.md`, or `.vida/` or set `VIDA_STATE_DIR` explicitly.",
+            "Unable to resolve VIDA project root from `{}`. Run from an activated VIDA project (requires AGENTS.md, vida.config.yaml, and .vida/{{config,db,project}}) or set VIDA_STATE_DIR explicitly.",
             cwd.display()
         )
     })
@@ -156,7 +156,9 @@ fn find_project_root(start: &Path) -> Option<PathBuf> {
 }
 
 fn looks_like_project_root(path: &Path) -> bool {
-    path.join("vida.config.yaml").is_file()
-        || path.join("AGENTS.md").is_file()
-        || path.join(".vida").is_dir()
+    path.join("AGENTS.md").is_file()
+        && path.join("vida.config.yaml").is_file()
+        && path.join(".vida/config").is_dir()
+        && path.join(".vida/db").is_dir()
+        && path.join(".vida/project").is_dir()
 }

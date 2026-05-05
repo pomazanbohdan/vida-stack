@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{json, Value};
@@ -717,14 +717,23 @@ fn artifact_path_materialized(artifact_path: &str, project_root: Option<&Path>) 
     if artifact_path.trim().is_empty() {
         return false;
     }
+    let Some(project_root) = project_root else {
+        return false;
+    };
     let path = PathBuf::from(artifact_path);
     if path.is_absolute() {
-        return path.exists();
+        return false;
     }
-    if let Some(project_root) = project_root {
-        return project_root.join(&path).exists();
+    if path.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return false;
     }
-    path.exists()
+
+    project_root.join(path).exists()
 }
 
 fn blocked_payload(surface: &str, state_root: &Path, reason: String) -> Value {
@@ -851,7 +860,8 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir_all(&temp_root).expect("create temp root");
-        let artifact_path = temp_root.join("docs/artifacts/developer-handoff.json");
+        let artifact_relative_path = "docs/artifacts/developer-handoff.json";
+        let artifact_path = temp_root.join(artifact_relative_path);
         fs::create_dir_all(
             artifact_path
                 .parent()
@@ -892,7 +902,7 @@ mod tests {
                 "developer_handoff_packet": {
                     "ready": true,
                     "status": "ready",
-                    "path": artifact_path.to_string_lossy()
+                    "path": artifact_relative_path
                 },
                 "spec_alignment_summary": {
                     "ready": false,
@@ -1120,5 +1130,35 @@ mod tests {
             payload["operator_contracts"]["artifact_refs"],
             payload["artifact_refs"]
         );
+    }
+
+    #[test]
+    fn artifact_path_materialized_rejects_out_of_root_paths() {
+        let temp_root =
+            std::env::temp_dir().join(format!("vida-artifact-root-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_root);
+        fs::create_dir_all(temp_root.join("artifacts")).expect("create root");
+        fs::write(temp_root.join("artifacts").join("inside.json"), b"ok").expect("write inside");
+
+        let absolute_inside = temp_root
+            .join("artifacts")
+            .join("inside.json")
+            .to_string_lossy()
+            .to_string();
+        assert!(!artifact_path_materialized(
+            &absolute_inside,
+            Some(&temp_root)
+        ));
+        assert!(!artifact_path_materialized(
+            "../outside.json",
+            Some(&temp_root)
+        ));
+        assert!(!artifact_path_materialized("artifacts/inside.json", None));
+        assert!(artifact_path_materialized(
+            "artifacts/inside.json",
+            Some(&temp_root)
+        ));
+
+        let _ = fs::remove_dir_all(temp_root);
     }
 }

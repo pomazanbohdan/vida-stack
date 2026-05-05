@@ -14,17 +14,21 @@ fn write_mock_vida(bin_dir: &Path) {
     );
 }
 
+fn write_activated_project_root(root: &Path) {
+    fs::write(root.join("AGENTS.md"), "# test\n").expect("agents");
+    fs::write(root.join("vida.config.yaml"), "project:\n  id: demo\n").expect("config");
+    fs::create_dir_all(root.join(".vida/config")).expect(".vida/config");
+    fs::create_dir_all(root.join(".vida/db")).expect(".vida/db");
+    fs::create_dir_all(root.join(".vida/project")).expect(".vida/project");
+}
+
 #[test]
 fn help_command_delegates_to_vida_taskflow_help() {
     let bin_dir = temp_dir("taskflow-cli-bin");
     write_mock_vida(&bin_dir);
     let vida_bin = bin_dir.join(if cfg!(windows) { "vida.bat" } else { "vida" });
     let project_root = temp_dir("taskflow-cli-project");
-    fs::write(
-        project_root.join("vida.config.yaml"),
-        "project:\n  id: demo\n",
-    )
-    .expect("config");
+    write_activated_project_root(&project_root);
     let mut process_guard = vida_test_support::ProcessGuard::new();
     process_guard.set_env("VIDA_TASKFLOW_VIDA_BIN", &vida_bin);
     process_guard.unset_env("VIDA_STATE_DIR");
@@ -51,11 +55,7 @@ fn delegated_commands_bind_project_local_state_dir_when_missing() {
     write_mock_vida(&bin_dir);
     let vida_bin = bin_dir.join(if cfg!(windows) { "vida.bat" } else { "vida" });
     let project_root = temp_dir("taskflow-cli-project");
-    fs::write(
-        project_root.join("vida.config.yaml"),
-        "project:\n  id: demo\n",
-    )
-    .expect("config");
+    write_activated_project_root(&project_root);
     let mut process_guard = vida_test_support::ProcessGuard::new();
     process_guard.set_env("VIDA_TASKFLOW_VIDA_BIN", &vida_bin);
     process_guard.unset_env("VIDA_STATE_DIR");

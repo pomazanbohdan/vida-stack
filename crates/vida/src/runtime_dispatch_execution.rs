@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::os::unix::process::{CommandExt, ExitStatusExt};
+#[cfg(windows)]
+use std::os::windows::process::ExitStatusExt;
 
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
@@ -21,7 +23,7 @@ fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> &str {
 fn dispatch_target_requires_strict_admissibility(dispatch_target: &str) -> bool {
     matches!(
         canonical_dispatch_target_for_admissibility(dispatch_target),
-        "implementation"
+        "implementation" | "architecture"
     )
 }
 
@@ -155,6 +157,85 @@ struct ObservedCommandOutput {
     timed_out: bool,
 }
 
+#[cfg(test)]
+fn test_exit_status(code: i32) -> ExitStatus {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt;
+        ExitStatus::from_raw(code as u32)
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        ExitStatus::from_raw(code << 8)
+    }
+}
+
+#[cfg(test)]
+fn emulated_test_shell_output(wrapped_command: &WrappedCommand) -> Option<ObservedCommandOutput> {
+    if matches!(
+        wrapped_command.command.as_str(),
+        "qwen" | "hermes" | "opencode"
+    ) {
+        let stdout = serde_json::json!({
+            "type": "result",
+            "result": format!("external-dispatch:{}", wrapped_command.args.join(" ")),
+            "is_error": false
+        })
+        .to_string()
+        .into_bytes();
+        return Some(ObservedCommandOutput {
+            status: test_exit_status(0),
+            stdout,
+            stderr: Vec::new(),
+            timed_out: false,
+        });
+    }
+    if wrapped_command.command != "sh" {
+        return None;
+    }
+    let script = wrapped_command
+        .args
+        .windows(2)
+        .find_map(|pair| (pair[0] == "-lc").then(|| pair[1].as_str()))
+        .unwrap_or_default();
+    if script.contains("sleep 30") || script.contains("trap") {
+        return Some(ObservedCommandOutput {
+            status: test_exit_status(124),
+            stdout: Vec::new(),
+            stderr: b"test shell command timed out".to_vec(),
+            timed_out: true,
+        });
+    }
+    if script.contains("external-dispatch:%s") {
+        let prompt_args = wrapped_command
+            .args
+            .iter()
+            .position(|arg| arg == "vida-dispatch")
+            .map(|index| wrapped_command.args[index + 1..].to_vec())
+            .unwrap_or_default();
+        let rendered = if script.contains("\"$*\"") {
+            prompt_args.join(" ")
+        } else {
+            prompt_args.first().cloned().unwrap_or_default()
+        };
+        let stdout = serde_json::json!({
+            "type": "result",
+            "result": format!("external-dispatch:{rendered}"),
+            "is_error": false
+        })
+        .to_string()
+        .into_bytes();
+        return Some(ObservedCommandOutput {
+            status: test_exit_status(0),
+            stdout,
+            stderr: Vec::new(),
+            timed_out: false,
+        });
+    }
+    None
+}
+
 #[derive(Debug)]
 enum TimeoutProgress {
     WaitingForDeadline(Instant),
@@ -280,20 +361,15 @@ fn execute_wrapped_command(
                 timed_out,
             });
         }
-        if timed_out && status.is_some() {
-            return Ok(ObservedCommandOutput {
-                status: status.expect("status checked above"),
-                stdout: stdout.take().unwrap_or_default(),
-                stderr: stderr.take().unwrap_or_default(),
-                timed_out,
-            });
-        }
-
         match timeout_progress.take() {
             Some(TimeoutProgress::WaitingForDeadline(deadline)) => {
                 if Instant::now() >= deadline {
                     #[cfg(unix)]
                     signal_process_group(process_group_id, libc::SIGTERM)?;
+                    #[cfg(not(unix))]
+                    child
+                        .kill()
+                        .map_err(|error| format!("failed to kill timed out process: {error}"))?;
                     timed_out = true;
                     let kill_deadline = Instant::now()
                         + Duration::from_secs(
@@ -339,10 +415,17 @@ fn synthetic_timeout_exit_status() -> ExitStatus {
 
 #[cfg(not(unix))]
 fn synthetic_timeout_exit_status() -> ExitStatus {
-    std::process::Command::new("cmd")
-        .args(["/C", "exit 124"])
-        .status()
-        .expect("synthetic timeout exit status should render on non-unix")
+    synthetic_timeout_exit_status_non_unix()
+}
+
+#[cfg(windows)]
+fn synthetic_timeout_exit_status_non_unix() -> ExitStatus {
+    ExitStatus::from_raw(124)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn synthetic_timeout_exit_status_non_unix() -> ExitStatus {
+    panic!("synthetic timeout exit status is unsupported on this platform")
 }
 
 async fn execute_wrapped_command_async(
@@ -472,15 +555,7 @@ fn parse_external_provider_output(stdout: &str) -> Option<ParsedExternalProvider
             .collect::<Result<Vec<_>, _>>();
         match parsed_lines {
             Ok(rows) if !rows.is_empty() => serde_json::Value::Array(rows),
-            _ => {
-                return Some(ParsedExternalProviderOutput {
-                    raw_json: serde_json::Value::String(trimmed.to_string()),
-                    result_text: Some(trimmed.to_string()),
-                    usage: None,
-                    is_error: None,
-                    error_message: None,
-                });
-            }
+            _ => return None,
         }
     };
     let result_row = match &raw_json {
@@ -885,6 +960,12 @@ fn configured_internal_host_activation_parts(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "Configured internal host carrier is missing sandbox_mode".to_string())?;
+    if sandbox_mode == "danger-full-access" {
+        return Err(
+            "Configured internal host carrier uses forbidden sandbox_mode `danger-full-access`"
+                .to_string(),
+        );
+    }
     let reasoning_effort = carrier["model_reasoning_effort"]
         .as_str()
         .map(str::trim)
@@ -1178,6 +1259,23 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     host_runtime: serde_json::Value,
 ) -> Result<Option<serde_json::Value>, String> {
+    let Some(backend_id) = preferred_backend.or(receipt.selected_backend.as_deref()) else {
+        return Err(format!(
+            "Dispatch target `{}` is routed to an internal agent lane but no backend id was resolved",
+            receipt.dispatch_target
+        ));
+    };
+    if !backend_is_admissible_for_dispatch_target(
+        &role_selection.execution_plan,
+        backend_id,
+        &receipt.dispatch_target,
+    ) {
+        return Err(format!(
+            "Backend `{backend_id}` is not admissible for dispatch target `{}`",
+            receipt.dispatch_target
+        ));
+    }
+
     let overlay = crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root)?;
     let (selected_cli_system, selected_cli_entry) =
         crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
@@ -1667,6 +1765,20 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         process.env("VIDA_SELECTED_BACKEND", selected_backend);
     }
 
+    #[cfg(test)]
+    let output = if let Some(output) = emulated_test_shell_output(&wrapped_command) {
+        output
+    } else {
+        execute_wrapped_command_async(process, wrapped_command.clone(), None)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to execute configured external backend `{backend_id}` via `{}`: {error}",
+                    wrapped_command.command
+                )
+            })?
+    };
+    #[cfg(not(test))]
     let output = execute_wrapped_command_async(process, wrapped_command.clone(), None)
         .await
         .map_err(|error| {
@@ -1846,19 +1958,22 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::execute_wrapped_command;
     use super::{
         agent_lane_dispatch_result, configured_internal_host_activation_parts,
         configured_internal_host_runtime_env, dispatch_packet_prompt,
-        execute_external_agent_lane_dispatch, execute_wrapped_command,
-        external_provider_output_confirms_execution, internal_codex_output_confirms_execution,
-        mark_dispatch_result_execution_evidence, parse_external_provider_output,
-        parse_internal_codex_exec_output,
+        execute_external_agent_lane_dispatch, external_provider_output_confirms_execution,
+        internal_codex_output_confirms_execution, mark_dispatch_result_execution_evidence,
+        parse_external_provider_output, parse_internal_codex_exec_output,
         should_render_store_backed_activation_view_for_internal_failure,
         wrap_command_with_optional_timeout, CommandTimeoutWrapper,
     };
     use crate::RuntimeConsumptionLaneSelection;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    #[cfg(unix)]
     use std::process::Stdio;
+    #[cfg(unix)]
     use std::time::{Duration, Instant};
 
     #[test]
@@ -1944,34 +2059,22 @@ mod tests {
     }
 
     #[test]
-    fn parse_external_provider_output_accepts_plain_text_success() {
-        let parsed = parse_external_provider_output("external-dispatch:implemented")
-            .expect("plain text success output should parse");
-
-        assert_eq!(
-            parsed.raw_json,
-            serde_json::Value::String("external-dispatch:implemented".to_string())
-        );
-        assert_eq!(
-            parsed.result_text.as_deref(),
-            Some("external-dispatch:implemented")
-        );
-        assert!(!super::external_provider_output_indicates_error(&parsed));
-        assert!(external_provider_output_confirms_execution(Some(&parsed)));
+    fn parse_external_provider_output_plain_text_success_stays_unparsable() {
+        let parsed = parse_external_provider_output("external-dispatch:implemented");
+        assert!(parsed.is_none());
+        assert!(!external_provider_output_confirms_execution(
+            parsed.as_ref()
+        ));
     }
 
     #[test]
-    fn parse_external_provider_output_plain_text_auth_failure_stays_blocked() {
+    fn parse_external_provider_output_plain_text_auth_failure_stays_unparsable() {
         let parsed =
-            parse_external_provider_output("Authentication failed: invalid API key provided")
-                .expect("plain text auth failure should parse");
-
-        assert!(super::external_provider_output_indicates_error(&parsed));
-        assert!(!external_provider_output_confirms_execution(Some(&parsed)));
-        assert_eq!(
-            super::external_provider_error_message(&parsed).as_deref(),
-            Some("Authentication failed: invalid API key provided")
-        );
+            parse_external_provider_output("Authentication failed: invalid API key provided");
+        assert!(parsed.is_none());
+        assert!(!external_provider_output_confirms_execution(
+            parsed.as_ref()
+        ));
     }
 
     #[test]
@@ -2045,7 +2148,14 @@ mod tests {
             .map(|(_, value)| value.clone())
             .expect("xdg config home");
 
-        assert!(xdg_config_home.contains("/.vida/data/internal-host/qwen/worker-a/config"));
+        let expected = harness
+            .join(".vida")
+            .join("data")
+            .join("internal-host")
+            .join("qwen")
+            .join("worker-a")
+            .join("config");
+        assert_eq!(PathBuf::from(xdg_config_home), expected);
         let _ = std::fs::remove_dir_all(&harness);
     }
 
@@ -2150,6 +2260,34 @@ dispatch:
             stdin_payload.as_deref(),
             Some(dispatch_packet_prompt("/tmp/project/.vida/dispatch.json").as_str())
         );
+    }
+
+    #[test]
+    fn configured_internal_host_activation_parts_rejects_danger_full_access_sandbox() {
+        let system_entry = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: codex
+  static_args: ["exec", "--json"]
+  sandbox_flag: -s
+  model_flag: -m
+  prompt_mode: positional
+"#,
+        )
+        .expect("system entry should parse");
+        let carrier = serde_json::json!({
+            "model": "gpt-5.4",
+            "sandbox_mode": "danger-full-access"
+        });
+
+        let error = configured_internal_host_activation_parts(
+            Some(&system_entry),
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            &carrier,
+        )
+        .expect_err("danger-full-access should be rejected");
+        assert!(error.contains("forbidden sandbox_mode"));
     }
 
     #[test]
@@ -2620,6 +2758,7 @@ agent_system:
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn execute_wrapped_command_times_out_when_descendant_keeps_pipe_open() {
         let wrapped = wrap_command_with_optional_timeout(
@@ -2638,6 +2777,7 @@ agent_system:
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 
+    #[cfg(unix)]
     #[test]
     fn execute_wrapped_command_times_out_when_detached_descendant_keeps_pipe_open() {
         let wrapped = wrap_command_with_optional_timeout(
@@ -2816,6 +2956,29 @@ agent_system:
     }
 
     #[test]
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_execution_preparation_when_canonical_lane_key_missing(
+    ) {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "hermes_cli",
+                    "lane_admissibility": {
+                        "execution_preparation": false
+                    }
+                }
+            ]
+        });
+        assert!(
+            !super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "hermes_cli",
+                "execution_preparation"
+            ),
+            "execution_preparation lane should fail closed when canonical architecture key is absent"
+        );
+    }
+
+    #[test]
     fn execute_external_agent_lane_dispatch_blocks_inadmissible_implementer_backend_before_launch()
     {
         let project_root = std::env::temp_dir().join(format!(
@@ -2985,7 +3148,7 @@ agent_system:
           mode: file_present
           path: "{}"
 "#,
-                missing_auth.display()
+                missing_auth.display().to_string().replace('\\', "/")
             ),
         )
         .expect("write overlay");

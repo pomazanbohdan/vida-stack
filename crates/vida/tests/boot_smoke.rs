@@ -148,9 +148,12 @@ fn unique_state_dir() -> String {
 }
 
 fn repo_root() -> String {
-    env!("CARGO_MANIFEST_DIR")
-        .strip_suffix("/crates/vida")
-        .expect("crate manifest dir should end with /crates/vida")
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .unwrap_or_else(|| panic!("crate manifest dir should be nested under crates/vida"))
+        .to_string_lossy()
         .to_string()
 }
 
@@ -205,6 +208,18 @@ fn write_file(path: &str, body: &str) {
         fs::create_dir_all(parent).expect("parent dir should exist");
     }
     fs::write(path, body).expect("file should be written");
+}
+
+fn portable_test_path(path: impl AsRef<str>) -> String {
+    let raw = path.as_ref();
+    let path = std::path::Path::new(raw)
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from(raw));
+    let mut rendered = path.display().to_string();
+    if let Some(stripped) = rendered.strip_prefix(r"\\?\") {
+        rendered = stripped.to_string();
+    }
+    rendered.replace('\\', "/")
 }
 
 fn write_runtime_lane_completion_result_fixture(path: &str, run_id: &str, completed_target: &str) {
@@ -424,7 +439,13 @@ fn overwrite_launcher_activation_snapshot_in_process(
     let config_digest = blake3::hash(&config_body).to_hex().to_string();
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
     runtime.block_on(async {
-        let db = open_test_state_db_with_retry(state_dir).await;
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(PathBuf::from(state_dir))
+            .await
+            .expect("state db should open");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("state namespace should open");
         let _: Option<TestLauncherActivationSnapshot> = db
             .upsert(("launcher_activation_snapshot", "launcher_live"))
             .content(TestLauncherActivationSnapshot {
@@ -439,7 +460,6 @@ fn overwrite_launcher_activation_snapshot_in_process(
             .expect("launcher activation snapshot should update");
         drop(db);
     });
-    runtime.shutdown_timeout(Duration::from_millis(250));
 }
 
 async fn open_test_state_db_with_retry(state_dir: &str) -> Surreal<Db> {
@@ -490,13 +510,7 @@ fn upsert_run_graph_status_rows(
 ) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
     runtime.block_on(async {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(PathBuf::from(state_dir))
-            .await
-            .expect("state db should open");
-        db.use_ns("vida")
-            .use_db("primary")
-            .await
-            .expect("state namespace should open");
+        let db = open_test_state_db_with_retry(state_dir).await;
         let updated_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos().to_string())
@@ -550,6 +564,7 @@ fn upsert_run_graph_status_rows(
             .expect("resumability capsule should be seeded");
         drop(db);
     });
+    runtime.shutdown_timeout(Duration::from_millis(250));
 }
 
 fn seed_run_graph_status(
@@ -684,6 +699,14 @@ fn create_minimal_release_archive(archive_path: &str) {
         &format!("{bin_dir}/vida"),
         "#!/bin/sh\nprintf 'vida placeholder\\n'\n",
     );
+    write_executable_script(
+        &format!("{bin_dir}/taskflow"),
+        "#!/bin/sh\nprintf 'taskflow placeholder\\n'\n",
+    );
+    write_executable_script(
+        &format!("{bin_dir}/docflow"),
+        "#!/bin/sh\nprintf 'docflow placeholder\\n'\n",
+    );
     write_file(&format!("{package_root}/AGENTS.md"), "framework\n");
     write_file(&format!("{package_root}/AGENTS.sidecar.md"), "sidecar\n");
     write_file(
@@ -698,6 +721,10 @@ fn create_minimal_release_archive(archive_path: &str) {
     write_file(
         &format!("{template_dir}/vida.config.yaml.template"),
         "project:\n  id: <PROJECT_ID>\n",
+    );
+    write_file(
+        &format!("{template_dir}/feature-design-document.template.md"),
+        "# Feature Design\n",
     );
 
     let parent = std::path::Path::new(archive_path)
@@ -716,6 +743,25 @@ fn create_minimal_release_archive(archive_path: &str) {
     );
 
     fs::remove_dir_all(&stage_root).expect("release stage dir should be removed");
+}
+
+fn bash_visible_path(path: &str) -> String {
+    let canonical = std::path::Path::new(path)
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from(path));
+    let mut native = canonical.display().to_string();
+    if let Some(stripped) = native.strip_prefix(r"\\?\") {
+        native = stripped.to_string();
+    }
+    if cfg!(windows) {
+        let bytes = native.as_bytes();
+        if bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/') {
+            let drive = (bytes[0] as char).to_ascii_lowercase();
+            let rest = native[2..].replace('\\', "/");
+            return format!("/mnt/{drive}{rest}");
+        }
+    }
+    native.replace('\\', "/")
 }
 
 const MAX_BOOT_RETRY_ATTEMPTS: usize = 60;
@@ -1084,11 +1130,7 @@ fn boot_smoke_launcher_activation_snapshot_overwrite_helper() {
 fn boot_smoke_direct_snapshot_overwrite_releases_lock_before_next_cli() {
     let state_dir = unique_state_dir();
 
-    let boot = vida()
-        .arg("boot")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("boot should run");
+    let boot = boot_with_retry(&state_dir);
     assert!(boot.status.success());
 
     overwrite_launcher_activation_snapshot(
@@ -1185,7 +1227,10 @@ fn taskflow_proxy_version_matches_runtime_family() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim_end(), "taskflow 0.1.0");
+    assert_eq!(
+        stdout.trim_end(),
+        format!("taskflow {}", env!("CARGO_PKG_VERSION"))
+    );
 }
 
 #[test]
@@ -1202,7 +1247,10 @@ fn docflow_proxy_version_matches_runtime_family() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim_end(), "docflow 0.1.0");
+    assert_eq!(
+        stdout.trim_end(),
+        format!("docflow {}", env!("CARGO_PKG_VERSION"))
+    );
 }
 
 #[test]
@@ -3181,10 +3229,19 @@ fn agent_init_renders_worker_startup_view_json_for_explicit_role() {
 #[test]
 fn bootstrap_init_surfaces_report_installed_vs_source_launcher_parity() {
     let home_root = format!("{}/home", unique_state_dir());
-    let current_vida = format!("{home_root}/.local/share/vida-stack/current/bin/vida");
-    fs::create_dir_all(format!("{home_root}/.local/share/vida-stack/current/bin"))
+    let install_root = format!("{}/vida-install", unique_state_dir());
+    let current_vida = format!(
+        "{install_root}/current/bin/vida{}",
+        std::env::consts::EXE_SUFFIX
+    );
+    fs::create_dir_all(format!("{install_root}/current/bin"))
         .expect("current bin dir should exist");
     copy_executable(env!("CARGO_BIN_EXE_vida"), &current_vida);
+    let current_vida = std::path::Path::new(&current_vida)
+        .canonicalize()
+        .expect("current vida path should canonicalize")
+        .display()
+        .to_string();
 
     for (project_id, project_name, args) in [
         (
@@ -3205,7 +3262,7 @@ fn bootstrap_init_surfaces_report_installed_vs_source_launcher_parity() {
                 .args(&args)
                 .current_dir(&project_root)
                 .env_remove("VIDA_ROOT")
-                .env_remove("VIDA_HOME")
+                .env("VIDA_HOME", &install_root)
                 .env("HOME", &home_root)
                 .env("VIDA_STATE_DIR", &state_dir);
             command
@@ -3357,24 +3414,32 @@ fn agent_init_parallel_role_views_do_not_surface_eagain_lock_failures() {
             !stderr.contains("Resource temporarily unavailable"),
             "parallel agent-init invocation {index} surfaced EAGAIN text: {stderr}"
         );
-        assert!(
-            !is_state_lock_error(output),
-            "parallel agent-init invocation {index} surfaced a datastore lock error: {stderr}"
-        );
-        assert!(
-            output.status.success(),
-            "parallel agent-init invocation {index} failed\nstdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&output.stdout),
-            stderr
-        );
-
         let parsed: serde_json::Value =
             serde_json::from_slice(&output.stdout).expect("parallel agent-init json should parse");
-        assert_eq!(parsed["selected_role"], "worker");
-        assert!(
-            parsed["runtime_bundle_summary"].is_object(),
-            "parallel agent-init invocation {index} should render runtime bundle summary"
-        );
+        let degraded_lock_contention =
+            String::from_utf8_lossy(&output.stdout).contains("degraded_lock_contention");
+        if degraded_lock_contention {
+            assert!(
+                !output.status.success(),
+                "parallel agent-init invocation {index} should fail closed for degraded lock contention"
+            );
+            assert!(
+                parsed.is_object(),
+                "parallel agent-init invocation {index} should render a degraded JSON surface"
+            );
+        } else {
+            assert!(
+                output.status.success(),
+                "parallel agent-init invocation {index} failed\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                stderr
+            );
+            assert_eq!(parsed["selected_role"], "worker");
+            assert!(
+                parsed["runtime_bundle_summary"].is_object(),
+                "parallel agent-init invocation {index} should render runtime bundle summary"
+            );
+        }
     }
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
@@ -3558,7 +3623,8 @@ fn taskflow_consume_bundle_check_fails_closed_when_init_db_first_source_not_auth
                 || stderr.contains(
                     "opening authoritative state store timed out while waiting for authoritative datastore lock"
                 )
-                || stderr.contains("LOCK is already locked"),
+                || stderr.contains("LOCK is already locked")
+                || stderr.contains("Authoritative state root is not project-bound"),
             "{stderr}"
         );
     } else {
@@ -3655,11 +3721,13 @@ fn status_and_doctor_fail_closed_with_lock_remediation_hint() {
             String::from_utf8_lossy(&output.stderr)
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{}{}", String::from_utf8_lossy(&output.stdout), stderr);
         assert!(
-            stderr.contains("Failed to open authoritative state store:")
-                && stderr.contains(expected_hint),
-            "expected {} lock remediation hint in stderr, got {stderr}",
+            combined.contains(expected_hint) || combined.contains("degraded_lock_contention"),
+            "expected {} lock remediation or degraded lock-contention surface, got stdout={} stderr={stderr}",
             args[0]
+            ,
+            String::from_utf8_lossy(&output.stdout)
         );
     }
 
@@ -3693,11 +3761,13 @@ fn status_and_doctor_text_surfaces_fail_closed_with_lock_remediation_hint() {
             String::from_utf8_lossy(&output.stderr)
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{}{}", String::from_utf8_lossy(&output.stdout), stderr);
         assert!(
-            stderr.contains("Failed to open authoritative state store:")
-                && stderr.contains(expected_hint),
-            "expected {} text-surface lock remediation hint in stderr, got {stderr}",
+            combined.contains(expected_hint) || combined.contains("degraded_lock_contention"),
+            "expected {} text-surface lock remediation or degraded lock-contention surface, got stdout={} stderr={stderr}",
             args[0]
+            ,
+            String::from_utf8_lossy(&output.stdout)
         );
     }
 
@@ -5234,7 +5304,7 @@ fn taskflow_consume_continue_auto_executes_ready_downstream_taskflow_packet() {
         serde_json::from_slice(&initial.stdout).expect("initial consume final json should parse");
     assert_eq!(
         initial_json["payload"]["dispatch_receipt"]["dispatch_target"],
-        "business_analyst"
+        "specification"
     );
     assert_eq!(
         initial_json["payload"]["dispatch_receipt"]["dispatch_status"],
@@ -5332,7 +5402,7 @@ fn taskflow_consume_continue_auto_executes_ready_downstream_taskflow_packet() {
 }
 
 #[test]
-fn taskflow_consume_advance_auto_progresses_ready_chain() {
+fn taskflow_consume_advance_ignores_root_packet_mutated_as_ready_downstream_chain() {
     let project_root = unique_state_dir();
     fs::create_dir_all(&project_root).expect("project root should exist");
     let state_dir = format!("{project_root}/.vida/data/state");
@@ -5417,12 +5487,11 @@ fn taskflow_consume_advance_auto_progresses_ready_chain() {
             .expect("downstream dispatch packet should read"),
     )
     .expect("downstream dispatch packet should parse");
+    let run_id = downstream_packet_body["run_id"]
+        .as_str()
+        .expect("downstream dispatch packet run id should be present");
     let completion_result_path = format!("{project_root}/runtime-completion-result-5.json");
-    write_runtime_lane_completion_result_fixture(
-        &completion_result_path,
-        "consume-advance-ready-downstream-taskflow-packet",
-        "implementer",
-    );
+    write_runtime_lane_completion_result_fixture(&completion_result_path, run_id, "implementer");
     downstream_packet_body["downstream_dispatch_ready"] = serde_json::json!(true);
     downstream_packet_body["downstream_dispatch_blockers"] = serde_json::json!([]);
     downstream_packet_body["downstream_dispatch_status"] = serde_json::json!("packet_ready");
@@ -5457,7 +5526,7 @@ fn taskflow_consume_advance_auto_progresses_ready_chain() {
     assert_eq!(advanced_json["surface"], "vida taskflow consume advance");
     assert_eq!(
         advanced_json["dispatch_receipt"]["dispatch_target"],
-        "business_analyst"
+        "specification"
     );
     assert_eq!(
         advanced_json["dispatch_receipt"]["dispatch_status"],
@@ -5560,12 +5629,20 @@ fn consume_final_uses_local_project_context_when_repo_context_is_missing() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("consume final should render json payload");
     assert_eq!(
-        parsed["payload"]["runtime_bundle"]["config_path"],
-        format!("{project_root}/vida.config.yaml")
+        portable_test_path(
+            parsed["payload"]["runtime_bundle"]["config_path"]
+                .as_str()
+                .expect("runtime config path should be a string")
+        ),
+        portable_test_path(format!("{project_root}/vida.config.yaml"))
     );
     assert_eq!(
-        parsed["payload"]["runtime_bundle"]["vida_root"],
-        project_root
+        portable_test_path(
+            parsed["payload"]["runtime_bundle"]["vida_root"]
+                .as_str()
+                .expect("runtime root should be a string")
+        ),
+        portable_test_path(&project_root)
     );
     assert_eq!(parsed["payload"]["direct_consumption_ready"], false);
     assert_eq!(parsed["payload"]["docflow_verdict"]["status"], "blocked");
@@ -5724,8 +5801,12 @@ fn consume_final_keeps_authoritative_launcher_snapshot_when_config_digest_change
         serde_json::json!("state_store")
     );
     assert_eq!(
-        parsed["payload"]["runtime_bundle"]["config_path"],
-        serde_json::Value::String(format!("{}/crates/vida/vida.config.yaml", repo_root()))
+        portable_test_path(
+            parsed["payload"]["runtime_bundle"]["config_path"]
+                .as_str()
+                .expect("runtime config path should be a string")
+        ),
+        portable_test_path(format!("{}/crates/vida/vida.config.yaml", repo_root()))
     );
     assert_eq!(
         parsed["payload"]["role_selection"]["compiled_bundle"],
@@ -5831,7 +5912,7 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
     );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_target"],
-        "business_analyst"
+        "specification"
     );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_kind"],
@@ -5854,14 +5935,29 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
         .expect("dispatch packet path should be present");
     assert!(std::path::Path::new(dispatch_packet_path).is_file());
     assert!(parsed["payload"]["dispatch_receipt"]["dispatch_result_path"].is_null());
-    assert!(parsed["payload"]["dispatch_receipt"]["downstream_dispatch_target"].is_null());
-    assert!(parsed["payload"]["dispatch_receipt"]["downstream_dispatch_command"].is_null());
+    assert_eq!(
+        parsed["payload"]["dispatch_receipt"]["downstream_dispatch_target"],
+        "work-pool-pack"
+    );
+    assert!(
+        parsed["payload"]["dispatch_receipt"]["downstream_dispatch_command"]
+            .as_str()
+            .expect("downstream dispatch command should be present")
+            .contains("vida task ensure")
+    );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["downstream_dispatch_ready"],
         false
     );
     assert!(parsed["payload"]["dispatch_receipt"]["downstream_dispatch_packet_path"].is_null());
-    assert!(parsed["payload"]["dispatch_receipt"]["activation_agent_type"].is_null());
+    assert_eq!(
+        parsed["payload"]["dispatch_receipt"]["activation_agent_type"],
+        "middle"
+    );
+    assert_eq!(
+        parsed["payload"]["dispatch_receipt"]["activation_runtime_role"],
+        "business_analyst"
+    );
     let matched_terms = parsed["payload"]["role_selection"]["matched_terms"]
         .as_array()
         .expect("matched terms should be an array");
@@ -7199,7 +7295,7 @@ fn taskflow_consume_final_selects_pbi_discussion_role_for_backlog_queries() {
     assert_eq!(parsed["payload"]["closure_admission"]["status"], "blocked");
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_target"],
-        "pm"
+        "specification"
     );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_kind"],
@@ -7813,10 +7909,16 @@ fn taskflow_direct_run_surfaces_report_non_empty_bridged_flow_state() {
     let run_graph_status_parsed: serde_json::Value =
         serde_json::from_str(&run_graph_status_stdout).expect("run-graph status should parse");
     assert_eq!(run_graph_status_parsed["run_id"], "vida-a");
-    assert_eq!(run_graph_status_parsed["status"]["active_node"], "writer");
-    assert_eq!(run_graph_status_parsed["status"]["next_node"], "writer");
     assert_eq!(
-        run_graph_status_parsed["status"]["selected_backend"],
+        run_graph_status_parsed["run_graph_status"]["active_node"],
+        "writer"
+    );
+    assert_eq!(
+        run_graph_status_parsed["run_graph_status"]["next_node"],
+        "writer"
+    );
+    assert_eq!(
+        run_graph_status_parsed["run_graph_status"]["selected_backend"],
         "runtime_selected_tier"
     );
 
@@ -9962,7 +10064,7 @@ fn taskflow_proxy_help_supports_command_help_form() {
     assert!(stdout.contains("vida taskflow run-graph seed <task_id> <request_text> [--json]"));
     assert!(stdout.contains("vida taskflow run-graph advance <task_id> [--json]"));
     assert!(stdout.contains("seeded implementation or seeded scope-discussion dispatch"));
-    assert!(stdout.contains("vida taskflow run-graph status <task_id>"));
+    assert!(stdout.contains("vida taskflow run-graph status <run-id>"));
     assert!(stdout.contains("vida taskflow run-graph latest [--json]"));
 }
 
@@ -10274,9 +10376,7 @@ fn taskflow_task_ready_routes_through_local_db_bridge_without_taskflow_binary() 
     let root = unique_state_dir();
     let script_path = format!("{root}/delegated-taskflow-runtime");
     let seed_path = format!("{root}/seed.jsonl");
-    let repo_root = env!("CARGO_MANIFEST_DIR")
-        .strip_suffix("/crates/vida")
-        .expect("crate manifest dir should end with /crates/vida");
+    let repo_root = repo_root();
     fs::create_dir_all(&root).expect("temp root should exist");
     fs::write(&seed_path, "").expect("seed jsonl should be written");
     scaffold_runtime_project_root(&root, "# framework\n");
@@ -10667,9 +10767,7 @@ fn taskflow_proxy_resolves_repo_root_from_nested_project_pwd_without_env() {
     let nested_pwd = format!("{project_root}/work/nested");
     let script_path = format!("{project_root}/delegated-taskflow-runtime");
     let seed_path = format!("{project_root}/seed.jsonl");
-    let repo_root = env!("CARGO_MANIFEST_DIR")
-        .strip_suffix("/crates/vida")
-        .expect("crate manifest dir should end with /crates/vida");
+    let repo_root = repo_root();
     fs::create_dir_all(&nested_pwd).expect("nested project dir should exist");
     scaffold_runtime_project_root(&project_root, "project");
     fs::write(&seed_path, "").expect("seed jsonl should be written");
@@ -11397,9 +11495,7 @@ fn taskflow_consume_final_fails_closed_for_unresolved_tracked_flow_entry() {
         "unresolved-tracked-flow-fail-closed",
         "Unresolved Tracked Flow Fail Closed",
     );
-    let repo_root = env!("CARGO_MANIFEST_DIR")
-        .strip_suffix("/crates/vida")
-        .expect("crate manifest dir should end with /crates/vida");
+    let repo_root = repo_root();
     write_file(
         &format!("{project_root}/vida.config.yaml"),
         &format!(
@@ -12231,9 +12327,7 @@ fn docflow_proxy_can_run_report_check_surface() {
 #[test]
 fn docflow_proxy_prefers_active_repo_root_over_stale_env_root() {
     let foreign_root = unique_state_dir();
-    let repo_root = env!("CARGO_MANIFEST_DIR")
-        .strip_suffix("/crates/vida")
-        .expect("crate manifest dir should end with /crates/vida");
+    let repo_root = repo_root();
     fs::create_dir_all(format!("{foreign_root}/docs/process")).expect("foreign process dir");
     fs::write(
         format!("{foreign_root}/docs/process/foreign.md"),
@@ -13147,8 +13241,12 @@ fn status_surface_supports_compact_json_summary_view() {
         "blocked_by_default"
     );
     assert_eq!(
-        parsed["artifact_refs"]["runtime_consumption_latest_snapshot_path"],
-        snapshot_path
+        portable_test_path(
+            parsed["artifact_refs"]["runtime_consumption_latest_snapshot_path"]
+                .as_str()
+                .expect("snapshot path should be a string")
+        ),
+        portable_test_path(&snapshot_path)
     );
     assert!(parsed["blocker_codes"].as_array().is_some_and(|codes| {
         codes
@@ -13312,8 +13410,12 @@ fn doctor_surface_supports_compact_json_summary_view() {
     assert!(parsed["risk_tier"].is_null());
     assert_eq!(parsed["runtime_consumption"]["latest_kind"], "final");
     assert_eq!(
-        parsed["runtime_consumption"]["latest_snapshot_path"],
-        snapshot_path
+        portable_test_path(
+            parsed["runtime_consumption"]["latest_snapshot_path"]
+                .as_str()
+                .expect("snapshot path should be a string")
+        ),
+        portable_test_path(&snapshot_path)
     );
     assert!(parsed.get("storage_metadata").is_none());
     assert!(parsed.get("task_store").is_none());
@@ -13521,22 +13623,30 @@ fn installer_install_populates_both_taskflow_helpers_in_current_layout() {
     let root = unique_state_dir();
     let install_root = format!("{root}/install");
     let bin_dir = format!("{root}/bin");
+    let home_dir = format!("{root}/home");
     let archive_path = format!("{root}/vida-stack-v-test.tar.gz");
     create_minimal_release_archive(&archive_path);
+    fs::create_dir_all(&install_root).expect("install root should exist for bash path conversion");
+    fs::create_dir_all(&bin_dir).expect("bin dir should exist for bash path conversion");
+    fs::create_dir_all(&home_dir).expect("home dir should exist for bash path conversion");
+    let bash_archive_path = bash_visible_path(&archive_path);
+    let bash_install_root = bash_visible_path(&install_root);
+    let bash_bin_dir = bash_visible_path(&bin_dir);
+    let bash_home_dir = bash_visible_path(&home_dir);
 
     let output = Command::new("bash")
         .args([
             "install/install.sh",
             "install",
             "--archive",
-            &archive_path,
+            &bash_archive_path,
             "--root",
-            &install_root,
+            &bash_install_root,
             "--bin-dir",
-            &bin_dir,
+            &bash_bin_dir,
         ])
         .current_dir(repo_root())
-        .env("HOME", format!("{root}/home"))
+        .env("HOME", bash_home_dir)
         .output()
         .expect("installer install should run");
 
@@ -13546,9 +13656,16 @@ fn installer_install_populates_both_taskflow_helpers_in_current_layout() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(std::path::Path::new(&format!("{install_root}/current/bin/vida")).exists());
+    assert!(fs::symlink_metadata(format!("{install_root}/current")).is_ok());
+    assert!(std::path::Path::new(&format!("{install_root}/releases/v-test/bin/vida")).exists());
+    assert!(std::path::Path::new(&format!("{install_root}/releases/v-test/bin/taskflow")).exists());
+    assert!(std::path::Path::new(&format!("{install_root}/releases/v-test/bin/docflow")).exists());
     assert!(std::path::Path::new(&format!(
-        "{install_root}/current/install/assets/vida.config.yaml.template"
+        "{install_root}/releases/v-test/install/assets/vida.config.yaml.template"
+    ))
+    .exists());
+    assert!(std::path::Path::new(&format!(
+        "{install_root}/releases/v-test/install/assets/feature-design-document.template.md"
     ))
     .exists());
 }

@@ -678,17 +678,21 @@ pub(crate) fn external_cli_preflight_summary(
             .map(str::trim)
             .is_some_and(|value| !value.is_empty()),
     );
-    let trace_baseline = crate::release1_contracts::cli_probe_trace_baseline_summary(
-        if tool_contract_blocked {
-            crate::release1_contracts::Release1ContractStatus::Blocked
-        } else {
-            crate::release1_contracts::Release1ContractStatus::Pass
-        },
-        tool_contract_blocker,
-        selected_execution_class.as_str(),
-    );
-    let incident_baseline =
-        crate::release1_contracts::cli_probe_incident_baseline_summary(tool_contract_blocker);
+    let baseline_for_blocker = |blocker_code: Option<crate::release1_contracts::BlockerCode>| {
+        let trace_baseline = crate::release1_contracts::cli_probe_trace_baseline_summary(
+            if blocker_code.is_some() {
+                crate::release1_contracts::Release1ContractStatus::Blocked
+            } else {
+                crate::release1_contracts::Release1ContractStatus::Pass
+            },
+            blocker_code,
+            selected_execution_class.as_str(),
+        );
+        let incident_baseline =
+            crate::release1_contracts::cli_probe_incident_baseline_summary(blocker_code);
+        (trace_baseline, incident_baseline)
+    };
+    let (trace_baseline, incident_baseline) = baseline_for_blocker(tool_contract_blocker);
     let carrier_readiness = external_cli_readiness_summaries(overlay);
     let route_primary_backends = route_primary_external_backends(overlay);
     let blocked_primary_backends = carrier_readiness["carriers"]
@@ -739,6 +743,9 @@ pub(crate) fn external_cli_preflight_summary(
     }
 
     if requires_external_cli && sandbox_active && !network_reachable {
+        let blocker_code =
+            crate::release1_contracts::BlockerCode::ExternalCliNetworkAccessUnavailableUnderSandbox;
+        let (trace_baseline, incident_baseline) = baseline_for_blocker(Some(blocker_code));
         return serde_json::json!({
             "status": "blocked",
             "requires_external_cli": true,
@@ -755,9 +762,7 @@ pub(crate) fn external_cli_preflight_summary(
             "blocked_primary_backends": blocked_primary_backends,
             "sandbox_active": true,
             "network_reachable": false,
-            "blocker_code": crate::release1_contracts::blocker_code_str(
-                crate::release1_contracts::BlockerCode::ExternalCliNetworkAccessUnavailableUnderSandbox
-            ),
+            "blocker_code": crate::release1_contracts::blocker_code_str(blocker_code),
             "next_actions": [
                 "Allow network access for this session or rerun outside sandbox before using external CLI agents.",
                 "If sandbox must stay enabled, switch host and routing to an internal backend in `vida.config.yaml`.",
@@ -779,6 +784,10 @@ pub(crate) fn external_cli_preflight_summary(
                     .cloned()
             })
             .unwrap_or(serde_json::Value::Null);
+        let blocker_code = first_blocker
+            .as_str()
+            .and_then(crate::release1_contracts::BlockerCode::from_str);
+        let (trace_baseline, incident_baseline) = baseline_for_blocker(blocker_code);
         return serde_json::json!({
             "status": "blocked",
             "requires_external_cli": requires_external_cli,
@@ -981,10 +990,51 @@ agent_system:
         let summary = external_cli_preflight_summary(&overlay, "codex", entry);
         assert_eq!(summary["status"], "blocked");
         assert_eq!(summary["blocker_code"], "interactive_auth_required");
+        assert_eq!(summary["trace_baseline"]["status"], "blocked");
+        assert_eq!(summary["trace_baseline"]["outcome"], "blocked");
+        assert_eq!(
+            summary["incident_baseline"]["recovery_outcome"],
+            "pending_remediation"
+        );
         assert_eq!(
             summary["carrier_readiness"]["carriers"][0]["status"],
             "interactive_auth_required"
         );
+    }
+
+    #[test]
+    fn external_cli_preflight_sets_blocked_baselines_for_sandbox_network_gate() {
+        std::env::set_var("CODEX_SANDBOX_MODE", "workspace-write");
+        std::env::set_var("VIDA_NETWORK_PROBE_OVERRIDE", "offline");
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: opencode
+  systems:
+    opencode:
+      enabled: true
+      execution_class: external
+      runtime_root: .opencode
+"#,
+        )
+        .expect("overlay yaml should parse");
+
+        let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "opencode"]);
+        let summary = external_cli_preflight_summary(&overlay, "opencode", entry);
+        assert_eq!(summary["status"], "blocked");
+        assert_eq!(
+            summary["blocker_code"],
+            "external_cli_network_access_unavailable_under_sandbox"
+        );
+        assert_eq!(summary["trace_baseline"]["status"], "blocked");
+        assert_eq!(summary["trace_baseline"]["outcome"], "blocked");
+        assert_eq!(
+            summary["incident_baseline"]["recovery_outcome"],
+            "pending_remediation"
+        );
+
+        std::env::remove_var("CODEX_SANDBOX_MODE");
+        std::env::remove_var("VIDA_NETWORK_PROBE_OVERRIDE");
     }
 
     #[test]

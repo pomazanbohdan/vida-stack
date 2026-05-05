@@ -301,6 +301,24 @@ pub(crate) fn resolve_overlay_path(root: &Path, path: &str) -> PathBuf {
     }
 }
 
+fn validate_project_relative_path(path: &str, field_name: &str) -> Result<(), String> {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() || path.starts_with('/') {
+        return Err(format!(
+            "Invalid `{field_name}` path `{path}`: absolute paths are not allowed"
+        ));
+    }
+    if candidate
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "Invalid `{field_name}` path `{path}`: `..` segments are not allowed"
+        ));
+    }
+    Ok(())
+}
+
 fn registry_sidecar_path(registry_path: &Path) -> PathBuf {
     let Some(file_name) = registry_path.file_name().and_then(|value| value.to_str()) else {
         return registry_path.with_extension("sidecar");
@@ -435,6 +453,7 @@ pub(crate) fn resolve_host_cli_template_source(
     let template_relative = registry_entry
         .and_then(host_cli_system_template_root)
         .ok_or_else(|| format!("No template_root configured for host CLI `{cli_system}`"))?;
+    validate_project_relative_path(&template_relative, "template_root")?;
     let primary_root = resolve_init_bootstrap_source_root();
     let fallback_root = super::repo_runtime_root();
     let candidates = if fallback_root == primary_root {
@@ -539,6 +558,9 @@ pub(crate) fn materialize_host_cli_template(
         .ok_or_else(|| format!("Registry entry required for host CLI `{cli_system}`"))?;
     let entry_ref = entry_value;
     let source = resolve_host_cli_template_source(cli_system, Some(&entry_ref))?;
+    let runtime_root_raw = yaml_string(yaml_lookup(&entry_ref, &["runtime_root"]))
+        .ok_or_else(|| format!("No runtime_root configured for host CLI `{cli_system}`"))?;
+    validate_project_relative_path(&runtime_root_raw, "runtime_root")?;
     let runtime_root = host_cli_system_runtime_root(&entry_ref, cli_system, project_root);
     let mode = host_cli_system_materialization_mode(&entry_ref, cli_system);
     let copy_tree_target = project_root.join(&runtime_root);
@@ -1083,6 +1105,20 @@ fn validate_project_activator_mutation_state_dir(
     Ok(resolved_state_dir)
 }
 
+fn repair_project_activation_assets(project_root: &Path) -> Result<(), String> {
+    let bootstrap_source_root = super::init_surfaces::resolve_init_bootstrap_source_root();
+    let (instruction_source_root, framework_memory_source_root) =
+        super::init_surfaces::default_init_instruction_bundle_source_roots(&bootstrap_source_root);
+    super::init_surfaces::materialize_framework_instruction_bundles(
+        project_root,
+        &instruction_source_root,
+        &framework_memory_source_root,
+    )
+    .and_then(|()| super::init_surfaces::ensure_runtime_home(project_root))
+    .and_then(|()| super::init_surfaces::write_runtime_agent_extension_projections(project_root))
+    .and_then(|()| super::init_surfaces::materialize_project_docs_scaffold(project_root))
+}
+
 pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> ExitCode {
     let project_root = match std::env::current_dir() {
         Ok(path) => path,
@@ -1104,6 +1140,12 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         || args.reasoning_language.is_some()
         || args.documentation_language.is_some()
         || args.todo_protocol_language.is_some();
+    if args.repair {
+        if let Err(error) = repair_project_activation_assets(&project_root) {
+            eprintln!("Project activation repair failed closed before state bootstrap: {error}");
+            return ExitCode::from(1);
+        }
+    }
     let activation_store = if activation_mutation_requested {
         let state_dir = args
             .state_dir
@@ -1244,15 +1286,11 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         }
     }
     if args.repair {
-        if let Err(error) = super::init_surfaces::ensure_runtime_home(&project_root)
-            .and_then(|()| {
-                super::init_surfaces::write_runtime_agent_extension_projections(&project_root)
-            })
-            .and_then(|()| super::init_surfaces::materialize_project_docs_scaffold(&project_root))
-        {
+        if let Err(error) = repair_project_activation_assets(&project_root) {
             eprintln!("Project activation repair failed closed: {error}");
             return ExitCode::from(1);
         }
+        changed_files.push("vida/config/instructions/bundles/**".to_string());
         changed_files.push(".vida/**".to_string());
         changed_files.push("docs/**".to_string());
     }
@@ -1765,10 +1803,9 @@ fn apply_project_activation_answers(
         ),
         (
             project_root.join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE),
-            fs::read_to_string(
-                resolve_init_bootstrap_source_root()
-                    .join("docs/framework/templates/feature-design-document.template.md"),
-            )
+            fs::read_to_string(super::init_surfaces::resolve_feature_design_template_source(
+                &resolve_init_bootstrap_source_root(),
+            )?)
             .map_err(|error| {
                 format!("Failed to read framework feature-design template source: {error}")
             })?,
@@ -2394,6 +2431,31 @@ mod tests {
             .expect("supported cli systems should render")
             .iter()
             .any(|value| value.as_str() == Some("codex")));
+    }
+
+    #[test]
+    fn project_activator_rejects_absolute_template_root() {
+        let entry: serde_yaml::Value = serde_yaml::from_str(
+            "template_root: /tmp/secrets\nruntime_root: .qwen\nmaterialization_mode: copy_tree_only\n",
+        )
+        .expect("entry should parse");
+        let error = super::resolve_host_cli_template_source("qwen", Some(&entry))
+            .expect_err("absolute template_root must be rejected");
+        assert!(error.contains("template_root"));
+        assert!(error.contains("absolute paths are not allowed"));
+    }
+
+    #[test]
+    fn project_activator_rejects_parent_runtime_root() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let entry: serde_yaml::Value = serde_yaml::from_str(
+            "template_root: .qwen\nruntime_root: ../escape\nmaterialization_mode: copy_tree_only\n",
+        )
+        .expect("entry should parse");
+        let error = super::materialize_host_cli_template(harness.path(), "qwen", Some(&entry))
+            .expect_err("parent runtime_root must be rejected");
+        assert!(error.contains("runtime_root"));
+        assert!(error.contains("`..` segments are not allowed"));
     }
 
     #[test]

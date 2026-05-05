@@ -12,7 +12,8 @@ fn explicit_binding_is_admissible_for_status(
             && binding_kind == Some("task_graph_task");
     }
     if status.status != "completed" {
-        return true;
+        return binding.binding_source != "explicit_continuation_bind_task"
+            && binding_kind != Some("task_graph_task");
     }
 
     let terminal_completed_without_next_unit = status.lifecycle_stage == "closure_complete"
@@ -74,7 +75,9 @@ fn active_exception_takeover_binding_matches_status(
     binding.status == "bound"
         && binding.run_id == status.run_id
         && binding.task_id == status.task_id
-        && binding.binding_source == "consume_continue_after_downstream_chain"
+        && crate::taskflow_continuation::is_downstream_chain_continuation_binding_source(
+            &binding.binding_source,
+        )
         && binding_kind == Some("run_graph_task")
         && active_exception_takeover_evidence_matches_status(status, dispatch, None)
 }
@@ -552,6 +555,14 @@ pub(crate) fn add_taskflow_active_work_truth(
             "continuation_allowed".to_string(),
             serde_json::Value::Bool(false),
         );
+        object.insert(
+            "continuation_required_now".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        object.insert(
+            "pause_boundary_gate".to_string(),
+            serde_json::Value::String("forbidden_while_ambiguous".to_string()),
+        );
         object.insert("active_bounded_unit".to_string(), serde_json::Value::Null);
         object.insert(
             "run_graph_latest_binding".to_string(),
@@ -578,26 +589,12 @@ pub(crate) fn add_taskflow_active_work_truth(
             "sequential_vs_parallel_posture".to_string(),
             serde_json::Value::String("unknown_until_explicit_taskflow_binding".to_string()),
         );
-        let mut next_actions = object
-            .get("next_actions")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        next_actions.insert(
-            0,
-            serde_json::Value::String(
-                "Do not assume the latest run-graph binding is the active bounded unit while TaskFlow has different in-progress task candidates.".to_string(),
-            ),
-        );
-        next_actions.insert(
-            1,
-            serde_json::Value::String(
-                "Bind the intended TaskFlow active task explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id> --json` or close/reconcile stale in-progress tasks before writing.".to_string(),
-            ),
-        );
         object.insert(
             "next_actions".to_string(),
-            serde_json::Value::Array(next_actions),
+            serde_json::json!([
+                "Do not assume the latest run-graph binding is the active bounded unit while TaskFlow has different in-progress task candidates.",
+                "Bind the intended TaskFlow active task explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id> --json` or close/reconcile stale in-progress tasks before writing."
+            ]),
         );
     }
 
@@ -675,6 +672,31 @@ mod tests {
             route_policy: serde_json::Value::Null,
             activation_evidence: serde_json::Value::Null,
             recorded_at: "2026-04-24T18:50:54Z".to_string(),
+        }
+    }
+
+    fn exception_takeover_binding(
+        run_id: &str,
+        binding_source: &str,
+    ) -> crate::state_store::RunGraphContinuationBinding {
+        crate::state_store::RunGraphContinuationBinding {
+            run_id: run_id.to_string(),
+            task_id: run_id.to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "run_graph_task",
+                "task_id": run_id,
+                "run_id": run_id,
+                "active_node": "analysis"
+            }),
+            binding_source: binding_source.to_string(),
+            why_this_unit:
+                "Explicit continuation binding records the active exception-takeover unit."
+                    .to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: Some("audit-p1-state-store-init-lock-timeout-proof-blocker".to_string()),
+            recorded_at: "2026-04-26T07:52:53Z".to_string(),
         }
     }
 
@@ -816,25 +838,10 @@ mod tests {
         status.status = "blocked".to_string();
         status.lifecycle_stage = "analysis_blocked".to_string();
 
-        let binding = crate::state_store::RunGraphContinuationBinding {
-            run_id: "runtime-audit-state-store-init-lock-timeout".to_string(),
-            task_id: "runtime-audit-state-store-init-lock-timeout".to_string(),
-            status: "bound".to_string(),
-            active_bounded_unit: serde_json::json!({
-                "kind": "run_graph_task",
-                "task_id": "runtime-audit-state-store-init-lock-timeout",
-                "run_id": "runtime-audit-state-store-init-lock-timeout",
-                "active_node": "analysis"
-            }),
-            binding_source: "consume_continue_after_downstream_chain".to_string(),
-            why_this_unit:
-                "Explicit continuation binding records the active exception-takeover unit."
-                    .to_string(),
-            primary_path: "normal_delivery_path".to_string(),
-            sequential_vs_parallel_posture: "sequential_only".to_string(),
-            request_text: Some("audit-p1-state-store-init-lock-timeout-proof-blocker".to_string()),
-            recorded_at: "2026-04-26T07:52:53Z".to_string(),
-        };
+        let binding = exception_takeover_binding(
+            "runtime-audit-state-store-init-lock-timeout",
+            crate::taskflow_continuation::CONSUME_CONTINUE_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE,
+        );
         let dispatch = exception_takeover_dispatch("runtime-audit-state-store-init-lock-timeout");
 
         let summary = build_continuation_binding_summary(
@@ -855,6 +862,44 @@ mod tests {
         assert_eq!(
             summary["active_bounded_unit"]["task_id"],
             "runtime-audit-state-store-init-lock-timeout"
+        );
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn blocked_latest_run_graph_status_accepts_direct_consume_exception_takeover_binding() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-cross-platform-vida-install-init-runtime",
+            "runtime-cross-platform-vida-install-init-runtime",
+            "analysis",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+
+        let binding = exception_takeover_binding(
+            "runtime-cross-platform-vida-install-init-runtime",
+            crate::taskflow_continuation::CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE,
+        );
+        let dispatch =
+            exception_takeover_dispatch("runtime-cross-platform-vida-install-init-runtime");
+
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            Some(&dispatch),
+            None,
+            false,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(
+            summary["binding_source"],
+            crate::taskflow_continuation::CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE
+        );
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "runtime-cross-platform-vida-install-init-runtime"
         );
         assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
     }
@@ -1210,8 +1255,20 @@ mod tests {
         status.status = "running".to_string();
         status.lifecycle_stage = "implementer_active".to_string();
 
-        let summary =
-            build_continuation_binding_summary(None, Some(&status), None, None, None, false);
+        let mut recovery = crate::taskflow_run_graph::default_run_graph_recovery_summary(
+            &status.task_id,
+            &status.run_id,
+        );
+        recovery.delegation_gate.delegated_cycle_open = true;
+
+        let summary = build_continuation_binding_summary(
+            None,
+            Some(&status),
+            Some(&recovery),
+            None,
+            None,
+            false,
+        );
         let taskflow_candidates = taskflow_active_candidates_from_tasks(&[task_record(
             "audit-p1-current-task",
             "in_progress",
@@ -1229,6 +1286,8 @@ mod tests {
             "run_graph_latest_orthogonal_to_taskflow_active_work"
         );
         assert_eq!(summary["orthogonal_to_taskflow_active_work"], true);
+        assert_eq!(summary["continuation_required_now"], false);
+        assert_eq!(summary["pause_boundary_gate"], "forbidden_while_ambiguous");
         assert_eq!(
             summary["run_graph_latest_binding"]["task_id"],
             "runtime-run-closure-validation-proof-feature-task"
@@ -1242,6 +1301,12 @@ mod tests {
                 row.as_str().is_some_and(|value| {
                     value.contains("Do not assume the latest run-graph binding")
                 })
+            })
+        }));
+        assert!(summary["next_actions"].as_array().is_some_and(|rows| {
+            rows.iter().all(|row| {
+                row.as_str()
+                    .is_some_and(|value| !value.contains("vida taskflow consume continue --run-id"))
             })
         }));
     }

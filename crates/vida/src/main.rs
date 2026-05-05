@@ -97,6 +97,7 @@ mod temp_state;
 mod test_cli_support;
 
 use std::env;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -261,14 +262,14 @@ fn main() -> ExitCode {
     }
 }
 
-fn normalized_cli_args() -> Vec<String> {
-    env::args().map(normalize_cli_arg).collect()
+fn normalized_cli_args() -> Vec<OsString> {
+    env::args_os().map(normalize_cli_arg).collect()
 }
 
-fn normalize_cli_arg(arg: String) -> String {
-    match arg.as_str() {
-        "--HELP" | "--Help" | "/HELP" | "/Help" | "/help" | "/?" => "--help".to_string(),
-        "-H" => "-h".to_string(),
+fn normalize_cli_arg(arg: OsString) -> OsString {
+    match arg.to_str() {
+        Some("--HELP" | "--Help" | "/HELP" | "/Help" | "/help" | "/?") => OsString::from("--help"),
+        Some("-H") => OsString::from("-h"),
         _ => arg,
     }
 }
@@ -363,14 +364,21 @@ mod tests {
         assert!(harness.path().join(".vida/receipts").is_dir());
         assert!(harness.path().join(".vida/runtime").is_dir());
         assert!(harness.path().join(".vida/scratchpad").is_dir());
-        assert!(!harness.path().join("vida").exists());
+        assert!(harness
+            .path()
+            .join("vida/config/instructions/bundles/framework-source")
+            .is_dir());
+        assert!(harness
+            .path()
+            .join("vida/config/instructions/bundles/framework-memory-source")
+            .is_dir());
     }
 
     #[test]
     fn uppercase_help_flag_is_normalized_for_windows_operator_habit() {
         let parsed = Cli::try_parse_from(["vida", "--help"])
             .expect_err("canonical help should render clap display error");
-        let argv = ["vida".to_string(), "--HELP".to_string()]
+        let argv = [OsString::from("vida"), OsString::from("--HELP")]
             .into_iter()
             .map(normalize_cli_arg);
         let normalized =

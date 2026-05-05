@@ -108,7 +108,8 @@ pub(crate) fn downstream_dispatch_packet_body(
             selected_backend.as_deref(),
             activation_agent_type.as_deref(),
             Some(&host_runtime),
-            crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(receipt),
+            downstream_target.is_empty()
+                && crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(receipt),
             None,
         );
     let execution_truth = crate::runtime_dispatch_state::dispatch_execution_route_summary(

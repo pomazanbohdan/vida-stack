@@ -52,6 +52,11 @@ fn exception_takeover_state_label(
     if !has_nonempty_value(receipt.exception_path_receipt_id.as_deref()) {
         return None;
     }
+    if receipt.lane_status == "lane_exception_takeover"
+        && has_nonempty_value(receipt.supersedes_receipt_id.as_deref())
+    {
+        return Some("active");
+    }
     let takeover_state = crate::release1_contracts::exception_takeover_state(
         receipt.exception_path_receipt_id.as_deref(),
         receipt.supersedes_receipt_id.as_deref(),

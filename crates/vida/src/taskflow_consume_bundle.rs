@@ -267,13 +267,21 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                 &docflow_verdict,
                 docflow_receipt_evidence,
             );
-            for blocker in seam_closure_admission_receipt_check["blocker_codes"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-            {
-                push_unique_string(&mut effective_blockers, blocker);
+            let cache_contract_blocked = effective_blockers.iter().any(|code| {
+                code.starts_with("invalid_cache_key_input:")
+                    || code.starts_with("invalid_invalidation_tuple_key:")
+                    || code.starts_with("missing_cache_key_inputs")
+                    || code.starts_with("missing_invalidation_tuple")
+            });
+            if !cache_contract_blocked {
+                for blocker in seam_closure_admission_receipt_check["blocker_codes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                {
+                    push_unique_string(&mut effective_blockers, blocker);
+                }
             }
             let db_first_activation_truth = match super::read_or_sync_launcher_activation_snapshot(
                 &store,
@@ -450,7 +458,7 @@ where
     match tokio::time::timeout(CONSUME_BUNDLE_CHECK_LOCK_TIMEOUT, future).await {
         Ok(result) => result.map_err(|error| error.to_string()),
         Err(_) => Err(format!(
-            "consume bundle check failed fast: {label} timed out while waiting for authoritative datastore lock"
+            "consume bundle check failed fast: {label} timed out while waiting for authoritative datastore lock; another VIDA process still holds the authoritative datastore lock, so stop or wait for that process and retry the command"
         )),
     }
 }
@@ -588,12 +596,16 @@ fn taskflow_docflow_seam_receipt_backed_check(
         .as_array()
         .map(|rows| rows.len())
         .unwrap_or(0);
-    let receipt_backed = docflow_receipt_evidence["receipt_backed"]
+    let docflow_receipt_backed = docflow_receipt_evidence["receipt_backed"]
         .as_bool()
         .unwrap_or(false);
+    let protocol_binding_receipt_backed =
+        !protocol_binding_receipt_id.is_empty() && binding_status == "bound" && protocol_rows > 0;
+    let receipt_backed = docflow_receipt_backed && protocol_binding_receipt_backed;
     let total_receipts = docflow_receipt_evidence["total_receipts"]
         .as_u64()
-        .unwrap_or_else(|| u64::from(receipt_backed));
+        .unwrap_or_else(|| u64::from(docflow_receipt_backed))
+        + u64::from(protocol_binding_receipt_backed);
     let has_readiness_surface = docflow_verdict
         .proof_surfaces
         .iter()
@@ -624,7 +636,7 @@ fn taskflow_docflow_seam_receipt_backed_check(
         "has_readiness_surface": has_readiness_surface,
         "has_proof_surface": has_proof_surface,
         "surface": "vida docflow readiness-check --profile active-canon | vida docflow proofcheck --profile active-canon",
-        "notes": "TaskFlow->DocFlow seam closure admission requires DocFlow readiness and proof verdict evidence; protocol-binding receipt metadata is informational only.",
+        "notes": "TaskFlow->DocFlow seam closure admission requires DocFlow readiness/proof evidence and a runtime-bound TaskFlow protocol-binding receipt.",
     })
 }
 
@@ -783,7 +795,47 @@ pub(crate) fn build_dev_team_readiness(
     config_path: &str,
     activation_bundle: &serde_json::Value,
 ) -> serde_json::Value {
+    const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
     let source_paths = dev_team_source_paths(config_path, None);
+    let config_metadata = match std::fs::symlink_metadata(config_path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return serde_json::json!({
+                "status": "config_unreadable",
+                "configured": false,
+                "enabled": serde_json::Value::Null,
+                "roles": [],
+                "sequence": [],
+                "flows": [],
+                "blockers": [format!("dev_team_config_unreadable: {error}")],
+                "source_paths": source_paths,
+            });
+        }
+    };
+    if !config_metadata.file_type().is_file() {
+        return serde_json::json!({
+            "status": "config_unreadable",
+            "configured": false,
+            "enabled": serde_json::Value::Null,
+            "roles": [],
+            "sequence": [],
+            "flows": [],
+            "blockers": ["dev_team_config_unreadable: expected_regular_file"],
+            "source_paths": source_paths,
+        });
+    }
+    if config_metadata.len() > MAX_CONFIG_BYTES {
+        return serde_json::json!({
+            "status": "config_unreadable",
+            "configured": false,
+            "enabled": serde_json::Value::Null,
+            "roles": [],
+            "sequence": [],
+            "flows": [],
+            "blockers": [format!("dev_team_config_unreadable: config_too_large ({} bytes)", config_metadata.len())],
+            "source_paths": source_paths,
+        });
+    }
     let config_text = match std::fs::read_to_string(config_path) {
         Ok(text) => text,
         Err(error) => {
@@ -1477,7 +1529,10 @@ mod tests {
             }
         });
 
-        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+        let snapshot = build_taskflow_agent_system_snapshot(
+            "target/vida-tests/missing-carrier-runtime-only-config.yaml",
+            &activation_bundle,
+        );
         assert_eq!(snapshot["carriers"][0]["carrier_id"], "canonical");
         assert_eq!(snapshot["dispatch_aliases"]["role_id"], "canonical");
         assert_eq!(
@@ -1872,6 +1927,29 @@ dev_team:
             readiness["blockers"],
             serde_json::json!(["missing_dev_team_config"])
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_dev_team_readiness_rejects_symlinked_config_path() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        let target_path = harness.path().join("actual-config.yaml");
+        std::fs::write(&target_path, "project:\n  id: demo\n").expect("target config should write");
+        std::os::unix::fs::symlink(&target_path, &config_path)
+            .expect("symlinked config should be created");
+
+        let readiness = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &serde_json::json!({}),
+        );
+
+        assert_eq!(readiness["status"], "config_unreadable");
+        assert!(readiness["blockers"]
+            .as_array()
+            .expect("readiness blockers should be array")
+            .iter()
+            .any(|entry| entry == "dev_team_config_unreadable: expected_regular_file"));
     }
 
     #[test]
@@ -2574,7 +2652,7 @@ dev_team:
         );
 
         assert_eq!(seam["status"], "blocked");
-        assert_eq!(seam["receipt_backed"], true);
+        assert_eq!(seam["receipt_backed"], false);
         assert_eq!(seam["total_receipts"], 2);
         assert_eq!(seam["closure_inputs_ready"], false);
         assert_eq!(seam["docflow_status"], "blocked");
@@ -2627,7 +2705,7 @@ dev_team:
         );
 
         assert_eq!(seam["status"], "pass");
-        assert_eq!(seam["receipt_backed"], true);
+        assert_eq!(seam["receipt_backed"], false);
         assert_eq!(seam["total_receipts"], 2);
         assert_eq!(seam["closure_inputs_ready"], true);
         assert_eq!(seam["docflow_status"], "pass");

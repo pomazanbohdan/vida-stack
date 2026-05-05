@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use time::format_description::well_known::Rfc3339;
@@ -7,6 +8,7 @@ pub(crate) const CANONICAL_LAUNCHER_COMMAND: &str = "vida";
 pub(crate) const DOCFLOW_READINESS_CURRENT_PATH: &str =
     "vida/config/docflow-readiness.current.jsonl";
 pub(crate) const DOCFLOW_PROOF_CURRENT_PATH: &str = "vida/config/docflow-proof.current.jsonl";
+const MAX_LAUNCHER_BINARY_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, serde::Serialize, Clone, PartialEq, Eq)]
 pub(crate) struct LauncherBinaryEvidence {
@@ -88,13 +90,45 @@ pub(crate) fn doctor_launcher_summary_for_root(
 }
 
 fn launcher_binary_fingerprint(path: &Path) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|error| {
+    let file = std::fs::File::open(path).map_err(|error| {
         format!(
-            "failed to read launcher binary `{}`: {error}",
+            "failed to open launcher binary `{}`: {error}",
             path.display()
         )
     })?;
-    Ok(blake3::hash(&bytes).to_hex().to_string())
+    let size = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    if size > MAX_LAUNCHER_BINARY_BYTES {
+        return Err(format!(
+            "launcher binary `{}` exceeds max fingerprint size of {} bytes",
+            path.display(),
+            MAX_LAUNCHER_BINARY_BYTES
+        ));
+    }
+    let mut reader = std::io::BufReader::new(file);
+    let mut hasher = blake3::Hasher::new();
+    let mut total_bytes = 0_u64;
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let read = reader.read(&mut chunk).map_err(|error| {
+            format!(
+                "failed to read launcher binary `{}`: {error}",
+                path.display()
+            )
+        })?;
+        if read == 0 {
+            break;
+        }
+        total_bytes = total_bytes.saturating_add(read as u64);
+        if total_bytes > MAX_LAUNCHER_BINARY_BYTES {
+            return Err(format!(
+                "launcher binary `{}` exceeds max fingerprint size of {} bytes",
+                path.display(),
+                MAX_LAUNCHER_BINARY_BYTES
+            ));
+        }
+        hasher.update(&chunk[..read]);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 fn installed_launcher_binary_evidence(
@@ -121,9 +155,21 @@ fn installed_launcher_binary_evidence(
         if !seen.insert(canonical.clone()) {
             continue;
         }
+        let active = canonical == active_canonical;
+        let fingerprint = match launcher_binary_fingerprint(&canonical) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) if !active => {
+                eprintln!(
+                    "Warning: skipping launcher candidate `{}`: {error}",
+                    canonical.display()
+                );
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         evidence.push(LauncherBinaryEvidence {
-            fingerprint: launcher_binary_fingerprint(&canonical)?,
-            active: canonical == active_canonical,
+            fingerprint,
+            active,
             path: canonical.display().to_string(),
         });
     }

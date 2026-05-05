@@ -381,6 +381,7 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
         }
     }
     let compact_summary = crate::taskflow_run_graph::build_run_graph_dispatch_compact_summary(
+        inputs.state_dir,
         inputs.latest_run_graph_status,
         inputs.latest_run_graph_recovery,
         inputs.latest_run_graph_dispatch_receipt,

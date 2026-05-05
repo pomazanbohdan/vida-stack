@@ -78,7 +78,7 @@ pub(crate) fn emit_degraded_read_lock_surface(
         crate::print_surface_line(render, "state access", "degraded_lock_contention");
         crate::print_surface_line(render, "state dir", &state_dir.display().to_string());
     }
-    ExitCode::SUCCESS
+    ExitCode::from(1)
 }
 
 pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {

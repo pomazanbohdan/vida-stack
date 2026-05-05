@@ -247,6 +247,12 @@ pub(crate) fn looks_like_init_bootstrap_source_root(root: &Path) -> bool {
     resolve_init_agents_source(root).is_ok()
         && resolve_init_sidecar_source(root).is_ok()
         && resolve_init_config_template_source(root).is_ok()
+        && root
+            .join(state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .is_dir()
+        && root
+            .join(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT)
+            .is_dir()
         && looks_like_host_runtime_source_root(root)
 }
 
@@ -296,6 +302,24 @@ pub(crate) fn resolve_init_config_template_source(root: &Path) -> Result<PathBuf
     first_existing_path(&candidates).ok_or_else(|| {
         format!(
             "Unable to resolve vida.config.yaml template. Checked: {}",
+            candidates
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
+}
+
+pub(crate) fn resolve_feature_design_template_source(root: &Path) -> Result<PathBuf, String> {
+    let candidates = [
+        root.join("install/assets/feature-design-document.template.md"),
+        root.join("docs/framework/templates/feature-design-document.template.md"),
+        root.join("docs/product/spec/templates/feature-design-document.template.md"),
+    ];
+    first_existing_path(&candidates).ok_or_else(|| {
+        format!(
+            "Unable to resolve framework feature-design template source. Checked: {}",
             candidates
                 .iter()
                 .map(|path| path.display().to_string())
@@ -425,8 +449,16 @@ mod tests {
         )
         .expect("config template should exist");
         assert!(
+            !looks_like_init_bootstrap_source_root(root),
+            "bootstrap source should not qualify until framework instruction bundles are present"
+        );
+        fs::create_dir_all(root.join(state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT))
+            .expect("instruction bundle source should exist");
+        fs::create_dir_all(root.join(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT))
+            .expect("framework memory source should exist");
+        assert!(
             looks_like_init_bootstrap_source_root(root),
-            "bootstrap source should require actual init assets rather than runtime-only markers"
+            "bootstrap source should require init assets and framework-owned bundle sources"
         );
     }
 
@@ -461,6 +493,10 @@ mod tests {
             ),
         )
         .expect("current config template should exist");
+        fs::create_dir_all(current_root.join(state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT))
+            .expect("current instruction bundle source should exist");
+        fs::create_dir_all(current_root.join(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT))
+            .expect("current framework memory source should exist");
 
         let candidates = installed_runtime_source_root_candidates(&install_root);
         assert_eq!(candidates[0], current_root);
@@ -551,6 +587,118 @@ mod tests {
             runtime.block_on(run(cli(&["init", "unexpected"]))),
             ExitCode::from(2)
         );
+    }
+
+    #[test]
+    fn init_materializes_and_refreshes_framework_instruction_bundles_from_explicit_sources() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let source_root = harness.path().join("source");
+        let instruction_source = source_root.join("framework-source");
+        let memory_source = source_root.join("framework-memory-source");
+        fs::create_dir_all(instruction_source.join("framework"))
+            .expect("instruction source should exist");
+        fs::create_dir_all(&memory_source).expect("memory source should exist");
+        fs::write(
+            instruction_source.join("framework/agent-definition.md"),
+            "agent definition v1\n",
+        )
+        .expect("instruction file should write");
+        fs::write(memory_source.join("framework-memory.md"), "memory v1\n")
+            .expect("memory file should write");
+
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "init",
+                "--instruction-source-root",
+                instruction_source.to_str().expect("path should be utf8"),
+                "--framework-memory-source-root",
+                memory_source.to_str().expect("path should be utf8"),
+            ]))),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            fs::read_to_string(harness.path().join(
+                "vida/config/instructions/bundles/framework-source/framework/agent-definition.md"
+            ))
+            .expect("materialized instruction file should exist"),
+            "agent definition v1\n"
+        );
+        assert_eq!(
+            fs::read_to_string(harness.path().join(
+                "vida/config/instructions/bundles/framework-memory-source/framework-memory.md"
+            ))
+            .expect("materialized memory file should exist"),
+            "memory v1\n"
+        );
+
+        fs::write(
+            instruction_source.join("framework/agent-definition.md"),
+            "agent definition v2\n",
+        )
+        .expect("instruction file should update");
+        fs::write(memory_source.join("framework-memory.md"), "memory v2\n")
+            .expect("memory file should update");
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "init",
+                "--instruction-source-root",
+                instruction_source.to_str().expect("path should be utf8"),
+                "--framework-memory-source-root",
+                memory_source.to_str().expect("path should be utf8"),
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        assert_eq!(
+            fs::read_to_string(harness.path().join(
+                "vida/config/instructions/bundles/framework-source/framework/agent-definition.md"
+            ))
+            .expect("refreshed instruction file should exist"),
+            "agent definition v2\n"
+        );
+        assert_eq!(
+            fs::read_to_string(harness.path().join(
+                "vida/config/instructions/bundles/framework-memory-source/framework-memory.md"
+            ))
+            .expect("refreshed memory file should exist"),
+            "memory v2\n"
+        );
+    }
+
+    #[test]
+    fn project_activator_repair_restores_framework_instruction_bundles() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        fs::remove_dir_all(
+            harness
+                .path()
+                .join("vida/config/instructions/bundles/framework-source"),
+        )
+        .expect("framework-source bundle should be removable");
+        fs::remove_dir_all(
+            harness
+                .path()
+                .join("vida/config/instructions/bundles/framework-memory-source"),
+        )
+        .expect("framework-memory-source bundle should be removable");
+
+        assert_eq!(
+            runtime.block_on(run(cli(&["project-activator", "--repair", "--json"]))),
+            ExitCode::SUCCESS
+        );
+        assert!(harness
+            .path()
+            .join("vida/config/instructions/bundles/framework-source/framework/agent-definition.md")
+            .is_file());
+        assert!(harness
+            .path()
+            .join("vida/config/instructions/bundles/framework-memory-source/framework-memory.md")
+            .is_file());
     }
 
     #[test]
@@ -887,6 +1035,51 @@ fn copy_file_if_missing(source: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn copy_tree_replace(source_root: &Path, target_root: &Path) -> Result<(), String> {
+    let metadata = std::fs::metadata(source_root)
+        .map_err(|error| format!("Failed to read {}: {error}", source_root.display()))?;
+    if !metadata.is_dir() {
+        return Err(format!(
+            "Expected directory source for tree materialization: {}",
+            source_root.display()
+        ));
+    }
+    if target_root.exists() {
+        std::fs::remove_dir_all(target_root)
+            .map_err(|error| format!("Failed to replace {}: {error}", target_root.display()))?;
+    }
+    copy_tree_recursive(source_root, target_root)
+}
+
+pub(crate) fn copy_tree_recursive(source_root: &Path, target_root: &Path) -> Result<(), String> {
+    let metadata = std::fs::metadata(source_root)
+        .map_err(|error| format!("Failed to read {}: {error}", source_root.display()))?;
+    if metadata.is_dir() {
+        std::fs::create_dir_all(target_root)
+            .map_err(|error| format!("Failed to create {}: {error}", target_root.display()))?;
+        for entry in std::fs::read_dir(source_root)
+            .map_err(|error| format!("Failed to read {}: {error}", source_root.display()))?
+        {
+            let entry = entry
+                .map_err(|error| format!("Failed to iterate {}: {error}", source_root.display()))?;
+            copy_tree_recursive(&entry.path(), &target_root.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    if let Some(parent) = target_root.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create {}: {error}", parent.display()))?;
+    }
+    std::fs::copy(source_root, target_root).map_err(|error| {
+        format!(
+            "Failed to copy {} -> {}: {error}",
+            source_root.display(),
+            target_root.display()
+        )
+    })?;
+    Ok(())
+}
+
 fn write_file_if_missing(target: &Path, contents: &str) -> Result<(), String> {
     if target.exists() {
         return Ok(());
@@ -896,6 +1089,31 @@ fn write_file_if_missing(target: &Path, contents: &str) -> Result<(), String> {
     }
     std::fs::write(target, contents)
         .map_err(|error| format!("Failed to write {}: {error}", target.display()))
+}
+
+pub(crate) fn default_init_instruction_bundle_source_roots(
+    bootstrap_source_root: &Path,
+) -> (PathBuf, PathBuf) {
+    (
+        bootstrap_source_root.join(state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT),
+        bootstrap_source_root.join(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT),
+    )
+}
+
+pub(crate) fn materialize_framework_instruction_bundles(
+    project_root: &Path,
+    instruction_source_root: &Path,
+    framework_memory_source_root: &Path,
+) -> Result<(), String> {
+    copy_tree_replace(
+        instruction_source_root,
+        &project_root.join(state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT),
+    )?;
+    copy_tree_replace(
+        framework_memory_source_root,
+        &project_root.join(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT),
+    )?;
+    Ok(())
 }
 
 pub(crate) fn write_runtime_agent_extension_projections(project_root: &Path) -> Result<(), String> {
@@ -996,22 +1214,30 @@ pub(crate) async fn run_init(args: super::BootArgs) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let source_root = resolve_init_bootstrap_source_root();
-    let framework_agents = match resolve_init_agents_source(&source_root) {
+    let bootstrap_source_root = resolve_init_bootstrap_source_root();
+    let (default_instruction_source_root, default_framework_memory_source_root) =
+        default_init_instruction_bundle_source_roots(&bootstrap_source_root);
+    let instruction_source_root = args
+        .instruction_source_root
+        .unwrap_or(default_instruction_source_root);
+    let framework_memory_source_root = args
+        .framework_memory_source_root
+        .unwrap_or(default_framework_memory_source_root);
+    let framework_agents = match resolve_init_agents_source(&bootstrap_source_root) {
         Ok(path) => path,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::from(1);
         }
     };
-    let sidecar_scaffold = match resolve_init_sidecar_source(&source_root) {
+    let sidecar_scaffold = match resolve_init_sidecar_source(&bootstrap_source_root) {
         Ok(path) => path,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::from(1);
         }
     };
-    let config_template = match resolve_init_config_template_source(&source_root) {
+    let config_template = match resolve_init_config_template_source(&bootstrap_source_root) {
         Ok(path) => path,
         Err(error) => {
             eprintln!("{error}");
@@ -1032,6 +1258,13 @@ pub(crate) async fn run_init(args: super::BootArgs) -> ExitCode {
         &framework_agents,
         &sidecar_scaffold,
     )
+    .and_then(|()| {
+        materialize_framework_instruction_bundles(
+            &project_root,
+            &instruction_source_root,
+            &framework_memory_source_root,
+        )
+    })
     .and_then(|()| copy_file_if_missing(&config_template, &project_root.join("vida.config.yaml")))
     .and_then(|()| materialize_project_docs_scaffold(&project_root))
     .and_then(|()| ensure_runtime_home(&project_root))
@@ -1051,15 +1284,7 @@ pub(crate) fn materialize_project_docs_scaffold(project_root: &Path) -> Result<(
     let project_id = super::project_activator_surface::inferred_project_id_candidate(project_root);
     let project_title = super::inferred_project_title(&project_id, None);
     let source_root = resolve_init_bootstrap_source_root();
-    let default_feature_template_source =
-        source_root.join("docs/product/spec/templates/feature-design-document.template.md");
-    let packaged_feature_template_source =
-        source_root.join("install/assets/feature-design-document.template.md");
-    let feature_template_source = if default_feature_template_source.is_file() {
-        default_feature_template_source
-    } else {
-        packaged_feature_template_source
-    };
+    let feature_template_source = resolve_feature_design_template_source(&source_root)?;
     let feature_template = std::fs::read_to_string(&feature_template_source).map_err(|error| {
         format!(
             "Failed to read framework feature-design template source {}: {error}",
@@ -1665,7 +1890,7 @@ fn print_init_summary(project_root: &Path, activation_view: &serde_json::Value) 
     println!("vida init project bootstrap ready");
     println!("project root: {}", project_root.display());
     println!(
-        "materialized: AGENTS.md, AGENTS.sidecar.md, vida.config.yaml, README.md, docs/project-root-map.md, docs/product/**, docs/process/**, docs/research/README.md, .vida/config, .vida/db, .vida/cache, .vida/framework, .vida/project, .vida/project/agent-extensions/*, .vida/project/agent-extensions/*.sidecar.yaml, .vida/receipts, .vida/runtime, .vida/scratchpad"
+        "materialized: AGENTS.md, AGENTS.sidecar.md, vida.config.yaml, vida/config/instructions/bundles/**, README.md, docs/project-root-map.md, docs/product/**, docs/process/**, docs/research/README.md, .vida/config, .vida/db, .vida/cache, .vida/framework, .vida/project, .vida/project/agent-extensions/*, .vida/project/agent-extensions/*.sidecar.yaml, .vida/receipts, .vida/runtime, .vida/scratchpad"
     );
     println!(
         "activation status: {}",
@@ -3593,7 +3818,13 @@ mod agent_init_surface_tests {
             serde_json::json!({ "status": "ready" }),
             selection,
             serde_json::json!({ "activation_kind": "activation_view" }),
-            serde_json::json!({ "mode": "activation_view_only" }),
+            serde_json::json!({
+                "mode": "activation_view_only",
+                "activation_view_is_execution_evidence": false,
+                "required_completion_evidence": "receipt_backed_execution_evidence",
+                "root_session_write_authority_granted": false,
+                "continuation_authority_granted": false
+            }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
             &test_activation_bundle(),
             serde_json::json!({
@@ -3686,7 +3917,13 @@ mod agent_init_surface_tests {
             serde_json::json!({ "status": "ready" }),
             selection,
             serde_json::json!({ "activation_kind": "activation_view" }),
-            serde_json::json!({ "mode": "activation_view_only" }),
+            serde_json::json!({
+                "mode": "activation_view_only",
+                "activation_view_is_execution_evidence": false,
+                "required_completion_evidence": "receipt_backed_execution_evidence",
+                "root_session_write_authority_granted": false,
+                "continuation_authority_granted": false
+            }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
             &test_activation_bundle(),
             serde_json::json!({ "status": "ready", "roles": [] }),
@@ -3716,7 +3953,13 @@ mod agent_init_surface_tests {
                 "request_text": "repair"
             }),
             serde_json::json!({ "activation_kind": "activation_view" }),
-            serde_json::json!({ "mode": "activation_view_only" }),
+            serde_json::json!({
+                "mode": "activation_view_only",
+                "activation_view_is_execution_evidence": false,
+                "required_completion_evidence": "receipt_backed_execution_evidence",
+                "root_session_write_authority_granted": false,
+                "continuation_authority_granted": false
+            }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
             &test_activation_bundle(),
             serde_json::json!({

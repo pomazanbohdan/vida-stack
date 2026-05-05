@@ -587,12 +587,21 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 store.root(),
                             )
                             .is_some();
+                        let allow_automatic_dispatch_execution =
+                            super::taskflow_task_bridge::infer_project_root_from_state_root(
+                                store.root(),
+                            )
+                            .map(|project_root| {
+                                super::runtime_dispatch_state::runtime_host_execution_contract_allows_automatic_dispatch_execution(&project_root)
+                            })
+                            .unwrap_or(true);
                         let state_root = store.root().to_path_buf();
                         drop(store);
                         if !consume_final_mode.is_read_only()
                             && direct_consumption_ready
                             && dispatch_receipt.dispatch_status == "routed"
                             && allow_taskflow_pack_execution
+                            && allow_automatic_dispatch_execution
                         {
                             if let Err(error) = super::execute_and_record_dispatch_receipt(
                                 &state_root,
@@ -647,7 +656,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     if let Err(error) = crate::taskflow_continuation::sync_run_graph_continuation_binding(
                                         &store,
                                         &status,
-                                        "consume_after_downstream_chain",
+                                        crate::taskflow_continuation::CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE,
                                     )
                                     .await
                                     {
@@ -911,7 +920,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         match consume_final_mode {
                             ConsumeFinalMode::Preview => ExitCode::SUCCESS,
                             ConsumeFinalMode::Execute | ConsumeFinalMode::ValidateOnly => {
-                                if payload.direct_consumption_ready {
+                                if payload.closure_admission.admitted {
                                     ExitCode::SUCCESS
                                 } else {
                                     ExitCode::from(1)
@@ -1208,37 +1217,37 @@ fn decode_execution_preparation_artifacts(
         && (artifact_json
             .map(|value| super::json_bool(value.get("handoff_ready"), false))
             .unwrap_or_else(|| super::json_bool(run_graph_bootstrap.get("handoff_ready"), false)));
+    let legacy_packet_ready = super::json_bool(
+        run_graph_bootstrap.get("execution_preparation_handoff_packet_ready"),
+        false,
+    ) || run_graph_bootstrap
+        .get("execution_preparation_packet_path")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let legacy_evidence_ready =
+        super::json_bool(
+            run_graph_bootstrap.get("execution_preparation_evidence_ready"),
+            false,
+        ) || run_graph_bootstrap["evidence"]["execution_preparation"]["status"].as_str()
+            == Some("ready")
+            || run_graph_bootstrap["evidence"]["execution_preparation"]["ready"]
+                .as_bool()
+                .unwrap_or(false);
+
     let developer_handoff_packet = DeveloperHandoffPacketArtifact {
         path: nonempty_json_string(packet_json.and_then(|value| value.get("path"))).or_else(|| {
             nonempty_json_string(run_graph_bootstrap.get("execution_preparation_packet_path"))
         }),
         ready: packet_json
-            .map(|value| super::json_bool(value.get("ready"), false))
-            .unwrap_or_else(|| {
-                super::json_bool(
-                    run_graph_bootstrap.get("execution_preparation_handoff_packet_ready"),
-                    false,
-                ) || run_graph_bootstrap
-                    .get("execution_preparation_packet_path")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|value| !value.trim().is_empty())
-                    .unwrap_or(false)
-            }),
+            .map(|value| super::json_bool(value.get("ready"), false) || legacy_packet_ready)
+            .unwrap_or(legacy_packet_ready),
         status: nonempty_json_string(packet_json.and_then(|value| value.get("status"))),
     };
     let execution_preparation_evidence = ExecutionPreparationEvidenceArtifact {
         ready: evidence_json
-            .map(|value| super::json_bool(value.get("ready"), false))
-            .unwrap_or_else(|| {
-                super::json_bool(
-                    run_graph_bootstrap.get("execution_preparation_evidence_ready"),
-                    false,
-                ) || run_graph_bootstrap["evidence"]["execution_preparation"]["status"].as_str()
-                    == Some("ready")
-                    || run_graph_bootstrap["evidence"]["execution_preparation"]["ready"]
-                        .as_bool()
-                        .unwrap_or(false)
-            }),
+            .map(|value| super::json_bool(value.get("ready"), false) || legacy_evidence_ready)
+            .unwrap_or(legacy_evidence_ready),
         status: nonempty_json_string(evidence_json.and_then(|value| value.get("status"))).or_else(
             || {
                 nonempty_json_string(
@@ -2293,6 +2302,18 @@ mod tests {
 
         let taskflow_handoff_plan = serde_json::json!({
             "handoff_ready": true,
+            "execution_preparation_artifacts": {
+                "handoff_ready": true,
+                "developer_handoff_packet": {
+                    "ready": false,
+                    "status": "pending_developer_handoff_packet",
+                    "path": null
+                },
+                "execution_preparation_evidence": {
+                    "ready": false,
+                    "status": "pending_execution_preparation_evidence"
+                }
+            }
         });
         let run_graph_bootstrap = serde_json::json!({
             "handoff_ready": true,

@@ -9,6 +9,19 @@ use crate::{
     RenderMode,
 };
 
+pub(crate) const CONSUME_CONTINUE_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE: &str =
+    "consume_continue_after_downstream_chain";
+pub(crate) const CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE: &str =
+    "consume_after_downstream_chain";
+
+pub(crate) fn is_downstream_chain_continuation_binding_source(binding_source: &str) -> bool {
+    matches!(
+        binding_source,
+        CONSUME_CONTINUE_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE
+            | CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE
+    )
+}
+
 fn terminal_completed_without_next_unit(status: &RunGraphStatus) -> bool {
     status.status == "completed"
         && status.lifecycle_stage == "closure_complete"
@@ -328,6 +341,12 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
         }
     };
     let binding = if let Some(task_id) = task_id.as_deref() {
+        if !terminal_completed_without_next_unit(&status) {
+            eprintln!(
+                "Explicit --task-id continuation binding is only allowed after run `{run_id}` reaches closure_complete with no downstream target."
+            );
+            return ExitCode::from(1);
+        }
         let task = match store.show_task(task_id).await {
             Ok(task) => task,
             Err(error) => {
