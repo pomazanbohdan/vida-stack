@@ -326,12 +326,40 @@ fn resolve_optional_text_arg(
     direct: Option<&str>,
     file_path: Option<&std::path::Path>,
 ) -> Result<Option<String>, String> {
+    const MAX_FILE_BYTES: u64 = 64 * 1024;
+
     if direct.is_some() && file_path.is_some() {
         return Err(format!(
             "Use only one {label} source: --{label} <text> or --{label}-file <path>"
         ));
     }
     if let Some(path) = file_path {
+        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+            format!(
+                "Failed to inspect {label} file `{}` metadata: {error}",
+                path.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Refusing to read {label} file `{}`: symlinks are not allowed",
+                path.display()
+            ));
+        }
+        if !metadata.is_file() {
+            return Err(format!(
+                "Refusing to read {label} file `{}`: expected a regular file",
+                path.display()
+            ));
+        }
+        if metadata.len() > MAX_FILE_BYTES {
+            return Err(format!(
+                "Refusing to read {label} file `{}`: file is {} bytes, limit is {} bytes",
+                path.display(),
+                metadata.len(),
+                MAX_FILE_BYTES
+            ));
+        }
         let value = std::fs::read_to_string(path).map_err(|error| {
             format!("Failed to read {label} file `{}`: {error}", path.display())
         })?;
