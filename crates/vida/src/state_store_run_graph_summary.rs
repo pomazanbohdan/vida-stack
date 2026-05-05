@@ -2118,7 +2118,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_graph_status_reconciles_closed_active_task_into_completed_clear_cycle() {
+    async fn run_graph_status_does_not_reconcile_closed_in_progress_task_into_completed() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -2177,15 +2177,15 @@ mod tests {
             .await
             .expect("load reconciled run-graph status");
         assert_eq!(reconciled.active_node, "implementer");
-        assert_eq!(reconciled.status, "completed");
-        assert_eq!(reconciled.lifecycle_stage, "implementation_complete");
+        assert_eq!(reconciled.status, "in_progress");
+        assert_eq!(reconciled.lifecycle_stage, "implementer_active");
         assert_eq!(reconciled.next_node, None);
-        assert_eq!(reconciled.policy_gate, "not_required");
+        assert_eq!(reconciled.policy_gate, "targeted_verification");
         assert_eq!(reconciled.handoff_state, "none");
-        assert_eq!(reconciled.checkpoint_kind, "none");
+        assert_eq!(reconciled.checkpoint_kind, "active");
         assert_eq!(reconciled.resume_target, "none");
-        assert!(!reconciled.recovery_ready);
-        assert!(!reconciled.delegation_gate().delegated_cycle_open);
+        assert!(reconciled.recovery_ready);
+        assert!(reconciled.delegation_gate().delegated_cycle_open);
 
         let _ = fs::remove_dir_all(&root);
     }
