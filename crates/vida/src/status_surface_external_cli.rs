@@ -785,7 +785,7 @@ pub(crate) fn external_cli_preflight_summary(
             .unwrap_or(serde_json::Value::Null);
         let blocker_code = first_blocker
             .as_str()
-            .and_then(crate::release1_contracts::blocker_code_from_str);
+            .and_then(crate::release1_contracts::BlockerCode::from_str);
         let (trace_baseline, incident_baseline) = baseline_for_blocker(blocker_code);
         return serde_json::json!({
             "status": "blocked",
