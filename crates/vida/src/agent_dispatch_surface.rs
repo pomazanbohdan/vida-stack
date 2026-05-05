@@ -378,14 +378,16 @@ fn agent_init_command(
     state_dir: Option<&std::path::Path>,
     runtime_role: &str,
 ) -> String {
+    let task_id_quoted = crate::shell_quote(task_id);
+    let runtime_role_quoted = crate::shell_quote(runtime_role);
     let mut command = if runtime_role.trim().is_empty() {
-        format!("vida agent-init --role worker {task_id} --json")
+        format!("vida agent-init --role worker -- {task_id_quoted} --json")
     } else {
-        format!("vida agent-init --role {runtime_role} {task_id} --json")
+        format!("vida agent-init --role {runtime_role_quoted} -- {task_id_quoted} --json")
     };
     if let Some(state_dir) = state_dir {
         command.push_str(" --state-dir ");
-        command.push_str(&state_dir.display().to_string());
+        command.push_str(&crate::shell_quote(&state_dir.display().to_string()));
     }
     command
 }
@@ -2093,7 +2095,7 @@ mod tests {
         assert!(
             preview.selected_lanes[0]
                 .dispatch_command
-                .contains("vida agent-init --role business_analyst task-analyst --json --state-dir /tmp/vida-state")
+                .contains("vida agent-init --role 'business_analyst' -- 'task-analyst' --json --state-dir '/tmp/vida-state'")
         );
     }
 
