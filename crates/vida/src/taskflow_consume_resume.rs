@@ -417,7 +417,7 @@ async fn validate_run_graph_resume_state(
         Err(error) => {
             let receipt_exists =
                 matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)));
-            if receipt_exists && resume_from_persisted_final_snapshot(store)? {
+            if receipt_exists && resume_from_persisted_final_snapshot(store, run_id)? {
                 return Ok(());
             }
             return Err(format!(
@@ -440,7 +440,7 @@ async fn validate_run_graph_resume_state(
     }
     match validate_run_graph_resume_gate(&status) {
         Ok(()) => Ok(()),
-        Err(_error) if resume_from_persisted_final_snapshot(store)? => Ok(()),
+        Err(_error) if resume_from_persisted_final_snapshot(store, run_id)? => Ok(()),
         Err(error) => Err(error),
     }
 }
@@ -679,11 +679,35 @@ fn final_snapshot_missing_failure_control_evidence(snapshot_path: &str) -> bool 
     !runtime_consumption_snapshot_has_failure_control_evidence(&summary_json)
 }
 
-fn resume_from_persisted_final_snapshot(store: &super::StateStore) -> Result<bool, String> {
+fn resume_from_persisted_final_snapshot(
+    store: &super::StateStore,
+    run_id: &str,
+) -> Result<bool, String> {
     let Some(snapshot_path) = super::latest_final_runtime_consumption_snapshot_path(store.root())?
     else {
         return Ok(false);
     };
+    let snapshot_body = match std::fs::read_to_string(&snapshot_path) {
+        Ok(body) => body,
+        Err(_) => return Ok(false),
+    };
+    let snapshot_json = match serde_json::from_str::<serde_json::Value>(&snapshot_body) {
+        Ok(snapshot) => snapshot,
+        Err(_) => return Ok(false),
+    };
+    let snapshot_run_id = snapshot_json
+        .get("source_run_id")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            snapshot_json
+                .pointer("/payload/dispatch_receipt/run_id")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if snapshot_run_id != Some(run_id) {
+        return Ok(false);
+    }
     Ok(!final_snapshot_missing_failure_control_evidence(
         &snapshot_path,
     ))
@@ -964,7 +988,7 @@ async fn validate_run_graph_resume_state_for_downstream_packet(
         Err(error) => {
             let receipt_exists =
                 matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)));
-            if receipt_exists && resume_from_persisted_final_snapshot(store)? {
+            if receipt_exists && resume_from_persisted_final_snapshot(store, run_id)? {
                 return Ok(());
             }
             return Err(format!(
@@ -6703,7 +6727,10 @@ agent_system:
         )
         .expect("write final snapshot");
 
-        assert!(resume_from_persisted_final_snapshot(&store).expect("runtime consumption summary"),);
+        assert!(
+            resume_from_persisted_final_snapshot(&store, "run-final-snapshot")
+                .expect("runtime consumption summary"),
+        );
         let snapshot_json: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&snapshot_path).expect("read final snapshot"))
                 .expect("parse final snapshot");
@@ -6772,7 +6799,10 @@ agent_system:
         assert!(!runtime_consumption_snapshot_has_failure_control_evidence(
             &snapshot_json
         ));
-        assert!(!resume_from_persisted_final_snapshot(&store).expect("runtime consumption summary"));
+        assert!(
+            !resume_from_persisted_final_snapshot(&store, "run-final-snapshot")
+                .expect("runtime consumption summary")
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
