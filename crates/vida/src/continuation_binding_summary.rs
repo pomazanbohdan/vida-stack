@@ -12,7 +12,8 @@ fn explicit_binding_is_admissible_for_status(
             && binding_kind == Some("task_graph_task");
     }
     if status.status != "completed" {
-        return true;
+        return binding.binding_source != "explicit_continuation_bind_task"
+            && binding_kind != Some("task_graph_task");
     }
 
     let terminal_completed_without_next_unit = status.lifecycle_stage == "closure_complete"
