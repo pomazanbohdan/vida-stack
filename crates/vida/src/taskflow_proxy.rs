@@ -2182,9 +2182,16 @@ fn build_graph_summary_waves(
     waves
 }
 
-fn parse_taskflow_next_args(
-    args: &[String],
-) -> Result<(bool, Option<&str>, Option<PathBuf>), &'static str> {
+enum TaskflowNextArgs<'a> {
+    Help,
+    Next {
+        as_json: bool,
+        scope_task_id: Option<&'a str>,
+        state_dir: Option<PathBuf>,
+    },
+}
+
+fn parse_taskflow_next_args(args: &[String]) -> Result<TaskflowNextArgs<'_>, &'static str> {
     if !matches!(args.first().map(String::as_str), Some("next")) {
         return Err("Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
     }
@@ -2218,7 +2225,7 @@ fn parse_taskflow_next_args(
                 index += 2;
             }
             "--help" | "-h" if index == 1 && args.len() == 2 => {
-                return Ok((false, Some("__help__"), None));
+                return Ok(TaskflowNextArgs::Help);
             }
             _ => {
                 return Err(
@@ -2228,7 +2235,11 @@ fn parse_taskflow_next_args(
         }
     }
 
-    Ok((as_json, scope_task_id, state_dir))
+    Ok(TaskflowNextArgs::Next {
+        as_json,
+        scope_task_id,
+        state_dir,
+    })
 }
 
 async fn route_taskflow_doctor(args: &[String]) -> ExitCode {
@@ -2451,11 +2462,15 @@ fn resolve_taskflow_proxy_state_dir(state_dir: Option<PathBuf>) -> Result<PathBu
 
 pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     let (as_json, scope_task_id, state_dir) = match parse_taskflow_next_args(args) {
-        Ok((_, Some("__help__"), _)) => {
+        Ok(TaskflowNextArgs::Help) => {
             print_taskflow_proxy_help(Some("next"));
             return ExitCode::SUCCESS;
         }
-        Ok(parsed) => parsed,
+        Ok(TaskflowNextArgs::Next {
+            as_json,
+            scope_task_id,
+            state_dir,
+        }) => (as_json, scope_task_id, state_dir),
         Err(usage) => {
             eprintln!("{usage}");
             return ExitCode::from(2);
