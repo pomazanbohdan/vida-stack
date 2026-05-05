@@ -301,6 +301,24 @@ pub(crate) fn resolve_overlay_path(root: &Path, path: &str) -> PathBuf {
     }
 }
 
+fn validate_project_relative_path(path: &str, field_name: &str) -> Result<(), String> {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        return Err(format!(
+            "Invalid `{field_name}` path `{path}`: absolute paths are not allowed"
+        ));
+    }
+    if candidate
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "Invalid `{field_name}` path `{path}`: `..` segments are not allowed"
+        ));
+    }
+    Ok(())
+}
+
 fn registry_sidecar_path(registry_path: &Path) -> PathBuf {
     let Some(file_name) = registry_path.file_name().and_then(|value| value.to_str()) else {
         return registry_path.with_extension("sidecar");
@@ -435,6 +453,7 @@ pub(crate) fn resolve_host_cli_template_source(
     let template_relative = registry_entry
         .and_then(host_cli_system_template_root)
         .ok_or_else(|| format!("No template_root configured for host CLI `{cli_system}`"))?;
+    validate_project_relative_path(&template_relative, "template_root")?;
     let primary_root = resolve_init_bootstrap_source_root();
     let fallback_root = super::repo_runtime_root();
     let candidates = if fallback_root == primary_root {
@@ -539,6 +558,9 @@ pub(crate) fn materialize_host_cli_template(
         .ok_or_else(|| format!("Registry entry required for host CLI `{cli_system}`"))?;
     let entry_ref = entry_value;
     let source = resolve_host_cli_template_source(cli_system, Some(&entry_ref))?;
+    let runtime_root_raw = yaml_string(yaml_lookup(&entry_ref, &["runtime_root"]))
+        .ok_or_else(|| format!("No runtime_root configured for host CLI `{cli_system}`"))?;
+    validate_project_relative_path(&runtime_root_raw, "runtime_root")?;
     let runtime_root = host_cli_system_runtime_root(&entry_ref, cli_system, project_root);
     let mode = host_cli_system_materialization_mode(&entry_ref, cli_system);
     let copy_tree_target = project_root.join(&runtime_root);
@@ -2394,6 +2416,31 @@ mod tests {
             .expect("supported cli systems should render")
             .iter()
             .any(|value| value.as_str() == Some("codex")));
+    }
+
+    #[test]
+    fn project_activator_rejects_absolute_template_root() {
+        let entry: serde_yaml::Value = serde_yaml::from_str(
+            "template_root: /tmp/secrets\nruntime_root: .qwen\nmaterialization_mode: copy_tree_only\n",
+        )
+        .expect("entry should parse");
+        let error = super::resolve_host_cli_template_source("qwen", Some(&entry))
+            .expect_err("absolute template_root must be rejected");
+        assert!(error.contains("template_root"));
+        assert!(error.contains("absolute paths are not allowed"));
+    }
+
+    #[test]
+    fn project_activator_rejects_parent_runtime_root() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let entry: serde_yaml::Value = serde_yaml::from_str(
+            "template_root: .qwen\nruntime_root: ../escape\nmaterialization_mode: copy_tree_only\n",
+        )
+        .expect("entry should parse");
+        let error = super::materialize_host_cli_template(harness.path(), "qwen", Some(&entry))
+            .expect_err("parent runtime_root must be rejected");
+        assert!(error.contains("runtime_root"));
+        assert!(error.contains("`..` segments are not allowed"));
     }
 
     #[test]
