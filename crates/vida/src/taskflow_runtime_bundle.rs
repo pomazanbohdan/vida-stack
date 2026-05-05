@@ -2080,8 +2080,8 @@ mod tests {
             .iter()
             .find(|family| family["family_id"] == "bootstrap")
             .expect("bootstrap family should exist");
-        assert_eq!(bootstrap["lane_scope"], "shared");
-        assert_eq!(bootstrap["availability"], "callable");
+        assert_eq!(bootstrap["lane_scope"], "root_only");
+        assert_eq!(bootstrap["availability"], "view_only_reference");
     }
 
     #[test]

@@ -115,6 +115,7 @@ fn command_family_scope_and_availability(
                 ("root_only", "view_only_reference")
             }
             "task_runtime" => ("shared", "view_only_reference"),
+            "bootstrap" => ("root_only", "view_only_reference"),
             _ => ("shared", "callable"),
         }
     } else {
