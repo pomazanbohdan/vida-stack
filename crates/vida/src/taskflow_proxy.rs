@@ -1675,7 +1675,9 @@ fn active_exception_takeover_binding_matches_status(
     binding.status == "bound"
         && binding.run_id == status.run_id
         && binding.task_id == status.task_id
-        && binding.binding_source == "consume_continue_after_downstream_chain"
+        && crate::taskflow_continuation::is_downstream_chain_continuation_binding_source(
+            &binding.binding_source,
+        )
         && binding_kind == Some("run_graph_task")
         && active_exception_takeover_evidence_matches_status(Some(status), dispatch, None)
 }
@@ -6486,6 +6488,29 @@ mod tests {
         }
     }
 
+    fn exception_takeover_binding(
+        run_id: &str,
+        binding_source: &str,
+    ) -> crate::state_store::RunGraphContinuationBinding {
+        crate::state_store::RunGraphContinuationBinding {
+            run_id: run_id.to_string(),
+            task_id: run_id.to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "run_graph_task",
+                "task_id": run_id,
+                "run_id": run_id,
+                "active_node": "analysis"
+            }),
+            binding_source: binding_source.to_string(),
+            why_this_unit: "Explicit continuation binding records exception takeover.".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: None,
+            recorded_at: "2026-04-24T18:50:54Z".to_string(),
+        }
+    }
+
     #[test]
     fn taskflow_next_decision_surfaces_candidate_when_runtime_gate_blocks_ready_head() {
         let dispatch = crate::state_store::RunGraphDispatchReceiptSummary {
@@ -6720,6 +6745,29 @@ mod tests {
             .blocker_codes
             .iter()
             .any(|code| code == "latest_run_graph_status_blocked"));
+    }
+
+    #[test]
+    fn taskflow_next_accepts_direct_consume_downstream_chain_binding_source() {
+        let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-cross-platform-vida-install-init-runtime",
+            "runtime-cross-platform-vida-install-init-runtime",
+            "analysis",
+        );
+        latest_status.status = "blocked".to_string();
+        latest_status.lifecycle_stage = "analysis_blocked".to_string();
+        let binding = exception_takeover_binding(
+            "runtime-cross-platform-vida-install-init-runtime",
+            crate::taskflow_continuation::CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE,
+        );
+        let dispatch =
+            exception_takeover_dispatch("runtime-cross-platform-vida-install-init-runtime");
+
+        assert!(super::active_exception_takeover_binding_matches_status(
+            Some(&binding),
+            Some(&latest_status),
+            Some(&dispatch),
+        ));
     }
 
     #[test]

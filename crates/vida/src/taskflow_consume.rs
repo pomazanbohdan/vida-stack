@@ -647,7 +647,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     if let Err(error) = crate::taskflow_continuation::sync_run_graph_continuation_binding(
                                         &store,
                                         &status,
-                                        "consume_after_downstream_chain",
+                                        crate::taskflow_continuation::CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE,
                                     )
                                     .await
                                     {

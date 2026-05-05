@@ -74,7 +74,9 @@ fn active_exception_takeover_binding_matches_status(
     binding.status == "bound"
         && binding.run_id == status.run_id
         && binding.task_id == status.task_id
-        && binding.binding_source == "consume_continue_after_downstream_chain"
+        && crate::taskflow_continuation::is_downstream_chain_continuation_binding_source(
+            &binding.binding_source,
+        )
         && binding_kind == Some("run_graph_task")
         && active_exception_takeover_evidence_matches_status(status, dispatch, None)
 }
@@ -678,6 +680,31 @@ mod tests {
         }
     }
 
+    fn exception_takeover_binding(
+        run_id: &str,
+        binding_source: &str,
+    ) -> crate::state_store::RunGraphContinuationBinding {
+        crate::state_store::RunGraphContinuationBinding {
+            run_id: run_id.to_string(),
+            task_id: run_id.to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "run_graph_task",
+                "task_id": run_id,
+                "run_id": run_id,
+                "active_node": "analysis"
+            }),
+            binding_source: binding_source.to_string(),
+            why_this_unit:
+                "Explicit continuation binding records the active exception-takeover unit."
+                    .to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: Some("audit-p1-state-store-init-lock-timeout-proof-blocker".to_string()),
+            recorded_at: "2026-04-26T07:52:53Z".to_string(),
+        }
+    }
+
     #[test]
     fn active_run_graph_status_binds_current_bounded_unit() {
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
@@ -816,25 +843,10 @@ mod tests {
         status.status = "blocked".to_string();
         status.lifecycle_stage = "analysis_blocked".to_string();
 
-        let binding = crate::state_store::RunGraphContinuationBinding {
-            run_id: "runtime-audit-state-store-init-lock-timeout".to_string(),
-            task_id: "runtime-audit-state-store-init-lock-timeout".to_string(),
-            status: "bound".to_string(),
-            active_bounded_unit: serde_json::json!({
-                "kind": "run_graph_task",
-                "task_id": "runtime-audit-state-store-init-lock-timeout",
-                "run_id": "runtime-audit-state-store-init-lock-timeout",
-                "active_node": "analysis"
-            }),
-            binding_source: "consume_continue_after_downstream_chain".to_string(),
-            why_this_unit:
-                "Explicit continuation binding records the active exception-takeover unit."
-                    .to_string(),
-            primary_path: "normal_delivery_path".to_string(),
-            sequential_vs_parallel_posture: "sequential_only".to_string(),
-            request_text: Some("audit-p1-state-store-init-lock-timeout-proof-blocker".to_string()),
-            recorded_at: "2026-04-26T07:52:53Z".to_string(),
-        };
+        let binding = exception_takeover_binding(
+            "runtime-audit-state-store-init-lock-timeout",
+            crate::taskflow_continuation::CONSUME_CONTINUE_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE,
+        );
         let dispatch = exception_takeover_dispatch("runtime-audit-state-store-init-lock-timeout");
 
         let summary = build_continuation_binding_summary(
@@ -855,6 +867,44 @@ mod tests {
         assert_eq!(
             summary["active_bounded_unit"]["task_id"],
             "runtime-audit-state-store-init-lock-timeout"
+        );
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn blocked_latest_run_graph_status_accepts_direct_consume_exception_takeover_binding() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-cross-platform-vida-install-init-runtime",
+            "runtime-cross-platform-vida-install-init-runtime",
+            "analysis",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+
+        let binding = exception_takeover_binding(
+            "runtime-cross-platform-vida-install-init-runtime",
+            crate::taskflow_continuation::CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE,
+        );
+        let dispatch =
+            exception_takeover_dispatch("runtime-cross-platform-vida-install-init-runtime");
+
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            Some(&dispatch),
+            None,
+            false,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(
+            summary["binding_source"],
+            crate::taskflow_continuation::CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE
+        );
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "runtime-cross-platform-vida-install-init-runtime"
         );
         assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
     }

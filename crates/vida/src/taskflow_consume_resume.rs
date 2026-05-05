@@ -3696,7 +3696,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         crate::taskflow_continuation::sync_run_graph_continuation_binding(
                             &store,
                             &status,
-                            "consume_continue_after_downstream_chain",
+                            crate::taskflow_continuation::CONSUME_CONTINUE_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE,
                         )
                         .await
                     {

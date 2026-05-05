@@ -9,6 +9,19 @@ use crate::{
     RenderMode,
 };
 
+pub(crate) const CONSUME_CONTINUE_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE: &str =
+    "consume_continue_after_downstream_chain";
+pub(crate) const CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE: &str =
+    "consume_after_downstream_chain";
+
+pub(crate) fn is_downstream_chain_continuation_binding_source(binding_source: &str) -> bool {
+    matches!(
+        binding_source,
+        CONSUME_CONTINUE_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE
+            | CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE
+    )
+}
+
 fn terminal_completed_without_next_unit(status: &RunGraphStatus) -> bool {
     status.status == "completed"
         && status.lifecycle_stage == "closure_complete"
