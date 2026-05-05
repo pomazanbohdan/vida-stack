@@ -1607,7 +1607,26 @@ fn validate_generated_draft(
 }
 
 fn validate_draft(draft: &TaskPlanGraphDraft, existing: &[TaskRecord]) -> TaskPlanValidation {
-    validate_draft_inner(draft, existing, false)
+    let mut validation = validate_draft_inner(draft, existing, false);
+    if draft
+        .validation
+        .blocker_codes
+        .iter()
+        .any(|code| code == "missing_plan_context")
+        && !draft.input_contract.missing_context.is_empty()
+    {
+        validation
+            .blocker_codes
+            .push("missing_plan_context".to_string());
+        validation.issues.push(format!(
+            "required PlanGraph input context is missing: {}",
+            draft.input_contract.missing_context.join(", ")
+        ));
+        validation.blocker_codes.sort();
+        validation.blocker_codes.dedup();
+        validation.status = "blocked".to_string();
+    }
+    validation
 }
 
 fn validate_draft_inner(
@@ -2874,6 +2893,57 @@ mod tests {
             .validation
             .blocker_codes
             .contains(&"cyclic_dependency".to_string()));
+        let store = StateStore::open_existing(state_dir.clone())
+            .await
+            .expect("state store should open");
+        assert!(store
+            .list_tasks(None, true)
+            .await
+            .expect("tasks should list")
+            .is_empty());
+        let _ = std::fs::remove_dir_all(state_dir);
+    }
+
+    #[tokio::test]
+    async fn materialize_blocks_draft_with_missing_plan_context_blocker() {
+        let state_dir = test_state_dir("missing-plan-context");
+        let mut draft = generate_plan_graph_draft(&PlanGenerateOptions {
+            source_file: None,
+            source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
+            require_context: true,
+            task_prefix: Some("feature-planner".to_string()),
+            parent_id: None,
+            output: None,
+            json: true,
+        })
+        .expect("draft should generate");
+
+        assert_eq!(draft.validation.status, "blocked");
+        // Simulate a structurally valid draft loaded for materialization that still carries
+        // the require-context blocker from generation.
+        draft.validation.issues.clear();
+
+        let receipt = materialize_plan_graph_draft(
+            &draft,
+            &PlanMaterializeOptions {
+                draft_path: PathBuf::from("unused.json"),
+                state_dir: state_dir.clone(),
+                dry_run: false,
+                json: true,
+            },
+        )
+        .await
+        .expect("missing-plan-context draft should produce blocked receipt");
+
+        assert_eq!(receipt.status, "blocked");
+        assert!(receipt.created_task_ids.is_empty());
+        assert!(receipt
+            .validation
+            .blocker_codes
+            .contains(&"missing_plan_context".to_string()));
         let store = StateStore::open_existing(state_dir.clone())
             .await
             .expect("state store should open");
