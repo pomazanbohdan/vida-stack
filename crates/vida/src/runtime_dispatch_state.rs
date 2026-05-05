@@ -4938,6 +4938,16 @@ mod tests {
         original: Option<String>,
     }
 
+    struct RecoveringMutex(Mutex<()>);
+
+    impl RecoveringMutex {
+        fn lock(&self) -> MutexGuard<'_, ()> {
+            self.0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
+    }
+
     fn env_var_lock() -> &'static RecoveringMutex {
         static LOCK: OnceLock<RecoveringMutex> = OnceLock::new();
         LOCK.get_or_init(|| RecoveringMutex(Mutex::new(())))
