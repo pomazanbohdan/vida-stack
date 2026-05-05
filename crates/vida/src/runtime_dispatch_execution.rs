@@ -476,15 +476,7 @@ fn parse_external_provider_output(stdout: &str) -> Option<ParsedExternalProvider
             .collect::<Result<Vec<_>, _>>();
         match parsed_lines {
             Ok(rows) if !rows.is_empty() => serde_json::Value::Array(rows),
-            _ => {
-                return Some(ParsedExternalProviderOutput {
-                    raw_json: serde_json::Value::String(trimmed.to_string()),
-                    result_text: Some(trimmed.to_string()),
-                    usage: None,
-                    is_error: None,
-                    error_message: None,
-                });
-            }
+            _ => return None,
         }
     };
     let result_row = match &raw_json {
@@ -1971,34 +1963,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_external_provider_output_accepts_plain_text_success() {
-        let parsed = parse_external_provider_output("external-dispatch:implemented")
-            .expect("plain text success output should parse");
-
-        assert_eq!(
-            parsed.raw_json,
-            serde_json::Value::String("external-dispatch:implemented".to_string())
-        );
-        assert_eq!(
-            parsed.result_text.as_deref(),
-            Some("external-dispatch:implemented")
-        );
-        assert!(!super::external_provider_output_indicates_error(&parsed));
-        assert!(external_provider_output_confirms_execution(Some(&parsed)));
+    fn parse_external_provider_output_plain_text_success_stays_unparsable() {
+        let parsed = parse_external_provider_output("external-dispatch:implemented");
+        assert!(parsed.is_none());
+        assert!(!external_provider_output_confirms_execution(parsed.as_ref()));
     }
 
     #[test]
-    fn parse_external_provider_output_plain_text_auth_failure_stays_blocked() {
-        let parsed =
-            parse_external_provider_output("Authentication failed: invalid API key provided")
-                .expect("plain text auth failure should parse");
-
-        assert!(super::external_provider_output_indicates_error(&parsed));
-        assert!(!external_provider_output_confirms_execution(Some(&parsed)));
-        assert_eq!(
-            super::external_provider_error_message(&parsed).as_deref(),
-            Some("Authentication failed: invalid API key provided")
-        );
+    fn parse_external_provider_output_plain_text_auth_failure_stays_unparsable() {
+        let parsed = parse_external_provider_output("Authentication failed: invalid API key provided");
+        assert!(parsed.is_none());
+        assert!(!external_provider_output_confirms_execution(parsed.as_ref()));
     }
 
     #[test]
