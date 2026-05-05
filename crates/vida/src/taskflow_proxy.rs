@@ -253,6 +253,14 @@ fn scheduler_effective_parallel_limit(configured: u64, requested: Option<u64>) -
         .max(1)
 }
 
+fn shell_quote_arg(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    let escaped = value.replace('\'', "'\"'\"'");
+    format!("'{escaped}'")
+}
+
 fn scheduler_rejection_reasons_from_blocked_by(
     blocked_by: &[crate::state_store::TaskDependencyStatus],
 ) -> Vec<String> {
@@ -1345,9 +1353,10 @@ fn build_taskflow_scheduler_dispatch_plan(
     }
     let execute_requested_with_selection = execute_requested && selected_primary_task.is_some();
     if let Some(task) = selected_primary_task.as_ref() {
+        let task_id = shell_quote_arg(&task.id);
         next_actions.push(format!(
             "Inspect the selected primary task with `vida task show {} --json` before delegated launch.",
-            task.id
+            task_id
         ));
     }
     if let Some(task) = selected_parallel_tasks.first() {
@@ -1913,8 +1922,9 @@ fn build_taskflow_next_decision(
                 Some(next_action),
             )
         } else if let Some(task) = ready_head.clone() {
+            let task_id = shell_quote_arg(&task.id);
             let next_action = TaskflowNextAction {
-                command: format!("vida task show {} --json", task.id),
+                command: format!("vida task show {task_id} --json"),
                 surface: "vida task show".to_string(),
                 reason: "a backlog slice is ready now; inspect the canonical task record before dispatch".to_string(),
             };
@@ -2764,15 +2774,17 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     let mut next_actions = Vec::<String>::new();
 
     if let Some(task) = ready_tasks.first() {
+        let task_id = shell_quote_arg(&task.id);
         next_actions.push(format!(
             "Inspect the primary ready task with `vida task show {} --json` before dispatch.",
-            task.id
+            task_id
         ));
     }
     if let Some(record) = blocked_tasks.first() {
+        let task_id = shell_quote_arg(&record.task.id);
         next_actions.push(format!(
             "Inspect the highest-priority blocked task with `vida task deps {} --json` before resequencing.",
-            record.task.id
+            task_id
         ));
     }
     if critical_path.length > 0 {
@@ -2979,9 +2991,10 @@ fn build_taskflow_graph_explain_payload(
                 "reason": "task is graph-ready; use scheduler dispatch to select the next bounded launch set"
             })
         } else {
+            let task_id = shell_quote_arg(&candidate.task.id);
             serde_json::json!({
                 "surface": "vida task deps",
-                "command": format!("vida task deps {} --json", candidate.task.id),
+                "command": format!("vida task deps {task_id} --json"),
                 "reason": "task is blocked by open graph dependencies"
             })
         }
