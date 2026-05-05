@@ -29,18 +29,22 @@ impl StateStore {
             .dependencies
             .iter()
             .filter(|dependency| dependency.edge_type != "parent-child")
-            .filter_map(|dependency| {
-                let blocker_task = by_id.get(&dependency.depends_on_id)?;
-                if blocker_task.status == "closed" {
-                    return None;
-                }
-                Some(TaskDependencyStatus {
+            .filter_map(|dependency| match by_id.get(&dependency.depends_on_id) {
+                Some(blocker_task) if blocker_task.status == "closed" => None,
+                Some(blocker_task) => Some(TaskDependencyStatus {
                     issue_id: dependency.issue_id.clone(),
                     depends_on_id: dependency.depends_on_id.clone(),
                     edge_type: dependency.edge_type.clone(),
                     dependency_status: blocker_task.status.clone(),
                     dependency_issue_type: Some(blocker_task.issue_type.clone()),
-                })
+                }),
+                None => Some(TaskDependencyStatus {
+                    issue_id: dependency.issue_id.clone(),
+                    depends_on_id: dependency.depends_on_id.clone(),
+                    edge_type: dependency.edge_type.clone(),
+                    dependency_status: "missing".to_string(),
+                    dependency_issue_type: Some("missing_dependency_target".to_string()),
+                }),
             })
             .collect::<Vec<_>>();
         blockers.sort_by(|left, right| {
@@ -813,6 +817,52 @@ mod tests {
             .parallel_blockers
             .iter()
             .any(|value| value == "conflict_domain_collision"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn missing_dependency_targets_block_ready_and_scheduling() {
+        let root = temp_root("task-missing-dependency-blocker");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        create_task_with_semantics(&store, "task-with-missing-dependency", None, None, None, None)
+            .await;
+
+        store
+            .set_task_dependencies(
+                "task-with-missing-dependency",
+                vec![TaskDependencyInput {
+                    issue_id: "task-with-missing-dependency->task-missing".to_string(),
+                    depends_on_id: "task-missing".to_string(),
+                    edge_type: "blocks".to_string(),
+                }],
+            )
+            .await
+            .expect("dependency should be set");
+
+        let ready = store
+            .ready_tasks_scoped(None)
+            .await
+            .expect("ready tasks should render");
+        assert!(ready
+            .iter()
+            .all(|task| task.id != "task-with-missing-dependency"));
+
+        let projection = store
+            .scheduling_projection_scoped(None, None)
+            .await
+            .expect("projection should render");
+        let blocked = projection
+            .blocked
+            .iter()
+            .find(|candidate| candidate.task.id == "task-with-missing-dependency")
+            .expect("task should be blocked");
+        assert!(!blocked.ready_now);
+        assert!(blocked
+            .blocked_by
+            .iter()
+            .any(|dependency| dependency.dependency_status == "missing"));
 
         let _ = fs::remove_dir_all(root);
     }
