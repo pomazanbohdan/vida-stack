@@ -1784,6 +1784,19 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
             }
             if ensure_existing {
                 if let Ok(task) = store.show_task(&command.task_id).await {
+                    let labels = parse_label_values(&command.labels);
+                    if let Some(reason) = ensure_existing_task_mismatch_reason(
+                        &task,
+                        &title,
+                        (!display_id.is_empty()).then_some(display_id.as_str()),
+                        &command.issue_type,
+                        &command.status,
+                        parent_id.as_deref(),
+                        &labels,
+                    ) {
+                        eprintln!("Failed to ensure task: {reason}");
+                        return ExitCode::from(1);
+                    }
                     print_task_mutation(command.render, "vida task ensure", &task, command.json);
                     return ExitCode::SUCCESS;
                 }
@@ -1840,6 +1853,68 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
             ExitCode::from(1)
         }
     }
+}
+
+fn ensure_existing_task_mismatch_reason(
+    task: &state_store::TaskRecord,
+    expected_title: &str,
+    expected_display_id: Option<&str>,
+    expected_issue_type: &str,
+    expected_status: &str,
+    expected_parent_id: Option<&str>,
+    expected_labels: &[String],
+) -> Option<String> {
+    if task.title != expected_title {
+        return Some(format!(
+            "existing task '{}' title mismatch (expected '{}', got '{}')",
+            task.id, expected_title, task.title
+        ));
+    }
+    if task.display_id.as_deref() != expected_display_id {
+        return Some(format!(
+            "existing task '{}' display_id mismatch (expected '{}', got '{}')",
+            task.id,
+            expected_display_id.unwrap_or(""),
+            task.display_id.as_deref().unwrap_or("")
+        ));
+    }
+    if task.issue_type != expected_issue_type {
+        return Some(format!(
+            "existing task '{}' issue_type mismatch (expected '{}', got '{}')",
+            task.id, expected_issue_type, task.issue_type
+        ));
+    }
+    if task.status != expected_status {
+        return Some(format!(
+            "existing task '{}' status mismatch (expected '{}', got '{}')",
+            task.id, expected_status, task.status
+        ));
+    }
+    let existing_parent_id = task_parent_id(task);
+    if existing_parent_id.as_deref() != expected_parent_id {
+        return Some(format!(
+            "existing task '{}' parent_id mismatch (expected '{}', got '{}')",
+            task.id,
+            expected_parent_id.unwrap_or(""),
+            existing_parent_id.as_deref().unwrap_or("")
+        ));
+    }
+    if expected_labels
+        .iter()
+        .any(|label| !task.labels.iter().any(|existing| existing == label))
+    {
+        let missing_labels: Vec<String> = expected_labels
+            .iter()
+            .filter(|label| !task.labels.iter().any(|existing| existing == *label))
+            .cloned()
+            .collect();
+        return Some(format!(
+            "existing task '{}' missing required labels: {}",
+            task.id,
+            missing_labels.join(",")
+        ));
+    }
+    None
 }
 
 fn task_create_title(command: &TaskCreateArgs) -> Result<String, String> {
@@ -4279,12 +4354,13 @@ mod tests {
         normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
         parse_label_values, parse_optional_label_value, parse_split_child_specs,
         persist_task_handoff_accept_receipt, select_task_next_lawful_binding,
-        task_close_automation_receipt, task_close_commit_allowlist_next_actions,
+        task_close_automation_receipt, task_close_commit_allowlist_next_actions, task_parent_id,
         task_close_commit_file_strings, task_close_feedback_blocker_summary,
         task_close_host_agent_telemetry, task_close_uses_isolated_state_dir, task_create_title,
         task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
         task_handoff_receipt_root, task_json_success_status, task_next_lawful_receipt,
         task_owned_status_receipt, validate_task_handoff_accept_receipt,
+        ensure_existing_task_mismatch_reason,
         ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::temp_state::TempStateHarness;
@@ -4403,6 +4479,37 @@ mod tests {
         );
         assert_eq!(receipt.unowned_files, vec!["README.md"]);
         assert_eq!(receipt.blocker_codes, vec!["dirty_ownership_ambiguous"]);
+    }
+
+    #[test]
+    fn ensure_existing_task_rejects_contract_mismatch() {
+        let mut task = owned_task_record("task-ensure", vec![]);
+        task.title = "Unexpected".to_string();
+        task.status = "closed".to_string();
+        task.issue_type = "bug".to_string();
+        task.labels = vec!["other".to_string()];
+        task.dependencies = vec![crate::state_store::TaskDependencyRecord {
+            issue_id: task.id.clone(),
+            depends_on_id: "other-parent".to_string(),
+            edge_type: "parent-child".to_string(),
+            created_at: "2026-04-24T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }];
+
+        assert_eq!(task_parent_id(&task).as_deref(), Some("other-parent"));
+        let reason = ensure_existing_task_mismatch_reason(
+            &task,
+            "Expected",
+            None,
+            "task",
+            "open",
+            Some("expected-parent"),
+            &["tracked-pack".to_string()],
+        )
+        .expect("mismatch reason should exist");
+        assert!(reason.contains("title mismatch"));
     }
 
     #[test]
