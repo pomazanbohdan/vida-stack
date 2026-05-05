@@ -4199,6 +4199,9 @@ pub(crate) fn model_profile_readiness_audit_payload_for_route(
     if readiness_blocked {
         blocker_codes.push("selected_model_profile_not_ready".to_string());
     }
+    if route["status"].as_str() == Some("blocked") {
+        blocker_codes.push("route_blocked".to_string());
+    }
     blocker_codes.sort();
     blocker_codes.dedup();
     let next_actions = if blocker_codes.is_empty() {
@@ -4220,6 +4223,7 @@ pub(crate) fn model_profile_readiness_audit_payload_for_route(
         "next_actions": next_actions,
         "dispatch_target": dispatch_target,
         "route_status": route["status"],
+        "route_blocker_codes": route["blocker_codes"],
         "selected_profile": {
             "profile_id": selected_model_profile_id,
             "model_ref": route["selected_model_ref"],
@@ -6017,6 +6021,7 @@ mod tests {
         );
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+        assert_eq!(payload["route_blocker_codes"], serde_json::json!(null));
         assert_eq!(
             payload["selected_profile"]["profile_id"],
             "configured_low_profile"
@@ -6114,7 +6119,7 @@ mod tests {
         assert_eq!(unready["status"], "blocked");
         assert_eq!(
             unready["blocker_codes"],
-            serde_json::json!(["selected_model_profile_not_ready"])
+            serde_json::json!(["route_blocked", "selected_model_profile_not_ready"])
         );
         assert_eq!(
             unready["selected_profile"]["readiness"]["blocker_code"],
@@ -6126,7 +6131,7 @@ mod tests {
         assert_eq!(missing["status"], "blocked");
         assert_eq!(
             missing["blocker_codes"],
-            serde_json::json!(["selected_model_profile_missing"])
+            serde_json::json!(["route_blocked", "selected_model_profile_missing"])
         );
         assert!(missing["selected_profile"]["readiness_status"].is_null());
     }
