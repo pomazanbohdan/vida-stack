@@ -2277,12 +2277,16 @@ pub(crate) fn configured_external_activation_parts(
 }
 
 fn external_dispatch_command_is_allowlisted(command: &str) -> bool {
-    let normalized = std::path::Path::new(command)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(command)
-        .trim()
-        .to_ascii_lowercase();
+    let trimmed = command.trim();
+    if trimmed.is_empty()
+        || trimmed.contains(std::path::MAIN_SEPARATOR)
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+    {
+        return false;
+    }
+
+    let normalized = trimmed.to_ascii_lowercase();
     matches!(
         normalized.as_str(),
         "codex" | "qwen" | "claude" | "gemini" | "aider" | "cursor-agent" | "opencode"
@@ -2382,6 +2386,30 @@ dispatch:
         .expect_err("non-allowlisted dispatch command should be rejected");
         assert!(error.contains("non-allowlisted"));
         assert!(error.contains("sh"));
+    }
+
+    #[test]
+    fn configured_external_activation_parts_rejects_path_like_allowlisted_command() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: ./tools/codex
+  prompt_mode: positional
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let error = configured_external_activation_parts(
+            "codex_cli",
+            &backend_entry,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            None,
+        )
+        .expect_err("path-like command should be rejected");
+
+        assert!(error.contains("non-allowlisted"));
+        assert!(error.contains("./tools/codex"));
     }
 
     #[test]
@@ -3196,9 +3224,9 @@ fn tracked_design_doc_finalized(role_selection: &RuntimeConsumptionLaneSelection
 
     std::fs::read_to_string(&resolved_path)
         .map(|contents| {
-            contents.lines().any(|line| {
-                line.trim().eq_ignore_ascii_case("Status: `approved`")
-            })
+            contents
+                .lines()
+                .any(|line| line.trim().eq_ignore_ascii_case("Status: `approved`"))
         })
         .unwrap_or(false)
 }
@@ -11784,8 +11812,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn maybe_bridge_closure_ready_verification_into_receipt_requires_receipt_backed_evidence(
-    ) {
+    async fn maybe_bridge_closure_ready_verification_into_receipt_requires_receipt_backed_evidence()
+    {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let state_root = harness.path().join(crate::state_store::default_state_dir());
         fs::create_dir_all(state_root.join("runtime-consumption"))
@@ -11859,7 +11887,10 @@ mod tests {
             receipt.exception_path_receipt_id.as_deref(),
             Some("exc-timeout")
         );
-        assert_eq!(receipt.dispatch_result_path.as_deref(), Some("/tmp/activation-view-only.json"));
+        assert_eq!(
+            receipt.dispatch_result_path.as_deref(),
+            Some("/tmp/activation-view-only.json")
+        );
     }
 
     #[test]
@@ -16039,7 +16070,8 @@ async fn persist_failed_dispatch_handoff_state(
     })?;
     if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
         if let Ok(status) = store.run_graph_status(&run_id).await {
-            let blocked_status = apply_first_handoff_execution_to_run_graph_status(&status, receipt);
+            let blocked_status =
+                apply_first_handoff_execution_to_run_graph_status(&status, receipt);
             store
                 .record_run_graph_status(&blocked_status)
                 .await
