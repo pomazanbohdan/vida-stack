@@ -40,14 +40,10 @@ pub(crate) const RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL: 
     "runtime_consumption_snapshot_registry:latest_final_release_admission";
 pub(crate) const RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_RECORDED_FINAL: &str =
     "runtime_consumption_snapshot_registry:latest_recorded_final_snapshot";
-pub(crate) const RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_BUNDLE_CHECK: &str =
-    "runtime_consumption_snapshot_registry:latest_bundle_check";
 pub(crate) const RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT: &str =
     "latest_final_release_admission_snapshot";
 pub(crate) const RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_RECORDED_FINAL_SNAPSHOT: &str =
     "latest_recorded_final_snapshot";
-pub(crate) const RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_BUNDLE_CHECK: &str =
-    "latest_bundle_check_snapshot";
 pub(crate) const RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT: &str =
     "protocol_binding_receipt";
 pub(crate) const RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE: &str =
@@ -61,31 +57,21 @@ pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_
 pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION: &str = "Refresh the latest checkpoint evidence before rerunning consume-final so the latest status and checkpoint rows share the same run_id.";
 
 pub(crate) fn latest_admissible_retrieval_trust_signal(
-    runtime_consumption: &RuntimeConsumptionSummary,
+    _runtime_consumption: &RuntimeConsumptionSummary,
     latest_final_snapshot_path: Option<&str>,
     protocol_binding_latest_receipt_id: Option<&str>,
 ) -> Option<serde_json::Value> {
     let acl = protocol_binding_latest_receipt_id?.trim();
-    let (citation, registry_ref, freshness, freshness_posture) = if let Some(path) =
-        latest_final_snapshot_path
+    let (citation, registry_ref, freshness, freshness_posture) = {
+        let path = latest_final_snapshot_path
             .map(str::trim)
-            .filter(|path| !path.is_empty())
-    {
+            .filter(|path| !path.is_empty())?;
         (
             path,
             RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
             "final",
             RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
         )
-    } else if runtime_consumption.latest_kind.as_deref() == Some("bundle-check") {
-        (
-            runtime_consumption.latest_snapshot_path.as_deref()?.trim(),
-            RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_BUNDLE_CHECK,
-            "bundle_check",
-            RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_BUNDLE_CHECK,
-        )
-    } else {
-        return None;
     };
 
     if citation.is_empty() || acl.is_empty() {

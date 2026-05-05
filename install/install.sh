@@ -723,6 +723,10 @@ copy_project_file() {
     return 0
   fi
 
+  if [[ -L "$target_path" ]]; then
+    fail "Refusing to overwrite symlinked ${label}: ${target_path}"
+  fi
+
   mkdir -p "$(dirname "$target_path")"
   cp "$source_path" "$target_path"
 }

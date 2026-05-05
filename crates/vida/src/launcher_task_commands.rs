@@ -2,6 +2,12 @@ pub(crate) fn shell_quote(value: &str) -> String {
     if value.is_empty() {
         return "''".to_string();
     }
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | ':'))
+    {
+        return value.to_string();
+    }
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 

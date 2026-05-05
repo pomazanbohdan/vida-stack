@@ -286,6 +286,12 @@ fn build_approval_envelope(
     let mut blocker_codes = Vec::new();
     blocker_codes.extend(principal_delegation.blocker_codes.iter().cloned());
     blocker_codes.extend(memory_governance.blocker_codes.iter().cloned());
+    if matches!(
+        approval_status,
+        "waiting_for_approval" | "approval_required"
+    ) {
+        blocker_codes.retain(|code| code != blocker_code_str(BlockerCode::ApprovalRequired));
+    }
     let surface_blocked = !blocker_codes.is_empty();
     blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
     let mut next_actions = match approval_status {

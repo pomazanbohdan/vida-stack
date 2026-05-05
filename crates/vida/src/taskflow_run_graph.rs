@@ -6,6 +6,7 @@ use crate::{
         shared_operator_output_contract_parity_error,
     },
     print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
+    shell_quote,
     state_store::{
         RunGraphContinuationBinding, RunGraphDispatchContext, RunGraphDispatchReceipt,
         RunGraphStatus, StateStore, StateStoreError,
@@ -396,7 +397,8 @@ fn next_lawful_operator_action_for_dispatch_resolution(
     {
         return Some(format!(
             "vida lane supersede {} --receipt-id {} --json",
-            status.run_id, receipt_id
+            shell_quote(&status.run_id),
+            shell_quote(receipt_id)
         ));
     }
     if receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some() {
@@ -1010,6 +1012,7 @@ fn run_graph_status_surface_blocker_codes(
 }
 
 fn projection_truth_from_status_surface(
+    state_root: &std::path::Path,
     status: &RunGraphStatus,
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
@@ -1030,38 +1033,13 @@ fn projection_truth_from_status_surface(
             request_text: None,
             recorded_at: String::new(),
         });
-    let stale_state_suspected = receipt.is_some_and(|value| {
-        projection_stale_state_suspected(Some(&RunGraphDispatchReceipt {
-            run_id: value.run_id.clone(),
-            dispatch_target: value.dispatch_target.clone(),
-            dispatch_status: value.dispatch_status.clone(),
-            lane_status: value.lane_status.clone(),
-            supersedes_receipt_id: value.supersedes_receipt_id.clone(),
-            exception_path_receipt_id: value.exception_path_receipt_id.clone(),
-            dispatch_kind: value.dispatch_kind.clone(),
-            dispatch_surface: value.dispatch_surface.clone(),
-            dispatch_command: value.dispatch_command.clone(),
-            dispatch_packet_path: value.dispatch_packet_path.clone(),
-            dispatch_result_path: value.dispatch_result_path.clone(),
-            blocker_code: value.blocker_code.clone(),
-            downstream_dispatch_target: value.downstream_dispatch_target.clone(),
-            downstream_dispatch_command: value.downstream_dispatch_command.clone(),
-            downstream_dispatch_note: value.downstream_dispatch_note.clone(),
-            downstream_dispatch_ready: value.downstream_dispatch_ready,
-            downstream_dispatch_blockers: value.downstream_dispatch_blockers.clone(),
-            downstream_dispatch_packet_path: value.downstream_dispatch_packet_path.clone(),
-            downstream_dispatch_status: value.downstream_dispatch_status.clone(),
-            downstream_dispatch_result_path: value.downstream_dispatch_result_path.clone(),
-            downstream_dispatch_trace_path: value.downstream_dispatch_trace_path.clone(),
-            downstream_dispatch_executed_count: value.downstream_dispatch_executed_count,
-            downstream_dispatch_active_target: value.downstream_dispatch_active_target.clone(),
-            downstream_dispatch_last_target: value.downstream_dispatch_last_target.clone(),
-            activation_agent_type: value.activation_agent_type.clone(),
-            activation_runtime_role: value.activation_runtime_role.clone(),
-            selected_backend: value.selected_backend.clone(),
-            recorded_at: value.recorded_at.clone(),
-        }))
-    });
+    let stale_state_suspected = projection_stale_state_suspected(
+        state_root,
+        receipt
+            .as_ref()
+            .map(|summary| dispatch_receipt_from_status_surface(summary))
+            .as_ref(),
+    );
     let projection_truth = RunGraphProjectionTruth {
         projection_source: if receipt.is_some() {
             "reconciled_run_graph_status".to_string()
@@ -1092,6 +1070,7 @@ fn projection_truth_from_status_surface(
 }
 
 pub(crate) fn build_run_graph_dispatch_compact_summary(
+    state_root: &std::path::Path,
     status: Option<&RunGraphStatus>,
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
@@ -1111,6 +1090,7 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
         })
     });
     let (projection_truth, blocker_codes) = projection_truth_from_status_surface(
+        state_root,
         status,
         recovery,
         receipt,
@@ -1152,7 +1132,44 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
     })
 }
 
-fn projection_stale_state_suspected(receipt: Option<&RunGraphDispatchReceipt>) -> bool {
+const MAX_DISPATCH_RESULT_BYTES: u64 = 1024 * 1024;
+
+fn safe_read_dispatch_result_json(
+    state_root: &std::path::Path,
+    result_path: &str,
+) -> Option<serde_json::Value> {
+    let trimmed = result_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = std::path::Path::new(trimmed);
+    let candidate = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        state_root.join(candidate)
+    };
+    let Ok(state_root_canonical) = std::fs::canonicalize(state_root) else {
+        return None;
+    };
+    let Ok(candidate_canonical) = std::fs::canonicalize(&candidate) else {
+        return None;
+    };
+    if !candidate_canonical.starts_with(&state_root_canonical) {
+        return None;
+    }
+    let Ok(metadata) = std::fs::metadata(&candidate_canonical) else {
+        return None;
+    };
+    if !metadata.is_file() || metadata.len() > MAX_DISPATCH_RESULT_BYTES {
+        return None;
+    }
+    crate::read_json_file_if_present(&candidate_canonical)
+}
+
+fn projection_stale_state_suspected(
+    state_root: &std::path::Path,
+    receipt: Option<&RunGraphDispatchReceipt>,
+) -> bool {
     let Some(receipt) = receipt else {
         return false;
     };
@@ -1162,15 +1179,10 @@ fn projection_stale_state_suspected(receipt: Option<&RunGraphDispatchReceipt>) -
     if receipt.dispatch_status != "executing" {
         return false;
     }
-    let Some(result_path) = receipt
-        .dispatch_result_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(result_path) = receipt.dispatch_result_path.as_deref() else {
         return false;
     };
-    let Some(result) = crate::read_json_file_if_present(std::path::Path::new(result_path)) else {
+    let Some(result) = safe_read_dispatch_result_json(state_root, result_path) else {
         return false;
     };
     if result["execution_state"].as_str() != Some("executing") {
@@ -1200,7 +1212,8 @@ pub(crate) async fn run_graph_projection_truth(
         crate::latest_terminal_consume_continue_snapshot_run_id(store.root())
             .ok()
             .flatten();
-    let stale_state_suspected = projection_stale_state_suspected(dispatch_receipt.as_ref());
+    let stale_state_suspected =
+        projection_stale_state_suspected(store.root(), dispatch_receipt.as_ref());
     Ok(RunGraphProjectionTruth {
         projection_source: if dispatch_receipt.is_some() {
             "reconciled_run_graph_status".to_string()
@@ -1314,6 +1327,35 @@ pub(crate) fn default_run_graph_status(
         checkpoint_kind: "none".to_string(),
         resume_target: "none".to_string(),
         recovery_ready: false,
+    }
+}
+
+pub(crate) fn default_run_graph_recovery_summary(
+    task_id: &str,
+    run_id: &str,
+) -> crate::state_store::RunGraphRecoverySummary {
+    crate::state_store::RunGraphRecoverySummary {
+        run_id: run_id.to_string(),
+        task_id: task_id.to_string(),
+        active_node: "implementation".to_string(),
+        lifecycle_stage: "implementation_active".to_string(),
+        resume_node: None,
+        resume_status: "running".to_string(),
+        checkpoint_kind: "execution_cursor".to_string(),
+        resume_target: "dispatch.implementation_lane".to_string(),
+        policy_gate: "not_required".to_string(),
+        handoff_state: "awaiting_implementation".to_string(),
+        recovery_ready: false,
+        delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+            active_node: "implementation".to_string(),
+            lifecycle_stage: "implementation_active".to_string(),
+            delegated_cycle_open: false,
+            delegated_cycle_state: "none".to_string(),
+            local_exception_takeover_gate: "admissible_not_active".to_string(),
+            blocker_code: None,
+            reporting_pause_gate: "allowed".to_string(),
+            continuation_signal: "continue_when_bound".to_string(),
+        },
     }
 }
 
@@ -5570,8 +5612,13 @@ mod tests {
             recorded_at: "2026-04-26T00:00:00Z".to_string(),
         };
 
-        let (_projection_truth, blocker_codes) =
-            projection_truth_from_status_surface(&status, None, Some(&receipt), None);
+        let (_projection_truth, blocker_codes) = projection_truth_from_status_surface(
+            std::path::Path::new("."),
+            &status,
+            None,
+            Some(&receipt),
+            None,
+        );
 
         assert_eq!(blocker_codes, vec!["tool_execution_failed".to_string()]);
     }
@@ -5714,6 +5761,7 @@ mod tests {
         });
 
         let summary = build_run_graph_dispatch_compact_summary(
+            std::path::Path::new("."),
             Some(&status),
             Some(&recovery),
             Some(&receipt),
@@ -5778,6 +5826,7 @@ mod tests {
         });
 
         let summary = build_run_graph_dispatch_compact_summary(
+            std::path::Path::new("."),
             Some(&status),
             None,
             None,
@@ -5861,6 +5910,7 @@ mod tests {
         });
 
         let summary = build_run_graph_dispatch_compact_summary(
+            std::path::Path::new("."),
             Some(&status),
             None,
             None,
@@ -5981,6 +6031,7 @@ mod tests {
         };
 
         let summary = build_run_graph_dispatch_compact_summary(
+            &root,
             Some(&status),
             Some(&recovery),
             Some(&receipt),
@@ -6220,8 +6271,10 @@ mod tests {
         assert_ne!(payload.status.next_node.as_deref(), Some("pm"));
         assert_eq!(
             payload.role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
-                .as_str(),
+                .as_str()
+                .map(|path| path.replace('\\', "/")),
             Some("docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md")
+                .map(str::to_string)
         );
     }
 
@@ -7014,6 +7067,9 @@ mod tests {
         let store = StateStore::open(harness.path().to_path_buf())
             .await
             .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
         let existing = RunGraphStatus {
             run_id: "task-direct-implementer".to_string(),
             task_id: "task-direct-implementer".to_string(),
@@ -7492,7 +7548,7 @@ mod tests {
             recorded_at: "2026-04-18T00:00:00Z".to_string(),
         };
 
-        assert!(projection_stale_state_suspected(Some(&receipt)));
+        assert!(projection_stale_state_suspected(&root, Some(&receipt)));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -7549,7 +7605,7 @@ mod tests {
             recorded_at: "2026-04-18T00:00:00Z".to_string(),
         };
 
-        assert!(!projection_stale_state_suspected(Some(&receipt)));
+        assert!(!projection_stale_state_suspected(&root, Some(&receipt)));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -7607,7 +7663,7 @@ mod tests {
             recorded_at: "2026-04-21T12:14:39Z".to_string(),
         };
 
-        assert!(projection_stale_state_suspected(Some(&receipt)));
+        assert!(projection_stale_state_suspected(&root, Some(&receipt)));
         assert_eq!(
             next_lawful_operator_action_for_projection(
                 &RunGraphStatus {

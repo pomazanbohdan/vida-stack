@@ -7,7 +7,7 @@ use crate::taskflow_run_graph::{
     run_taskflow_recovery, run_taskflow_run_graph, run_taskflow_run_graph_mutation,
 };
 use crate::taskflow_spec_bootstrap::run_taskflow_bootstrap_spec;
-use crate::taskflow_task_bridge::{enforce_execution_preparation_contract_gate, proxy_state_dir};
+use crate::taskflow_task_bridge::proxy_state_dir;
 use crate::{
     print_surface_header, print_surface_line, surface_render, taskflow_consume,
     taskflow_protocol_binding, Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs,
@@ -253,6 +253,20 @@ fn scheduler_effective_parallel_limit(configured: u64, requested: Option<u64>) -
         .max(1)
 }
 
+fn shell_quote_arg(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | ':'))
+    {
+        return value.to_string();
+    }
+    let escaped = value.replace('\'', "'\"'\"'");
+    format!("'{escaped}'")
+}
+
 fn scheduler_rejection_reasons_from_blocked_by(
     blocked_by: &[crate::state_store::TaskDependencyStatus],
 ) -> Vec<String> {
@@ -304,8 +318,8 @@ fn scheduler_reservation_preview(
         conflict_domain: task.conflict_domain.clone(),
         command: format!(
             "vida agent-init --role worker {} --state-dir {} --json",
-            task.id,
-            state_dir.display()
+            crate::shell_quote(&task.id),
+            crate::shell_quote(&state_dir.display().to_string())
         ),
         state_dir: state_dir.display().to_string(),
         reservation_status: if execute_requested {
@@ -1345,9 +1359,10 @@ fn build_taskflow_scheduler_dispatch_plan(
     }
     let execute_requested_with_selection = execute_requested && selected_primary_task.is_some();
     if let Some(task) = selected_primary_task.as_ref() {
+        let task_id = shell_quote_arg(&task.id);
         next_actions.push(format!(
             "Inspect the selected primary task with `vida task show {} --json` before delegated launch.",
-            task.id
+            task_id
         ));
     }
     if let Some(task) = selected_parallel_tasks.first() {
@@ -1706,6 +1721,8 @@ fn build_taskflow_next_decision(
         dispatch,
         terminal_consume_continue_run_id,
     );
+    let active_exception_takeover_continuation =
+        active_exception_takeover_evidence && latest_run_graph_status_blocked;
     let terminal_consume_continue_without_next_unit = latest_run_graph_status
         .zip(terminal_consume_continue_run_id)
         .is_some_and(|(status, run_id)| status.run_id == run_id);
@@ -1717,7 +1734,7 @@ fn build_taskflow_next_decision(
             && !explicit_task_binding_matches_status(explicit_binding, latest_run_graph_status);
     let admissibility_gate = if recovery_holds_active_bound_run {
         "delegated_cycle_runtime_gate".to_string()
-    } else if active_exception_takeover_evidence {
+    } else if active_exception_takeover_continuation {
         "active_exception_takeover_continuation".to_string()
     } else if terminal_consume_continue_without_next_unit {
         "terminal_continue_snapshot_without_next_bounded_unit".to_string()
@@ -1736,7 +1753,7 @@ fn build_taskflow_next_decision(
         ready_head: ready_head.clone(),
         admissible_now: !(recovery_holds_active_bound_run
             || active_exception_takeover_binding
-            || (active_exception_takeover_evidence && latest_run_graph_status_blocked)
+            || active_exception_takeover_continuation
             || terminal_consume_continue_without_next_unit
             || latest_run_graph_status_blocks_admission
             || completed_without_explicit_next_unit),
@@ -1797,7 +1814,7 @@ fn build_taskflow_next_decision(
                     Some(next_action),
                 )
             }
-        } else if active_exception_takeover_evidence {
+        } else if active_exception_takeover_continuation {
             let run_id = latest_run_graph_status
                 .map(|status| status.run_id.as_str())
                 .unwrap_or("<run-id>");
@@ -1913,8 +1930,9 @@ fn build_taskflow_next_decision(
                 Some(next_action),
             )
         } else if let Some(task) = ready_head.clone() {
+            let task_id = shell_quote_arg(&task.id);
             let next_action = TaskflowNextAction {
-                command: format!("vida task show {} --json", task.id),
+                command: format!("vida task show {task_id} --json"),
                 surface: "vida task show".to_string(),
                 reason: "a backlog slice is ready now; inspect the canonical task record before dispatch".to_string(),
             };
@@ -2184,9 +2202,16 @@ fn build_graph_summary_waves(
     waves
 }
 
-fn parse_taskflow_next_args(
-    args: &[String],
-) -> Result<(bool, Option<&str>, Option<PathBuf>), &'static str> {
+enum TaskflowNextArgs<'a> {
+    Help,
+    Next {
+        as_json: bool,
+        scope_task_id: Option<&'a str>,
+        state_dir: Option<PathBuf>,
+    },
+}
+
+fn parse_taskflow_next_args(args: &[String]) -> Result<TaskflowNextArgs<'_>, &'static str> {
     if !matches!(args.first().map(String::as_str), Some("next")) {
         return Err("Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
     }
@@ -2220,7 +2245,7 @@ fn parse_taskflow_next_args(
                 index += 2;
             }
             "--help" | "-h" if index == 1 && args.len() == 2 => {
-                return Ok((false, Some("__help__"), None));
+                return Ok(TaskflowNextArgs::Help);
             }
             _ => {
                 return Err(
@@ -2230,7 +2255,11 @@ fn parse_taskflow_next_args(
         }
     }
 
-    Ok((as_json, scope_task_id, state_dir))
+    Ok(TaskflowNextArgs::Next {
+        as_json,
+        scope_task_id,
+        state_dir,
+    })
 }
 
 async fn route_taskflow_doctor(args: &[String]) -> ExitCode {
@@ -2453,11 +2482,15 @@ fn resolve_taskflow_proxy_state_dir(state_dir: Option<PathBuf>) -> Result<PathBu
 
 pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     let (as_json, scope_task_id, state_dir) = match parse_taskflow_next_args(args) {
-        Ok((_, Some("__help__"), _)) => {
+        Ok(TaskflowNextArgs::Help) => {
             print_taskflow_proxy_help(Some("next"));
             return ExitCode::SUCCESS;
         }
-        Ok(parsed) => parsed,
+        Ok(TaskflowNextArgs::Next {
+            as_json,
+            scope_task_id,
+            state_dir,
+        }) => (as_json, scope_task_id, state_dir),
         Err(usage) => {
             eprintln!("{usage}");
             return ExitCode::from(2);
@@ -2764,15 +2797,17 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     let mut next_actions = Vec::<String>::new();
 
     if let Some(task) = ready_tasks.first() {
+        let task_id = shell_quote_arg(&task.id);
         next_actions.push(format!(
             "Inspect the primary ready task with `vida task show {} --json` before dispatch.",
-            task.id
+            task_id
         ));
     }
     if let Some(record) = blocked_tasks.first() {
+        let task_id = shell_quote_arg(&record.task.id);
         next_actions.push(format!(
             "Inspect the highest-priority blocked task with `vida task deps {} --json` before resequencing.",
-            record.task.id
+            task_id
         ));
     }
     if critical_path.length > 0 {
@@ -2979,9 +3014,10 @@ fn build_taskflow_graph_explain_payload(
                 "reason": "task is graph-ready; use scheduler dispatch to select the next bounded launch set"
             })
         } else {
+            let task_id = shell_quote_arg(&candidate.task.id);
             serde_json::json!({
                 "surface": "vida task deps",
-                "command": format!("vida task deps {} --json", candidate.task.id),
+                "command": format!("vida task deps {task_id} --json"),
                 "reason": "task is blocked by open graph dependencies"
             })
         }
@@ -3324,7 +3360,15 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         recovery.as_ref().and_then(|summary| summary.as_ref()),
         dispatch.as_ref().and_then(|summary| summary.as_ref()),
     );
-    if execute_requested && !dry_run {
+    drop(store);
+    if execute_requested && !dry_run && runtime_gate_blockers.blocker_codes.is_empty() {
+        let store = match crate::state_store::StateStore::open_existing(state_dir.clone()).await {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("Failed to open authoritative state store: {error}");
+                return ExitCode::from(1);
+            }
+        };
         match build_scheduler_packet_backed_execution_gate(&store, &plan).await {
             Ok(gate) => {
                 plan.packet_backed_execution_supported = gate.supported;
@@ -3341,7 +3385,6 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         }
     }
 
-    drop(store);
     if execute_requested && !dry_run && runtime_gate_blockers.blocker_codes.is_empty() {
         if let Err(error) = persist_scheduler_execute_receipt(&mut plan, &state_dir).await {
             plan.status = "blocked".to_string();
@@ -4192,6 +4235,9 @@ pub(crate) fn model_profile_readiness_audit_payload_for_route(
     if readiness_blocked {
         blocker_codes.push("selected_model_profile_not_ready".to_string());
     }
+    if route["status"].as_str() == Some("blocked") {
+        blocker_codes.push("route_blocked".to_string());
+    }
     blocker_codes.sort();
     blocker_codes.dedup();
     let next_actions = if blocker_codes.is_empty() {
@@ -4213,6 +4259,7 @@ pub(crate) fn model_profile_readiness_audit_payload_for_route(
         "next_actions": next_actions,
         "dispatch_target": dispatch_target,
         "route_status": route["status"],
+        "route_blocker_codes": route["blocker_codes"],
         "selected_profile": {
             "profile_id": selected_model_profile_id,
             "model_ref": route["selected_model_ref"],
@@ -5773,7 +5820,7 @@ mod tests {
         assert_eq!(normalized["status"], "blocked");
         assert_eq!(
             normalized["blocker_codes"],
-            serde_json::json!(["unsupported_blocker_code"])
+            serde_json::json!(["route_missing"])
         );
         assert_eq!(
             normalized["next_actions"],
@@ -6010,6 +6057,7 @@ mod tests {
         );
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+        assert_eq!(payload["route_blocker_codes"], serde_json::json!(null));
         assert_eq!(
             payload["selected_profile"]["profile_id"],
             "configured_low_profile"
@@ -6107,7 +6155,7 @@ mod tests {
         assert_eq!(unready["status"], "blocked");
         assert_eq!(
             unready["blocker_codes"],
-            serde_json::json!(["selected_model_profile_not_ready"])
+            serde_json::json!(["route_blocked", "selected_model_profile_not_ready"])
         );
         assert_eq!(
             unready["selected_profile"]["readiness"]["blocker_code"],
@@ -6119,7 +6167,7 @@ mod tests {
         assert_eq!(missing["status"], "blocked");
         assert_eq!(
             missing["blocker_codes"],
-            serde_json::json!(["selected_model_profile_missing"])
+            serde_json::json!(["route_blocked", "selected_model_profile_missing"])
         );
         assert!(missing["selected_profile"]["readiness_status"].is_null());
     }
@@ -7022,16 +7070,6 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
             return ExitCode::SUCCESS;
         }
         let consume_subcommand = args.args.get(1).map(String::as_str);
-        if matches!(consume_subcommand, Some("continue" | "advance")) {
-            let state_root = proxy_state_dir();
-            if let Err(error) = enforce_execution_preparation_contract_gate(&state_root) {
-                eprintln!(
-                    "{error}\nFail-closed: `vida taskflow consume {}` requires release-1 execution-preparation evidence/contract.",
-                    consume_subcommand.unwrap_or("unknown")
-                );
-                return ExitCode::from(1);
-            }
-        }
         if matches!(
             consume_subcommand,
             None | Some(

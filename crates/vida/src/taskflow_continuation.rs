@@ -341,6 +341,12 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
         }
     };
     let binding = if let Some(task_id) = task_id.as_deref() {
+        if !terminal_completed_without_next_unit(&status) {
+            eprintln!(
+                "Explicit --task-id continuation binding is only allowed after run `{run_id}` reaches closure_complete with no downstream target."
+            );
+            return ExitCode::from(1);
+        }
         let task = match store.show_task(task_id).await {
             Ok(task) => task,
             Err(error) => {

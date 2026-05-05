@@ -8,16 +8,9 @@ use crate::{
     latest_final_runtime_consumption_snapshot_path,
     latest_recorded_final_runtime_consumption_snapshot_path,
     merge_project_activation_into_init_view, read_or_sync_launcher_activation_snapshot,
-    runtime_consumption_state::{
-        latest_admissible_retrieval_trust_signal,
-        RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
-        RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
-        RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_RECORDED_FINAL_SNAPSHOT,
-        RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_RECORDED_FINAL,
-        RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
-    },
-    surface_render::operator_command_map,
-    DoctorLauncherSummary, StateStore, TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
+    runtime_consumption_state::latest_admissible_retrieval_trust_signal,
+    surface_render::operator_command_map, DoctorLauncherSummary, StateStore,
+    TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
 };
 
 use super::activation_status::{activation_status_is_pending, canonical_activation_status};
@@ -66,21 +59,11 @@ fn runtime_bundle_retrieval_trust_evidence(
         protocol_binding_receipt_id,
     )
     .or_else(|| {
-        let citation = latest_recorded_final_snapshot_path?.trim();
-        let acl = protocol_binding_receipt_id?.trim();
-        if citation.is_empty() || acl.is_empty() || runtime_consumption.final_snapshots == 0 {
-            return None;
-        }
-        Some(serde_json::json!({
-            "source": RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
-            "source_registry_ref": RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_RECORDED_FINAL,
-            "citation": citation,
-            "freshness": "recorded_final",
-            "freshness_posture": RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_RECORDED_FINAL_SNAPSHOT,
-            "acl": acl,
-            "acl_context": format!("{RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT}:{acl}"),
-            "acl_propagation": RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
-        }))
+        latest_admissible_retrieval_trust_signal(
+            runtime_consumption,
+            latest_recorded_final_snapshot_path,
+            protocol_binding_receipt_id,
+        )
     })
     .unwrap_or_else(|| serde_json::json!({}))
 }
@@ -754,38 +737,12 @@ fn runtime_roots_equivalent(left: &str, right: &str) -> bool {
 
 fn bundle_project_root(
     state_root: &Path,
-    activation_source_config_path: &str,
+    _activation_source_config_path: &str,
 ) -> Result<PathBuf, String> {
     if let Some(project_root) =
         crate::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
     {
         return Ok(project_root);
-    }
-
-    let activation_source_config_path = activation_source_config_path.trim();
-    if !activation_source_config_path.is_empty() {
-        let config_path = Path::new(activation_source_config_path);
-        if config_path.exists() {
-            let source_root = if config_path.is_file() {
-                config_path.parent().unwrap_or(config_path)
-            } else {
-                config_path
-            };
-
-            if crate::looks_like_project_root(source_root)
-                && std::fs::metadata(source_root.join(".vida"))
-                    .map(|metadata| metadata.is_dir())
-                    .unwrap_or(false)
-            {
-                return Ok(source_root.to_path_buf());
-            }
-
-            if let Some(project_root) =
-                crate::taskflow_task_bridge::infer_project_root_from_state_root(source_root)
-            {
-                return Ok(project_root);
-            }
-        }
     }
 
     Err(format!(
@@ -912,6 +869,21 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
             {
                 blockers.push(code);
             }
+        }
+    }
+    let startup_bundle_status = payload.activation_bundle["project_protocol_projections"]
+        ["startup_bundle"]["status"]
+        .as_str();
+    if startup_bundle_status.is_some_and(|status| !matches!(status, "pass" | "ready")) {
+        if let Some(code) = super::release1_contracts::invalid_cache_key_input_blocker_code(
+            "startup_bundle_revision",
+        ) {
+            blockers.push(code);
+        }
+        if let Some(code) = super::release1_contracts::invalid_invalidation_tuple_key_blocker_code(
+            "startup_bundle_revision",
+        ) {
+            blockers.push(code);
         }
     }
 
@@ -2080,8 +2052,8 @@ mod tests {
             .iter()
             .find(|family| family["family_id"] == "bootstrap")
             .expect("bootstrap family should exist");
-        assert_eq!(bootstrap["lane_scope"], "shared");
-        assert_eq!(bootstrap["availability"], "callable");
+        assert_eq!(bootstrap["lane_scope"], "root_only");
+        assert_eq!(bootstrap["availability"], "view_only_reference");
     }
 
     #[test]
@@ -2548,7 +2520,7 @@ mod tests {
         let evidence = runtime_bundle_retrieval_trust_evidence(
             &runtime_consumption,
             Some("/tmp/project/.vida/data/state/runtime-consumption/final-2.json"),
-            Some("/tmp/project/.vida/data/state/runtime-consumption/final-2.json"),
+            None,
             Some("protocol-binding-receipt-2"),
         );
 
@@ -2601,7 +2573,7 @@ mod tests {
         let evidence = runtime_bundle_retrieval_trust_evidence(
             &runtime_consumption,
             Some("/tmp/project/.vida/data/state/runtime-consumption/final-8.json"),
-            Some("/tmp/project/.vida/data/state/runtime-consumption/final-7.json"),
+            Some("/tmp/project/.vida/data/state/runtime-consumption/final-older.json"),
             Some("protocol-binding-receipt-2"),
         );
 
@@ -2613,7 +2585,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_bundle_retrieval_trust_evidence_falls_back_to_recorded_final_snapshot() {
+    fn runtime_bundle_retrieval_trust_evidence_without_admissible_snapshot_returns_empty_object() {
         let runtime_consumption = crate::runtime_consumption_state::RuntimeConsumptionSummary {
             total_snapshots: 4,
             bundle_snapshots: 1,
@@ -2628,35 +2600,11 @@ mod tests {
         let evidence = runtime_bundle_retrieval_trust_evidence(
             &runtime_consumption,
             None,
-            Some("/tmp/project/.vida/data/state/runtime-consumption/final-blocked.json"),
-            Some("protocol-binding-receipt-2"),
+            None,
+            Some("receipt-1"),
         );
 
-        assert_eq!(
-            evidence["source"],
-            serde_json::json!("runtime_consumption_snapshot_index")
-        );
-        assert_eq!(
-            evidence["source_registry_ref"],
-            serde_json::json!(
-                "runtime_consumption_snapshot_registry:latest_recorded_final_snapshot"
-            )
-        );
-        assert_eq!(
-            evidence["citation"],
-            serde_json::json!(
-                "/tmp/project/.vida/data/state/runtime-consumption/final-blocked.json"
-            )
-        );
-        assert_eq!(evidence["freshness"], serde_json::json!("recorded_final"));
-        assert_eq!(
-            evidence["freshness_posture"],
-            serde_json::json!("latest_recorded_final_snapshot")
-        );
-        assert_eq!(
-            evidence["acl_context"],
-            serde_json::json!("protocol_binding_receipt:protocol-binding-receipt-2")
-        );
+        assert_eq!(evidence, serde_json::json!({}));
     }
 
     #[test]
@@ -2850,8 +2798,8 @@ mod tests {
     }
 
     #[test]
-    fn bundle_project_root_prefers_activation_source_config_root_when_state_root_non_project_bound()
-    {
+    fn bundle_project_root_blocks_activation_source_config_fallback_when_state_root_non_project_bound(
+    ) {
         use std::time::{SystemTime, UNIX_EPOCH};
 
         let unique = SystemTime::now()
@@ -2887,9 +2835,9 @@ mod tests {
             .expect("project root .vida should be created");
         std::fs::write(&config_path, "test").expect("config fixture should be written");
 
-        let selected = bundle_project_root(&state_root, config_path.to_string_lossy().as_ref())
-            .expect("config root fallback should resolve project root");
-        assert_eq!(selected, config_root);
+        let error = bundle_project_root(&state_root, config_path.to_string_lossy().as_ref())
+            .expect_err("config-path fallback must not override authoritative state-root trust");
+        assert!(error.contains("no DB-backed project root is available"));
 
         std::fs::remove_dir_all(&root).ok();
     }

@@ -800,7 +800,27 @@ pub(crate) fn build_runtime_assignment_from_dispatch_alias(
         &task_class,
         &runtime_role,
     );
+    let alias_carrier_tier = alias
+        .get("carrier_tier")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     if let Some(map) = assignment.as_object_mut() {
+        if let Some(carrier_tier) = alias_carrier_tier.as_ref() {
+            map.insert(
+                "activation_agent_type".to_string(),
+                serde_json::Value::String(carrier_tier.clone()),
+            );
+            map.insert(
+                "selected_tier".to_string(),
+                serde_json::Value::String(carrier_tier.clone()),
+            );
+            map.insert(
+                "selected_carrier_tier".to_string(),
+                serde_json::Value::String(carrier_tier.clone()),
+            );
+        }
         map.insert(
             "dispatch_alias_id".to_string(),
             serde_json::Value::String(alias_id.to_string()),

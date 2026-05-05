@@ -10,16 +10,26 @@ fn escape_toml_basic_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+fn is_safe_role_id(role_id: &str) -> bool {
+    !role_id.trim().is_empty()
+        && role_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
 fn rendered_host_runtime_agent_catalog(
     agent_catalog: &[serde_json::Value],
-    named_lane_catalog: &[serde_json::Value],
+    _named_lane_catalog: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
     let mut seen = HashSet::new();
     let mut rows = Vec::new();
-    for row in agent_catalog.iter().chain(named_lane_catalog.iter()) {
+    for row in agent_catalog {
         let Some(role_id) = row["role_id"].as_str() else {
             continue;
         };
+        if !is_safe_role_id(role_id) {
+            continue;
+        }
         if seen.insert(role_id.to_string()) {
             rows.push(row.clone());
         }
@@ -209,6 +219,20 @@ fn render_shell_environment_policy(policy: Option<&serde_json::Value>) -> Option
     if object.is_empty() {
         return None;
     }
+    let include_only_present = object
+        .get("include_only")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|values| !values.is_empty());
+    let effective_inherit = object
+        .get("inherit")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| {
+            if value.eq_ignore_ascii_case("all") && !include_only_present {
+                "none"
+            } else {
+                value
+            }
+        });
 
     let mut lines = vec!["[shell_environment_policy]".to_string()];
     for key in [
@@ -219,6 +243,12 @@ fn render_shell_environment_policy(policy: Option<&serde_json::Value>) -> Option
         let Some(value) = object.get(key) else {
             continue;
         };
+        if key == "inherit" {
+            if let Some(inherit) = effective_inherit {
+                lines.push(format!("{key} = \"{}\"", escape_toml_basic_string(inherit)));
+            }
+            continue;
+        }
         match value {
             serde_json::Value::String(text) => {
                 lines.push(format!("{key} = \"{}\"", escape_toml_basic_string(text)))
@@ -716,6 +746,9 @@ pub(crate) fn overlay_host_runtime_agent_catalog(
                 serde_yaml::Value::String(text) if !text.trim().is_empty() => text.trim(),
                 _ => return None,
             };
+            if !is_safe_role_id(role_id) {
+                return None;
+            }
             let runtime_roles = yaml_string_list(yaml_lookup(value, &["runtime_roles"]));
             let task_classes = yaml_string_list(yaml_lookup(value, &["task_classes"]));
             let rate = yaml_string(yaml_lookup(value, &["rate"]))
@@ -949,6 +982,11 @@ mod tests {
         .expect(
             "project config should define platform-scoped Codex App shell environment inheritance",
         );
+        let expected_shell_inherit = if shell_inherit.eq_ignore_ascii_case("all") {
+            "none"
+        } else {
+            shell_inherit.as_str()
+        };
         let agent_catalog = super::overlay_host_runtime_agent_catalog(&config);
         let alias_catalog = super::host_runtime_dispatch_alias_catalog_for_root(
             &config,
@@ -974,7 +1012,7 @@ mod tests {
         let config_toml = fs::read_to_string(runtime_root.path().join("config.toml"))
             .expect("rendered config should be readable");
         assert!(config_toml.contains("[shell_environment_policy]"));
-        assert!(config_toml.contains(&format!("inherit = \"{shell_inherit}\"")));
+        assert!(config_toml.contains(&format!("inherit = \"{expected_shell_inherit}\"")));
 
         for row in &agent_catalog {
             let role = row["role_id"]
@@ -994,28 +1032,22 @@ mod tests {
                 "rendered {role} should carry configured host runtime bootstrap instructions"
             );
             assert!(rendered.contains("[shell_environment_policy]"));
-            assert!(rendered.contains(&format!("inherit = \"{shell_inherit}\"")));
+            assert!(rendered.contains(&format!("inherit = \"{expected_shell_inherit}\"")));
         }
 
         for row in &alias_catalog {
             let role = row["role_id"]
                 .as_str()
                 .expect("configured dispatch alias should have role_id");
-            let rendered = fs::read_to_string(
-                runtime_root
+            assert!(
+                !runtime_root
                     .path()
                     .join("agents")
-                    .join(format!("{role}.toml")),
-            )
-            .expect("rendered alias toml should be readable");
-            assert!(rendered.contains(&format!("name = \"{role}\"")));
-            assert!(rendered.contains("description = \""));
-            assert!(
-                rendered.contains(bootstrap.trim()),
-                "rendered alias {role} should carry configured host runtime bootstrap instructions"
+                    .join(format!("{role}.toml"))
+                    .exists(),
+                "dispatch alias {role} should stay runtime routing data, not a materialized host agent"
             );
-            assert!(rendered.contains("Lane activation overlay:"));
-            assert!(rendered.contains("[shell_environment_policy]"));
+            assert!(!config_toml.contains(&format!("[agents.{role}]")));
         }
     }
 }

@@ -369,7 +369,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Purpose:");
             println!(
-                "  Preview canonical scheduler selection for one critical-path task plus compatible parallel-safe siblings under the configured max_parallel_agents ceiling."
+                "  preview-first canonical scheduler selection for one critical-path task plus compatible parallel-safe siblings under the configured max_parallel_agents ceiling."
             );
             println!(
                 "  `--execute` performs bounded scheduler selection, persists scheduler receipts, and attempts the lawful `vida agent-init` activation surface for selected lanes without claiming worker completion."
@@ -1129,6 +1129,20 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         };
     }
 
+    if (normalized.contains("replace") && normalized.contains("snapshot"))
+        || normalized.contains("apply snapshot")
+        || normalized.contains("authoritative replace")
+        || normalized.contains("snapshot replace")
+        || normalized.contains("restore snapshot")
+    {
+        return TaskflowQueryAnswer {
+            intent: "replace-backlog-snapshot",
+            why: "Authoritative backlog replacement should use the canonical snapshot artifact and the store's replace path instead of additive import-only wiring.",
+            command: "vida task replace-jsonl <path> --json",
+            failure_modes: "Replacement mutates the live backlog by removing stale tasks absent from the snapshot; inspect the artifact first if identity or completeness is uncertain.",
+        };
+    }
+
     if normalized.contains("artifact")
         || normalized.contains("artifacts")
         || normalized.contains("execution-preparation")
@@ -1248,20 +1262,6 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
             why: "Closure should happen only after proof/doc sync confirms the slice is complete.",
             command: "vida task close <task-id> --reason \"...\" --json",
             failure_modes: "Closing the wrong task mutates the primary backlog; inspect the task first if the identifier is uncertain.",
-        };
-    }
-
-    if (normalized.contains("replace") && normalized.contains("snapshot"))
-        || normalized.contains("apply snapshot")
-        || normalized.contains("authoritative replace")
-        || normalized.contains("snapshot replace")
-        || normalized.contains("restore snapshot")
-    {
-        return TaskflowQueryAnswer {
-            intent: "replace-backlog-snapshot",
-            why: "Authoritative backlog replacement should use the canonical snapshot artifact and the store's replace path instead of additive import-only wiring.",
-            command: "vida task replace-jsonl <path> --json",
-            failure_modes: "Replacement mutates the live backlog by removing stale tasks absent from the snapshot; inspect the artifact first if identity or completeness is uncertain.",
         };
     }
 

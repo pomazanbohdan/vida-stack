@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use serde::{Deserialize, Serialize};
@@ -247,7 +247,9 @@ fn parse_generate_options(args: &[String]) -> Result<PlanGenerateOptions, String
             }
             "--output" => {
                 index += 1;
-                options.output = Some(PathBuf::from(required_value(args, index, "--output")?));
+                let output = PathBuf::from(required_value(args, index, "--output")?);
+                validate_output_path(&output)?;
+                options.output = Some(output);
             }
             "--json" => options.json = true,
             "--help" | "-h" => return Err(plan_generate_usage().to_string()),
@@ -1393,11 +1395,15 @@ fn path_exists_from_repo_context(candidate: &str) -> bool {
     if Path::new(candidate).exists() {
         return true;
     }
-    let Ok(current_dir) = std::env::current_dir() else {
-        return false;
-    };
-    current_dir
-        .ancestors()
+    let current_dir_roots = std::env::current_dir()
+        .ok()
+        .into_iter()
+        .flat_map(|path| path.ancestors().map(Path::to_path_buf).collect::<Vec<_>>());
+    let manifest_roots = [Path::new(env!("CARGO_MANIFEST_DIR"))]
+        .into_iter()
+        .flat_map(|path| path.ancestors().map(Path::to_path_buf).collect::<Vec<_>>());
+    current_dir_roots
+        .chain(manifest_roots)
         .any(|ancestor| ancestor.join(candidate).exists())
 }
 
@@ -1605,7 +1611,26 @@ fn validate_generated_draft(
 }
 
 fn validate_draft(draft: &TaskPlanGraphDraft, existing: &[TaskRecord]) -> TaskPlanValidation {
-    validate_draft_inner(draft, existing, false)
+    let mut validation = validate_draft_inner(draft, existing, false);
+    if draft
+        .validation
+        .blocker_codes
+        .iter()
+        .any(|code| code == "missing_plan_context")
+        && !draft.input_contract.missing_context.is_empty()
+    {
+        validation
+            .blocker_codes
+            .push("missing_plan_context".to_string());
+        validation.issues.push(format!(
+            "required PlanGraph input context is missing: {}",
+            draft.input_contract.missing_context.join(", ")
+        ));
+        validation.blocker_codes.sort();
+        validation.blocker_codes.dedup();
+        validation.status = "blocked".to_string();
+    }
+    validation
 }
 
 fn validate_draft_inner(
@@ -1978,12 +2003,32 @@ fn read_draft(path: &Path) -> Result<TaskPlanGraphDraft, String> {
     serde_json::from_str(&raw).map_err(|error| error.to_string())
 }
 
+fn validate_output_path(path: &Path) -> Result<(), String> {
+    if path.is_absolute() {
+        return Err("`--output` must be a relative path".to_string());
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("`--output` must not contain `..` path traversal".to_string());
+    }
+    Ok(())
+}
+
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let body = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
-    std::fs::write(path, format!("{body}\n")).map_err(|error| error.to_string())
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    use std::io::Write as _;
+    file.write_all(format!("{body}\n").as_bytes())
+        .map_err(|error| error.to_string())
 }
 
 fn print_json_or_plain<T: Serialize>(json: bool, value: &T, plain: &str) -> ExitCode {
@@ -2852,6 +2897,57 @@ mod tests {
             .validation
             .blocker_codes
             .contains(&"cyclic_dependency".to_string()));
+        let store = StateStore::open_existing(state_dir.clone())
+            .await
+            .expect("state store should open");
+        assert!(store
+            .list_tasks(None, true)
+            .await
+            .expect("tasks should list")
+            .is_empty());
+        let _ = std::fs::remove_dir_all(state_dir);
+    }
+
+    #[tokio::test]
+    async fn materialize_blocks_draft_with_missing_plan_context_blocker() {
+        let state_dir = test_state_dir("missing-plan-context");
+        let mut draft = generate_plan_graph_draft(&PlanGenerateOptions {
+            source_file: None,
+            source_text: Some("Implement planner".to_string()),
+            spec_refs: Vec::new(),
+            backlog_refs: Vec::new(),
+            context_refs: Vec::new(),
+            require_context: true,
+            task_prefix: Some("feature-planner".to_string()),
+            parent_id: None,
+            output: None,
+            json: true,
+        })
+        .expect("draft should generate");
+
+        assert_eq!(draft.validation.status, "blocked");
+        // Simulate a structurally valid draft loaded for materialization that still carries
+        // the require-context blocker from generation.
+        draft.validation.issues.clear();
+
+        let receipt = materialize_plan_graph_draft(
+            &draft,
+            &PlanMaterializeOptions {
+                draft_path: PathBuf::from("unused.json"),
+                state_dir: state_dir.clone(),
+                dry_run: false,
+                json: true,
+            },
+        )
+        .await
+        .expect("missing-plan-context draft should produce blocked receipt");
+
+        assert_eq!(receipt.status, "blocked");
+        assert!(receipt.created_task_ids.is_empty());
+        assert!(receipt
+            .validation
+            .blocker_codes
+            .contains(&"missing_plan_context".to_string()));
         let store = StateStore::open_existing(state_dir.clone())
             .await
             .expect("state store should open");

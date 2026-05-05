@@ -198,7 +198,7 @@ fn ignored_feedback_contract_language(reason: &str) -> Vec<String> {
 }
 
 fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
-    ignored_feedback_phrases(
+    let mut ignored = ignored_feedback_phrases(
         reason,
         &[
             "explicit failed markers still fail",
@@ -216,11 +216,6 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "failed keywords",
             "failure keyword",
             "failed keyword",
-            "failed subprocess status",
-            "failed subprocess status/stdout/stderr",
-            "failed status/stdout/stderr",
-            "failed subprocess diagnostics",
-            "failed command diagnostics",
             "records failure",
             "recorded failure",
             "recording failure",
@@ -263,7 +258,17 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "does not count as failure",
             "do not count as failure",
         ],
-    )
+    );
+    let normalized = reason.to_ascii_lowercase();
+    if normalized.contains("diagnostics for failed subprocess")
+        || normalized.contains("helper diagnostics for failed subprocess")
+    {
+        ignored.push("failed subprocess status".to_string());
+        ignored.push("failed subprocess status/stdout/stderr".to_string());
+    }
+    ignored.sort();
+    ignored.dedup();
+    ignored
 }
 
 fn ignored_feedback_phrases(reason: &str, phrases: &[&str]) -> Vec<String> {
@@ -297,9 +302,8 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "canonical close blocked feedback derivation",
             "blocker keyword matching",
             "blocked reason detection",
-            "concrete blocked task outcomes",
-            "blocked task outcomes",
             "failure evidence",
+            "concrete blocked task outcomes",
             "concrete blocked reasons",
             "top-level blocked/actionable",
             "top level blocked/actionable",
@@ -364,10 +368,13 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
             let has_blocker_keyword = blocker_keywords
                 .iter()
                 .any(|keyword| normalized.contains(keyword));
+            let starts_with_blocked_status = blocker_keywords
+                .iter()
+                .any(|keyword| normalized.starts_with(&format!("{keyword}:")));
             let has_meta_keyword = meta_keywords
                 .iter()
                 .any(|keyword| normalized.contains(keyword));
-            if has_blocker_keyword && has_meta_keyword {
+            if has_blocker_keyword && has_meta_keyword && !starts_with_blocked_status {
                 Some(normalized)
             } else {
                 None
@@ -1136,9 +1143,6 @@ mod tests {
             .iter()
             .any(|phrase| phrase == "actionable blocked output"));
         assert!(ignored.iter().any(|phrase| phrase == "genuinely blocked"));
-        assert!(ignored
-            .iter()
-            .any(|phrase| phrase == "concrete blocked task outcomes"));
         assert!(ignored.iter().any(|phrase| phrase == "failure evidence"));
     }
 
@@ -1212,6 +1216,19 @@ mod tests {
     }
 
     #[test]
+    fn close_feedback_inference_preserves_failed_subprocess_status_reasons() {
+        let reason = "Task failed subprocess status 101 while running proofs.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "failure");
+        assert_eq!(score, 35);
+        assert_eq!(inference["outcome"], "failure");
+        assert_eq!(inference["failure_markers"], serde_json::json!(["failed"]));
+    }
+
+    #[test]
     fn close_feedback_inference_preserves_concrete_blocked_reasons() {
         let reason = "Task remains blocked pending operator evidence.";
         let outcome = super::infer_feedback_outcome_from_close_reason(reason);
@@ -1222,6 +1239,29 @@ mod tests {
         assert_eq!(score, 35);
         assert_eq!(inference["outcome"], "failure");
         assert_eq!(inference["failure_markers"], serde_json::json!(["blocked"]));
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_blocked_prefix_with_meta_keywords() {
+        let reason = "Blocked: cargo test failed";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_approval_prefix_with_meta_keywords() {
+        let reason = "Awaiting_approval: return to operator with proof artifact";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some((
+                "awaiting_approval",
+                crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str()
+            ))
+        );
     }
 
     #[test]

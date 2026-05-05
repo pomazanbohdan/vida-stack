@@ -88,11 +88,24 @@ pub(crate) fn print_surface_header(render: RenderMode, title: &str) {
 }
 
 pub(crate) fn print_surface_line(render: RenderMode, label: &str, value: &str) {
+    let safe_value = sanitize_terminal_value(value);
     match render {
-        RenderMode::Plain => println!("{label}: {value}"),
-        RenderMode::Color => println!("\x1b[1;34m{label}\x1b[0m: {value}"),
-        RenderMode::ColorEmoji => println!("🔹 \x1b[1;34m{label}\x1b[0m: {value}"),
+        RenderMode::Plain => println!("{label}: {safe_value}"),
+        RenderMode::Color => println!("\x1b[1;34m{label}\x1b[0m: {safe_value}"),
+        RenderMode::ColorEmoji => println!("🔹 \x1b[1;34m{label}\x1b[0m: {safe_value}"),
     }
+}
+
+fn sanitize_terminal_value(value: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control() {
+            sanitized.extend(character.escape_default());
+        } else {
+            sanitized.push(character);
+        }
+    }
+    sanitized
 }
 
 pub(crate) fn print_surface_ok(render: RenderMode, label: &str, value: &str) {
@@ -115,6 +128,7 @@ fn command_family_scope_and_availability(
                 ("root_only", "view_only_reference")
             }
             "task_runtime" => ("shared", "view_only_reference"),
+            "bootstrap" => ("root_only", "view_only_reference"),
             _ => ("shared", "callable"),
         }
     } else {
@@ -236,6 +250,19 @@ pub(crate) fn print_compact_command_families(render: RenderMode, surface: &str) 
             render,
             "command family",
             &format!("{label} [{lane_scope}/{availability}]: {commands}"),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_terminal_value;
+
+    #[test]
+    fn sanitize_terminal_value_escapes_control_characters() {
+        assert_eq!(
+            sanitize_terminal_value("safe\nline\r\x1b[31mred\tcol"),
+            r"safe\nline\r\u{1b}[31mred\tcol"
         );
     }
 }

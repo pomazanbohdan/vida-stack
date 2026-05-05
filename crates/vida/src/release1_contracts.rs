@@ -751,6 +751,11 @@ pub(crate) fn exception_takeover_state(
         return ExceptionTakeoverState::ActiveTakeover;
     }
     if local_exception_takeover_gate
+        .is_some_and(|gate| gate.trim() == "blocked_open_delegated_cycle")
+    {
+        return ExceptionTakeoverState::ReceiptRecorded;
+    }
+    if local_exception_takeover_gate
         .is_some_and(|gate| gate.trim() != "blocked_open_delegated_cycle")
     {
         return ExceptionTakeoverState::ActiveTakeover;
@@ -1338,6 +1343,7 @@ const EXTENDED_BLOCKER_CODE_STRINGS: &[&str] = &[
     "requested_current_task_not_ready",
     "route_fields_not_behavioral",
     "route_missing",
+    "route_blocked",
     "scheduler_packet_dispatch_failed",
     "scheduler_packet_dispatch_no_execution_evidence",
     "selected_backend_missing",
@@ -2666,6 +2672,14 @@ mod tests {
                 Some("receipt-1"),
                 Some("supersede-1"),
                 Some("blocked_open_delegated_cycle")
+            ),
+            ExceptionTakeoverState::ActiveTakeover
+        );
+        assert_eq!(
+            exception_takeover_state(
+                Some("receipt-1"),
+                Some("supersede-1"),
+                Some("delegated_cycle_clear")
             ),
             ExceptionTakeoverState::ActiveTakeover
         );

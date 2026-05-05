@@ -192,11 +192,10 @@ fn terminal_closure_status_has_explicit_receipt_override(
     if !has_supersession {
         return false;
     }
-    has_receipt_evidence_id(receipt.exception_path_receipt_id.as_deref())
-        || matches!(
-            receipt.lane_status.as_deref(),
-            Some("lane_exception_takeover") | Some("lane_superseded")
-        )
+    matches!(
+        receipt.lane_status.as_deref(),
+        Some("lane_exception_takeover") | Some("lane_superseded")
+    )
 }
 
 pub(crate) fn normalize_legacy_downstream_preview_drift(
@@ -235,9 +234,20 @@ fn reconcile_run_graph_status_with_closed_task(
     let Some(task) = task else {
         return status;
     };
-    if task.status != "closed"
-        || !StateStore::run_graph_status_allows_task_close_closure_binding(&status)
+    if task.status != "closed" {
+        return status;
+    }
+    if status.status == "blocked"
+        && status.active_node == "closure"
+        && status.lifecycle_stage == "closure_blocked"
+        && status.next_node.is_none()
+        && status.handoff_state == "none"
+        && status.resume_target == "none"
     {
+        status.lifecycle_stage = "closure_complete".to_string();
+        return status;
+    }
+    if !StateStore::run_graph_status_allows_task_close_closure_binding(&status) {
         return status;
     }
 
@@ -290,10 +300,17 @@ impl RunGraphDelegationGateSummary {
             && status.status != "completed"
             && status.active_node != "planning"
             && status.lifecycle_stage.ends_with("_active");
+        let delegated_lane_blocked = !handoff_pending
+            && status.status == "blocked"
+            && status.active_node != "planning"
+            && status.lifecycle_stage.ends_with("_blocked")
+            && status.policy_gate != "not_required";
         let (delegated_cycle_open, delegated_cycle_state) = if handoff_pending {
             (true, "handoff_pending".to_string())
         } else if delegated_lane_active {
             (true, "delegated_lane_active".to_string())
+        } else if delegated_lane_blocked {
+            (true, "delegated_lane_blocked".to_string())
         } else {
             (false, "clear".to_string())
         };
@@ -1294,9 +1311,7 @@ impl StateStore {
             Err(error) => return Err(error),
         };
         if task.status != "closed" {
-            self.clear_run_graph_continuation_binding(&binding.run_id)
-                .await?;
-            return Ok(None);
+            return Ok(Some(binding));
         }
         if !self
             .task_close_reconcile_has_persisted_receipt_truth(&binding.run_id, &binding.task_id)
@@ -1503,6 +1518,23 @@ impl StateStore {
         if status.checkpoint_kind.trim().eq_ignore_ascii_case("none") {
             return Ok(());
         }
+        let mut latest_checkpoint_query = self
+            .db
+            .query(
+                "SELECT run_id, updated_at FROM resumability_capsule ORDER BY updated_at DESC, run_id DESC LIMIT 1;",
+            )
+            .await?;
+        let latest_checkpoint_rows: Vec<RunGraphLatestRow> = latest_checkpoint_query.take(0)?;
+        if let Some(latest_checkpoint) = latest_checkpoint_rows.into_iter().next() {
+            if latest_checkpoint.run_id != status.run_id {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "run-graph recovery/checkpoint summary is inconsistent for `{}`: latest checkpoint evidence must share the same run_id (checkpoint_run_id={})",
+                        status.run_id, latest_checkpoint.run_id
+                    ),
+                });
+            }
+        }
         match self
             .run_graph_projection_checkpoint_record(&status.run_id)
             .await?
@@ -1659,9 +1691,11 @@ impl StateStore {
         &self,
         run_id: &str,
     ) -> Result<Option<RunGraphDispatchReceipt>, StateStoreError> {
-        self.run_graph_dispatch_receipt_stored(run_id)
-            .await
-            .map(|row| row.map(Into::into))
+        let Some(receipt) = self.run_graph_dispatch_receipt_stored(run_id).await? else {
+            return Ok(None);
+        };
+        let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
+        Ok(Some(receipt.into()))
     }
 
     async fn run_graph_dispatch_receipt_stored(
@@ -1672,9 +1706,12 @@ impl StateStore {
             .db
             .select(("run_graph_dispatch_receipt", run_id))
             .await?;
-        let Some(receipt) = receipt.map(normalize_legacy_downstream_preview_drift) else {
+        let Some(receipt) = receipt else {
             return Ok(None);
         };
+        Self::ensure_run_graph_dispatch_receipt_required_fields_present(&receipt)?;
+        let receipt = normalize_legacy_downstream_preview_drift(receipt);
+        Self::ensure_run_graph_dispatch_receipt_summary_consistency(&receipt)?;
         let mut receipt: RunGraphDispatchReceipt = receipt.into();
         if crate::runtime_dispatch_state::normalize_stale_in_flight_dispatch_receipt(
             self.root(),
@@ -1851,25 +1888,10 @@ impl StateStore {
     fn ensure_run_graph_dispatch_receipt_summary_consistency(
         receipt: &RunGraphDispatchReceiptStored,
     ) -> Result<(), StateStoreError> {
-        if receipt.dispatch_status.trim().is_empty() {
-            return Err(StateStoreError::InvalidTaskRecord {
-                reason: format!(
-                    "run-graph dispatch receipt summary is inconsistent for `{}`: dispatch_status must be non-empty",
-                    receipt.run_id
-                ),
-            });
-        }
+        Self::ensure_run_graph_dispatch_receipt_required_fields_present(receipt)?;
         let Some(raw_lane_status) = receipt.lane_status.as_deref() else {
             return Ok(());
         };
-        if raw_lane_status.trim().is_empty() {
-            return Err(StateStoreError::InvalidTaskRecord {
-                reason: format!(
-                    "run-graph dispatch receipt summary is inconsistent for `{}`: lane_status must be non-empty when present",
-                    receipt.run_id
-                ),
-            });
-        }
         let raw_lane_status = raw_lane_status.trim();
         let canonical_lane_status =
             canonical_lane_status_str(raw_lane_status).unwrap_or(raw_lane_status);
@@ -1900,6 +1922,31 @@ impl StateStore {
                     canonical_lane_status,
                     effective_derived_lane_status,
                     receipt.dispatch_status
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_run_graph_dispatch_receipt_required_fields_present(
+        receipt: &RunGraphDispatchReceiptStored,
+    ) -> Result<(), StateStoreError> {
+        if receipt.dispatch_status.trim().is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: dispatch_status must be non-empty",
+                    receipt.run_id
+                ),
+            });
+        }
+        let Some(raw_lane_status) = receipt.lane_status.as_deref() else {
+            return Ok(());
+        };
+        if raw_lane_status.trim().is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: lane_status must be non-empty when present",
+                    receipt.run_id
                 ),
             });
         }
@@ -1972,6 +2019,7 @@ impl StateStore {
     pub(crate) fn validate_run_graph_dispatch_receipt_contract(
         receipt: RunGraphDispatchReceiptStored,
     ) -> Result<RunGraphDispatchReceiptStored, StateStoreError> {
+        Self::ensure_run_graph_dispatch_receipt_required_fields_present(&receipt)?;
         let receipt = normalize_legacy_downstream_preview_drift(receipt);
         Self::ensure_run_graph_dispatch_receipt_summary_consistency(&receipt)?;
         Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
@@ -2118,7 +2166,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_graph_status_reconciles_closed_active_task_into_completed_clear_cycle() {
+    async fn run_graph_status_does_not_reconcile_closed_in_progress_task_into_completed() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -2160,6 +2208,7 @@ mod tests {
         status.lifecycle_stage = "implementer_active".to_string();
         status.policy_gate = "targeted_verification".to_string();
         status.handoff_state = "none".to_string();
+        status.checkpoint_kind = "active".to_string();
         status.resume_target = "none".to_string();
         status.recovery_ready = true;
         store
@@ -2177,15 +2226,15 @@ mod tests {
             .await
             .expect("load reconciled run-graph status");
         assert_eq!(reconciled.active_node, "implementer");
-        assert_eq!(reconciled.status, "completed");
-        assert_eq!(reconciled.lifecycle_stage, "implementation_complete");
+        assert_eq!(reconciled.status, "in_progress");
+        assert_eq!(reconciled.lifecycle_stage, "implementer_active");
         assert_eq!(reconciled.next_node, None);
-        assert_eq!(reconciled.policy_gate, "not_required");
+        assert_eq!(reconciled.policy_gate, "targeted_verification");
         assert_eq!(reconciled.handoff_state, "none");
-        assert_eq!(reconciled.checkpoint_kind, "none");
+        assert_eq!(reconciled.checkpoint_kind, "active");
         assert_eq!(reconciled.resume_target, "none");
-        assert!(!reconciled.recovery_ready);
-        assert!(!reconciled.delegation_gate().delegated_cycle_open);
+        assert!(reconciled.recovery_ready);
+        assert!(reconciled.delegation_gate().delegated_cycle_open);
 
         let _ = fs::remove_dir_all(&root);
     }

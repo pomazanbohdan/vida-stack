@@ -1,4 +1,4 @@
-use std::process::ExitCode;
+use std::{path::Path, process::ExitCode};
 
 use crate::{
     print_surface_header, print_surface_line, state_store::StateStore,
@@ -6,10 +6,34 @@ use crate::{
 };
 
 fn read_packet_body(path: &str) -> Result<serde_json::Value, String> {
-    let body = std::fs::read_to_string(path)
-        .map_err(|error| format!("Failed to read persisted packet `{path}`: {error}"))?;
+    let resolved_path = canonicalize_packet_path(path)?;
+    let display_path = resolved_path.display().to_string();
+    let body = std::fs::read_to_string(&resolved_path)
+        .map_err(|error| format!("Failed to read persisted packet `{display_path}`: {error}"))?;
     serde_json::from_str(&body)
-        .map_err(|error| format!("Failed to decode persisted packet `{path}`: {error}"))
+        .map_err(|error| format!("Failed to decode persisted packet `{display_path}`: {error}"))
+}
+
+fn canonicalize_packet_path(path: &str) -> Result<std::path::PathBuf, String> {
+    let candidate = Path::new(path);
+    let resolved_path = candidate
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve persisted packet path `{path}`: {error}"))?;
+    let state_root = proxy_state_dir();
+    let resolved_state_root = state_root.canonicalize().map_err(|error| {
+        format!(
+            "Failed to resolve authoritative state root `{}`: {error}",
+            state_root.display()
+        )
+    })?;
+    if !resolved_path.starts_with(&resolved_state_root) {
+        return Err(format!(
+            "Persisted packet path `{}` resolves outside authoritative state root `{}`.",
+            resolved_path.display(),
+            resolved_state_root.display()
+        ));
+    }
+    Ok(resolved_path)
 }
 
 async fn resolve_packet_render_run_id(

@@ -40,7 +40,7 @@ impl StateStore {
             ))
             .await?;
         let row = row.ok_or(StateStoreError::MissingLauncherActivationSnapshot)?;
-        row.validate()?;
+        row.validate_shape()?;
         Ok(row)
     }
 }
@@ -57,6 +57,10 @@ impl LauncherActivationSnapshot {
                 reason: "source_config_digest is empty".to_string(),
             });
         }
+        self.validate_shape()
+    }
+
+    fn validate_shape(&self) -> Result<(), StateStoreError> {
         if !self.compiled_bundle.is_object() {
             return Err(StateStoreError::InvalidLauncherActivationSnapshot {
                 reason: "compiled_bundle must be an object".to_string(),

@@ -42,6 +42,7 @@ pub(crate) fn build_status_json_report(
 ) -> Result<serde_json::Value, String> {
     let latest_run_graph_dispatch_compact_summary =
         crate::taskflow_run_graph::build_run_graph_dispatch_compact_summary(
+            inputs.state_dir,
             inputs.latest_run_graph_status,
             inputs.latest_run_graph_recovery,
             inputs.latest_run_graph_dispatch_receipt,

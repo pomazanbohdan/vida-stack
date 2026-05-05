@@ -3818,7 +3818,13 @@ mod agent_init_surface_tests {
             serde_json::json!({ "status": "ready" }),
             selection,
             serde_json::json!({ "activation_kind": "activation_view" }),
-            serde_json::json!({ "mode": "activation_view_only" }),
+            serde_json::json!({
+                "mode": "activation_view_only",
+                "activation_view_is_execution_evidence": false,
+                "required_completion_evidence": "receipt_backed_execution_evidence",
+                "root_session_write_authority_granted": false,
+                "continuation_authority_granted": false
+            }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
             &test_activation_bundle(),
             serde_json::json!({
@@ -3911,7 +3917,13 @@ mod agent_init_surface_tests {
             serde_json::json!({ "status": "ready" }),
             selection,
             serde_json::json!({ "activation_kind": "activation_view" }),
-            serde_json::json!({ "mode": "activation_view_only" }),
+            serde_json::json!({
+                "mode": "activation_view_only",
+                "activation_view_is_execution_evidence": false,
+                "required_completion_evidence": "receipt_backed_execution_evidence",
+                "root_session_write_authority_granted": false,
+                "continuation_authority_granted": false
+            }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
             &test_activation_bundle(),
             serde_json::json!({ "status": "ready", "roles": [] }),
@@ -3941,7 +3953,13 @@ mod agent_init_surface_tests {
                 "request_text": "repair"
             }),
             serde_json::json!({ "activation_kind": "activation_view" }),
-            serde_json::json!({ "mode": "activation_view_only" }),
+            serde_json::json!({
+                "mode": "activation_view_only",
+                "activation_view_is_execution_evidence": false,
+                "required_completion_evidence": "receipt_backed_execution_evidence",
+                "root_session_write_authority_granted": false,
+                "continuation_authority_granted": false
+            }),
             serde_json::json!({ "bundle_id": "bundle-test" }),
             &test_activation_bundle(),
             serde_json::json!({

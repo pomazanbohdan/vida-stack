@@ -297,13 +297,21 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
 #[cfg(test)]
 mod tests {
     use super::build_host_agent_status_summary;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root should resolve")
+            .to_path_buf()
+    }
 
     #[test]
     fn build_host_agent_status_summary_exposes_hybrid_external_cli_relevance() {
-        let summary =
-            build_host_agent_status_summary(Path::new("/home/unnamed/project/vida-stack"))
-                .expect("host agent summary should render");
+        let project_root = repo_root();
+        let summary = build_host_agent_status_summary(&project_root)
+            .expect("host agent summary should render");
         assert_eq!(summary["host_cli_system"], "codex");
         assert_eq!(summary["hybrid_external_cli_relevant"], true);
         assert_eq!(
@@ -316,16 +324,16 @@ mod tests {
         assert!(summary["agents"]["junior"]["default_model_profile"]
             .as_str()
             .is_some());
-        assert_eq!(summary["agents"]["senior"]["model"], "gpt-5.3-codex-spark");
+        assert_eq!(summary["agents"]["senior"]["model"], "gpt-5.5");
         assert_eq!(
             summary["subagent_backends"]["internal_subagents"]["default_model_profile"],
-            "internal_fast"
+            "codex_gpt55_low_write"
         );
     }
 
     #[test]
     fn project_config_exposes_four_internal_and_three_external_agent_surfaces() {
-        let project_root = Path::new("/home/unnamed/project/vida-stack");
+        let project_root = repo_root();
         let overlay = crate::project_activator_surface::read_yaml_file_checked(
             &project_root.join("vida.config.yaml"),
         )

@@ -546,10 +546,11 @@ UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
         artifact_id: &str,
         required_follow_on: &[String],
     ) -> Result<(), StateStoreError> {
+        let artifact_id_literal = escape_surql_literal(artifact_id);
         self.db
             .query(format!(
                 "DELETE instruction_dependency_edge WHERE from_artifact = '{}';",
-                artifact_id
+                artifact_id_literal
             ))
             .await?;
 

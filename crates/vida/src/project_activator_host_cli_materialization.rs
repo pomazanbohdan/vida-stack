@@ -3,6 +3,31 @@ use super::*;
 const CODEX_RUNTIME_LABEL: &str = "Codex";
 const HOST_RUNTIME_LABEL: &str = CODEX_RUNTIME_LABEL;
 
+fn resolve_runtime_surface_within_project(
+    project_root: &Path,
+    runtime_surface: &str,
+) -> Result<PathBuf, String> {
+    let surface = runtime_surface.trim();
+    if surface.is_empty() {
+        return Err("Host CLI runtime_root must not be empty".to_string());
+    }
+    let candidate = PathBuf::from(surface);
+    if candidate.is_absolute() {
+        return Err(format!(
+            "Host CLI runtime_root must be relative to the project root: {surface}"
+        ));
+    }
+    if candidate
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "Host CLI runtime_root must not contain parent directory traversal: {surface}"
+        ));
+    }
+    Ok(project_root.join(candidate))
+}
+
 pub(crate) fn render_host_cli_template_from_catalog(
     project_root: &Path,
     runtime_root: &Path,
@@ -72,10 +97,9 @@ pub(crate) fn materialize_host_cli_template_with_catalog_render(
     registry_entry: &serde_yaml::Value,
 ) -> Result<PathBuf, String> {
     let source = super::resolve_host_cli_template_source(cli_system, Some(registry_entry))?;
-    let runtime_root =
-        super::host_cli_system_runtime_root(registry_entry, cli_system, project_root);
-    let copy_tree_target = project_root.join(&runtime_root);
-    super::copy_tree_if_missing(&source, &copy_tree_target)?;
+    let runtime_surface = super::host_cli_system_runtime_surface(registry_entry, cli_system);
+    let runtime_root = resolve_runtime_surface_within_project(project_root, &runtime_surface)?;
+    super::copy_tree_if_missing(&source, &runtime_root)?;
     let overlay = super::read_yaml_file_checked(&project_root.join("vida.config.yaml"))
         .unwrap_or(serde_yaml::Value::Null);
     let scoring_policy = serde_json::to_value(
@@ -84,10 +108,7 @@ pub(crate) fn materialize_host_cli_template_with_catalog_render(
             .unwrap_or(serde_yaml::Value::Null),
     )
     .unwrap_or(serde_json::Value::Null);
-    let rendered_catalog_root = project_root.join(super::host_cli_system_runtime_surface(
-        registry_entry,
-        cli_system,
-    ));
+    let rendered_catalog_root = runtime_root.clone();
     let carrier_roles = {
         let overlay_roles = overlay_host_cli_agent_catalog(&overlay);
         if overlay_roles.is_empty() {
@@ -101,10 +122,7 @@ pub(crate) fn materialize_host_cli_template_with_catalog_render(
     if !carrier_roles.is_empty() {
         render_host_cli_template_from_catalog(
             project_root,
-            &project_root.join(super::host_cli_system_runtime_surface(
-                registry_entry,
-                cli_system,
-            )),
+            &runtime_root,
             &source,
             &carrier_roles,
             &carrier_dispatch_aliases,

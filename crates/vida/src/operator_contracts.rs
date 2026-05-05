@@ -141,12 +141,6 @@ fn canonical_blocker_candidates(
         if trimmed.is_empty() || trimmed != entry {
             return None;
         }
-        if !trimmed
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
-        {
-            return None;
-        }
         entries.push(trimmed.to_string());
     }
     let canonical = canonicalize(&entries);

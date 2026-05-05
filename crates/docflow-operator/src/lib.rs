@@ -20,6 +20,8 @@ pub fn render_relation_summary(edges: &[RelationEdge]) -> String {
 }
 
 pub fn render_artifact_impact(artifact: &str, source: &str, impacts: &[(&str, &str)]) -> String {
+    let artifact = sanitize_terminal_text(artifact);
+    let source = sanitize_terminal_text(source);
     let mut lines = vec![
         "artifact-impact".to_string(),
         format!("  artifact: {artifact}"),
@@ -27,6 +29,8 @@ pub fn render_artifact_impact(artifact: &str, source: &str, impacts: &[(&str, &s
         format!("  impacts: {}", impacts.len()),
     ];
     for (path, reasons) in impacts {
+        let path = sanitize_terminal_text(path);
+        let reasons = sanitize_terminal_text(reasons);
         lines.push(format!("  impact: {path} [{reasons}]"));
     }
     lines.join("\n")
@@ -38,6 +42,8 @@ pub fn render_task_impact(
     touched: &[&str],
     impacts: &[(&str, &str, &str)],
 ) -> String {
+    let task_id = sanitize_terminal_text(task_id);
+    let root = sanitize_terminal_text(root);
     let mut lines = vec![
         "task-impact".to_string(),
         format!("  task_id: {task_id}"),
@@ -46,14 +52,31 @@ pub fn render_task_impact(
         format!("  indirect_impacts: {}", impacts.len()),
     ];
     for path in touched {
+        let path = sanitize_terminal_text(path);
         lines.push(format!("  touched_path: {path}"));
     }
     for (source_artifact, path, reasons) in impacts {
+        let source_artifact = sanitize_terminal_text(source_artifact);
+        let path = sanitize_terminal_text(path);
+        let reasons = sanitize_terminal_text(reasons);
         lines.push(format!(
             "  indirect_impact: {path} <= {source_artifact} [{reasons}]"
         ));
     }
     lines.join("\n")
+}
+
+fn sanitize_terminal_text(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|ch| match ch {
+            '\n' => "\\n".chars().collect::<Vec<_>>(),
+            '\r' => "\\r".chars().collect::<Vec<_>>(),
+            '\t' => "\\t".chars().collect::<Vec<_>>(),
+            _ if ch.is_control() => format!("\\u{{{:x}}}", ch as u32).chars().collect::<Vec<_>>(),
+            _ => vec![ch],
+        })
+        .collect()
 }
 
 pub fn render_layer_status(
@@ -173,6 +196,29 @@ mod tests {
         assert!(rendered.contains("indirect_impacts: 1"));
         assert!(rendered.contains("touched_path: docs/process/a.md"));
         assert!(rendered.contains("indirect_impact: docs/process/b.md <= process/a [footer_ref]"));
+    }
+
+    #[test]
+    fn impact_renderers_escape_control_chars() {
+        let artifact = render_artifact_impact(
+            "artifact\u{1b}[31m",
+            "source\nvalue",
+            &[("docs/evil\u{1b}[0m.md", "footer_ref\nmarkdown_link")],
+        );
+        assert!(artifact.contains("artifact: artifact\\u{1b}[31m"));
+        assert!(artifact.contains("source: source\\nvalue"));
+        assert!(artifact.contains("impact: docs/evil\\u{1b}[0m.md [footer_ref\\nmarkdown_link]"));
+
+        let task = render_task_impact(
+            "task\u{1b}[2J",
+            "/tmp/root\nnext",
+            &["docs/touched\u{1b}[K.md"],
+            &[("source\u{1b}[1m", "docs/path\n.md", "footer_ref\rmarkdown_link")],
+        );
+        assert!(task.contains("task_id: task\\u{1b}[2J"));
+        assert!(task.contains("root: /tmp/root\\nnext"));
+        assert!(task.contains("touched_path: docs/touched\\u{1b}[K.md"));
+        assert!(task.contains("indirect_impact: docs/path\\n.md <= source\\u{1b}[1m [footer_ref\\rmarkdown_link]"));
     }
 
     #[test]
