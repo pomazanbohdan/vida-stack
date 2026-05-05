@@ -552,6 +552,14 @@ pub(crate) fn add_taskflow_active_work_truth(
             "continuation_allowed".to_string(),
             serde_json::Value::Bool(false),
         );
+        object.insert(
+            "continuation_required_now".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        object.insert(
+            "pause_boundary_gate".to_string(),
+            serde_json::Value::String("forbidden_while_ambiguous".to_string()),
+        );
         object.insert("active_bounded_unit".to_string(), serde_json::Value::Null);
         object.insert(
             "run_graph_latest_binding".to_string(),
@@ -578,26 +586,12 @@ pub(crate) fn add_taskflow_active_work_truth(
             "sequential_vs_parallel_posture".to_string(),
             serde_json::Value::String("unknown_until_explicit_taskflow_binding".to_string()),
         );
-        let mut next_actions = object
-            .get("next_actions")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        next_actions.insert(
-            0,
-            serde_json::Value::String(
-                "Do not assume the latest run-graph binding is the active bounded unit while TaskFlow has different in-progress task candidates.".to_string(),
-            ),
-        );
-        next_actions.insert(
-            1,
-            serde_json::Value::String(
-                "Bind the intended TaskFlow active task explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id> --json` or close/reconcile stale in-progress tasks before writing.".to_string(),
-            ),
-        );
         object.insert(
             "next_actions".to_string(),
-            serde_json::Value::Array(next_actions),
+            serde_json::json!([
+                "Do not assume the latest run-graph binding is the active bounded unit while TaskFlow has different in-progress task candidates.",
+                "Bind the intended TaskFlow active task explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id> --json` or close/reconcile stale in-progress tasks before writing."
+            ]),
         );
     }
 
@@ -1210,8 +1204,20 @@ mod tests {
         status.status = "running".to_string();
         status.lifecycle_stage = "implementer_active".to_string();
 
-        let summary =
-            build_continuation_binding_summary(None, Some(&status), None, None, None, false);
+        let mut recovery = crate::taskflow_run_graph::default_run_graph_recovery_summary(
+            &status.task_id,
+            &status.run_id,
+        );
+        recovery.delegation_gate.delegated_cycle_open = true;
+
+        let summary = build_continuation_binding_summary(
+            None,
+            Some(&status),
+            Some(&recovery),
+            None,
+            None,
+            false,
+        );
         let taskflow_candidates = taskflow_active_candidates_from_tasks(&[task_record(
             "audit-p1-current-task",
             "in_progress",
@@ -1229,6 +1235,8 @@ mod tests {
             "run_graph_latest_orthogonal_to_taskflow_active_work"
         );
         assert_eq!(summary["orthogonal_to_taskflow_active_work"], true);
+        assert_eq!(summary["continuation_required_now"], false);
+        assert_eq!(summary["pause_boundary_gate"], "forbidden_while_ambiguous");
         assert_eq!(
             summary["run_graph_latest_binding"]["task_id"],
             "runtime-run-closure-validation-proof-feature-task"
@@ -1241,6 +1249,13 @@ mod tests {
             rows.iter().any(|row| {
                 row.as_str().is_some_and(|value| {
                     value.contains("Do not assume the latest run-graph binding")
+                })
+            })
+        }));
+        assert!(summary["next_actions"].as_array().is_some_and(|rows| {
+            rows.iter().all(|row| {
+                row.as_str().is_some_and(|value| {
+                    !value.contains("vida taskflow consume continue --run-id")
                 })
             })
         }));
