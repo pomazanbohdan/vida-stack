@@ -3322,7 +3322,15 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         recovery.as_ref().and_then(|summary| summary.as_ref()),
         dispatch.as_ref().and_then(|summary| summary.as_ref()),
     );
-    if execute_requested && !dry_run {
+    drop(store);
+    if execute_requested && !dry_run && runtime_gate_blockers.blocker_codes.is_empty() {
+        let store = match crate::state_store::StateStore::open_existing(state_dir.clone()).await {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("Failed to open authoritative state store: {error}");
+                return ExitCode::from(1);
+            }
+        };
         match build_scheduler_packet_backed_execution_gate(&store, &plan).await {
             Ok(gate) => {
                 plan.packet_backed_execution_supported = gate.supported;
@@ -3339,7 +3347,6 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         }
     }
 
-    drop(store);
     if execute_requested && !dry_run && runtime_gate_blockers.blocker_codes.is_empty() {
         if let Err(error) = persist_scheduler_execute_receipt(&mut plan, &state_dir).await {
             plan.status = "blocked".to_string();
