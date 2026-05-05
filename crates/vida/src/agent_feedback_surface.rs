@@ -216,11 +216,6 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "failed keywords",
             "failure keyword",
             "failed keyword",
-            "failed subprocess status",
-            "failed subprocess status/stdout/stderr",
-            "failed status/stdout/stderr",
-            "failed subprocess diagnostics",
-            "failed command diagnostics",
             "records failure",
             "recorded failure",
             "recording failure",
@@ -1209,6 +1204,22 @@ mod tests {
             .any(|phrase| phrase.as_str().is_some_and(|value| value.contains(
                 "installed vida task next --json returns blocked with recovery action"
             ))));
+    }
+
+    #[test]
+    fn close_feedback_inference_preserves_failed_subprocess_status_reasons() {
+        let reason = "Task failed subprocess status 101 while running proofs.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "failure");
+        assert_eq!(score, 35);
+        assert_eq!(inference["outcome"], "failure");
+        assert_eq!(
+            inference["failure_markers"],
+            serde_json::json!(["fail", "failed"])
+        );
     }
 
     #[test]
