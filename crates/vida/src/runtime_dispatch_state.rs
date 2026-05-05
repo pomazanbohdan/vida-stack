@@ -14717,7 +14717,8 @@ pub(crate) fn write_runtime_dispatch_packet(
         .format(&Rfc3339)
         .expect("rfc3339 timestamp should render")
         .replace(':', "-");
-    let packet_path = packet_dir.join(format!("{}-{ts}.json", ctx.receipt.run_id));
+    let safe_run_id = validate_dispatch_packet_run_id_component(&ctx.receipt.run_id)?;
+    let packet_path = packet_dir.join(format!("{safe_run_id}-{ts}.json"));
     let packet_path_display = packet_path.display().to_string();
     let activation_command = runtime_dispatch_command_for_packet_path(
         ctx.role_selection,
@@ -14738,6 +14739,24 @@ pub(crate) fn write_runtime_dispatch_packet(
     std::fs::write(&packet_path, encoded)
         .map_err(|error| format!("Failed to write dispatch packet: {error}"))?;
     Ok(packet_path.display().to_string())
+}
+
+fn validate_dispatch_packet_run_id_component(run_id: &str) -> Result<&str, String> {
+    let value = run_id.trim();
+    if value.is_empty() {
+        return Err("Failed to write dispatch packet: receipt.run_id is empty".to_string());
+    }
+    if value.contains('/') || value.contains('\\') {
+        return Err(format!(
+            "Failed to write dispatch packet: receipt.run_id `{value}` contains path separators"
+        ));
+    }
+    if value == "." || value == ".." {
+        return Err(format!(
+            "Failed to write dispatch packet: receipt.run_id `{value}` is not a valid filename segment"
+        ));
+    }
+    Ok(value)
 }
 
 pub(crate) async fn execute_runtime_dispatch_handoff(
