@@ -6,6 +6,7 @@ use crate::{
         shared_operator_output_contract_parity_error,
     },
     print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
+    shell_quote,
     state_store::{
         RunGraphContinuationBinding, RunGraphDispatchContext, RunGraphDispatchReceipt,
         RunGraphStatus, StateStore, StateStoreError,
@@ -396,7 +397,8 @@ fn next_lawful_operator_action_for_dispatch_resolution(
     {
         return Some(format!(
             "vida lane supersede {} --receipt-id {} --json",
-            status.run_id, receipt_id
+            shell_quote(&status.run_id),
+            shell_quote(receipt_id)
         ));
     }
     if receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some() {
