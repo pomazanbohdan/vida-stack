@@ -88,7 +88,7 @@ impl StateStore {
     ) -> bool {
         matches!(
             status.status.as_str(),
-            "ready" | "in_progress" | "completed"
+            "completed"
         ) && !matches!(
             status.lifecycle_stage.as_str(),
             "analysis_blocked"
