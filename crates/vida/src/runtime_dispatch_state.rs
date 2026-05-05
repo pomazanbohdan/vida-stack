@@ -1874,6 +1874,13 @@ pub(crate) fn runtime_host_execution_contract_for_root(project_root: &Path) -> s
     })
 }
 
+pub(crate) fn runtime_host_execution_contract_allows_automatic_dispatch_execution(
+    project_root: &Path,
+) -> bool {
+    runtime_host_execution_contract_for_root(project_root)["selected_cli_execution_class"].as_str()
+        == Some("internal")
+}
+
 pub(crate) fn load_project_overlay_yaml_for_root(
     project_root: &Path,
 ) -> Result<serde_yaml::Value, String> {
