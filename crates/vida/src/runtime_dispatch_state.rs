@@ -3271,17 +3271,6 @@ async fn receipt_backed_execution_evidence_path(
             .map(Some);
         }
     }
-    if let Some(path) = readable_result_path(
-        store.root(),
-        receipt.downstream_dispatch_result_path.as_deref(),
-    ) {
-        return Ok(Some(path));
-    }
-    if let Some(path) =
-        tracked_verification_closure_evidence_path(store, role_selection, receipt).await?
-    {
-        return Ok(Some(path));
-    }
     Ok(None)
 }
 
@@ -3385,7 +3374,7 @@ pub(crate) async fn maybe_reconcile_blocked_verification_timeout_with_receipt_ev
     role_selection: &RuntimeConsumptionLaneSelection,
     run_graph_bootstrap: &serde_json::Value,
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
-    admitted_override: Option<bool>,
+    _admitted_override: Option<bool>,
 ) -> Result<bool, String> {
     if receipt.dispatch_target != "verification"
         || receipt.dispatch_kind != "agent_lane"
@@ -3394,19 +3383,8 @@ pub(crate) async fn maybe_reconcile_blocked_verification_timeout_with_receipt_ev
     {
         return Ok(false);
     }
-    let result_path = if let Some(path) =
-        receipt_backed_execution_evidence_path(store, role_selection, receipt).await?
-    {
-        Some(path)
-    } else {
-        tracked_verification_closure_evidence_path_with_admission(
-            store,
-            role_selection,
-            receipt,
-            admitted_override,
-        )
-        .await?
-    };
+    let result_path =
+        receipt_backed_execution_evidence_path(store, role_selection, receipt).await?;
     let Some(result_path) = result_path else {
         return Ok(false);
     };
@@ -11729,7 +11707,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn maybe_bridge_closure_ready_verification_into_receipt_promotes_blocked_verification_timeout(
+    async fn maybe_bridge_closure_ready_verification_into_receipt_requires_receipt_backed_evidence(
     ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let state_root = harness.path().join(crate::state_store::default_state_dir());
@@ -11791,29 +11769,20 @@ mod tests {
                 Some(true),
             )
             .await
-            .expect("bridge should succeed");
+            .expect("reconcile should return");
 
-        assert!(bridged);
-        assert_eq!(receipt.dispatch_status, "executed");
-        assert_eq!(receipt.lane_status, "lane_completed");
-        assert!(receipt.blocker_code.is_none());
-        assert!(receipt.exception_path_receipt_id.is_none());
+        assert!(!bridged);
+        assert_eq!(receipt.dispatch_status, "blocked");
+        assert_eq!(receipt.lane_status, "lane_blocked");
         assert_eq!(
-            receipt.downstream_dispatch_target.as_deref(),
-            Some("closure")
+            receipt.blocker_code.as_deref(),
+            Some("internal_activation_view_only")
         );
-        assert!(receipt.downstream_dispatch_ready);
         assert_eq!(
-            receipt.downstream_dispatch_status.as_deref(),
-            Some("packet_ready")
+            receipt.exception_path_receipt_id.as_deref(),
+            Some("exc-timeout")
         );
-        let evidence_path = receipt
-            .dispatch_result_path
-            .as_deref()
-            .expect("bridged dispatch evidence path should exist");
-        let evidence = read_json(harness.path(), evidence_path);
-        assert_eq!(evidence["artifact_kind"], "verification_evidence");
-        assert_eq!(evidence["status"], "clean");
+        assert_eq!(receipt.dispatch_result_path.as_deref(), Some("/tmp/activation-view-only.json"));
     }
 
     #[test]
