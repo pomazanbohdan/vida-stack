@@ -920,7 +920,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         match consume_final_mode {
                             ConsumeFinalMode::Preview => ExitCode::SUCCESS,
                             ConsumeFinalMode::Execute | ConsumeFinalMode::ValidateOnly => {
-                                if payload.direct_consumption_ready {
+                                if payload.closure_admission.admitted {
                                     ExitCode::SUCCESS
                                 } else {
                                     ExitCode::from(1)
