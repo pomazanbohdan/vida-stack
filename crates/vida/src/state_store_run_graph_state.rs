@@ -625,6 +625,9 @@ impl RunGraphStatus {
         approval_receipt: Option<&crate::state_store::RunGraphApprovalDelegationReceipt>,
     ) -> RunGraphPrincipalDelegationProjection {
         let approval_receipt_id = approval_receipt
+            .filter(|receipt| {
+                receipt.transition_kind == "approval_complete" && receipt.run_id == self.run_id
+            })
             .map(|receipt| receipt.receipt_id.clone())
             .and_then(non_empty_string);
         let dispatch_target = dispatch_summary
@@ -725,6 +728,9 @@ impl RunGraphStatus {
             .to_ascii_lowercase()
             .contains("ttl");
         let approval_receipt_id = approval_receipt
+            .filter(|receipt| {
+                receipt.transition_kind == "approval_complete" && receipt.run_id == self.run_id
+            })
             .map(|receipt| receipt.receipt_id.clone())
             .and_then(non_empty_string);
         let memory_class = if !governance_required {
@@ -812,4 +818,65 @@ impl RunGraphStatus {
 fn non_empty_string(value: String) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status_with_memory_gate() -> RunGraphStatus {
+        RunGraphStatus {
+            run_id: "run-1".to_string(),
+            task_id: "task-1".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "dispatch".to_string(),
+            next_node: Some("approval".to_string()),
+            status: "memory_delete_required".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal".to_string(),
+            lane_id: "lane-1".to_string(),
+            lifecycle_stage: "governance".to_string(),
+            policy_gate: "memory_delete_required".to_string(),
+            handoff_state: "consent_linked ttl_linked".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "cursor".to_string(),
+            resume_target: "dispatch.approval".to_string(),
+            recovery_ready: true,
+        }
+    }
+
+    fn approval_receipt(transition_kind: &str) -> crate::state_store::RunGraphApprovalDelegationReceipt {
+        crate::state_store::RunGraphApprovalDelegationReceipt {
+            receipt_id: "receipt-1".to_string(),
+            run_id: "run-1".to_string(),
+            task_id: "task-1".to_string(),
+            task_class: "implementation".to_string(),
+            route_task_class: "implementation".to_string(),
+            active_node: "approval".to_string(),
+            next_node: None,
+            status: "awaiting_approval".to_string(),
+            lifecycle_stage: "approval_wait".to_string(),
+            policy_gate: "approval_required".to_string(),
+            handoff_state: "awaiting_approval".to_string(),
+            resume_target: "dispatch.approval".to_string(),
+            transition_kind: transition_kind.to_string(),
+            recorded_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn memory_governance_requires_approval_complete_receipt() {
+        let status = status_with_memory_gate();
+
+        let waiting_projection = status.memory_governance_projection(Some(&approval_receipt("approval_wait")));
+        assert_eq!(waiting_projection.enforcement_state, "blocked");
+        assert!(waiting_projection
+            .blocker_codes
+            .iter()
+            .any(|code| code == crate::contract_profile_adapter::blocker_code_str(crate::contract_profile_adapter::BlockerCode::ApprovalRequired)));
+
+        let complete_projection = status.memory_governance_projection(Some(&approval_receipt("approval_complete")));
+        assert_eq!(complete_projection.enforcement_state, "pass");
+        assert!(complete_projection.blocker_codes.is_empty());
+    }
 }
