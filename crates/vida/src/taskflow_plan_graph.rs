@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use serde::{Deserialize, Serialize};
@@ -247,7 +247,9 @@ fn parse_generate_options(args: &[String]) -> Result<PlanGenerateOptions, String
             }
             "--output" => {
                 index += 1;
-                options.output = Some(PathBuf::from(required_value(args, index, "--output")?));
+                let output = PathBuf::from(required_value(args, index, "--output")?);
+                validate_output_path(&output)?;
+                options.output = Some(output);
             }
             "--json" => options.json = true,
             "--help" | "-h" => return Err(plan_generate_usage().to_string()),
@@ -1978,12 +1980,32 @@ fn read_draft(path: &Path) -> Result<TaskPlanGraphDraft, String> {
     serde_json::from_str(&raw).map_err(|error| error.to_string())
 }
 
+fn validate_output_path(path: &Path) -> Result<(), String> {
+    if path.is_absolute() {
+        return Err("`--output` must be a relative path".to_string());
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("`--output` must not contain `..` path traversal".to_string());
+    }
+    Ok(())
+}
+
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let body = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
-    std::fs::write(path, format!("{body}\n")).map_err(|error| error.to_string())
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    use std::io::Write as _;
+    file.write_all(format!("{body}\n").as_bytes())
+        .map_err(|error| error.to_string())
 }
 
 fn print_json_or_plain<T: Serialize>(json: bool, value: &T, plain: &str) -> ExitCode {
