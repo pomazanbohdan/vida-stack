@@ -1659,9 +1659,12 @@ impl StateStore {
         &self,
         run_id: &str,
     ) -> Result<Option<RunGraphDispatchReceipt>, StateStoreError> {
-        self.run_graph_dispatch_receipt_stored(run_id)
+        let receipt = self
+            .run_graph_dispatch_receipt_stored(run_id)
+            .await?
+            .map(Into::into);
+        self.validate_run_graph_dispatch_receipt_contract(receipt)
             .await
-            .map(|row| row.map(Into::into))
     }
 
     async fn run_graph_dispatch_receipt_stored(
