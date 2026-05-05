@@ -3545,7 +3545,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
-                    let mut ready_task_candidates = projection
+                    let ready_task_candidates = projection
                         .ready
                         .iter()
                         .map(|candidate| {
@@ -3555,12 +3555,6 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             )
                         })
                         .collect::<Vec<_>>();
-                    if runtime_binding_task_missing_in_explicit_scope {
-                        if let Some(current_task_id) = projection.current_task_id.as_deref() {
-                            ready_task_candidates
-                                .retain(|candidate| candidate.task_id == current_task_id);
-                        }
-                    }
                     let receipt = task_next_lawful_receipt(
                         &tasks,
                         ready_task_candidates,
