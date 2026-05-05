@@ -1031,7 +1031,7 @@ fn projection_truth_from_status_surface(
             recorded_at: String::new(),
         });
     let stale_state_suspected = receipt.is_some_and(|value| {
-        projection_stale_state_suspected(Some(&RunGraphDispatchReceipt {
+        projection_stale_state_suspected(std::path::Path::new("."), Some(&RunGraphDispatchReceipt {
             run_id: value.run_id.clone(),
             dispatch_target: value.dispatch_target.clone(),
             dispatch_status: value.dispatch_status.clone(),
@@ -1152,7 +1152,44 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
     })
 }
 
-fn projection_stale_state_suspected(receipt: Option<&RunGraphDispatchReceipt>) -> bool {
+const MAX_DISPATCH_RESULT_BYTES: u64 = 1024 * 1024;
+
+fn safe_read_dispatch_result_json(
+    state_root: &std::path::Path,
+    result_path: &str,
+) -> Option<serde_json::Value> {
+    let trimmed = result_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = std::path::Path::new(trimmed);
+    let candidate = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        state_root.join(candidate)
+    };
+    let Ok(state_root_canonical) = std::fs::canonicalize(state_root) else {
+        return None;
+    };
+    let Ok(candidate_canonical) = std::fs::canonicalize(&candidate) else {
+        return None;
+    };
+    if !candidate_canonical.starts_with(&state_root_canonical) {
+        return None;
+    }
+    let Ok(metadata) = std::fs::metadata(&candidate_canonical) else {
+        return None;
+    };
+    if !metadata.is_file() || metadata.len() > MAX_DISPATCH_RESULT_BYTES {
+        return None;
+    }
+    crate::read_json_file_if_present(&candidate_canonical)
+}
+
+fn projection_stale_state_suspected(
+    state_root: &std::path::Path,
+    receipt: Option<&RunGraphDispatchReceipt>,
+) -> bool {
     let Some(receipt) = receipt else {
         return false;
     };
@@ -1162,15 +1199,10 @@ fn projection_stale_state_suspected(receipt: Option<&RunGraphDispatchReceipt>) -
     if receipt.dispatch_status != "executing" {
         return false;
     }
-    let Some(result_path) = receipt
-        .dispatch_result_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(result_path) = receipt.dispatch_result_path.as_deref() else {
         return false;
     };
-    let Some(result) = crate::read_json_file_if_present(std::path::Path::new(result_path)) else {
+    let Some(result) = safe_read_dispatch_result_json(state_root, result_path) else {
         return false;
     };
     if result["execution_state"].as_str() != Some("executing") {
@@ -1200,7 +1232,7 @@ pub(crate) async fn run_graph_projection_truth(
         crate::latest_terminal_consume_continue_snapshot_run_id(store.root())
             .ok()
             .flatten();
-    let stale_state_suspected = projection_stale_state_suspected(dispatch_receipt.as_ref());
+    let stale_state_suspected = projection_stale_state_suspected(store.root(), dispatch_receipt.as_ref());
     Ok(RunGraphProjectionTruth {
         projection_source: if dispatch_receipt.is_some() {
             "reconciled_run_graph_status".to_string()
@@ -7492,7 +7524,7 @@ mod tests {
             recorded_at: "2026-04-18T00:00:00Z".to_string(),
         };
 
-        assert!(projection_stale_state_suspected(Some(&receipt)));
+        assert!(projection_stale_state_suspected(temp.path(), Some(&receipt)));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -7549,7 +7581,7 @@ mod tests {
             recorded_at: "2026-04-18T00:00:00Z".to_string(),
         };
 
-        assert!(!projection_stale_state_suspected(Some(&receipt)));
+        assert!(!projection_stale_state_suspected(temp.path(), Some(&receipt)));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -7607,7 +7639,7 @@ mod tests {
             recorded_at: "2026-04-21T12:14:39Z".to_string(),
         };
 
-        assert!(projection_stale_state_suspected(Some(&receipt)));
+        assert!(projection_stale_state_suspected(temp.path(), Some(&receipt)));
         assert_eq!(
             next_lawful_operator_action_for_projection(
                 &RunGraphStatus {
