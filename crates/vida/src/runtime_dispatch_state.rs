@@ -15696,7 +15696,20 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
         Ok(execute_runtime_dispatch_handoff(state_root, role_selection, receipt).await)
     };
     let execution_result = match execution_result {
-        Ok(result) => result?,
+        Ok(result) => match result {
+            Ok(execution_result) => execution_result,
+            Err(execution_error) => {
+                persist_failed_dispatch_handoff_state(
+                    state_root,
+                    role_selection,
+                    run_graph_bootstrap,
+                    receipt,
+                    &execution_error,
+                )
+                .await?;
+                return Err(execution_error);
+            }
+        },
         Err(timeout_error) => {
             apply_dispatch_handoff_timeout_to_receipt(
                 state_root,
@@ -15827,6 +15840,79 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
         .record_run_graph_dispatch_receipt(receipt)
         .await
         .map_err(|error| format!("Failed to persist dispatch receipt after execution: {error}"))?;
+    Ok(())
+}
+
+async fn persist_failed_dispatch_handoff_state(
+    state_root: &Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    run_graph_bootstrap: &serde_json::Value,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+    execution_error: &str,
+) -> Result<(), String> {
+    let failure_result = runtime_dispatch_result(
+        receipt,
+        serde_json::json!({
+            "surface": receipt.dispatch_surface.clone().unwrap_or_else(|| "vida agent-init".to_string()),
+            "status": "blocked",
+            "execution_state": "blocked",
+            "blocker_code": "dispatch_execution_handoff_failed",
+            "blocker_message": execution_error,
+        }),
+    );
+    let dispatch_result_path = write_runtime_dispatch_result(state_root, receipt, &failure_result)?;
+    receipt.dispatch_result_path = Some(dispatch_result_path);
+    receipt.dispatch_status = "blocked".to_string();
+    receipt.lane_status = derive_lane_status(
+        &receipt.dispatch_status,
+        receipt.supersedes_receipt_id.as_deref(),
+        receipt.exception_path_receipt_id.as_deref(),
+    )
+    .as_str()
+    .to_string();
+    receipt.blocker_code = Some("dispatch_execution_handoff_failed".to_string());
+    refresh_downstream_dispatch_preview_truth(role_selection, run_graph_bootstrap, receipt);
+
+    let store = tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
+        StateStore::open_existing(state_root.to_path_buf()),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "Timed out reopening authoritative state store after dispatch handoff failure after {}s",
+            DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS
+        )
+    })?
+    .map_err(|error| {
+        format!("Failed to reopen authoritative state store after dispatch handoff failure: {error}")
+    })?;
+    if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
+        if let Ok(status) = store.run_graph_status(&run_id).await {
+            let blocked_status = apply_first_handoff_execution_to_run_graph_status(&status, receipt);
+            store
+                .record_run_graph_status(&blocked_status)
+                .await
+                .map_err(|error| format!("Failed to record blocked run-graph status after dispatch handoff failure: {error}"))?;
+            crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                &store,
+                &blocked_status,
+                "dispatch_execution_failed",
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to synchronize continuation binding after dispatch handoff failure: {error}"
+                )
+            })?;
+        }
+    }
+    store
+        .record_run_graph_dispatch_receipt(receipt)
+        .await
+        .map_err(|error| {
+            format!("Failed to persist blocked dispatch receipt after dispatch handoff failure: {error}")
+        })?;
     Ok(())
 }
 
