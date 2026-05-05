@@ -373,7 +373,7 @@ mod tests {
     fn uppercase_help_flag_is_normalized_for_windows_operator_habit() {
         let parsed = Cli::try_parse_from(["vida", "--help"])
             .expect_err("canonical help should render clap display error");
-        let argv = ["vida".to_string(), "--HELP".to_string()]
+        let argv = [OsString::from("vida"), OsString::from("--HELP")]
             .into_iter()
             .map(normalize_cli_arg);
         let normalized =
