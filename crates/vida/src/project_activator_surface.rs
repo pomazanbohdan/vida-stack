@@ -1140,12 +1140,6 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         || args.reasoning_language.is_some()
         || args.documentation_language.is_some()
         || args.todo_protocol_language.is_some();
-    if args.repair {
-        if let Err(error) = repair_project_activation_assets(&project_root) {
-            eprintln!("Project activation repair failed closed before state bootstrap: {error}");
-            return ExitCode::from(1);
-        }
-    }
     let activation_store = if activation_mutation_requested {
         let state_dir = args
             .state_dir
