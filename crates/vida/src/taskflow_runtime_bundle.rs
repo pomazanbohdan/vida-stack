@@ -1039,7 +1039,7 @@ fn startup_bundle_projection_blocks_cache_tuple(startup_bundle: &serde_json::Val
     let normalized = status.trim().to_ascii_lowercase();
     if matches!(
         normalized.as_str(),
-        "pass" | "ready" | "canonical" | "compiled" | "executable"
+        "pass" | "ready" | "canonical"
     ) {
         return false;
     }
@@ -1887,6 +1887,33 @@ mod tests {
             "project_protocol_projections": {
                 "startup_bundle": {
                     "status": "present",
+                    "artifact_revision": "sb-1",
+                    "promotion_state": {
+                        "bound": false,
+                        "compiled": false,
+                        "executable": false
+                    }
+                }
+            }
+        });
+
+        let blockers = cache_contract_consistency_blockers(&payload);
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_cache_key_input:startup_bundle_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_invalidation_tuple_key:startup_bundle_revision"));
+    }
+
+
+    #[test]
+    fn cache_contract_consistency_blocks_compiled_status_without_promotion_evidence() {
+        let mut payload = cache_alignment_payload("sb-1");
+        payload.activation_bundle = serde_json::json!({
+            "project_protocol_projections": {
+                "startup_bundle": {
+                    "status": "compiled",
                     "artifact_revision": "sb-1",
                     "promotion_state": {
                         "bound": false,
