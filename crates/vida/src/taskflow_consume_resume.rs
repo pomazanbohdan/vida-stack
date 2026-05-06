@@ -372,10 +372,13 @@ fn validate_receipt_packet_pair(
         ));
     }
     if let Some(expected_dispatch_packet_path) = receipt.dispatch_packet_path.as_deref() {
-        if expected_dispatch_packet_path != packet_path {
+        if !dispatch_packet_paths_equivalent(expected_dispatch_packet_path, packet_path) {
             let expected_downstream_packet_path =
                 receipt.downstream_dispatch_packet_path.as_deref();
-            if expected_downstream_packet_path != Some(packet_path) {
+            if !expected_downstream_packet_path
+                .map(|path| dispatch_packet_paths_equivalent(path, packet_path))
+                .unwrap_or(false)
+            {
                 return Err(format!(
                     "Persisted dispatch receipt expects dispatch_packet_path `{expected_dispatch_packet_path}` but resolved `{packet_path}`"
                 ));
@@ -415,6 +418,42 @@ fn validate_receipt_packet_pair(
         }
     }
     Ok(())
+}
+
+fn dispatch_packet_paths_equivalent(left: &str, right: &str) -> bool {
+    left == right
+        || dispatch_packet_path_compare_key(left) == dispatch_packet_path_compare_key(right)
+}
+
+fn dispatch_packet_path_compare_key(path: &str) -> String {
+    let path = path.trim().replace('\\', "/");
+    let path = path.strip_prefix("//?/").unwrap_or(path.as_str());
+    let absolute = path.starts_with('/');
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            if parts
+                .last()
+                .map(|last: &&str| *last != ".." && !last.ends_with(':'))
+                .unwrap_or(false)
+            {
+                parts.pop();
+            } else {
+                parts.push(part);
+            }
+            continue;
+        }
+        parts.push(part);
+    }
+    let normalized = parts.join("/");
+    if absolute {
+        format!("/{normalized}")
+    } else {
+        normalized
+    }
 }
 
 async fn validate_run_graph_resume_state(
@@ -4469,7 +4508,8 @@ mod tests {
         runtime_consumption_resume_receipt_next_actions,
         runtime_consumption_snapshot_has_failure_control_evidence,
         should_refresh_resumed_downstream_preview, sync_run_graph_after_retry_artifact,
-        validate_run_graph_resume_state, validate_run_graph_resume_state_for_downstream_packet,
+        validate_receipt_packet_pair, validate_run_graph_resume_state,
+        validate_run_graph_resume_state_for_downstream_packet,
         DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
@@ -4478,6 +4518,54 @@ mod tests {
     use std::fs;
     use std::process::ExitCode;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn validate_receipt_packet_pair_accepts_mixed_windows_separator_dispatch_path() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "mixed-separator-run".to_string(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("takeover-receipt".to_string()),
+            exception_path_receipt_id: Some("takeover-receipt".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(
+                r"C:\project\vida-stack\.vida/data/state\runtime-consumption\dispatch-packets\packet.json"
+                    .to_string(),
+            ),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-06T00:00:00Z".to_string(),
+        };
+        let packet = serde_json::json!({
+            "run_id": "mixed-separator-run",
+            "lane_status": "lane_exception_takeover",
+            "dispatch_status": "routed",
+            "supersedes_receipt_id": "takeover-receipt",
+            "exception_path_receipt_id": "takeover-receipt"
+        });
+        let resolved_path = r"C:\project\vida-stack\.vida\data\state\runtime-consumption\dispatch-packets\packet.json";
+
+        validate_receipt_packet_pair(&receipt, &packet, resolved_path, "dispatch packet")
+            .expect("mixed separators should not invalidate the same dispatch packet path");
+    }
 
     #[test]
     fn consume_continue_state_access_blocker_payload_reports_lock_diagnostics() {
