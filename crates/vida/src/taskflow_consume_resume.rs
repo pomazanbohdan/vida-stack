@@ -1040,13 +1040,16 @@ fn enforce_consume_continue_execution_preparation_gate(
             state_root,
         );
     }
-    if runtime_consumption_snapshot_has_execution_preparation_blocker(&snapshot) {
-        return Err(format!(
-            "execution_preparation_gate_blocked: {}",
-            super::blocker_code_str(super::BlockerCode::PendingExecutionPreparationEvidence)
-        ));
-    }
-    Ok(())
+    let blocked_reason = if runtime_consumption_snapshot_has_execution_preparation_blocker(&snapshot)
+    {
+        super::blocker_code_str(super::BlockerCode::PendingExecutionPreparationEvidence)
+            .to_string()
+    } else {
+        format!("release-1 operator contract is not admitted `{canonical_status}`")
+    };
+    Err(format!(
+        "execution_preparation_gate_blocked: {blocked_reason}"
+    ))
 }
 
 fn resume_from_persisted_final_snapshot(
@@ -7873,7 +7876,7 @@ agent_system:
     }
 
     #[test]
-    fn consume_continue_execution_preparation_gate_allows_unrelated_blocked_contract() {
+    fn consume_continue_execution_preparation_gate_rejects_unrelated_blocked_contract() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7917,9 +7920,11 @@ agent_system:
         )
         .expect("write final snapshot");
 
-        assert_eq!(
-            enforce_consume_continue_execution_preparation_gate(&root),
-            Ok(())
+        let error = enforce_consume_continue_execution_preparation_gate(&root)
+            .expect_err("blocked contracts must fail closed");
+        assert!(
+            error.contains("release-1 operator contract is not admitted `blocked`"),
+            "unexpected error: {error}"
         );
 
         let _ = fs::remove_dir_all(&root);
