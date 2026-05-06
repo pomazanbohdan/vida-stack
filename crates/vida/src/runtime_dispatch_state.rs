@@ -796,7 +796,7 @@ fn canonical_dispatch_target_for_backend_resolution(dispatch_target: &str) -> &s
 fn dispatch_target_requires_strict_backend_admissibility(dispatch_target: &str) -> bool {
     matches!(
         canonical_dispatch_target_for_backend_resolution(dispatch_target),
-        "implementation"
+        "implementation" | "verification"
     )
 }
 
@@ -12544,6 +12544,61 @@ mod tests {
 
         assert_eq!(
             downstream_selected_backend(&role_selection, "implementer", Some("junior"), None),
+            Some("internal_subagents".to_string())
+        );
+    }
+
+    #[test]
+    fn downstream_selected_backend_prefers_admissible_fallback_for_verification_when_primary_is_inadmissible(
+    ) {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue verification".to_string(),
+            selected_role: "verifier".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["verification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "verification": {
+                        "executor_backend": "hermes_cli",
+                        "fallback_executor_backend": "internal_subagents"
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "hermes_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "verification": false
+                        }
+                    },
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "verification": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+
+        assert_eq!(
+            downstream_selected_backend(
+                &role_selection,
+                "verification",
+                Some("senior"),
+                Some("hermes_cli")
+            ),
             Some("internal_subagents".to_string())
         );
     }
