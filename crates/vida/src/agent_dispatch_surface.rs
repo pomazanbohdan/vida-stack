@@ -1144,7 +1144,22 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
             let mut activation_bundle =
                 match crate::build_taskflow_consume_bundle_payload(&store).await {
                     Ok(payload) => payload.activation_bundle,
-                    Err(_) => serde_json::Value::Null,
+                    Err(error) => {
+                        let booted_state =
+                            matches!(store.latest_boot_compatibility_summary().await, Ok(Some(_)))
+                                && matches!(
+                                    store.latest_migration_preflight_summary().await,
+                                    Ok(Some(_))
+                                );
+                        if !booted_state {
+                            eprintln!(
+                            "Failed to load activation bundle for agent dispatch preview: {error}"
+                        );
+                            return ExitCode::from(1);
+                        }
+                        crate::taskflow_proxy::runtime_project_config_activation_bundle()
+                            .unwrap_or(serde_json::Value::Null)
+                    }
                 };
             let preview = if command.dev_team {
                 let configured_max_parallel_agents =

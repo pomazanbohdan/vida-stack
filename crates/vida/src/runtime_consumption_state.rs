@@ -6,6 +6,10 @@ use time::format_description::well_known::Rfc3339;
 use super::{block_on_state_store, StateStore};
 use crate::state_store::RunGraphDispatchReceiptSummary;
 
+pub(crate) fn runtime_consumption_snapshot_path_string(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct RuntimeConsumptionSummary {
     pub(crate) total_snapshots: usize,
@@ -110,7 +114,7 @@ pub(crate) fn write_runtime_consumption_snapshot(
         .map_err(|error| format!("Failed to encode runtime-consumption snapshot: {error}"))?;
     std::fs::write(&snapshot_path, body)
         .map_err(|error| format!("Failed to write runtime-consumption snapshot: {error}"))?;
-    Ok(snapshot_path.display().to_string())
+    Ok(runtime_consumption_snapshot_path_string(&snapshot_path))
 }
 
 pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code(
@@ -265,7 +269,7 @@ pub(crate) fn runtime_consumption_summary(
             .ok()
             .and_then(|meta| meta.modified().ok())
             .unwrap_or(SystemTime::UNIX_EPOCH);
-        let path_display = path.display().to_string();
+        let path_display = runtime_consumption_snapshot_path_string(&path);
         match &latest {
             Some((latest_modified, _, _)) if modified <= *latest_modified => {}
             _ => latest = Some((modified, kind, path_display)),
@@ -552,7 +556,7 @@ where
             .ok()
             .and_then(|meta| meta.modified().ok())
             .unwrap_or(SystemTime::UNIX_EPOCH);
-        let path_display = path.display().to_string();
+        let path_display = runtime_consumption_snapshot_path_string(&path);
         match &latest_valid {
             Some((latest_modified, _)) if modified <= *latest_modified => {}
             _ => latest_valid = Some((modified, path_display)),
@@ -570,7 +574,8 @@ mod tests {
         latest_terminal_consume_continue_snapshot_run_id,
         runtime_consumption_final_dispatch_receipt_blocker_code,
         runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result,
-        runtime_consumption_snapshot_has_release_admission_evidence, RuntimeConsumptionSummary,
+        runtime_consumption_snapshot_has_release_admission_evidence,
+        runtime_consumption_snapshot_path_string, RuntimeConsumptionSummary,
         RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT,
         RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
         RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
@@ -578,7 +583,7 @@ mod tests {
         RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
     };
     use crate::state_store::{RunGraphDispatchReceiptSummary, RunGraphStatus};
-    use std::{fs, thread, time::Duration};
+    use std::{fs, path::Path, thread, time::Duration};
 
     fn sample_runtime_consumption_summary(
         latest_kind: Option<&str>,
@@ -592,6 +597,16 @@ mod tests {
             latest_kind: latest_kind.map(str::to_string),
             latest_snapshot_path: latest_snapshot_path.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn runtime_consumption_snapshot_path_string_uses_contract_separators() {
+        let raw =
+            Path::new(r"C:\project\vida-stack\.vida\data\state\runtime-consumption\final.json");
+        assert_eq!(
+            runtime_consumption_snapshot_path_string(raw),
+            "C:/project/vida-stack/.vida/data/state/runtime-consumption/final.json"
+        );
     }
 
     #[test]
@@ -779,7 +794,10 @@ mod tests {
         let selected = latest_final_runtime_consumption_snapshot_path(&root)
             .expect("latest valid final snapshot should resolve")
             .expect("one valid final snapshot should be available");
-        assert_eq!(selected, valid_path.display().to_string());
+        assert_eq!(
+            selected,
+            runtime_consumption_snapshot_path_string(&valid_path)
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -852,7 +870,10 @@ mod tests {
         let selected = latest_final_runtime_consumption_snapshot_path(&root)
             .expect("latest admissible final snapshot should resolve")
             .expect("one admissible final snapshot should be available");
-        assert_eq!(selected, admissible_path.display().to_string());
+        assert_eq!(
+            selected,
+            runtime_consumption_snapshot_path_string(&admissible_path)
+        );
 
         let _ = fs::remove_dir_all(root);
     }

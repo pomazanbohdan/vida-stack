@@ -59,8 +59,45 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
     }
 }
 
+fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
+    match &args.command {
+        TaskCommand::ImportJsonl(command) => command.state_dir.is_some(),
+        TaskCommand::ReplaceJsonl(command) => command.state_dir.is_some(),
+        TaskCommand::ExportJsonl(command) => command.state_dir.is_some(),
+        TaskCommand::List(command) => command.state_dir.is_some(),
+        TaskCommand::Show(command) => command.state_dir.is_some(),
+        TaskCommand::Progress(command) => command.state_dir.is_some(),
+        TaskCommand::Ready(command) => command.state_dir.is_some(),
+        TaskCommand::Next(command) => command.state_dir.is_some(),
+        TaskCommand::NextLawful(command) => command.state_dir.is_some(),
+        TaskCommand::NextDisplayId(command) => command.state_dir.is_some(),
+        TaskCommand::Create(command) | TaskCommand::Ensure(command) => command.state_dir.is_some(),
+        TaskCommand::Update(command) => command.state_dir.is_some(),
+        TaskCommand::OwnedStatus(command) => command.state_dir.is_some(),
+        TaskCommand::Close(command) => command.state_dir.is_some(),
+        TaskCommand::Split(command) => command.state_dir.is_some(),
+        TaskCommand::SpawnBlocker(command) => command.state_dir.is_some(),
+        TaskCommand::Deps(command)
+        | TaskCommand::ReverseDeps(command)
+        | TaskCommand::Children(command)
+        | TaskCommand::Tree(command) => command.state_dir.is_some(),
+        TaskCommand::ReparentChildren(command) => command.state_dir.is_some(),
+        TaskCommand::Blocked(command)
+        | TaskCommand::ValidateGraph(command)
+        | TaskCommand::CriticalPath(command) => command.state_dir.is_some(),
+        TaskCommand::Dep(command) => match &command.command {
+            super::TaskDependencyCommand::Add(command) => command.state_dir.is_some(),
+            super::TaskDependencyCommand::Remove(command) => command.state_dir.is_some(),
+        },
+        TaskCommand::Handoff(command) => match &command.command {
+            super::TaskHandoffCommand::Accept(command) => command.state_dir.is_some(),
+        },
+        TaskCommand::Help(_) | TaskCommand::AdaptivePreview(_) => false,
+    }
+}
+
 fn task_command_needs_project_root(args: &TaskArgs) -> bool {
-    !matches!(args.command, TaskCommand::Help(_))
+    !matches!(args.command, TaskCommand::Help(_)) && !task_command_has_explicit_state_dir(args)
 }
 
 fn agent_command_needs_project_root(args: &AgentArgs) -> bool {
@@ -210,6 +247,26 @@ mod tests {
     fn prepare_runtime_state_dir_keeps_boot_permissive_for_temp_roots() {
         let _env_guard = EnvVarGuard::unset("VIDA_STATE_DIR");
         let cli = Cli::try_parse_from(["vida", "boot"]).expect("boot cli should parse");
+
+        assert!(!command_needs_project_root_state_dir(&cli.command));
+        assert!(prepare_runtime_state_dir(&cli.command)
+            .expect("state dir preparation should succeed")
+            .is_none());
+        assert!(std::env::var_os("VIDA_STATE_DIR").is_none());
+    }
+
+    #[test]
+    fn prepare_runtime_state_dir_skips_project_root_for_explicit_task_state_dir() {
+        let _env_guard = EnvVarGuard::unset("VIDA_STATE_DIR");
+        let cli = Cli::try_parse_from([
+            "vida",
+            "task",
+            "next-lawful",
+            "--state-dir",
+            "C:/tmp/isolated-state",
+            "--json",
+        ])
+        .expect("task next-lawful cli should parse");
 
         assert!(!command_needs_project_root_state_dir(&cli.command));
         assert!(prepare_runtime_state_dir(&cli.command)

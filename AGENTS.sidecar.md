@@ -121,6 +121,38 @@ Project-routing rule:
 30. Agent carriers, visible host-agent templates, carrier topology, and default lane-to-carrier assumptions must not be hardcoded in owner/runtime code paths; the source of truth is the active configuration and registries, primarily `vida.config.yaml` plus the enabled agent-extension registries.
 31. File-system template layouts such as `.codex/agents/*.toml` are materialization outputs, not authority surfaces; when code or runtime summaries need the available carriers/templates, resolve them from the configured carrier catalog first and treat on-disk templates as projection/evidence only.
 
+## Complex And Architectural Processing Contract
+
+Use this project-local sidecar contract when a user request or discovered defect requires complex, comprehensive, architectural, root-cause, end-to-end, or cross-module remediation. It also applies when a change touches API contracts, VIDA framework behavior, shared widgets, auth/session behavior, routing, persistence, localization, Material/Shad/STAC ownership, or Web/Android E2E-visible user workflows.
+
+This contract is a project overlay for `vida-stack`. It does not replace framework owner law, root `AGENTS.md`, TaskFlow lane authority, DocFlow ownership, or canonical framework protocol surfaces. When deeper framework rules are needed, resolve them through the bounded VIDA runtime surfaces and `vida protocol view <id>`.
+
+Hotfixes are not an allowed delivery mode for this project. If a defect is urgent, narrow the bounded architectural remediation scope and execute that scope with the required investigation, design decision, implementation, and verification. Do not deliver a temporary or symptom-only change as a separate result.
+
+Complex and architectural processing means all of the following:
+
+1. Study the full related code path before proposing or applying a fix: callers, callees, adapters, providers, state transitions, UI surfaces, tests, generated artifacts, scripts, and documentation that can affect the bounded behavior.
+2. Resolve ambiguity before implementation. If related code, runtime state, API behavior, or ownership boundaries leave open questions, continue bounded investigation or report an explicit blocker instead of guessing.
+3. Study API contracts with direct evidence when API behavior matters. Prefer safe read-only direct API requests against configured targets; mutating API probes must use the existing live-mutation E2E contract, cleanup rules, and explicit environment safeguards.
+4. Check authoritative online documentation for version-sensitive APIs, frameworks, libraries, widgets, and platform behavior when local source or tests do not fully define the contract. Prefer official/versioned docs and record the source/date in the design or handoff evidence when the decision depends on that external contract.
+5. Form an architectural remediation decision before write-producing work. The decision must name the accepted seam, ownership layer, data flow, compatibility constraints, rejected alternatives, and minimal bounded write scope.
+6. Verify planned-fix impact before editing by reading related code that can regress: shared helpers, generated sources, call sites, platform variants, existing tests, and user-flow documentation.
+7. Apply the fix comprehensively across the bounded architecture instead of patching one symptom, one widget, one locale, one adapter, or one platform in isolation.
+8. Update proof with the implementation: unit tests for pure contracts and state, widget tests for UI states and accessibility/layout stability, and Web/Android E2E tests for changed user-visible navigation, auth/account, record/list/detail, storage, proxy/browser/device, or live Odoo behavior.
+9. Update the human user flow whenever user-visible behavior changes. Keep `docs/specs/e2e-user-flows.md` and the mapped Patrol/Web/Android flow evidence aligned with the implementation, or record a specific rationale when the change is intentionally unit/widget-only.
+
+Verification checklist for complex or architectural work:
+
+1. The related code map is complete enough that no known caller, adapter, provider, generated path, platform path, or user-flow surface is left unreviewed.
+2. API behavior is backed by direct request evidence, or by an explicit reason why a direct request is unsafe or impossible in the current environment.
+3. External framework/library/widget facts are checked against authoritative online documentation when local code is not sufficient.
+4. The architectural decision and impact map are written into the task, design, or handoff evidence before implementation starts.
+5. Implementation updates every affected bounded surface and does not leave parallel legacy behavior as an accidental active path.
+6. Unit/widget coverage and the 80% local coverage target remain protected; new tests cover behavior and architectural seams rather than shallow invocations.
+7. Web and Android E2E flow coverage is added or updated for changed user-visible workflows, with shared flow helpers used where practical.
+8. User-flow documentation is updated before closure for every changed user-visible workflow.
+9. Every defect discovered during this checklist is classified by severity, ownership, and architectural area. Defects inside the same bounded architectural area enter the current remediation queue when they do not materially change ownership or risk; other defects become explicit next tasks/follow-ups under this same complex-processing contract, not informal notes.
+
 -----
 artifact_path: project/repository/agents.sidecar
 artifact_type: bootstrap_doc
@@ -130,5 +162,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-04-30T22:15:50.4924193Z
+updated_at: 2026-05-06T06:16:26.9582364Z
 changelog_ref: AGENTS.sidecar.changelog.jsonl

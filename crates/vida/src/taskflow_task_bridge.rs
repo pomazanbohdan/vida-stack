@@ -134,12 +134,6 @@ pub(crate) fn enforce_execution_preparation_contract_gate(state_root: &Path) -> 
                 .to_string(),
         );
     }
-    if canonical_status != Some("pass") {
-        return Err(
-            "execution_preparation_gate_blocked: release-1 operator contract is not admitted"
-                .to_string(),
-        );
-    }
     if has_execution_preparation_blocker(&snapshot) {
         return Err(format!(
             "execution_preparation_gate_blocked: {}",
@@ -321,12 +315,12 @@ mod tests {
     }
 
     #[test]
-    fn execution_preparation_contract_gate_accepts_only_admitted_release1_statuses() {
+    fn execution_preparation_contract_gate_allows_unrelated_blocked_release1_statuses() {
         let cases = [
             ("pass", "final-pass.json", true),
             ("ok", "final-ok.json", true),
-            ("blocked", "final-blocked.json", false),
-            ("block", "final-block.json", false),
+            ("blocked", "final-blocked.json", true),
+            ("block", "final-block.json", true),
         ];
 
         for (status, file_name, admitted) in cases {

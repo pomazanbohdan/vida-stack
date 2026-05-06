@@ -3,7 +3,8 @@ use std::future::Future;
 use std::process::ExitCode;
 use std::time::Duration;
 
-const CONSUME_BUNDLE_CHECK_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+const CONSUME_BUNDLE_CHECK_OPEN_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
+const CONSUME_BUNDLE_CHECK_PAYLOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) async fn run_taskflow_consume_bundle(args: &[String]) -> Option<ExitCode> {
     match args {
@@ -235,6 +236,7 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
     let state_dir = super::taskflow_task_bridge::proxy_state_dir();
     let store = match fail_fast_with_timeout(
         "opening authoritative state store",
+        CONSUME_BUNDLE_CHECK_OPEN_LOCK_TIMEOUT,
         super::StateStore::open_existing(state_dir),
     )
     .await
@@ -247,6 +249,7 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
     };
     match fail_fast_with_timeout(
         "building consume bundle payload",
+        CONSUME_BUNDLE_CHECK_PAYLOAD_TIMEOUT,
         super::build_taskflow_consume_bundle_payload(&store),
     )
     .await
@@ -450,12 +453,16 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
     }
 }
 
-async fn fail_fast_with_timeout<T, E, F>(label: &str, future: F) -> Result<T, String>
+async fn fail_fast_with_timeout<T, E, F>(
+    label: &str,
+    timeout: Duration,
+    future: F,
+) -> Result<T, String>
 where
     F: Future<Output = Result<T, E>>,
     E: std::fmt::Display,
 {
-    match tokio::time::timeout(CONSUME_BUNDLE_CHECK_LOCK_TIMEOUT, future).await {
+    match tokio::time::timeout(timeout, future).await {
         Ok(result) => result.map_err(|error| error.to_string()),
         Err(_) => Err(format!(
             "consume bundle check failed fast: {label} timed out while waiting for authoritative datastore lock; another VIDA process still holds the authoritative datastore lock, so stop or wait for that process and retry the command"
@@ -2783,9 +2790,11 @@ dev_team:
             .build()
             .expect("test runtime should build");
         let result = runtime.block_on(async {
-            fail_fast_with_timeout("opening authoritative state store", async {
-                std::future::pending::<Result<(), String>>().await
-            })
+            fail_fast_with_timeout(
+                "opening authoritative state store",
+                std::time::Duration::from_millis(1),
+                async { std::future::pending::<Result<(), String>>().await },
+            )
             .await
         });
 

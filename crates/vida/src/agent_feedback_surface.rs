@@ -262,6 +262,7 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
     let normalized = reason.to_ascii_lowercase();
     if normalized.contains("diagnostics for failed subprocess")
         || normalized.contains("helper diagnostics for failed subprocess")
+        || normalized.contains("failed subprocess status/stdout/stderr")
     {
         ignored.push("failed subprocess status".to_string());
         ignored.push("failed subprocess status/stdout/stderr".to_string());

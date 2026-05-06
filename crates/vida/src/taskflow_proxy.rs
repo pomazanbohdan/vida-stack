@@ -244,6 +244,12 @@ fn normalize_scheduler_max_parallel_agents(activation_bundle: &serde_json::Value
         .unwrap_or(1)
 }
 
+pub(crate) fn runtime_project_config_activation_bundle() -> Result<serde_json::Value, String> {
+    let project_root = crate::resolve_runtime_project_root()?;
+    let overlay = crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(&project_root)?;
+    crate::build_compiled_agent_extension_bundle_for_root(&overlay, &project_root)
+}
+
 fn scheduler_effective_parallel_limit(configured: u64, requested: Option<u64>) -> u64 {
     let configured = configured.max(1);
     requested
@@ -1548,6 +1554,10 @@ pub(crate) async fn build_taskflow_scheduler_dispatch_plan_from_store(
     let max_parallel_agents = crate::build_taskflow_consume_bundle_payload(store)
         .await
         .map(|payload| normalize_scheduler_max_parallel_agents(&payload.activation_bundle))
+        .or_else(|_| {
+            runtime_project_config_activation_bundle()
+                .map(|bundle| normalize_scheduler_max_parallel_agents(&bundle))
+        })
         .unwrap_or(1);
     let explicit_binding = if current_task_id.is_none() {
         Some(

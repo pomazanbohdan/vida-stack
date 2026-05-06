@@ -3790,6 +3790,24 @@ pub(crate) async fn run_taskflow_consume_resume_command(
             let role_selection;
             let run_graph_bootstrap;
             let state_root = store.root().to_path_buf();
+            if requested_run_id.is_none()
+                && requested_dispatch_packet_path.is_none()
+                && requested_downstream_packet_path.is_none()
+            {
+                if let Err(error) =
+                    super::taskflow_task_bridge::enforce_execution_preparation_contract_gate(
+                        &state_root,
+                    )
+                {
+                    if emit_output {
+                        eprintln!("{error}");
+                    }
+                    if as_json && emit_output {
+                        emit_consume_continue_resume_error_json(&error, surface_name);
+                    }
+                    return ExitCode::from(1);
+                }
+            }
             match resolve_runtime_consumption_resume_inputs(
                 &store,
                 requested_run_id.as_deref(),

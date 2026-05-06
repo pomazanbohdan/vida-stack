@@ -194,6 +194,19 @@ impl StateStore {
         Self::open_existing_read_only_once(root).await
     }
 
+    pub async fn open_existing_read_only_with_timeout(
+        root: PathBuf,
+        timeout: std::time::Duration,
+    ) -> Result<Self, StateStoreError> {
+        match tokio::time::timeout(timeout, Self::open_existing_read_only(root)).await {
+            Ok(result) => result,
+            Err(_) => Err(StateStoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "timed out while waiting for authoritative datastore lock; another VIDA process still holds the authoritative datastore lock, so stop or wait for that process and retry the command",
+            ))),
+        }
+    }
+
     async fn open_existing_once(root: PathBuf) -> Result<Self, StateStoreError> {
         Self::open_once(root).await
     }

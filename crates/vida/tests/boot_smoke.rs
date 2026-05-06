@@ -2,7 +2,7 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -220,6 +220,16 @@ fn portable_test_path(path: impl AsRef<str>) -> String {
         rendered = stripped.to_string();
     }
     rendered.replace('\\', "/")
+}
+
+fn assert_stdout_contains_output_path(stdout: &str, output: &str) {
+    let expected = format!("output: {output}");
+    let normalized_stdout = stdout.replace('\\', "/");
+    let normalized_expected = expected.replace('\\', "/");
+    assert!(
+        stdout.contains(&expected) || normalized_stdout.contains(&normalized_expected),
+        "stdout should contain output path `{output}`, got: {stdout}"
+    );
 }
 
 fn write_runtime_lane_completion_result_fixture(path: &str, run_id: &str, completed_target: &str) {
@@ -622,7 +632,7 @@ where
     for _ in 0..3 {
         let mut command = bounded_vida_command(timeout_args);
         build(&mut command);
-        let output = command.output().expect(expectation);
+        let output = bounded_command_output(command, timeout_args).expect(expectation);
         if is_retryable_temporary_failure(&output) {
             last = Some(output);
             continue;
@@ -645,7 +655,7 @@ where
         &mut || {
             let mut command = bounded_vida_command(timeout_args);
             build(&mut command);
-            command.output().expect(expectation)
+            bounded_command_output(command, timeout_args).expect(expectation)
         },
         MAX_BOOT_RETRY_ATTEMPTS,
         |output, _| is_state_lock_error(output),
@@ -665,6 +675,75 @@ fn bounded_vida_command(timeout_args: &[&str]) -> Command {
         command.arg(env!("CARGO_BIN_EXE_vida"));
         command
     }
+}
+
+fn bounded_command_output(mut command: Command, timeout_args: &[&str]) -> std::io::Result<Output> {
+    #[cfg(windows)]
+    {
+        let timeout = parse_timeout_args(timeout_args);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = command.spawn()?;
+        let started = std::time::Instant::now();
+        loop {
+            if child.try_wait()?.is_some() {
+                return child.wait_with_output();
+            }
+            if started.elapsed() >= timeout {
+                let _ = child.kill();
+                let mut output = child.wait_with_output()?;
+                output.status = timeout_exit_status();
+                output.stderr.extend_from_slice(
+                    b"\ncommand timed out while waiting for bounded VIDA command\n",
+                );
+                return Ok(output);
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+    #[cfg(unix)]
+    {
+        let _ = timeout_args;
+        command.output()
+    }
+}
+
+fn parse_timeout_args(timeout_args: &[&str]) -> Duration {
+    timeout_args
+        .iter()
+        .rev()
+        .find_map(|arg| parse_timeout_arg(arg))
+        .unwrap_or_else(|| Duration::from_secs(120))
+}
+
+fn parse_timeout_arg(raw: &str) -> Option<Duration> {
+    let value = raw.trim();
+    if let Some(milliseconds) = value.strip_suffix("ms") {
+        return milliseconds.parse::<u64>().ok().map(Duration::from_millis);
+    }
+    if let Some(seconds) = value.strip_suffix('s') {
+        return seconds.parse::<u64>().ok().map(Duration::from_secs);
+    }
+    if let Some(minutes) = value.strip_suffix('m') {
+        return minutes
+            .parse::<u64>()
+            .ok()
+            .map(|minutes| Duration::from_secs(minutes * 60));
+    }
+    value.parse::<u64>().ok().map(Duration::from_secs)
+}
+
+#[cfg(unix)]
+fn timeout_exit_status() -> ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+
+    ExitStatus::from_raw(124 << 8)
+}
+
+#[cfg(windows)]
+fn timeout_exit_status() -> ExitStatus {
+    use std::os::windows::process::ExitStatusExt;
+
+    ExitStatus::from_raw(124)
 }
 
 fn run_protocol_binding_check_with_timeout(state_dir: &std::path::Path) -> std::process::Output {
@@ -764,6 +843,18 @@ fn bash_visible_path(path: &str) -> String {
     native.replace('\\', "/")
 }
 
+fn normalized_installer_script_for_bash() -> String {
+    let source = format!("{}/install/install.sh", repo_root());
+    let body = fs::read_to_string(&source).expect("installer script should read");
+    let script_path = format!("{}/install-normalized.sh", unique_state_dir());
+    let parent = std::path::Path::new(&script_path)
+        .parent()
+        .expect("normalized installer script should have parent");
+    fs::create_dir_all(parent).expect("normalized installer parent should exist");
+    write_executable_script(&script_path, &body.replace("\r\n", "\n"));
+    bash_visible_path(&script_path)
+}
+
 const MAX_BOOT_RETRY_ATTEMPTS: usize = 60;
 
 fn retry_with_backoff<F, P>(
@@ -828,18 +919,33 @@ fn command_output_with_retry(command: &mut Command) -> std::process::Output {
 }
 
 fn is_retryable_temporary_failure(output: &std::process::Output) -> bool {
-    output.status.code() == Some(124) || is_state_lock_error(output)
+    output.status.code() == Some(124)
+        || (is_state_lock_error(output) && !is_deterministic_lock_contention_surface(output))
 }
 
 fn is_state_lock_error_text(text: &str) -> bool {
     text.contains(support::STATE_LOCK_ERROR_MESSAGE)
         || text.contains("timed out while waiting for authoritative datastore lock")
         || text.contains("Timed out opening authoritative state store")
+        || text.contains("another VIDA process still holds the authoritative datastore lock")
+        || text.contains("The process cannot access the file because another process has locked")
+        || text.contains("os error 33")
 }
 
 fn is_state_lock_error(output: &std::process::Output) -> bool {
     let stderr = String::from_utf8_lossy(&output.stderr);
     is_state_lock_error_text(&stderr)
+}
+
+fn is_deterministic_lock_contention_surface(output: &std::process::Output) -> bool {
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    combined.contains("failed fast")
+        || combined.contains("degraded_lock_contention")
+        || combined.contains("memory governance guard timed out")
 }
 
 fn retry_backoff_delay(attempt: usize) -> Duration {
@@ -1710,10 +1816,19 @@ fn task_root_next_alias_accepts_explicit_state_dir_override() {
 
 #[test]
 fn taskflow_graph_summary_reports_ready_blocked_and_critical_path() {
-    let output = vida()
-        .args(["taskflow", "graph-summary", "--json"])
-        .output()
-        .expect("taskflow graph-summary should run");
+    let state_dir = unique_state_dir();
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+
+    let output = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "taskflow graph-summary should run",
+        |command| {
+            command
+                .args(["taskflow", "graph-summary", "--json"])
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
@@ -2286,7 +2401,12 @@ fn taskflow_proxy_help_supports_graph_summary_topic() {
         .output()
         .expect("taskflow graph-summary topic help should run");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "installed vida task ready should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: graph-summary"));
     assert!(stdout.contains("vida taskflow graph-summary [--json]"));
@@ -2302,7 +2422,12 @@ fn taskflow_proxy_help_supports_graph_topic() {
         .output()
         .expect("taskflow graph topic help should run");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "installed vida task ready should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: graph"));
     assert!(stdout.contains("vida taskflow graph explain"));
@@ -3434,7 +3559,15 @@ fn agent_init_parallel_role_views_do_not_surface_eagain_lock_failures() {
                 String::from_utf8_lossy(&output.stdout),
                 stderr
             );
-            assert_eq!(parsed["selected_role"], "worker");
+            let selected_role = parsed["selected_role"]
+                .as_str()
+                .or_else(|| parsed["selection"]["selected_role"].as_str());
+            assert_eq!(
+                selected_role,
+                Some("worker"),
+                "parallel agent-init invocation {index} should select worker, stdout: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
             assert!(
                 parsed["runtime_bundle_summary"].is_object(),
                 "parallel agent-init invocation {index} should render runtime bundle summary"
@@ -6517,8 +6650,14 @@ fn project_activator_fails_closed_when_authoritative_state_store_cannot_open() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("failed closed before mutation"));
-    assert!(stderr.contains("authoritative state store"));
+    assert!(
+        stderr.contains("failed closed before mutation"),
+        "stderr should mention fail-closed pre-mutation guard, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("default authoritative state dir"),
+        "stderr should mention default authoritative state dir, got: {stderr}"
+    );
 
     let after_config =
         fs::read_to_string(&config_path).expect("config should still be readable after failure");
@@ -10861,7 +11000,6 @@ fn installed_vida_resolves_taskflow_binary_from_its_bin_dir_and_project_root_fro
         .expect("install python dir should exist");
     fs::create_dir_all(format!("{project_root}/vida")).expect("project vida dir should exist");
     fs::create_dir_all(&nested_pwd).expect("nested project dir should exist");
-    scaffold_runtime_project_root(&project_root, "project");
     copy_executable(env!("CARGO_BIN_EXE_vida"), &vida_path);
     write_executable_script(
         &script_path,
@@ -10894,6 +11032,33 @@ else:
 "#,
     );
 
+    let mut init_command = Command::new(&vida_path);
+    init_command
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT");
+    let init_output = command_output_with_retry(&mut init_command);
+    assert!(
+        init_output.status.success(),
+        "installed vida init should materialize project bootstrap: stdout={} stderr={}",
+        String::from_utf8_lossy(&init_output.stdout),
+        String::from_utf8_lossy(&init_output.stderr)
+    );
+
+    let mut boot_command = Command::new(&vida_path);
+    boot_command
+        .arg("boot")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT");
+    let boot_output = command_output_with_retry(&mut boot_command);
+    assert!(
+        boot_output.status.success(),
+        "installed vida boot should initialize project state: stdout={} stderr={}",
+        String::from_utf8_lossy(&boot_output.stdout),
+        String::from_utf8_lossy(&boot_output.stderr)
+    );
+    wait_for_state_unlock(&project_root);
+
     let mut command = Command::new(&vida_path);
     command
         .args(["taskflow", "task", "ready", "--json"])
@@ -10901,7 +11066,12 @@ else:
         .env_remove("VIDA_ROOT");
     let output = command_output_with_retry(&mut command);
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "installed vida task ready should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let parsed: serde_json::Value =
@@ -12421,7 +12591,7 @@ fn docflow_proxy_can_run_rust_registry_write_surface() {
     let stdout = String::from_utf8_lossy(&output_run.stdout);
     assert!(stdout.contains("registry-write"));
     assert!(stdout.contains("total_rows: 1"));
-    assert!(stdout.contains(&format!("output: {output}")));
+    assert_stdout_contains_output_path(&stdout, &output);
 
     let written = fs::read_to_string(&output).expect("registry jsonl should be written");
     assert!(written.contains("\"artifact_path\":\"docs/process/a.md\""));
@@ -12444,7 +12614,7 @@ fn docflow_proxy_can_run_rust_registry_write_canonical_surface() {
     assert!(output_run.status.success());
     let stdout = String::from_utf8_lossy(&output_run.stdout);
     assert!(stdout.contains("registry-write"));
-    assert!(stdout.contains(&format!("output: {output}")));
+    assert_stdout_contains_output_path(&stdout, &output);
     let written = fs::read_to_string(&output).expect("canonical registry jsonl should be written");
     assert!(written.contains("\"artifact_path\":\"docs/process/a.md\""));
 
@@ -12580,7 +12750,7 @@ fn docflow_proxy_can_run_rust_readiness_write_surface() {
     assert!(output_run.status.success());
     let stdout = String::from_utf8_lossy(&output_run.stdout);
     assert!(stdout.contains("readiness-write"));
-    assert!(stdout.contains(&format!("output: {output}")));
+    assert_stdout_contains_output_path(&stdout, &output);
 
     let written = fs::read_to_string(&output).expect("readiness jsonl should be written");
     assert!(written.contains("\"artifact_path\":\"docs/process/a.md\""));
@@ -12604,7 +12774,7 @@ fn docflow_proxy_can_run_rust_readiness_write_canonical_surface() {
     assert!(output_run.status.success());
     let stdout = String::from_utf8_lossy(&output_run.stdout);
     assert!(stdout.contains("readiness-write"));
-    assert!(stdout.contains(&format!("output: {output}")));
+    assert_stdout_contains_output_path(&stdout, &output);
     let written = fs::read_to_string(&output).expect("canonical readiness jsonl should be written");
     assert!(written.contains("\"artifact_path\":\"docs/process/a.md\""));
 
@@ -13598,14 +13768,17 @@ fn installer_doctor_fails_closed_when_installed_helpers_are_missing() {
     );
     write_file(&format!("{install_root}/env.sh"), "export VIDA_HOME=test\n");
 
+    let bash_install_root = bash_visible_path(&install_root);
+    let bash_bin_dir = bash_visible_path(&bin_dir);
+    let normalized_installer_script = normalized_installer_script_for_bash();
     let output = Command::new("bash")
         .args([
-            "install/install.sh",
+            &normalized_installer_script,
             "doctor",
             "--root",
-            &install_root,
+            &bash_install_root,
             "--bin-dir",
-            &bin_dir,
+            &bash_bin_dir,
         ])
         .current_dir(repo_root())
         .output()
@@ -13634,9 +13807,10 @@ fn installer_install_populates_both_taskflow_helpers_in_current_layout() {
     let bash_bin_dir = bash_visible_path(&bin_dir);
     let bash_home_dir = bash_visible_path(&home_dir);
 
+    let normalized_installer_script = normalized_installer_script_for_bash();
     let output = Command::new("bash")
         .args([
-            "install/install.sh",
+            &normalized_installer_script,
             "install",
             "--archive",
             &bash_archive_path,

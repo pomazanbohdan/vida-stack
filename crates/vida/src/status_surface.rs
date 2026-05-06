@@ -1,4 +1,5 @@
 use std::process::ExitCode;
+use std::time::Duration;
 
 use crate::{state_store, state_store::StateStore, StatusArgs};
 
@@ -9,6 +10,8 @@ use crate::status_surface_operator_contracts::{
 use crate::status_surface_signals::final_snapshot_missing_release_admission_evidence;
 use crate::status_surface_text_report::{emit_status_text_report, StatusTextReportInputs};
 use crate::status_surface_truth_inputs::build_status_truth_inputs;
+
+const STATUS_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) fn degraded_read_lock_payload(
     surface: &str,
@@ -89,7 +92,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
-    match StateStore::open_existing_read_only(state_dir.clone()).await {
+    match StateStore::open_existing_read_only_with_timeout(
+        state_dir.clone(),
+        STATUS_SURFACE_LOCK_TIMEOUT,
+    )
+    .await
+    {
         Ok(store) => match store.storage_metadata_summary().await {
             Ok(storage_metadata) => {
                 let backend_summary = format!(

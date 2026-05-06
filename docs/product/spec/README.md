@@ -76,3 +76,4 @@ source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
 updated_at: 2026-04-30T22:16:37.515945Z
 changelog_ref: README.changelog.jsonl
+- `docs/product/spec/update-agents-sidecar-only-add-project-design.md`

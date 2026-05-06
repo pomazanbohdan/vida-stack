@@ -1,4 +1,5 @@
 use std::process::ExitCode;
+use std::time::Duration;
 
 use crate::contract_profile_adapter::{
     blocker_code_str, canonical_blocker_code_list, canonical_compatibility_class_str,
@@ -21,6 +22,7 @@ const MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run 
 const MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal.";
 const MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
     "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence.";
+const DOCTOR_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn governance_projection_blocker_codes(
     principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
@@ -500,7 +502,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
-    match super::StateStore::open_existing_read_only(state_dir.clone()).await {
+    match super::StateStore::open_existing_read_only_with_timeout(
+        state_dir.clone(),
+        DOCTOR_SURFACE_LOCK_TIMEOUT,
+    )
+    .await
+    {
         Ok(store) => {
             let storage_metadata = match store.storage_metadata_summary().await {
                 Ok(summary) => summary,

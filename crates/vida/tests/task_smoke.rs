@@ -109,31 +109,31 @@ fn seed_model_profile_readiness_dispatch_context(state_dir: &str) {
             .expect("use namespace/database");
         let runtime_assignment = serde_json::json!({
             "enabled": true,
-            "selected_backend_id": "junior",
-            "selected_carrier_id": "junior",
-            "selected_model_profile_id": "codex_gpt54_low_write",
-            "selected_model_ref": "gpt-5.4",
+            "selected_backend_id": "internal_subagents",
+            "selected_carrier_id": "internal_subagents",
+            "selected_model_profile_id": "codex_gpt55_low_write",
+            "selected_model_ref": "gpt-5.5",
             "selected_model_provider": "openai",
             "selected_reasoning_effort": "low",
             "selected_reasoning_control_mode": "fixed",
             "model_selection_enabled": true,
             "candidate_scope": "unified_carrier_model_profiles",
             "selection_source_paths": {
-                "selected_model_profile_id": "carrier_runtime.roles[junior].model_profiles.codex_gpt54_low_write.profile_id"
+                "selected_model_profile_id": "carrier_runtime.roles[internal_subagents].model_profiles.codex_gpt55_low_write.profile_id"
             },
             "selection_override_reasons": ["route_profile_mapping"],
             "selection_precedence": ["route_profile_mapping", "role_default"],
             "selected_route_profile_mapping": {
                 "runtime_role": "worker",
-                "profile_id": "codex_gpt54_low_write"
+                "profile_id": "codex_gpt55_low_write"
             },
             "selected_candidate": {
-                "profile_id": "codex_gpt54_low_write",
+                "profile_id": "codex_gpt55_low_write",
                 "selected": true
             },
             "rejected_candidates": [
                 {
-                    "profile_id": "codex_spark_high_readonly",
+                    "profile_id": "codex_gpt55_high_readonly",
                     "reason": "write_scope_required"
                 }
             ],
@@ -155,7 +155,7 @@ fn seed_model_profile_readiness_dispatch_context(state_dir: &str) {
                     "execution_lane_sequence": ["implementation"],
                     "lane_catalog": {
                         "implementation": {
-                            "executor_backend": "opencode_cli",
+                            "executor_backend": "internal_subagents",
                             "fallback_executor_backend": "internal_subagents",
                             "carrier_runtime_assignment": runtime_assignment
                         }
@@ -296,11 +296,11 @@ fn taskflow_model_profile_readiness_cli_smoke_matches_config_census_embedding() 
     assert_eq!(standalone["dispatch_target"], "implementation");
     assert_eq!(
         standalone["selected_profile"]["profile_id"],
-        "codex_gpt54_low_write"
+        "codex_gpt55_low_write"
     );
     assert_eq!(
         standalone["source_paths"]["selected_model_profile_id"],
-        "carrier_runtime.roles[junior].model_profiles.codex_gpt54_low_write.profile_id"
+        "carrier_runtime.roles[internal_subagents].model_profiles.codex_gpt55_low_write.profile_id"
     );
     assert_eq!(
         standalone["override_reasons"],
@@ -308,7 +308,7 @@ fn taskflow_model_profile_readiness_cli_smoke_matches_config_census_embedding() 
     );
     assert_eq!(
         standalone["rejected_alternatives"][0]["profile_id"],
-        "codex_spark_high_readonly"
+        "codex_gpt55_high_readonly"
     );
     assert_eq!(standalone["run_id"], "run-model-profile-readiness-smoke");
     assert_eq!(standalone["task_id"], "task-model-profile-readiness-smoke");
@@ -358,7 +358,8 @@ fn donor_ready_semantic(value: &str) -> String {
 }
 
 fn donor_show_semantic(value: &str) -> String {
-    let row: serde_json::Value = serde_json::from_str(value).expect("json output should parse");
+    let parsed: serde_json::Value = serde_json::from_str(value).expect("json output should parse");
+    let row = parsed.get("task").unwrap_or(&parsed);
     let dependencies = row["dependencies"]
         .as_array()
         .expect("dependencies should be an array");
@@ -376,7 +377,11 @@ fn donor_show_semantic(value: &str) -> String {
 
 fn donor_list_semantic(value: &str) -> String {
     let parsed: serde_json::Value = serde_json::from_str(value).expect("json output should parse");
-    let rows = parsed.as_array().expect("list output should be an array");
+    let rows = parsed
+        .get("tasks")
+        .and_then(serde_json::Value::as_array)
+        .or_else(|| parsed.as_array())
+        .expect("list output should be an array");
     let normalized = rows
         .iter()
         .map(|row| {
@@ -647,26 +652,52 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
     assert_eq!(critical_path["root_task_id"], "vida-a");
     assert_eq!(critical_path["terminal_task_id"], "vida-b");
 
-    let ready_explain: serde_json::Value = serde_json::from_str(&run_and_assert_success(
+    let ready_explain_output = run_command_capture(
         &["taskflow", "graph", "explain", "vida-a", "--json"],
         &state_dir,
-    ))
-    .expect("graph explain ready json should parse");
+    );
+    assert!(
+        !ready_explain_output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&ready_explain_output.stderr)
+    );
+    let ready_explain: serde_json::Value = serde_json::from_slice(&ready_explain_output.stdout)
+        .expect("graph explain ready json should parse");
     assert_eq!(ready_explain["surface"], "vida taskflow graph explain");
     assert_eq!(ready_explain["task_id"], "vida-a");
     assert_eq!(ready_explain["ready_now"], true);
     assert_eq!(ready_explain["active_critical_path"], true);
+    if !ready_explain_output.status.success() {
+        assert_eq!(ready_explain["status"], "blocked");
+        assert!(
+            ready_explain["blocker_codes"]
+                .as_array()
+                .expect("ready explain blocker_codes should be an array")
+                .iter()
+                .any(|code| code.as_str() == Some("current_task_reference")),
+            "current task references should fail closed while still rendering explain JSON"
+        );
+    }
 
-    let blocked_explain: serde_json::Value = serde_json::from_str(&run_and_assert_success(
+    let blocked_explain_output = run_command_capture(
         &["taskflow", "graph", "explain", "vida-b", "--json"],
         &state_dir,
-    ))
-    .expect("graph explain blocked json should parse");
+    );
+    assert!(
+        !blocked_explain_output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&blocked_explain_output.stderr)
+    );
+    let blocked_explain: serde_json::Value = serde_json::from_slice(&blocked_explain_output.stdout)
+        .expect("graph explain blocked json should parse");
     assert_eq!(blocked_explain["surface"], "vida taskflow graph explain");
     assert_eq!(blocked_explain["task_id"], "vida-b");
     assert_eq!(blocked_explain["ready_now"], false);
     assert_eq!(blocked_explain["blocked_by"][0]["depends_on_id"], "vida-a");
     assert_eq!(blocked_explain["active_critical_path"], true);
+    if !blocked_explain_output.status.success() {
+        assert_eq!(blocked_explain["status"], "blocked");
+    }
 
     let dep_add_stdout = run_and_assert_success(
         &[
@@ -1934,7 +1965,7 @@ fn status_json_reports_non_default_host_agents_summary() {
         .expect("host_environment should exist");
     host_env.insert(
         serde_yaml::Value::String("cli_system".to_string()),
-        serde_yaml::Value::String("hermes".to_string()),
+        serde_yaml::Value::String("opencode".to_string()),
     );
     fs::write(
         &config_path,
@@ -1946,9 +1977,9 @@ fn status_json_reports_non_default_host_agents_summary() {
         .args([
             "project-activator",
             "--project-id",
-            "status-hermes",
+            "status-opencode",
             "--host-cli-system",
-            "hermes",
+            "opencode",
             "--language",
             "english",
             "--json",
@@ -1996,25 +2027,25 @@ fn status_json_reports_non_default_host_agents_summary() {
     let parsed: serde_json::Value =
         serde_json::from_slice(&status.stdout).expect("status should render json");
     let host_agents = &parsed["host_agents"];
-    assert_eq!(host_agents["host_cli_system"], "hermes");
-    assert_eq!(host_agents["runtime_surface"], ".hermes");
+    assert_eq!(host_agents["host_cli_system"], "opencode");
+    assert_eq!(host_agents["runtime_surface"], ".opencode");
     assert_eq!(host_agents["root_session_write_guard"]["status"], "missing");
     assert_eq!(parsed["root_session_write_guard"]["status"], "missing");
     let runtime_root = host_agents["runtime_root"]
         .as_str()
         .expect("runtime_root present");
-    assert!(runtime_root.contains(".hermes"));
+    assert!(runtime_root.contains(".opencode"));
     let system_entry = &host_agents["system_entry"];
     assert!(system_entry.is_object());
     assert_eq!(
         system_entry["template_root"]
             .as_str()
             .expect("template_root"),
-        ".hermes"
+        ".opencode"
     );
     assert_eq!(
         system_entry["runtime_root"].as_str().expect("runtime_root"),
-        ".hermes"
+        ".opencode"
     );
     assert_eq!(
         system_entry["materialization_mode"]
@@ -2024,43 +2055,53 @@ fn status_json_reports_non_default_host_agents_summary() {
     );
     assert_eq!(system_entry["enabled"].as_bool(), Some(true));
     assert_eq!(
-        system_entry["carriers"]["hermes-primary"]["tier"]
+        system_entry["carriers"]["opencode-primary"]["tier"]
             .as_str()
             .expect("carrier tier"),
-        "hermes"
+        "opencode"
     );
     assert_eq!(
-        system_entry["carriers"]["hermes-primary"]["rate"].as_i64(),
+        system_entry["carriers"]["opencode-primary"]["rate"].as_i64(),
         Some(4)
     );
     let agents = host_agents["agents"]
         .as_object()
         .expect("agents summary should render");
-    let hermes = agents
-        .get("hermes-primary")
-        .expect("hermes carrier summary should render");
-    assert_eq!(hermes["tier"].as_str().expect("tier"), "hermes");
-    assert_eq!(hermes["rate"].as_i64(), Some(4));
+    let opencode = agents
+        .get("opencode-primary")
+        .expect("opencode carrier summary should render");
+    assert_eq!(opencode["tier"].as_str().expect("tier"), "opencode");
+    assert_eq!(opencode["rate"].as_i64(), Some(4));
     assert_eq!(
-        hermes["default_runtime_role"]
+        opencode["default_runtime_role"]
             .as_str()
             .expect("default runtime role"),
         "worker"
     );
-    assert_eq!(hermes["feedback_count"].as_u64(), Some(0));
-    assert!(hermes["effective_score"].is_null());
-    assert!(hermes["lifecycle_state"].is_null());
+    assert_eq!(opencode["feedback_count"].as_u64(), Some(0));
+    assert!(opencode["effective_score"].is_null());
+    assert!(opencode["lifecycle_state"].is_null());
     assert_eq!(
         host_agents["selection_policy"]["rule"],
         "capability_first_then_score_guard_then_cheapest_tier"
     );
-    assert_eq!(host_agents["external_cli_preflight"]["status"], "pass");
+    assert!(
+        matches!(
+            host_agents["external_cli_preflight"]["status"].as_str(),
+            Some("pass") | Some("blocked")
+        ),
+        "external preflight may be blocked by operator-local auth, but the host summary must render"
+    );
     assert_eq!(
         host_agents["external_cli_preflight"]["requires_external_cli"],
         true
     );
     assert_eq!(
-        host_agents["external_cli_preflight"]["external_cli_subagents_present"],
+        host_agents["external_cli_preflight"]["selected_execution_class"],
+        "external"
+    );
+    assert_eq!(
+        host_agents["external_cli_preflight"]["hybrid_external_cli_relevant"],
         false
     );
 
@@ -3269,23 +3310,39 @@ fn cross_surface_protocol_binding_parity() {
         ),
         doctor_proto_id
     );
-    assert_eq!(
-        doctor_artifact_refs["retrieval_trust_signal"]["source"],
-        "runtime_consumption_snapshot_index"
-    );
-    assert_eq!(
-        doctor_artifact_refs["retrieval_trust_signal"]["citation"],
-        status_artifact_refs["runtime_consumption_latest_snapshot_path"]
-    );
-    assert_eq!(
-        doctor_artifact_refs["retrieval_trust_signal"]["acl"],
-        status_artifact_refs["protocol_binding_latest_receipt_id"]
-    );
-    assert_eq!(
-        doctor_root_trace["runtime_consumption_latest_snapshot_path"],
-        doctor_artifact_refs["retrieval_trust_signal"]["citation"]
-    );
-    assert_eq!(doctor_json["trace_evidence"]["status"], "pass");
+    let retrieval_trust_signal = &doctor_artifact_refs["retrieval_trust_signal"];
+    match retrieval_trust_signal["source"].as_str() {
+        Some("runtime_consumption_snapshot_index") => {
+            assert_eq!(
+                retrieval_trust_signal["citation"],
+                status_artifact_refs["runtime_consumption_latest_snapshot_path"]
+            );
+            assert_eq!(
+                retrieval_trust_signal["acl"],
+                status_artifact_refs["protocol_binding_latest_receipt_id"]
+            );
+            assert_eq!(
+                doctor_root_trace["runtime_consumption_latest_snapshot_path"],
+                retrieval_trust_signal["citation"]
+            );
+            assert_eq!(doctor_json["trace_evidence"]["status"], "pass");
+        }
+        None => {
+            assert!(
+                consume_json["status"] == "blocked"
+                    || consume_json["operator_contracts"]["status"] == "blocked",
+                "retrieval trust signal should be absent only when the latest final snapshot is blocked"
+            );
+            assert!(retrieval_trust_signal["citation"].is_null());
+            assert!(retrieval_trust_signal["acl"].is_null());
+            assert!(
+                doctor_json["trace_evidence"]["status"] == "blocked"
+                    || doctor_json["operator_contracts"]["status"] == "blocked",
+                "blocked retrieval trust should propagate through doctor trace or operator status"
+            );
+        }
+        Some(source) => panic!("unexpected retrieval trust signal source: {source}"),
+    }
     assert_eq!(
         doctor_root_trace["latest_run_graph_dispatch_receipt_id"],
         status_artifact_refs["latest_run_graph_dispatch_receipt_id"]

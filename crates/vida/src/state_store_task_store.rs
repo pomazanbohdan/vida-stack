@@ -56,7 +56,13 @@ impl StateStore {
 
         if state_root.file_name().and_then(|value| value.to_str()) == Some("state") {
             if let Some(data_dir) = state_root.parent() {
-                if let Some(vida_dir) = data_dir.parent() {
+                if data_dir.file_name().and_then(|value| value.to_str()) == Some("data") {
+                    let Some(vida_dir) = data_dir.parent() else {
+                        return state_root.join("exports/tasks.snapshot.jsonl");
+                    };
+                    if vida_dir.file_name().and_then(|value| value.to_str()) != Some(".vida") {
+                        return state_root.join("exports/tasks.snapshot.jsonl");
+                    }
                     return vida_dir.join("exports/tasks.snapshot.jsonl");
                 }
             }
@@ -1470,6 +1476,37 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     #[cfg(unix)]
     use std::{io::ErrorKind, os::unix::fs::symlink};
+
+    fn unique_task_store_temp_root(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
+    }
+
+    #[test]
+    fn canonical_task_snapshot_path_keeps_isolated_state_roots_local() {
+        let state_root = unique_task_store_temp_root("vida-isolated-task-state").join("state");
+
+        assert_eq!(
+            StateStore::canonical_task_snapshot_path_for_state_root(&state_root),
+            state_root.join("exports/tasks.snapshot.jsonl")
+        );
+    }
+
+    #[test]
+    fn canonical_task_snapshot_path_maps_project_state_layout_to_vida_exports() {
+        let project_root = unique_task_store_temp_root("vida-project-task-state");
+        let state_root = project_root.join(".vida").join("data").join("state");
+
+        assert_eq!(
+            StateStore::canonical_task_snapshot_path_for_state_root(&state_root),
+            project_root
+                .join(".vida")
+                .join("exports/tasks.snapshot.jsonl")
+        );
+    }
 
     #[tokio::test]
     async fn close_task_refreshes_run_graph_continuation_binding_to_closure() {
