@@ -34,6 +34,8 @@ This map does not cover extracted secondary bundles by default.
    - project-owned documentation tooling map
 10. `docs/process/agent-extensions/README.md`
    - project-owned agent role/skill/profile/flow extension map
+11. `docs/process/github-issues-triage-guide.md`
+   - project-owned GitHub Issues triage, label taxonomy, and diagnostic publication guide
 
 ## Activation Triggers
 
@@ -68,6 +70,8 @@ Do not use this map as the default route for extracted bundles unless the task e
    - continue to `docs/process/documentation-tooling-map.md`
 9. Project agent-system extension questions:
    - continue to `docs/process/agent-extensions/README.md`
+10. GitHub Issues triage / label / issue workflow questions:
+   - continue to `docs/process/github-issues-triage-guide.md`
 
 ## Boundary Rule
 
@@ -79,10 +83,10 @@ Do not use this map as the default route for extracted bundles unless the task e
 artifact_path: project/root-map
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-05-06'
 schema_version: '1'
 status: canonical
 source_path: docs/project-root-map.md
 created_at: '2026-03-10T08:45:00+02:00'
-updated_at: 2026-03-16T10:05:31.520957193Z
+updated_at: 2026-05-06T11:52:00+03:00
 changelog_ref: project-root-map.changelog.jsonl
