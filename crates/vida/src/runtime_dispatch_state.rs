@@ -369,6 +369,20 @@ pub(crate) fn build_runtime_closure_admission(
     docflow_verdict: &RuntimeConsumptionDocflowVerdict,
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> RuntimeConsumptionClosureAdmission {
+    build_runtime_closure_admission_with_design_gate_state(
+        bundle_check,
+        docflow_verdict,
+        role_selection,
+        false,
+    )
+}
+
+fn build_runtime_closure_admission_with_design_gate_state(
+    bundle_check: &TaskflowConsumeBundleCheck,
+    docflow_verdict: &RuntimeConsumptionDocflowVerdict,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    design_gate_completed: bool,
+) -> RuntimeConsumptionClosureAdmission {
     let mut blockers = Vec::new();
     if !bundle_check.ok {
         if let Some(code) = crate::release_contract_adapters::blocker_code(
@@ -407,7 +421,7 @@ pub(crate) fn build_runtime_closure_admission(
             blockers.push(code);
         }
     }
-    if role_selection.execution_plan["status"] == "design_first" {
+    if role_selection.execution_plan["status"] == "design_first" && !design_gate_completed {
         if let Some(code) = crate::release_contract_adapters::blocker_code(
             crate::release1_contracts::BlockerCode::PendingDesignPacket,
         ) {
@@ -435,6 +449,21 @@ pub(crate) fn build_runtime_closure_admission(
         blockers,
         proof_surfaces,
     }
+}
+
+async fn build_runtime_closure_admission_for_store(
+    store: &StateStore,
+    bundle_check: &TaskflowConsumeBundleCheck,
+    docflow_verdict: &RuntimeConsumptionDocflowVerdict,
+    role_selection: &RuntimeConsumptionLaneSelection,
+) -> RuntimeConsumptionClosureAdmission {
+    let design_gate_completed = tracked_design_first_gate_completed(store, role_selection).await;
+    build_runtime_closure_admission_with_design_gate_state(
+        bundle_check,
+        docflow_verdict,
+        role_selection,
+        design_gate_completed,
+    )
 }
 
 pub(crate) fn build_taskflow_handoff_plan(
@@ -3376,6 +3405,15 @@ fn tracked_implementer_dev_task_id<'a>(
         .filter(|value| !value.is_empty())
 }
 
+fn tracked_work_pool_task_id<'a>(
+    role_selection: &'a RuntimeConsumptionLaneSelection,
+) -> Option<&'a str> {
+    role_selection.execution_plan["tracked_flow_bootstrap"]["work_pool_task"]["task_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 fn tracked_specification_task_id<'a>(
     role_selection: &'a RuntimeConsumptionLaneSelection,
 ) -> Option<&'a str> {
@@ -3443,6 +3481,18 @@ fn tracked_design_doc_finalized(role_selection: &RuntimeConsumptionLaneSelection
         .unwrap_or(false)
 }
 
+async fn tracked_task_exists(store: &StateStore, task_id: &str) -> bool {
+    store.show_task(task_id).await.is_ok()
+}
+
+async fn tracked_task_closed(store: &StateStore, task_id: &str) -> bool {
+    store
+        .show_task(task_id)
+        .await
+        .map(|task| task.status == "closed")
+        .unwrap_or(false)
+}
+
 async fn tracked_specification_task_closed(
     store: &StateStore,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -3454,11 +3504,29 @@ async fn tracked_specification_task_closed(
     let Some(task_id) = tracked_specification_task_id(role_selection) else {
         return false;
     };
-    store
-        .show_task(task_id)
-        .await
-        .map(|task| task.status == "closed")
-        .unwrap_or(false)
+    tracked_task_closed(store, task_id).await
+}
+
+async fn tracked_design_first_gate_completed(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+) -> bool {
+    if role_selection.execution_plan["status"] != "design_first" {
+        return false;
+    }
+    let Some(spec_task_id) = tracked_specification_task_id(role_selection) else {
+        return false;
+    };
+    let Some(work_pool_task_id) = tracked_work_pool_task_id(role_selection) else {
+        return false;
+    };
+    let Some(dev_task_id) = tracked_implementer_dev_task_id(role_selection) else {
+        return false;
+    };
+    tracked_design_doc_finalized(role_selection)
+        && tracked_task_closed(store, spec_task_id).await
+        && tracked_task_exists(store, work_pool_task_id).await
+        && tracked_task_exists(store, dev_task_id).await
 }
 
 async fn tracked_specification_gate_completion_ready(
@@ -3555,8 +3623,13 @@ async fn verification_closure_admission_ready(
     let (registry, check, readiness, proof, _overview) = crate::build_docflow_runtime_evidence();
     let docflow_verdict =
         crate::build_docflow_runtime_verdict(&registry, &check, &readiness, &proof);
-    let closure_admission =
-        build_runtime_closure_admission(&bundle_check, &docflow_verdict, role_selection);
+    let closure_admission = build_runtime_closure_admission_for_store(
+        store,
+        &bundle_check,
+        &docflow_verdict,
+        role_selection,
+    )
+    .await;
     if closure_admission.admitted {
         return Ok(true);
     }
@@ -5565,6 +5638,94 @@ mod tests {
     }
 
     #[test]
+    fn closure_admission_accepts_completed_design_first_tracked_flow_state() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            let spec_task_id = "feature-closure-design-spec";
+            let work_pool_task_id = "feature-closure-design-work-pool";
+            let dev_task_id = "feature-closure-design-dev";
+            create_open_task(&store, spec_task_id, "spec-pack").await;
+            store
+                .close_task(spec_task_id, "design packet finalized")
+                .await
+                .expect("spec task should close");
+            create_open_task(&store, work_pool_task_id, "work-pool-pack").await;
+            create_open_task(&store, dev_task_id, "dev-pack").await;
+            let design_doc_path = harness.path().join("docs/closure-design.md");
+            std::fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
+                .expect("design doc parent should exist");
+            write_approved_design_doc(&design_doc_path);
+
+            let bundle_check = TaskflowConsumeBundleCheck {
+                ok: true,
+                blockers: vec![],
+                root_artifact_id: "root".to_string(),
+                artifact_count: 4,
+                boot_classification: "compatible".to_string(),
+                migration_state: "ready".to_string(),
+                activation_status: "ready_enough_for_normal_work".to_string(),
+            };
+            let docflow_verdict = RuntimeConsumptionDocflowVerdict {
+                status: "pass".to_string(),
+                ready: true,
+                blockers: vec![],
+                proof_surfaces: vec![
+                    "vida docflow check --profile active-canon".to_string(),
+                    "vida docflow readiness-check --profile active-canon".to_string(),
+                    "vida docflow proofcheck --profile active-canon".to_string(),
+                ],
+            };
+            let role_selection = RuntimeConsumptionLaneSelection {
+                ok: true,
+                activation_source: "test".to_string(),
+                selection_mode: "auto".to_string(),
+                fallback_role: "orchestrator".to_string(),
+                request: "feature design then implementation".to_string(),
+                selected_role: "business_analyst".to_string(),
+                conversational_mode: Some("scope_discussion".to_string()),
+                single_task_only: true,
+                tracked_flow_entry: Some("spec-pack".to_string()),
+                allow_freeform_chat: true,
+                confidence: "high".to_string(),
+                matched_terms: vec!["implementation".to_string()],
+                compiled_bundle: serde_json::Value::Null,
+                execution_plan: serde_json::json!({
+                    "status": "design_first",
+                    "tracked_flow_bootstrap": {
+                        "spec_task": {
+                            "task_id": spec_task_id
+                        },
+                        "work_pool_task": {
+                            "task_id": work_pool_task_id
+                        },
+                        "dev_task": {
+                            "task_id": dev_task_id
+                        },
+                        "design_doc_path": design_doc_path.display().to_string()
+                    }
+                }),
+                reason: "test".to_string(),
+            };
+
+            let admission = build_runtime_closure_admission_for_store(
+                &store,
+                &bundle_check,
+                &docflow_verdict,
+                &role_selection,
+            )
+            .await;
+
+            assert_eq!(admission.status, "admit");
+            assert!(admission.admitted);
+            assert!(admission.blockers.is_empty());
+        });
+    }
+
+    #[test]
     fn runtime_host_execution_contract_reflects_external_qwen_selection() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -6260,6 +6421,28 @@ mod tests {
             .close_task(task_id, "implemented and proven")
             .await
             .expect("task should close");
+    }
+
+    async fn create_open_task(store: &crate::StateStore, task_id: &str, label: &str) {
+        let labels = vec![label.to_string()];
+        store
+            .create_task(CreateTaskRequest {
+                task_id,
+                title: "Tracked packet",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 2,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("open task should be created");
     }
 
     fn write_approved_design_doc(path: &Path) {
@@ -15436,8 +15619,13 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
                 crate::build_docflow_runtime_evidence();
             let docflow_verdict =
                 crate::build_docflow_runtime_verdict(&registry, &check, &readiness, &proof);
-            let closure_admission =
-                build_runtime_closure_admission(&bundle_check, &docflow_verdict, role_selection);
+            let closure_admission = build_runtime_closure_admission_for_store(
+                &store,
+                &bundle_check,
+                &docflow_verdict,
+                role_selection,
+            )
+            .await;
             let closure_ready = closure_admission.admitted;
             let execution_state = if closure_ready { "executed" } else { "blocked" };
             let status = if closure_ready { "pass" } else { "blocked" };

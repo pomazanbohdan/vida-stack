@@ -391,6 +391,14 @@ fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -
     {
         return Some("pending_terminal_write_evidence");
     }
+    if receipt
+        .blocker_code
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || !receipt.downstream_dispatch_blockers.is_empty()
+    {
+        return Some("blocked_dispatch_receipt");
+    }
     None
 }
 
@@ -488,15 +496,6 @@ fn next_lawful_operator_action_for_projection(
     receipt: Option<&RunGraphDispatchReceipt>,
     terminal_consume_continue_run_id: Option<&str>,
 ) -> Option<String> {
-    if let Some(command) = receipt.and_then(|value| {
-        next_lawful_operator_action_for_dispatch_resolution(
-            status,
-            value,
-            terminal_consume_continue_run_id,
-        )
-    }) {
-        return Some(command);
-    }
     if receipt.is_some_and(blocked_external_dispatch_artifact_mismatched_as_internal_activation) {
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
             return Some(format!(
@@ -508,6 +507,15 @@ fn next_lawful_operator_action_for_projection(
             "vida taskflow consume continue --run-id {} --json",
             status.run_id
         ));
+    }
+    if let Some(command) = receipt.and_then(|value| {
+        next_lawful_operator_action_for_dispatch_resolution(
+            status,
+            value,
+            terminal_consume_continue_run_id,
+        )
+    }) {
+        return Some(command);
     }
     next_lawful_operator_action_for_status(status)
 }
@@ -5750,6 +5758,67 @@ mod tests {
             .as_array()
             .is_some_and(|actions| !actions.is_empty()));
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn blocked_dispatch_receipt_recommends_lane_show_instead_of_status_self_loop() {
+        let status = RunGraphStatus {
+            run_id: "run-closure-pending-design".to_string(),
+            task_id: "run-closure-pending-design".to_string(),
+            task_class: "scope_discussion".to_string(),
+            active_node: "closure".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "spec-pack".to_string(),
+            selected_backend: "hermes_cli".to_string(),
+            lane_id: "closure_lane".to_string(),
+            lifecycle_stage: "closure_blocked".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "closure".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "closure".to_string(),
+            dispatch_surface: Some("vida taskflow closure-preview".to_string()),
+            dispatch_command: Some(
+                "vida agent-init --downstream-packet closure.json --json".to_string(),
+            ),
+            dispatch_packet_path: Some("/tmp/closure-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/closure-result.json".to_string()),
+            blocker_code: Some("pending_design_packet".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("closure".to_string()),
+            downstream_dispatch_last_target: Some("closure".to_string()),
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-05-06T20:00:00Z".to_string(),
+        };
+
+        let action = next_lawful_operator_action_for_projection(&status, Some(&receipt), None);
+
+        assert_eq!(
+            action.as_deref(),
+            Some("vida lane show run-closure-pending-design --json")
+        );
     }
 
     #[test]
