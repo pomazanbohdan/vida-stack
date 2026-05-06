@@ -177,12 +177,20 @@ fn consume_continue_resume_error_blocker_code(error: &str) -> &'static str {
 }
 
 fn consume_continue_resume_error_run_id(error: &str) -> Option<String> {
-    let marker = "run `";
-    let start = error.find(marker)? + marker.len();
-    let rest = &error[start..];
-    let end = rest.find('`')?;
-    let run_id = rest[..end].trim();
-    (!run_id.is_empty()).then(|| run_id.to_string())
+    for marker in ["Run-graph resume gate denied for `", "run `", "run_id `"] {
+        let Some(start) = error.find(marker).map(|index| index + marker.len()) else {
+            continue;
+        };
+        let rest = &error[start..];
+        let Some(end) = rest.find('`') else {
+            continue;
+        };
+        let run_id = rest[..end].trim();
+        if !run_id.is_empty() {
+            return Some(run_id.to_string());
+        }
+    }
+    None
 }
 
 fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> serde_json::Value {
@@ -948,6 +956,97 @@ fn final_snapshot_missing_failure_control_evidence(snapshot_path: &str) -> bool 
         Err(_) => return true,
     };
     !runtime_consumption_snapshot_has_failure_control_evidence(&summary_json)
+}
+
+fn latest_runtime_consumption_snapshot_for_resume_gate(
+    state_root: &std::path::Path,
+) -> Result<serde_json::Value, String> {
+    let snapshot_path = match super::latest_final_runtime_consumption_snapshot_path(state_root)? {
+        Some(path) => path,
+        None => super::latest_recorded_final_runtime_consumption_snapshot_path(state_root)?
+            .ok_or_else(|| {
+            "execution_preparation_gate_blocked: latest runtime-consumption snapshot is not `final`"
+                .to_string()
+            })?,
+    };
+    let snapshot_body = std::fs::read_to_string(&snapshot_path).map_err(|error| {
+        format!(
+            "execution_preparation_gate_blocked: failed to read runtime-consumption snapshot: {error}"
+        )
+    })?;
+    serde_json::from_str::<serde_json::Value>(&snapshot_body).map_err(|error| {
+        format!(
+            "execution_preparation_gate_blocked: failed to parse runtime-consumption snapshot: {error}"
+        )
+    })
+}
+
+fn runtime_consumption_snapshot_has_execution_preparation_blocker(
+    snapshot: &serde_json::Value,
+) -> bool {
+    let pending_execution_preparation_evidence =
+        super::blocker_code_str(super::BlockerCode::PendingExecutionPreparationEvidence);
+    let pending_design_packet = super::blocker_code_str(super::BlockerCode::PendingDesignPacket);
+    let pending_developer_handoff_packet =
+        super::blocker_code_str(super::BlockerCode::PendingDeveloperHandoffPacket);
+    let missing_execution_preparation_contract =
+        super::blocker_code_str(super::BlockerCode::MissingExecutionPreparationContract);
+    let mut blockers: Vec<&str> = Vec::new();
+    if let Some(rows) = snapshot["closure_admission"]["blockers"].as_array() {
+        blockers.extend(rows.iter().filter_map(serde_json::Value::as_str));
+    }
+    if let Some(rows) = snapshot["operator_contracts"]["blocker_codes"].as_array() {
+        blockers.extend(rows.iter().filter_map(serde_json::Value::as_str));
+    }
+    if let Some(code) = snapshot["dispatch_receipt"]["blocker_code"].as_str() {
+        blockers.push(code);
+    }
+    blockers.iter().any(|value| {
+        *value == pending_execution_preparation_evidence
+            || *value == pending_design_packet
+            || *value == pending_developer_handoff_packet
+            || *value == missing_execution_preparation_contract
+    })
+}
+
+fn enforce_consume_continue_execution_preparation_gate(
+    state_root: &std::path::Path,
+) -> Result<(), String> {
+    let snapshot = latest_runtime_consumption_snapshot_for_resume_gate(state_root)?;
+    let contract = &snapshot["operator_contracts"];
+    let contract_ready = contract["contract_id"].as_str() == Some("release-1-operator-contracts")
+        && contract["schema_version"].as_str() == Some("release-1-v1")
+        && contract["status"].is_string()
+        && contract["blocker_codes"].is_array()
+        && contract["next_actions"].is_array()
+        && contract["artifact_refs"].is_object();
+    if !contract_ready {
+        return Err(
+            "execution_preparation_gate_blocked: missing or invalid release-1 operator contract"
+                .to_string(),
+        );
+    }
+    let Some(canonical_status) = contract["status"]
+        .as_str()
+        .and_then(crate::release1_contracts::canonical_release1_contract_status_str)
+    else {
+        return Err(
+            "execution_preparation_gate_blocked: release-1 operator contract has invalid status"
+                .to_string(),
+        );
+    };
+    if canonical_status == "pass" {
+        return super::taskflow_task_bridge::enforce_execution_preparation_contract_gate(
+            state_root,
+        );
+    }
+    if runtime_consumption_snapshot_has_execution_preparation_blocker(&snapshot) {
+        return Err(format!(
+            "execution_preparation_gate_blocked: {}",
+            super::blocker_code_str(super::BlockerCode::PendingExecutionPreparationEvidence)
+        ));
+    }
+    Ok(())
 }
 
 fn resume_from_persisted_final_snapshot(
@@ -3879,10 +3978,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 && requested_dispatch_packet_path.is_none()
                 && requested_downstream_packet_path.is_none()
             {
-                if let Err(error) =
-                    super::taskflow_task_bridge::enforce_execution_preparation_contract_gate(
-                        &state_root,
-                    )
+                if let Err(error) = enforce_consume_continue_execution_preparation_gate(&state_root)
                 {
                     if emit_output {
                         eprintln!("{error}");
@@ -4495,6 +4591,7 @@ mod tests {
         consume_continue_resume_error_payload, consume_continue_state_access_blocker_payload,
         dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
         dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
+        enforce_consume_continue_execution_preparation_gate,
         fail_fast_state_store_open_read_only_with_timeout, normalize_runtime_dispatch_packet,
         normalize_stale_in_flight_dispatch_receipt, persisted_dispatch_packet_lineage_task_id,
         prefer_ready_downstream_packet_over_active_result, prepare_explicit_resume_retry_artifact,
@@ -7415,6 +7512,114 @@ agent_system:
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn consume_continue_execution_preparation_gate_allows_unrelated_blocked_contract() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-execution-gate-unrelated-blocker-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let snapshot_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&snapshot_dir).expect("create runtime-consumption directory");
+        let snapshot_path = snapshot_dir.join("final-2026-03-18T00-00-02Z.json");
+        let operator_contracts = crate::build_operator_contracts_envelope(
+            "blocked",
+            vec!["closure_admission_block".to_string()],
+            vec!["Inspect closure admission evidence.".to_string()],
+            serde_json::json!({
+                "runtime_consumption_latest_snapshot_path": snapshot_path.display().to_string(),
+                "latest_run_graph_dispatch_receipt_id": "run-resume-gate",
+                "latest_task_reconciliation_receipt_id": serde_json::Value::Null,
+                "consume_final_surface": "vida taskflow consume final",
+            }),
+        );
+        fs::write(
+            &snapshot_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "status": operator_contracts["status"].clone(),
+                "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                "next_actions": operator_contracts["next_actions"].clone(),
+                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                "closure_admission": {
+                    "blockers": ["closure_admission_block"],
+                },
+                "operator_contracts": operator_contracts,
+                "dispatch_receipt": {
+                    "blocker_code": null,
+                },
+            })
+            .to_string(),
+        )
+        .expect("write final snapshot");
+
+        assert_eq!(
+            enforce_consume_continue_execution_preparation_gate(&root),
+            Ok(())
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn consume_continue_execution_preparation_gate_rejects_preparation_blocker() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-execution-gate-prep-blocker-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let snapshot_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&snapshot_dir).expect("create runtime-consumption directory");
+        let snapshot_path = snapshot_dir.join("final-2026-03-18T00-00-03Z.json");
+        let operator_contracts = crate::build_operator_contracts_envelope(
+            "blocked",
+            vec!["pending_execution_preparation_evidence".to_string()],
+            vec!["Record execution preparation evidence.".to_string()],
+            serde_json::json!({
+                "runtime_consumption_latest_snapshot_path": snapshot_path.display().to_string(),
+                "latest_run_graph_dispatch_receipt_id": "run-resume-gate",
+                "latest_task_reconciliation_receipt_id": serde_json::Value::Null,
+                "consume_final_surface": "vida taskflow consume final",
+            }),
+        );
+        fs::write(
+            &snapshot_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "status": operator_contracts["status"].clone(),
+                "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                "next_actions": operator_contracts["next_actions"].clone(),
+                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                "closure_admission": {
+                    "blockers": [],
+                },
+                "operator_contracts": operator_contracts,
+                "dispatch_receipt": {
+                    "blocker_code": null,
+                },
+            })
+            .to_string(),
+        )
+        .expect("write final snapshot");
+
+        let error = enforce_consume_continue_execution_preparation_gate(&root)
+            .expect_err("preparation blocker must fail closed");
+        assert!(
+            error.contains("pending_execution_preparation_evidence"),
+            "unexpected error: {error}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[tokio::test]
     async fn validate_run_graph_resume_state_accepts_persisted_receipt_lineage_when_summary_rows_are_missing(
     ) {
@@ -7644,6 +7849,11 @@ agent_system:
         assert!(error.contains("recovery_ready is false"));
         assert!(error.contains("vida lane show run-exception-takeover --json"));
         assert!(error.contains("owned_write_scope"));
+
+        let payload =
+            consume_continue_resume_error_payload(&error, "vida taskflow consume continue");
+        assert_eq!(payload["run_id"], "run-exception-takeover");
+        assert_eq!(payload["artifact_refs"]["run_id"], "run-exception-takeover");
     }
 
     #[tokio::test]
