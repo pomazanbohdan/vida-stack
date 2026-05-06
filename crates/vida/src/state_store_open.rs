@@ -55,9 +55,11 @@ impl AuthoritativeOpenGuard {
             std::io::ErrorKind::WouldBlock
                 | std::io::ErrorKind::TimedOut
                 | std::io::ErrorKind::Interrupted
-        ) || error
-            .raw_os_error()
-            .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
+        ) || error.raw_os_error().is_some_and(|code| {
+            code == libc::EWOULDBLOCK
+                || code == libc::EAGAIN
+                || (cfg!(windows) && matches!(code, 32 | 33))
+        })
     }
 }
 
@@ -136,17 +138,15 @@ impl StateStore {
         for attempt in 0..AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT {
             match open_once(root.clone()).await {
                 Ok(store) => return Ok(store),
-                Err(StateStoreError::Db(error))
-                    if attempt + 1 < AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT =>
+                Err(error)
+                    if attempt + 1 < AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT
+                        && Self::error_is_lock_contention(&error) =>
                 {
-                    if Self::message_is_lock_contention(&error.to_string()) {
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS,
-                        ))
-                        .await;
-                        continue;
-                    }
-                    return Err(StateStoreError::Db(error));
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS,
+                    ))
+                    .await;
+                    continue;
                 }
                 Err(error) => return Err(error),
             }
@@ -240,6 +240,18 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_lock_violation_errors_are_lock_contention() {
+        for code in [32, 33] {
+            let error = StateStoreError::Io(std::io::Error::from_raw_os_error(code));
+            assert!(
+                StateStore::error_is_lock_contention(&error),
+                "Windows raw OS error {code} should be retried as lock contention"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn read_only_open_bypasses_authoritative_open_guard() {

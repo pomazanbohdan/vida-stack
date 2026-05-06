@@ -871,10 +871,9 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
             }
         }
     }
-    let startup_bundle_status = payload.activation_bundle["project_protocol_projections"]
-        ["startup_bundle"]["status"]
-        .as_str();
-    if startup_bundle_status.is_some_and(|status| !matches!(status, "pass" | "ready")) {
+    let startup_bundle =
+        &payload.activation_bundle["project_protocol_projections"]["startup_bundle"];
+    if startup_bundle_projection_blocks_cache_tuple(startup_bundle) {
         if let Some(code) = super::release1_contracts::invalid_cache_key_input_blocker_code(
             "startup_bundle_revision",
         ) {
@@ -1028,6 +1027,30 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
     blockers.sort();
     blockers.dedup();
     blockers
+}
+
+fn startup_bundle_projection_blocks_cache_tuple(startup_bundle: &serde_json::Value) -> bool {
+    let Some(status) = startup_bundle
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    let normalized = status.trim().to_ascii_lowercase();
+    if matches!(
+        normalized.as_str(),
+        "pass" | "ready" | "canonical" | "compiled" | "executable"
+    ) {
+        return false;
+    }
+    let promotion_state = startup_bundle.get("promotion_state");
+    let promoted_executable = ["bound", "compiled", "executable"].iter().all(|key| {
+        promotion_state
+            .and_then(|state| state.get(*key))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    });
+    !promoted_executable
 }
 
 fn cache_registry_contract_blockers(payload: &TaskflowConsumeBundlePayload) -> Vec<String> {
@@ -1823,6 +1846,64 @@ mod tests {
             },
         });
         payload
+    }
+
+    #[test]
+    fn cache_contract_consistency_accepts_canonical_startup_bundle_projection() {
+        let mut payload = cache_alignment_payload("sb-1");
+        payload.activation_bundle = serde_json::json!({
+            "project_protocol_projections": {
+                "startup_bundle": {
+                    "status": "canonical",
+                    "artifact_revision": "sb-1",
+                    "promotion_state": {
+                        "bound": true,
+                        "compiled": true,
+                        "executable": true
+                    }
+                }
+            }
+        });
+
+        let blockers = cache_contract_consistency_blockers(&payload);
+        assert!(
+            !blockers
+                .iter()
+                .any(|row| row == "invalid_cache_key_input:startup_bundle_revision"),
+            "{blockers:?}"
+        );
+        assert!(
+            !blockers
+                .iter()
+                .any(|row| row == "invalid_invalidation_tuple_key:startup_bundle_revision"),
+            "{blockers:?}"
+        );
+    }
+
+    #[test]
+    fn cache_contract_consistency_blocks_non_promoted_startup_bundle_projection() {
+        let mut payload = cache_alignment_payload("sb-1");
+        payload.activation_bundle = serde_json::json!({
+            "project_protocol_projections": {
+                "startup_bundle": {
+                    "status": "present",
+                    "artifact_revision": "sb-1",
+                    "promotion_state": {
+                        "bound": false,
+                        "compiled": false,
+                        "executable": false
+                    }
+                }
+            }
+        });
+
+        let blockers = cache_contract_consistency_blockers(&payload);
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_cache_key_input:startup_bundle_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_invalidation_tuple_key:startup_bundle_revision"));
     }
 
     #[test]
