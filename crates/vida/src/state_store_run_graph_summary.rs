@@ -198,6 +198,70 @@ fn terminal_closure_status_has_explicit_receipt_override(
     )
 }
 
+fn stored_receipt_has_active_exception_takeover(receipt: &RunGraphDispatchReceiptStored) -> bool {
+    receipt.lane_status.as_deref() == Some("lane_exception_takeover")
+        && has_receipt_evidence_id(receipt.exception_path_receipt_id.as_deref())
+        && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref())
+}
+
+fn continuation_binding_active_kind(binding: &RunGraphContinuationBinding) -> Option<&str> {
+    binding
+        .active_bounded_unit
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+}
+
+fn continuation_binding_active_node(binding: &RunGraphContinuationBinding) -> Option<&str> {
+    binding
+        .active_bounded_unit
+        .get("active_node")
+        .and_then(serde_json::Value::as_str)
+}
+
+fn reconcile_continuation_binding_with_exception_takeover_receipt(
+    binding: RunGraphContinuationBinding,
+    receipt: Option<&RunGraphDispatchReceiptStored>,
+) -> RunGraphContinuationBinding {
+    let Some(receipt) = receipt else {
+        return binding;
+    };
+    if binding.run_id != receipt.run_id
+        || continuation_binding_active_kind(&binding) != Some("run_graph_task")
+        || !stored_receipt_has_active_exception_takeover(receipt)
+    {
+        return binding;
+    }
+    let active_node = receipt.dispatch_target.trim();
+    if active_node.is_empty() || continuation_binding_active_node(&binding) == Some(active_node) {
+        return binding;
+    }
+    let recorded_at = if receipt.recorded_at.trim().is_empty() {
+        binding.recorded_at.clone()
+    } else {
+        receipt.recorded_at.clone()
+    };
+    RunGraphContinuationBinding {
+        run_id: binding.run_id.clone(),
+        task_id: binding.task_id.clone(),
+        status: "bound".to_string(),
+        active_bounded_unit: serde_json::json!({
+            "kind": "run_graph_task",
+            "task_id": binding.task_id.clone(),
+            "run_id": binding.run_id.clone(),
+            "active_node": active_node,
+        }),
+        binding_source: "latest_run_graph_exception_takeover_dispatch".to_string(),
+        why_this_unit: format!(
+            "Latest runtime dispatch records exception-takeover evidence for task `{}` at node `{}`.",
+            binding.task_id, active_node
+        ),
+        primary_path: "normal_delivery_path".to_string(),
+        sequential_vs_parallel_posture: "sequential_only_exception_takeover".to_string(),
+        request_text: binding.request_text,
+        recorded_at,
+    }
+}
+
 pub(crate) fn normalize_legacy_downstream_preview_drift(
     mut receipt: RunGraphDispatchReceiptStored,
 ) -> RunGraphDispatchReceiptStored {
@@ -1065,6 +1129,22 @@ impl StateStore {
         Ok(())
     }
 
+    async fn effective_exception_takeover_continuation_binding(
+        &self,
+        binding: RunGraphContinuationBinding,
+    ) -> Result<RunGraphContinuationBinding, StateStoreError> {
+        let receipt: Option<RunGraphDispatchReceiptStored> = self
+            .db
+            .select(("run_graph_dispatch_receipt", binding.run_id.as_str()))
+            .await?;
+        Ok(
+            reconcile_continuation_binding_with_exception_takeover_receipt(
+                binding,
+                receipt.as_ref(),
+            ),
+        )
+    }
+
     pub async fn run_graph_continuation_binding(
         &self,
         run_id: &str,
@@ -1079,6 +1159,9 @@ impl StateStore {
                 else {
                     return Ok(None);
                 };
+                let binding = self
+                    .effective_exception_takeover_continuation_binding(binding)
+                    .await?;
                 binding.validate()?;
                 Ok(Some(binding))
             }
@@ -1245,6 +1328,9 @@ impl StateStore {
             else {
                 continue;
             };
+            binding = self
+                .effective_exception_takeover_continuation_binding(binding)
+                .await?;
             binding.validate()?;
             if binding.binding_source != "explicit_continuation_bind_task" {
                 return Ok(Some(binding));
@@ -3380,6 +3466,136 @@ mod tests {
         assert_eq!(latest.binding_source, "explicit_continuation_bind_task");
         assert_eq!(latest.active_bounded_unit["kind"], "task_graph_task");
         assert_eq!(latest.active_bounded_unit["task_status"], "in_progress");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn active_exception_takeover_reconciles_stale_continuation_binding_for_next_lawful_sources(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-active-exception-takeover-reconciles-next-lawful-binding-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "run-next-lawful-stale",
+                title: "Next lawful stale binding task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-next-lawful-stale",
+            "scope_discussion",
+            "spec-pack",
+        );
+        status.task_id = "run-next-lawful-stale".to_string();
+        status.active_node = "planning".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "planning_blocked".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("record run status");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: status.run_id.clone(),
+                dispatch_target: "specification".to_string(),
+                dispatch_status: "routed".to_string(),
+                lane_status: "lane_exception_takeover".to_string(),
+                supersedes_receipt_id: Some("exc-next-lawful-stale".to_string()),
+                exception_path_receipt_id: Some("exc-next-lawful-stale".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init --dispatch-packet packet.json".to_string()),
+                dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("work-pool-pack".to_string()),
+                downstream_dispatch_command: Some("vida task ensure feature-x".to_string()),
+                downstream_dispatch_note: Some("wait for bounded evidence return".to_string()),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["pending_specification_evidence".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("specification".to_string()),
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("middle".to_string()),
+                recorded_at: "2026-05-06T11:58:00Z".to_string(),
+            })
+            .await
+            .expect("record exception takeover receipt");
+
+        store
+            .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
+                run_id: status.run_id.clone(),
+                task_id: status.task_id.clone(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "run_graph_task",
+                    "task_id": status.task_id,
+                    "run_id": status.run_id,
+                    "active_node": "planning"
+                }),
+                binding_source: "explicit_continuation_bind".to_string(),
+                why_this_unit: "stale operator binding".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+                request_text: Some("continue".to_string()),
+                recorded_at: "2026-05-06T11:50:00Z".to_string(),
+            })
+            .await
+            .expect("record stale explicit binding");
+
+        let current = store
+            .run_graph_continuation_binding("run-next-lawful-stale")
+            .await
+            .expect("read current binding")
+            .expect("current binding should exist");
+        let explicit = store
+            .latest_explicit_run_graph_continuation_binding()
+            .await
+            .expect("read latest explicit binding")
+            .expect("latest explicit binding should exist");
+
+        for binding in [current, explicit] {
+            assert_eq!(
+                binding.binding_source,
+                "latest_run_graph_exception_takeover_dispatch"
+            );
+            assert_eq!(binding.active_bounded_unit["active_node"], "specification");
+            assert_eq!(
+                binding.sequential_vs_parallel_posture,
+                "sequential_only_exception_takeover"
+            );
+        }
 
         let _ = fs::remove_dir_all(&root);
     }
