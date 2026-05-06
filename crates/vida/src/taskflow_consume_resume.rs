@@ -380,11 +380,11 @@ fn validate_receipt_packet_pair(
         ));
     }
     if let Some(expected_dispatch_packet_path) = receipt.dispatch_packet_path.as_deref() {
-        if !dispatch_packet_paths_equivalent(expected_dispatch_packet_path, packet_path) {
+        if expected_dispatch_packet_path != packet_path {
             let expected_downstream_packet_path =
                 receipt.downstream_dispatch_packet_path.as_deref();
             if !expected_downstream_packet_path
-                .map(|path| dispatch_packet_paths_equivalent(path, packet_path))
+                .map(|path| path == packet_path)
                 .unwrap_or(false)
             {
                 return Err(format!(
@@ -426,42 +426,6 @@ fn validate_receipt_packet_pair(
         }
     }
     Ok(())
-}
-
-fn dispatch_packet_paths_equivalent(left: &str, right: &str) -> bool {
-    left == right
-        || dispatch_packet_path_compare_key(left) == dispatch_packet_path_compare_key(right)
-}
-
-fn dispatch_packet_path_compare_key(path: &str) -> String {
-    let path = path.trim().replace('\\', "/");
-    let path = path.strip_prefix("//?/").unwrap_or(path.as_str());
-    let absolute = path.starts_with('/');
-    let mut parts = Vec::new();
-    for part in path.split('/') {
-        if part.is_empty() || part == "." {
-            continue;
-        }
-        if part == ".." {
-            if parts
-                .last()
-                .map(|last: &&str| *last != ".." && !last.ends_with(':'))
-                .unwrap_or(false)
-            {
-                parts.pop();
-            } else {
-                parts.push(part);
-            }
-            continue;
-        }
-        parts.push(part);
-    }
-    let normalized = parts.join("/");
-    if absolute {
-        format!("/{normalized}")
-    } else {
-        normalized
-    }
 }
 
 async fn validate_run_graph_resume_state(
