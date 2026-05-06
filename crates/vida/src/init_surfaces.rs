@@ -3031,10 +3031,7 @@ fn agent_init_execution_truth(selection: &serde_json::Value) -> serde_json::Valu
                 .and_then(|value| {
                     serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
                 })?;
-            let dispatch_target = selection
-                .get("dispatch_target")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
+            let dispatch_target = agent_init_selection_dispatch_target(selection);
             Some(
                 super::runtime_dispatch_state::dispatch_execution_route_summary(
                     &role_selection,
@@ -3193,10 +3190,7 @@ fn rebuilt_embedded_runtime_assignment(
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .unwrap_or(role_selection.selected_role.as_str());
-    let dispatch_target = selection
-        .get("dispatch_target")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
+    let dispatch_target = agent_init_selection_dispatch_target(selection);
     let task_class = task_class_for_dispatch_target(dispatch_target, selected_role);
     crate::build_runtime_assignment_from_resolved_constraints(
         activation_bundle,
@@ -3234,10 +3228,7 @@ fn packet_level_runtime_assignment(
         }
     }
 
-    let dispatch_target = selection
-        .get("dispatch_target")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
+    let dispatch_target = agent_init_selection_dispatch_target(selection);
     let role_selection = agent_init_role_selection(selection)?;
     let (assignment, source) = super::runtime_dispatch_state::dispatch_target_runtime_assignment(
         &role_selection.execution_plan,
@@ -3293,6 +3284,31 @@ fn agent_init_runtime_assignment_resolution(
         ),
         _ => (serde_json::Value::Null, "none"),
     }
+}
+
+fn agent_init_selection_dispatch_target(selection: &serde_json::Value) -> &str {
+    selection
+        .get("dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            selection
+                .get("packet")
+                .and_then(|packet| packet.get("dispatch_target"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| {
+            selection
+                .get("packet")
+                .and_then(|packet| packet.get("downstream_dispatch_target"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_default()
 }
 
 fn agent_init_missing_assignment_blocker(
@@ -3466,10 +3482,7 @@ fn agent_init_backend_truth(
         role_selection
             .as_ref()
             .and_then(|role_selection| {
-                let dispatch_target = selection
-                    .get("dispatch_target")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default();
+                let dispatch_target = agent_init_selection_dispatch_target(selection);
                 selected_backend_str.map(|backend_id| {
                     super::runtime_dispatch_state::backend_is_admissible_for_dispatch_target(
                         &role_selection.execution_plan,
@@ -3990,6 +4003,100 @@ mod agent_init_surface_tests {
             "internal_subagents"
         );
         assert_eq!(payload["backend_truth"]["override_status"], "lawful");
+    }
+
+    #[test]
+    fn downstream_agent_init_backend_truth_prefers_downstream_target_over_stale_plan_assignment() {
+        let mut role_selection = test_role_selection();
+        role_selection.selected_role = "business_analyst".to_string();
+        role_selection.execution_plan = serde_json::json!({
+            "runtime_assignment": {
+                "enabled": false,
+                "reason": "no_carrier_declares_runtime_role_and_task_class",
+                "runtime_role": "business_analyst",
+                "task_class": "verification"
+            },
+            "development_flow": {
+                "dispatch_contract": {
+                    "implementer_activation": {
+                        "enabled": true,
+                        "selected_carrier_id": "junior",
+                        "selected_backend_id": "junior",
+                        "selected_model_profile_id": "codex_gpt54_mini_impl",
+                        "selected_tier": "junior",
+                        "activation_agent_type": "junior",
+                        "activation_runtime_role": "worker",
+                        "runtime_role": "worker",
+                        "task_class": "implementation",
+                        "selection_rule": "role_task_then_readiness_then_score_then_cost_quality"
+                    }
+                }
+            },
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true
+                    }
+                },
+                {
+                    "backend_id": "junior",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true
+                    }
+                }
+            ]
+        });
+        let selection = agent_init_packet_selection(
+            "/tmp/downstream.json",
+            serde_json::json!({
+                "activation_runtime_role": "worker",
+                "request_text": "fix runtime handoff",
+                "downstream_dispatch_target": "implementer",
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "selected_backend": "internal_subagents",
+                "role_selection_full": role_selection,
+            }),
+            true,
+        )
+        .expect("downstream packet selection should build");
+        let payload = build_agent_init_surface_payload(
+            test_project_root(),
+            test_config_path(),
+            serde_json::json!({ "status": "ready" }),
+            selection,
+            serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({
+                "mode": "activation_view_only",
+                "activation_view_is_execution_evidence": false,
+                "required_completion_evidence": "receipt_backed_execution_evidence",
+                "root_session_write_authority_granted": false,
+                "continuation_authority_granted": false
+            }),
+            serde_json::json!({ "bundle_id": "bundle-test" }),
+            &test_activation_bundle(),
+            serde_json::json!({ "status": "ready", "roles": [] }),
+        );
+
+        assert_eq!(payload["selection"]["mode"], "downstream_packet");
+        assert_eq!(payload["selection"]["dispatch_target"], "implementer");
+        assert_eq!(
+            payload["backend_truth"]["assignment_source"],
+            "dispatch_contract_implementer_activation"
+        );
+        assert_eq!(payload["backend_truth"]["selected_carrier_id"], "junior");
+        assert_eq!(
+            payload["backend_truth"]["selected_model_profile_id"],
+            "codex_gpt54_mini_impl"
+        );
+        assert_eq!(
+            payload["backend_truth"]["runtime_assignment"]["task_class"],
+            "implementation"
+        );
+        assert!(payload["backend_truth"]["assignment_blocker"].is_null());
     }
 
     #[test]

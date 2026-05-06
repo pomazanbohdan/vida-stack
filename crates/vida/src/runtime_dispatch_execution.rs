@@ -100,7 +100,7 @@ async fn bounded_activation_view(
             &store,
             project_root,
             dispatch_packet_path,
-            false,
+            dispatch_packet_path_should_render_as_downstream(dispatch_packet_path),
         ),
     )
     .await;
@@ -110,6 +110,20 @@ async fn bounded_activation_view(
         Ok(Ok(view)) => view,
         _ => default_activation_view(receipt, role_selection),
     }
+}
+
+fn dispatch_packet_path_should_render_as_downstream(dispatch_packet_path: &str) -> bool {
+    let Ok(body) = std::fs::read_to_string(dispatch_packet_path) else {
+        return false;
+    };
+    let Ok(packet) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return false;
+    };
+    packet["packet_kind"].as_str() == Some("runtime_downstream_dispatch_packet")
+        || packet["downstream_dispatch_target"]
+            .as_str()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
 }
 
 fn configured_external_dispatch_wall_timeout_seconds(
@@ -1606,7 +1620,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
                         &store,
                         project_root,
                         dispatch_packet_path,
-                        false,
+                        dispatch_packet_path_should_render_as_downstream(dispatch_packet_path),
                     )
                     .await
                     .unwrap_or_else(|_| default_activation_view(receipt, role_selection));
@@ -1962,10 +1976,11 @@ mod tests {
     use super::execute_wrapped_command;
     use super::{
         agent_lane_dispatch_result, configured_internal_host_activation_parts,
-        configured_internal_host_runtime_env, dispatch_packet_prompt,
-        execute_external_agent_lane_dispatch, external_provider_output_confirms_execution,
-        internal_codex_output_confirms_execution, mark_dispatch_result_execution_evidence,
-        parse_external_provider_output, parse_internal_codex_exec_output,
+        configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
+        dispatch_packet_prompt, execute_external_agent_lane_dispatch,
+        external_provider_output_confirms_execution, internal_codex_output_confirms_execution,
+        mark_dispatch_result_execution_evidence, parse_external_provider_output,
+        parse_internal_codex_exec_output,
         should_render_store_backed_activation_view_for_internal_failure,
         wrap_command_with_optional_timeout, CommandTimeoutWrapper,
     };
@@ -2156,6 +2171,56 @@ mod tests {
             .join("worker-a")
             .join("config");
         assert_eq!(PathBuf::from(xdg_config_home), expected);
+        let _ = std::fs::remove_dir_all(&harness);
+    }
+
+    #[test]
+    fn downstream_agent_init_backend_truth_detects_downstream_packet_path_for_activation_render() {
+        let harness = std::env::temp_dir().join(format!(
+            "vida-runtime-dispatch-downstream-detect-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&harness).expect("create harness dir");
+        let downstream_path = harness.join("downstream.json");
+        let dispatch_path = harness.join("dispatch.json");
+        std::fs::write(
+            &downstream_path,
+            serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "downstream_dispatch_target": "implementer"
+            })
+            .to_string(),
+        )
+        .expect("downstream packet should write");
+        std::fs::write(
+            &dispatch_path,
+            serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "dispatch_target": "specification"
+            })
+            .to_string(),
+        )
+        .expect("dispatch packet should write");
+
+        assert!(dispatch_packet_path_should_render_as_downstream(
+            downstream_path
+                .to_str()
+                .expect("downstream path should render")
+        ));
+        assert!(!dispatch_packet_path_should_render_as_downstream(
+            dispatch_path.to_str().expect("dispatch path should render")
+        ));
+        assert!(!dispatch_packet_path_should_render_as_downstream(
+            harness
+                .join("missing.json")
+                .to_str()
+                .expect("missing path should render")
+        ));
+
         let _ = std::fs::remove_dir_all(&harness);
     }
 
