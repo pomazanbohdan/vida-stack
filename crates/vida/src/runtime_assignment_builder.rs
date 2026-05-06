@@ -2635,6 +2635,115 @@ mod tests {
     }
 
     #[test]
+    fn missing_external_cli_detect_command_is_rejected_before_selection() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "middle",
+                "tier": "middle",
+                "rate": 4,
+                "normalized_cost_units": 4,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "default_model_profile": "codex_gpt54_medium_review",
+                "model_profiles": {
+                    "codex_gpt54_medium_review": {
+                        "profile_id": "codex_gpt54_medium_review",
+                        "model_ref": "gpt-5.4",
+                        "provider": "openai",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 4,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "read_or_review",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "hermes_cli",
+                "tier": "external_free",
+                "rate": 0,
+                "normalized_cost_units": 0,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "default_model_profile": "hermes_provider_configured_review",
+                "backend_class": "external_cli",
+                "model_profiles": {
+                    "hermes_provider_configured_review": {
+                        "profile_id": "hermes_provider_configured_review",
+                        "model_ref": "hermes/provider-configured",
+                        "provider": "hermes",
+                        "reasoning_effort": "provider_default",
+                        "normalized_cost_units": 0,
+                        "speed_tier": "medium",
+                        "quality_tier": "medium",
+                        "write_scope": "none",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "subagents": {
+                "hermes_cli": {
+                    "enabled": true,
+                    "subagent_backend_class": "external_cli",
+                    "detect_command": "vida-definitely-missing-external-cli-command-for-test",
+                    "default_model_profile": "hermes_provider_configured_review",
+                    "model_profiles": {
+                        "hermes_provider_configured_review": {
+                            "profile_id": "hermes_provider_configured_review",
+                            "model_ref": "hermes/provider-configured",
+                            "provider": "hermes",
+                            "reasoning_effort": "provider_default",
+                            "normalized_cost_units": 0,
+                            "speed_tier": "medium",
+                            "quality_tier": "medium",
+                            "write_scope": "none",
+                            "runtime_roles": ["coach"],
+                            "task_classes": ["review"],
+                            "readiness": { "required": true, "ready": true }
+                        }
+                    }
+                }
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "coach",
+            "review",
+            "coach",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "middle");
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "hermes_cli"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("external_backend_not_ready"))
+                    && row["external_backend_readiness"]["status"]
+                        == "external_cli_command_not_found"
+                    && row["external_backend_readiness"]["blocker_code"] == "tool_execution_failed"
+            }));
+    }
+
+    #[test]
     fn external_cli_readiness_override_remains_admissible() {
         let mut compiled_bundle = compiled_bundle_with_roles(vec![
             serde_json::json!({

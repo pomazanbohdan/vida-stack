@@ -14,6 +14,74 @@ fn file_exists(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn path_candidate_exists(path: &std::path::Path) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false)
+}
+
+fn command_path_candidates(base: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut candidates = vec![base.to_path_buf()];
+    if cfg!(windows) && base.extension().is_none() {
+        let pathext =
+            std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+        for extension in pathext.split(';').map(str::trim) {
+            if extension.is_empty() {
+                continue;
+            }
+            candidates.push(base.with_extension(extension.trim_start_matches('.')));
+        }
+    }
+    candidates
+}
+
+fn command_contains_path_separator(command: &str) -> bool {
+    command.contains('/') || command.contains('\\')
+}
+
+fn command_is_resolvable(command: &str) -> bool {
+    let command = command.trim();
+    if command.is_empty() {
+        return false;
+    }
+    #[cfg(test)]
+    if command == "sh" {
+        return true;
+    }
+    let expanded = expand_user_path(command);
+    let command_path = std::path::Path::new(&expanded);
+    if command_path.is_absolute() || command_contains_path_separator(command) {
+        return command_path_candidates(command_path)
+            .iter()
+            .any(|candidate| path_candidate_exists(candidate));
+    }
+    let Some(path_var) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path_var).any(|dir| {
+        command_path_candidates(&dir.join(command))
+            .iter()
+            .any(|candidate| path_candidate_exists(candidate))
+    })
+}
+
+fn external_cli_command_probe<'a>(
+    backend_entry: &'a serde_yaml::Value,
+) -> Option<(&'static str, &'a str)> {
+    crate::yaml_lookup(backend_entry, &["dispatch", "command"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|command| ("dispatch.command", command))
+        .or_else(|| {
+            crate::yaml_lookup(backend_entry, &["detect_command"])
+                .and_then(serde_yaml::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|command| ("detect_command", command))
+        })
+}
+
 fn read_text_file(path: &str) -> Option<String> {
     std::fs::read_to_string(expand_user_path(path)).ok()
 }
@@ -211,6 +279,34 @@ fn external_cli_carrier_readiness(
     preferred_profile_id: Option<&str>,
 ) -> serde_json::Value {
     let profile_projection = external_backend_profile_projection(backend_id, backend_entry);
+    if let Some((command_source, command)) = external_cli_command_probe(backend_entry) {
+        if !command_is_resolvable(command) {
+            return serde_json::json!({
+                "backend_id": backend_id,
+                "status": "external_cli_command_not_found",
+                "blocked": true,
+                "blocker_code": crate::release1_contracts::blocker_code_str(
+                    crate::release1_contracts::BlockerCode::ToolExecutionFailed
+                ),
+                "current_model_ref": serde_json::Value::Null,
+                "current_reasoning_effort": profile_projection["current_reasoning_effort"].clone(),
+                "expected_model_ref": profile_projection["model"].clone(),
+                "default_model_profile": profile_projection["default_model_profile"].clone(),
+                "selected_model_profile": profile_projection["default_model_profile"].clone(),
+                "model_profiles": profile_projection["model_profiles"].clone(),
+                "detect_command": command,
+                "command_resolution": {
+                    "source": command_source,
+                    "status": "command_not_found",
+                    "command": command,
+                },
+                "next_actions": [
+                    format!("Install or expose `{command}` on PATH, or reroute this external CLI backend before dispatch."),
+                    "Rerun `vida status --json` after restoring the external CLI command."
+                ],
+            });
+        }
+    }
     let readiness = crate::yaml_lookup(backend_entry, &["readiness"]);
     if readiness.is_none() {
         return serde_json::json!({
@@ -896,6 +992,142 @@ agent_system:
     }
 
     #[test]
+    fn external_cli_detect_command_missing_blocks_carrier_readiness() {
+        let entry = serde_yaml::to_value(serde_json::json!({
+            "enabled": true,
+            "subagent_backend_class": "external_cli",
+            "detect_command": "vida-definitely-missing-external-cli-command-for-test",
+            "default_model_profile": "hermes_provider_configured_review",
+            "model_profiles": {
+                "hermes_provider_configured_review": {
+                    "profile_id": "hermes_provider_configured_review",
+                    "model_ref": "hermes/provider-configured",
+                    "provider": "hermes",
+                    "reasoning_effort": "provider_default",
+                    "normalized_cost_units": 0,
+                    "runtime_roles": ["coach"],
+                    "task_classes": ["review"],
+                    "write_scope": "none"
+                }
+            }
+        }))
+        .expect("yaml value should render");
+
+        let readiness =
+            external_cli_backend_readiness_verdict_for_profile("hermes_cli", &entry, None);
+
+        assert_eq!(readiness["status"], "external_cli_command_not_found");
+        assert_eq!(readiness["blocked"], true);
+        assert_eq!(readiness["blocker_code"], "tool_execution_failed");
+        assert_eq!(
+            readiness["command_resolution"]["status"],
+            "command_not_found"
+        );
+    }
+
+    #[test]
+    fn external_cli_detect_command_present_preserves_ready_status() {
+        let current_exe = std::env::current_exe()
+            .expect("current executable path should be available")
+            .display()
+            .to_string();
+        let entry = serde_yaml::to_value(serde_json::json!({
+            "enabled": true,
+            "subagent_backend_class": "external_cli",
+            "detect_command": current_exe,
+            "default_model_profile": "hermes_provider_configured_review",
+            "model_profiles": {
+                "hermes_provider_configured_review": {
+                    "profile_id": "hermes_provider_configured_review",
+                    "model_ref": "hermes/provider-configured",
+                    "provider": "hermes",
+                    "reasoning_effort": "provider_default",
+                    "normalized_cost_units": 0,
+                    "runtime_roles": ["coach"],
+                    "task_classes": ["review"],
+                    "write_scope": "none"
+                }
+            }
+        }))
+        .expect("yaml value should render");
+
+        let readiness =
+            external_cli_backend_readiness_verdict_for_profile("hermes_cli", &entry, None);
+
+        assert_eq!(readiness["status"], "carrier_ready");
+        assert_eq!(readiness["blocked"], false);
+    }
+
+    #[test]
+    fn external_cli_dispatch_command_is_authoritative_probe_when_present() {
+        let current_exe = std::env::current_exe()
+            .expect("current executable path should be available")
+            .display()
+            .to_string();
+        let entry = serde_yaml::to_value(serde_json::json!({
+            "enabled": true,
+            "subagent_backend_class": "external_cli",
+            "detect_command": "vida-definitely-missing-external-cli-command-for-test",
+            "dispatch": {
+                "command": current_exe
+            },
+            "default_model_profile": "hermes_provider_configured_review",
+            "model_profiles": {
+                "hermes_provider_configured_review": {
+                    "profile_id": "hermes_provider_configured_review",
+                    "model_ref": "hermes/provider-configured",
+                    "provider": "hermes",
+                    "reasoning_effort": "provider_default",
+                    "normalized_cost_units": 0,
+                    "runtime_roles": ["coach"],
+                    "task_classes": ["review"],
+                    "write_scope": "none"
+                }
+            }
+        }))
+        .expect("yaml value should render");
+
+        let readiness =
+            external_cli_backend_readiness_verdict_for_profile("hermes_cli", &entry, None);
+
+        assert_eq!(readiness["status"], "carrier_ready");
+        assert_eq!(readiness["blocked"], false);
+    }
+
+    #[test]
+    fn external_cli_preflight_blocks_when_detect_command_is_missing() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      runtime_root: .codex
+agent_system:
+  subagents:
+    hermes_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      detect_command: vida-definitely-missing-external-cli-command-for-test
+"#,
+        )
+        .expect("overlay yaml should parse");
+
+        let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
+        let summary = external_cli_preflight_summary(&overlay, "codex", entry);
+
+        assert_eq!(summary["status"], "blocked");
+        assert_eq!(summary["blocker_code"], "tool_execution_failed");
+        assert_eq!(summary["carrier_readiness"]["ready_like_count"], 0);
+        assert_eq!(
+            summary["carrier_readiness"]["carriers"][0]["status"],
+            "external_cli_command_not_found"
+        );
+    }
+
+    #[test]
     fn external_host_preserves_external_requirement_behavior() {
         let overlay: serde_yaml::Value = serde_yaml::from_str(
             r#"
@@ -1051,6 +1283,11 @@ host_environment:
             r#"{"recent":[{"providerID":"opencode","modelID":"gpt-5.1-codex-mini"}]}"#,
         )
         .expect("model file should write");
+        let command_path = std::env::current_exe()
+            .expect("current executable path should be available")
+            .display()
+            .to_string()
+            .replace('\'', "''");
 
         let overlay: serde_yaml::Value = serde_yaml::from_str(&format!(
             r#"
@@ -1084,7 +1321,7 @@ agent_system:
           runtime_roles: [coach]
           task_classes: [review]
       dispatch:
-        command: opencode
+        command: '{}'
         static_args: ["run"]
         model_flag: --model
       readiness:
@@ -1097,6 +1334,7 @@ agent_system:
           expected_ref: opencode/minimax-m2.5-free
           allow_dispatch_override: true
 "#,
+            command_path,
             auth_path.display(),
             model_path.display()
         ))
@@ -1131,6 +1369,11 @@ agent_system:
             r#"{"recent":[{"providerID":"opencode","modelID":"gpt-5.1-codex-mini"}]}"#,
         )
         .expect("model file should write");
+        let command_path = std::env::current_exe()
+            .expect("current executable path should be available")
+            .display()
+            .to_string()
+            .replace('\'', "''");
 
         let overlay: serde_yaml::Value = serde_yaml::from_str(&format!(
             r#"
@@ -1164,7 +1407,7 @@ agent_system:
           runtime_roles: [coach]
           task_classes: [review]
       dispatch:
-        command: opencode
+        command: '{}'
         static_args: ["run"]
       readiness:
         auth:
@@ -1175,6 +1418,7 @@ agent_system:
           path: {}
           expected_ref: opencode/minimax-m2.5-free
 "#,
+            command_path,
             auth_path.display(),
             model_path.display()
         ))
@@ -1209,6 +1453,11 @@ agent_system:
             r#"{"recent":[{"providerID":"opencode","modelID":"minimax-m2.5-free"}]}"#,
         )
         .expect("model file should write");
+        let command_path = std::env::current_exe()
+            .expect("current executable path should be available")
+            .display()
+            .to_string()
+            .replace('\'', "''");
 
         let overlay: serde_yaml::Value = serde_yaml::from_str(&format!(
             r#"
@@ -1235,7 +1484,7 @@ agent_system:
           runtime_roles: [coach]
           task_classes: [review]
       dispatch:
-        command: opencode
+        command: '{}'
         static_args: ["run"]
         model_flag: --model
       readiness:
@@ -1247,6 +1496,7 @@ agent_system:
           path: {}
           allow_dispatch_override: true
 "#,
+            command_path,
             auth_path.display(),
             model_path.display()
         ))
