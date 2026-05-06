@@ -1037,10 +1037,7 @@ fn startup_bundle_projection_blocks_cache_tuple(startup_bundle: &serde_json::Val
         return false;
     };
     let normalized = status.trim().to_ascii_lowercase();
-    if matches!(
-        normalized.as_str(),
-        "pass" | "ready" | "canonical"
-    ) {
+    if matches!(normalized.as_str(), "pass" | "ready" | "canonical") {
         return false;
     }
     let promotion_state = startup_bundle.get("promotion_state");
@@ -1847,7 +1844,6 @@ mod tests {
         });
         payload
     }
-
     #[test]
     fn cache_contract_consistency_accepts_canonical_startup_bundle_projection() {
         let mut payload = cache_alignment_payload("sb-1");
@@ -1905,7 +1901,6 @@ mod tests {
             .iter()
             .any(|row| row == "invalid_invalidation_tuple_key:startup_bundle_revision"));
     }
-
 
     #[test]
     fn cache_contract_consistency_blocks_compiled_status_without_promotion_evidence() {

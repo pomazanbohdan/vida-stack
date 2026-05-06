@@ -6776,6 +6776,58 @@ fn project_activator_rejects_foreign_env_state_dir_for_mutation() {
 }
 
 #[test]
+fn project_activator_repair_rejects_foreign_env_state_dir_before_asset_mutation() {
+    let project_root = unique_state_dir();
+    fs::create_dir_all(&project_root).expect("project root should exist");
+
+    let init = vida()
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env_remove("VIDA_STATE_DIR")
+        .output()
+        .expect("init should run");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let framework_source =
+        Path::new(&project_root).join("vida/config/instructions/bundles/framework-source");
+    fs::remove_dir_all(&framework_source).expect("framework source bundle should be removable");
+
+    let foreign_project_root = unique_state_dir();
+    let foreign_state_dir = format!("{foreign_project_root}/.vida/data/state");
+    fs::create_dir_all(&foreign_state_dir).expect("foreign state dir should exist");
+
+    let activator = vida()
+        .args(["project-activator", "--repair", "--json"])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &foreign_state_dir)
+        .output()
+        .expect("project activator repair should run");
+    assert!(!activator.status.success());
+
+    let stderr = String::from_utf8_lossy(&activator.stderr);
+    assert!(stderr.contains("failed closed before mutation"));
+    assert!(
+        stderr.contains("non-project state dir")
+            || stderr.contains("default authoritative state dir")
+    );
+    assert!(
+        !framework_source.exists(),
+        "repair must not restore project assets before state-dir validation"
+    );
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+    fs::remove_dir_all(foreign_project_root).expect("foreign temp root should be removed");
+}
+
+#[test]
 fn status_json_exposes_host_agent_summary() {
     let project_root = unique_state_dir();
     fs::create_dir_all(&project_root).expect("project root should exist");

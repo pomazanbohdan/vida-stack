@@ -1140,6 +1140,7 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         || args.reasoning_language.is_some()
         || args.documentation_language.is_some()
         || args.todo_protocol_language.is_some();
+    let mut repaired_before_state_bootstrap = false;
     let activation_store = if activation_mutation_requested {
         let state_dir = args
             .state_dir
@@ -1153,6 +1154,15 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
                     return ExitCode::from(1);
                 }
             };
+        if args.repair {
+            if let Err(error) = repair_project_activation_assets(&project_root) {
+                eprintln!(
+                    "Project activation repair failed closed after state-dir validation: {error}"
+                );
+                return ExitCode::from(1);
+            }
+            repaired_before_state_bootstrap = true;
+        }
         match open_project_activation_store(state_dir.clone()).await {
             Ok(store) => Some(store),
             Err(error) => {
@@ -1280,9 +1290,14 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         }
     }
     if args.repair {
-        if let Err(error) = repair_project_activation_assets(&project_root) {
-            eprintln!("Project activation repair failed closed: {error}");
-            return ExitCode::from(1);
+        if !repaired_before_state_bootstrap
+            || host_cli_activated.is_some()
+            || activation_answers.is_some()
+        {
+            if let Err(error) = repair_project_activation_assets(&project_root) {
+                eprintln!("Project activation repair failed closed: {error}");
+                return ExitCode::from(1);
+            }
         }
         changed_files.push("vida/config/instructions/bundles/**".to_string());
         changed_files.push(".vida/**".to_string());
