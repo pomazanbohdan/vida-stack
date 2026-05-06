@@ -669,6 +669,122 @@ pub(crate) fn execution_plan_route_for_dispatch_target<'a>(
     dispatch_contract_lane(execution_plan, dispatch_target)
 }
 
+fn non_empty_assignment_string(assignment: &serde_json::Value, key: &str) -> bool {
+    assignment
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+}
+
+fn runtime_assignment_has_authoritative_truth(assignment: &serde_json::Value) -> bool {
+    if !assignment
+        .as_object()
+        .is_some_and(|object| !object.is_empty())
+    {
+        return false;
+    }
+    if assignment
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        == Some(false)
+    {
+        return true;
+    }
+    non_empty_assignment_string(assignment, "selected_carrier_id")
+        && non_empty_assignment_string(assignment, "selected_model_profile_id")
+}
+
+fn authoritative_runtime_assignment_candidate(
+    assignment: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    runtime_assignment_has_authoritative_truth(assignment).then(|| assignment.clone())
+}
+
+fn legacy_dispatch_contract_activation_for_target<'a>(
+    execution_plan: &'a serde_json::Value,
+    dispatch_target: &str,
+) -> Option<(&'a serde_json::Value, &'static str)> {
+    let contract = &execution_plan["development_flow"]["dispatch_contract"];
+    let activation_key = match dispatch_target {
+        "specification" => "specification_activation",
+        "implementer" | "implementation" => "implementer_activation",
+        "coach" => "coach_activation",
+        "verification" | "verifier" => "verifier_activation",
+        "execution_preparation" | "escalation" => "escalation_activation",
+        _ => return None,
+    };
+    contract
+        .get(activation_key)
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            let source = match activation_key {
+                "specification_activation" => "dispatch_contract_specification_activation",
+                "implementer_activation" => "dispatch_contract_implementer_activation",
+                "coach_activation" => "dispatch_contract_coach_activation",
+                "verifier_activation" => "dispatch_contract_verifier_activation",
+                "escalation_activation" => "dispatch_contract_escalation_activation",
+                _ => "dispatch_contract_activation",
+            };
+            (value, source)
+        })
+}
+
+pub(crate) fn dispatch_target_runtime_assignment(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> (serde_json::Value, &'static str) {
+    if let Some((assignment, source)) =
+        execution_plan_route_for_dispatch_target(execution_plan, dispatch_target).and_then(
+            |route| {
+                authoritative_runtime_assignment_candidate(runtime_assignment_from_route(route))
+                    .map(|assignment| {
+                        let source = if route.get("carrier_runtime_assignment").is_some() {
+                            "route_carrier_runtime_assignment"
+                        } else {
+                            "route_runtime_assignment"
+                        };
+                        (assignment, source)
+                    })
+            },
+        )
+    {
+        return (assignment, source);
+    }
+
+    if let Some((assignment, source)) =
+        legacy_dispatch_contract_activation_for_target(execution_plan, dispatch_target).and_then(
+            |(activation, source)| {
+                authoritative_runtime_assignment_candidate(activation)
+                    .map(|assignment| (assignment, source))
+            },
+        )
+    {
+        return (assignment, source);
+    }
+
+    if let Some((assignment, source)) = dispatch_contract_lane(execution_plan, dispatch_target)
+        .map(dispatch_contract_lane_activation)
+        .and_then(|activation| {
+            authoritative_runtime_assignment_candidate(activation)
+                .map(|assignment| (assignment, "dispatch_contract_lane_activation"))
+        })
+    {
+        return (assignment, source);
+    }
+
+    if let Some(assignment) = authoritative_runtime_assignment_candidate(
+        runtime_assignment_from_execution_plan(execution_plan),
+    ) {
+        return (
+            assignment,
+            runtime_assignment_source_from_execution_plan(execution_plan),
+        );
+    }
+
+    (serde_json::Value::Null, "missing")
+}
+
 fn canonical_dispatch_target_for_backend_resolution(dispatch_target: &str) -> &str {
     match dispatch_target {
         "implementer" | "analysis" => "implementation",
@@ -4801,6 +4917,10 @@ fn build_runtime_dispatch_packet_body(
         receipt_selected_backend,
         selected_backend_override,
     );
+    let (runtime_assignment, runtime_assignment_source) = dispatch_target_runtime_assignment(
+        &ctx.role_selection.execution_plan,
+        &ctx.receipt.dispatch_target,
+    );
     let activation_evidence = dispatch_activation_evidence_summary(ctx.receipt);
     let delivery_task_packet = runtime_delivery_task_packet_with_scope_context(
         &ctx.receipt.run_id,
@@ -4818,7 +4938,7 @@ fn build_runtime_dispatch_packet_body(
         handoff_task_class,
         closure_class,
     );
-    Ok(serde_json::json!({
+    let mut packet = serde_json::json!({
         "packet_kind": "runtime_dispatch_packet",
         "packet_template_kind": packet_template_kind,
         "delivery_task_packet": if packet_template_kind == "delivery_task_packet" {
@@ -4910,7 +5030,16 @@ fn build_runtime_dispatch_packet_body(
             .cloned()
             .unwrap_or(serde_json::Value::Null),
         "orchestration_contract": ctx.role_selection.execution_plan["orchestration_contract"],
-    }))
+    });
+    if let Some(object) = packet.as_object_mut() {
+        object.insert("runtime_assignment".to_string(), runtime_assignment.clone());
+        object.insert("carrier_runtime_assignment".to_string(), runtime_assignment);
+        object.insert(
+            "runtime_assignment_source".to_string(),
+            serde_json::Value::String(runtime_assignment_source.to_string()),
+        );
+    }
+    Ok(packet)
 }
 
 pub(crate) fn runtime_dispatch_packet_preview(
@@ -14885,6 +15014,129 @@ agent_system:
                 .map(|mut rows| rows.next().is_none())
                 .unwrap_or(true),
             "preview helper must not write a dispatch packet to disk"
+        );
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_carries_dispatch_target_runtime_assignment() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "write docs/product/spec/github-114-design.md".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["specification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "runtime_assignment": {
+                    "enabled": false,
+                    "reason": "no_carrier_declares_runtime_role_and_task_class",
+                    "runtime_role": "business_analyst",
+                    "task_class": "verification"
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "specification": {
+                                "activation": {
+                                    "selected_tier": "middle",
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "business_analyst"
+                                },
+                                "closure_class": "law",
+                                "packet_template_kind": "delivery_task_packet",
+                                "task_class": "specification",
+                                "runtime_role": "business_analyst"
+                            }
+                        },
+                        "specification_activation": {
+                            "enabled": true,
+                            "selected_carrier_id": "middle",
+                            "selected_backend_id": "middle",
+                            "selected_model_profile_id": "codex_gpt55_medium_write",
+                            "selected_tier": "middle",
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "business_analyst",
+                            "runtime_role": "business_analyst",
+                            "task_class": "specification",
+                            "selection_rule": "role_task_then_readiness_then_score_then_cost_quality"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "github-114-runtime-assignment".to_string(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-06T00:00:00Z".to_string(),
+        };
+        let handoff_plan = serde_json::json!({});
+        let run_graph_bootstrap = serde_json::json!({});
+        let ctx = RuntimeDispatchPacketContext::new(
+            &state_root,
+            &role_selection,
+            &receipt,
+            &handoff_plan,
+            &run_graph_bootstrap,
+        );
+
+        let preview = runtime_dispatch_packet_preview(&ctx).expect("preview should render");
+        let packet = &preview["packet"];
+
+        assert_eq!(
+            packet["runtime_assignment_source"],
+            "dispatch_contract_specification_activation"
+        );
+        assert_eq!(
+            packet["runtime_assignment"]["selected_carrier_id"],
+            "middle"
+        );
+        assert_eq!(
+            packet["runtime_assignment"]["selected_model_profile_id"],
+            "codex_gpt55_medium_write"
+        );
+        assert_eq!(packet["runtime_assignment"]["task_class"], "specification");
+        assert_eq!(
+            packet["carrier_runtime_assignment"],
+            packet["runtime_assignment"]
         );
     }
 

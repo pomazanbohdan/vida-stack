@@ -3206,10 +3206,61 @@ fn rebuilt_embedded_runtime_assignment(
     )
 }
 
+fn packet_level_runtime_assignment(
+    selection: &serde_json::Value,
+) -> Option<(serde_json::Value, &'static str)> {
+    let packet = selection.get("packet")?;
+    let top_level_assignment = packet
+        .get("runtime_assignment")
+        .or_else(|| packet.get("carrier_runtime_assignment"))
+        .filter(|assignment| !assignment.is_null());
+    if let Some(assignment) = top_level_assignment {
+        let has_carrier = assignment
+            .get("selected_carrier_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        let has_model_profile = assignment
+            .get("selected_model_profile_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        let disabled = assignment
+            .get("enabled")
+            .and_then(serde_json::Value::as_bool)
+            == Some(false);
+        if disabled || (has_carrier && has_model_profile) {
+            return Some((assignment.clone(), "packet_runtime_assignment"));
+        }
+    }
+
+    let dispatch_target = selection
+        .get("dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let role_selection = agent_init_role_selection(selection)?;
+    let (assignment, source) = super::runtime_dispatch_state::dispatch_target_runtime_assignment(
+        &role_selection.execution_plan,
+        dispatch_target,
+    );
+    (!assignment.is_null()).then_some((assignment, source))
+}
+
 fn agent_init_runtime_assignment_resolution(
     selection: &serde_json::Value,
     activation_bundle: &serde_json::Value,
 ) -> (serde_json::Value, &'static str) {
+    if matches!(
+        selection.get("mode").and_then(serde_json::Value::as_str),
+        Some("dispatch_packet" | "downstream_packet")
+    ) {
+        if let Some((runtime_assignment, assignment_source)) =
+            packet_level_runtime_assignment(selection)
+        {
+            return (runtime_assignment, assignment_source);
+        }
+    }
+
     if let Some(role_selection) = agent_init_role_selection(selection) {
         let runtime_assignment =
             super::runtime_assignment_from_execution_plan(&role_selection.execution_plan).clone();
@@ -4211,6 +4262,86 @@ mod agent_init_surface_tests {
             "rebuilt_legacy_embedded_selection"
         );
         assert_eq!(payload["backend_truth"]["selected_carrier_id"], "junior");
+        assert!(payload["backend_truth"]["assignment_blocker"].is_null());
+    }
+
+    #[test]
+    fn agent_init_surface_payload_prefers_dispatch_target_assignment_over_stale_plan_assignment() {
+        let mut role_selection = test_role_selection();
+        role_selection.selected_role = "business_analyst".to_string();
+        role_selection.execution_plan = serde_json::json!({
+            "runtime_assignment": {
+                "enabled": false,
+                "reason": "no_carrier_declares_runtime_role_and_task_class",
+                "runtime_role": "business_analyst",
+                "task_class": "verification"
+            },
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "specification": {
+                            "activation": {
+                                "selected_tier": "middle",
+                                "activation_agent_type": "middle",
+                                "activation_runtime_role": "business_analyst"
+                            },
+                            "task_class": "specification",
+                            "runtime_role": "business_analyst"
+                        }
+                    },
+                    "specification_activation": {
+                        "enabled": true,
+                        "selected_carrier_id": "middle",
+                        "selected_backend_id": "middle",
+                        "selected_model_profile_id": "codex_gpt55_medium_write",
+                        "selected_tier": "middle",
+                        "activation_agent_type": "middle",
+                        "activation_runtime_role": "business_analyst",
+                        "runtime_role": "business_analyst",
+                        "task_class": "specification",
+                        "selection_rule": "role_task_then_readiness_then_score_then_cost_quality"
+                    }
+                }
+            }
+        });
+        let selection = agent_init_packet_selection(
+            "/tmp/dispatch.json",
+            serde_json::json!({
+                "activation_runtime_role": "business_analyst",
+                "request_text": "write docs/product/spec/github-114-design.md",
+                "dispatch_target": "specification",
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "role_selection_full": role_selection,
+            }),
+            false,
+        )
+        .expect("packet selection should build");
+        let payload = build_agent_init_surface_payload(
+            test_project_root(),
+            test_config_path(),
+            serde_json::json!({ "status": "ready" }),
+            selection,
+            serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({ "mode": "activation_view_only" }),
+            serde_json::json!({ "bundle_id": "bundle-test" }),
+            &test_activation_bundle(),
+            serde_json::json!({ "status": "ready", "roles": [] }),
+        );
+
+        assert_eq!(
+            payload["backend_truth"]["assignment_source"],
+            "dispatch_contract_specification_activation"
+        );
+        assert_eq!(payload["backend_truth"]["selected_carrier_id"], "middle");
+        assert_eq!(
+            payload["backend_truth"]["selected_model_profile_id"],
+            "codex_gpt55_medium_write"
+        );
+        assert_eq!(
+            payload["backend_truth"]["runtime_assignment"]["task_class"],
+            "specification"
+        );
         assert!(payload["backend_truth"]["assignment_blocker"].is_null());
     }
 
