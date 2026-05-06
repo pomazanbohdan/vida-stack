@@ -3852,13 +3852,19 @@ fn receipt_waiting_on_implementer_evidence(
 fn receipt_waiting_on_specification_evidence(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
+    let specification_gate_blockers = [
+        blocker_code_str(BlockerCode::PendingSpecificationEvidence),
+        blocker_code_str(BlockerCode::PendingDesignFinalize),
+        blocker_code_str(BlockerCode::PendingSpecTaskClose),
+    ];
     receipt.dispatch_target == "specification"
         && receipt.downstream_dispatch_target.as_deref() == Some("work-pool-pack")
         && !receipt.downstream_dispatch_ready
-        && receipt
-            .downstream_dispatch_blockers
-            .iter()
-            .any(|value| value == blocker_code_str(BlockerCode::PendingSpecificationEvidence))
+        && receipt.downstream_dispatch_blockers.iter().any(|value| {
+            specification_gate_blockers
+                .iter()
+                .any(|blocker| value == blocker)
+        })
 }
 
 fn blocked_implementer_step_receipt(

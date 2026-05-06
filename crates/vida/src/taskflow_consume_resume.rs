@@ -7265,6 +7265,212 @@ agent_system:
     }
 
     #[test]
+    fn resolve_resume_inputs_refreshes_executed_specification_with_stale_design_blockers_before_resume_gate(
+    ) {
+        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+        runtime.block_on(async {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            let root = std::env::temp_dir().join(format!(
+                "vida-consume-resume-spec-stale-design-blockers-{}-{}",
+                std::process::id(),
+                nanos
+            ));
+            let state_dir = root.join("state");
+            let store = StateStore::open(state_dir.clone())
+                .await
+                .expect("open store");
+
+            let run_id = "run-specification-stale-design-blockers";
+            let spec_task_id = "feature-spec-stale-design-blockers-spec";
+            let design_doc_path = root.join("docs/spec-stale-design-blockers.md");
+            fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
+                .expect("create design doc directory");
+            fs::write(
+                &design_doc_path,
+                "# Spec Stale Design Blockers\n\nStatus: `approved`\n",
+            )
+            .expect("write approved design doc");
+
+            let labels = vec!["spec-pack".to_string()];
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: spec_task_id,
+                    title: "Closed stale spec pack",
+                    display_id: None,
+                    description: "",
+                    issue_type: "task",
+                    status: "closed",
+                    priority: 0,
+                    parent_id: None,
+                    labels: &labels,
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create closed spec task");
+
+            let mut status = crate::taskflow_run_graph::default_run_graph_status(
+                run_id,
+                "scope_discussion",
+                "spec-pack",
+            );
+            status.task_id = run_id.to_string();
+            status.active_node = "specification".to_string();
+            status.next_node = None;
+            status.status = "blocked".to_string();
+            status.lifecycle_stage = "specification_complete".to_string();
+            status.handoff_state = "none".to_string();
+            status.resume_target = "none".to_string();
+            status.recovery_ready = false;
+            store
+                .record_run_graph_status(&status)
+                .await
+                .expect("persist blocked specification status");
+
+            let packet_dir = state_dir.join("runtime-consumption/dispatch-packets");
+            fs::create_dir_all(&packet_dir).expect("create packet directory");
+            let packet_path = packet_dir.join(format!("{run_id}.json"));
+            fs::write(
+                &packet_path,
+                serde_json::json!({
+                    "packet_template_kind": "delivery_task_packet",
+                    "run_id": run_id,
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "business_analyst",
+                    "selected_backend": "middle",
+                    "delivery_task_packet": {
+                        "packet_id": format!("{run_id}::specification::delivery"),
+                        "goal": "Refresh stale specification completion blockers",
+                        "scope_in": ["dispatch_target:specification", "runtime_role:business_analyst"],
+                        "read_only_paths": ["docs/product/spec"],
+                        "owned_paths": [design_doc_path.display().to_string()],
+                        "definition_of_done": ["record bounded specification evidence"],
+                        "verification_command": format!("vida taskflow consume continue --run-id {run_id} --json"),
+                        "proof_target": "bounded specification proof",
+                        "stop_rules": ["stop after bounded evidence"],
+                        "blocking_question": "What is the next bounded action required for `specification`?"
+                    },
+                    "role_selection_full": {
+                        "ok": true,
+                        "activation_source": "test",
+                        "selection_mode": "fixed",
+                        "fallback_role": "orchestrator",
+                        "request": "continue stale specification",
+                        "selected_role": "pm",
+                        "conversational_mode": "development",
+                        "single_task_only": true,
+                        "tracked_flow_entry": "spec-pack",
+                        "allow_freeform_chat": false,
+                        "confidence": "high",
+                        "matched_terms": ["specification"],
+                        "compiled_bundle": null,
+                        "execution_plan": {
+                            "tracked_flow_bootstrap": {
+                                "spec_task": {
+                                    "task_id": spec_task_id
+                                },
+                                "design_doc_path": design_doc_path.display().to_string(),
+                                "work_pool_task": {
+                                    "ensure_command": "vida task ensure feature-spec-stale-design-blockers-work-pool \"Work-pool pack\" --type task --status open --json"
+                                }
+                            },
+                            "development_flow": {
+                                "dispatch_contract": {
+                                    "specification_activation": {
+                                        "completion_blocker": "pending_specification_evidence",
+                                        "activation_agent_type": "middle",
+                                        "activation_runtime_role": "business_analyst"
+                                    }
+                                }
+                            },
+                            "orchestration_contract": {}
+                        },
+                        "reason": "test"
+                    },
+                    "run_graph_bootstrap": {
+                        "run_id": run_id
+                    }
+                })
+                .to_string(),
+            )
+            .expect("write dispatch packet");
+
+            store
+                .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                    run_id: run_id.to_string(),
+                    dispatch_target: "specification".to_string(),
+                    dispatch_status: "executed".to_string(),
+                    lane_status: "lane_completed".to_string(),
+                    supersedes_receipt_id: None,
+                    exception_path_receipt_id: None,
+                    dispatch_kind: "agent_lane".to_string(),
+                    dispatch_surface: Some("vida agent-init".to_string()),
+                    dispatch_command: Some("vida agent-init".to_string()),
+                    dispatch_packet_path: Some(packet_path.display().to_string()),
+                    dispatch_result_path: Some("/tmp/specification-result.json".to_string()),
+                    blocker_code: None,
+                    downstream_dispatch_target: Some("work-pool-pack".to_string()),
+                    downstream_dispatch_command: Some(
+                        "vida task ensure feature-spec-stale-design-blockers-work-pool \"Work-pool pack\" --type task --status open --json"
+                            .to_string(),
+                    ),
+                    downstream_dispatch_note: Some("stale design/spec task blockers".to_string()),
+                    downstream_dispatch_ready: false,
+                    downstream_dispatch_blockers: vec![
+                        "pending_design_finalize".to_string(),
+                        "pending_spec_task_close".to_string(),
+                    ],
+                    downstream_dispatch_packet_path: None,
+                    downstream_dispatch_status: None,
+                    downstream_dispatch_result_path: Some("/tmp/specification-result.json".to_string()),
+                    downstream_dispatch_trace_path: None,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: None,
+                    downstream_dispatch_last_target: None,
+                    activation_agent_type: Some("middle".to_string()),
+                    activation_runtime_role: Some("business_analyst".to_string()),
+                    selected_backend: Some("middle".to_string()),
+                    recorded_at: "2026-04-17T00:00:00Z".to_string(),
+                })
+                .await
+                .expect("persist executed specification receipt with stale blockers");
+
+            let resume = resolve_runtime_consumption_resume_inputs_for_run_id(&store, run_id)
+                .await
+                .expect("stale spec-pack blockers should refresh before strict resume gate");
+            assert_eq!(resume.dispatch_receipt.dispatch_status, "executed");
+            assert_eq!(
+                resume
+                    .dispatch_receipt
+                    .downstream_dispatch_target
+                    .as_deref(),
+                Some("work-pool-pack")
+            );
+            assert!(resume.dispatch_receipt.downstream_dispatch_ready);
+            assert!(resume.dispatch_receipt.downstream_dispatch_blockers.is_empty());
+            assert_eq!(
+                resume
+                    .dispatch_receipt
+                    .downstream_dispatch_status
+                    .as_deref(),
+                Some("packet_ready")
+            );
+            assert!(resume
+                .dispatch_receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty()));
+
+            let _ = fs::remove_dir_all(&root);
+        });
+    }
+
+    #[test]
     fn resume_continue_snapshot_has_release1_shared_envelope_fields() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
