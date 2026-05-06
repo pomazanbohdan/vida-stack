@@ -366,16 +366,7 @@ fn next_lawful_operator_action_for_status(status: &RunGraphStatus) -> Option<Str
 }
 
 fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -> Option<&str> {
-    if receipt.lane_status == "lane_exception_takeover"
-        && receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        && receipt
-            .supersedes_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-    {
+    if dispatch_receipt_has_active_exception_takeover(receipt) {
         return Some("active_exception_takeover");
     }
     if receipt.blocker_code.as_deref() == Some("configured_backend_dispatch_failed") {
@@ -403,6 +394,18 @@ fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -
         return None;
     }
     None
+}
+
+fn dispatch_receipt_has_active_exception_takeover(receipt: &RunGraphDispatchReceipt) -> bool {
+    receipt.lane_status == "lane_exception_takeover"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn active_root_dispatch_packet_execute_command(
@@ -439,7 +442,7 @@ fn next_lawful_operator_action_for_dispatch_resolution(
     receipt: &RunGraphDispatchReceipt,
     terminal_consume_continue_run_id: Option<&str>,
 ) -> Option<String> {
-    let _reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
+    let reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
     if let Some(command) = active_root_dispatch_packet_execute_command(receipt) {
         return Some(command);
     }
@@ -456,7 +459,7 @@ fn next_lawful_operator_action_for_dispatch_resolution(
             shell_quote(receipt_id)
         ));
     }
-    if receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some() {
+    if reason_class == "active_exception_takeover" {
         if !status.recovery_ready || status.resume_target == "none" {
             return Some(format!("vida lane show {} --json", status.run_id));
         }
@@ -599,6 +602,16 @@ fn recovery_next_action_reason(
         return "the latest consume-continue snapshot already completed without a next action, so bind the next bounded unit explicitly instead of repeating continuation".to_string();
     }
     if command.starts_with("vida lane show") {
+        if projection_truth
+            .dispatch_receipt
+            .as_ref()
+            .is_some_and(|receipt| {
+                dispatch_receipt_resolution_reason_class(receipt)
+                    == Some("active_exception_takeover")
+            })
+        {
+            return "inspect the active exception-takeover owned scope and completion evidence before finishing the scoped recovery or binding a different bounded unit".to_string();
+        }
         return "inspect the lane envelope for the dispatch blocker, then record structured exception-takeover evidence and supersession before any local recovery work".to_string();
     }
     if command.starts_with("vida taskflow consume continue")
@@ -5652,6 +5665,99 @@ mod tests {
             next_lawful_operator_action_for_projection(&status, Some(&receipt), None).as_deref(),
             Some("vida taskflow consume continue --run-id run-active-exception --json")
         );
+    }
+
+    #[test]
+    fn recovery_status_reason_for_active_exception_lane_show_is_scope_inspection_not_setup() {
+        let status = RunGraphStatus {
+            run_id: "run-active-exception-not-ready".to_string(),
+            task_id: "task-active-exception-not-ready".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "analysis_lane".to_string(),
+            lifecycle_stage: "analysis_blocked".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("exception-receipt-1".to_string()),
+            exception_path_receipt_id: Some("exception-receipt-1".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_terminal_write_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-26T00:00:00Z".to_string(),
+        };
+        let summary = crate::state_store::RunGraphRecoverySummary {
+            run_id: status.run_id.clone(),
+            task_id: status.task_id.clone(),
+            active_node: status.active_node.clone(),
+            lifecycle_stage: status.lifecycle_stage.clone(),
+            resume_node: None,
+            resume_status: "blocked".to_string(),
+            checkpoint_kind: status.checkpoint_kind.clone(),
+            resume_target: status.resume_target.clone(),
+            policy_gate: status.policy_gate.clone(),
+            handoff_state: status.handoff_state.clone(),
+            recovery_ready: status.recovery_ready,
+            delegation_gate: status.delegation_gate(),
+        };
+        let command = next_lawful_operator_action_for_projection(&status, Some(&receipt), None)
+            .expect("active exception takeover should point to lane show when not resumable");
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason:
+                "run-graph status was reconciled against active exception takeover receipt evidence"
+                    .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: false,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(command.clone()),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        assert_eq!(
+            command,
+            "vida lane show run-active-exception-not-ready --json"
+        );
+        let reason = recovery_next_action_reason(&command, &summary, &projection_truth);
+
+        assert!(reason.contains("active exception-takeover owned scope"));
+        assert!(reason.contains("completion evidence"));
+        assert!(!reason.contains("record structured exception-takeover"));
+        assert!(!reason.contains("supersession before"));
+        assert!(!reason.contains("before any local recovery work"));
     }
 
     #[test]
