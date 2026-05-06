@@ -2037,6 +2037,7 @@ struct TaskContinuationCandidate {
 struct TaskNextLawfulReceipt {
     status: String,
     active_bounded_unit: serde_json::Value,
+    binding_source: Option<String>,
     why_this_unit: String,
     sequential_vs_parallel_posture: String,
     ready_task_candidates: Vec<TaskContinuationCandidate>,
@@ -2923,6 +2924,7 @@ fn blocked_task_next_lawful_receipt(
     TaskNextLawfulReceipt {
         status: "blocked".to_string(),
         active_bounded_unit,
+        binding_source: None,
         why_this_unit: "blocked_until_unique_lawful_continuation_is_evidenced".to_string(),
         sequential_vs_parallel_posture: "unknown_until_explicit_binding".to_string(),
         ready_task_candidates,
@@ -2934,6 +2936,7 @@ fn blocked_task_next_lawful_receipt(
 
 fn pass_task_next_lawful_receipt(
     active_bounded_unit: serde_json::Value,
+    binding_source: Option<String>,
     why_this_unit: &str,
     sequential_vs_parallel_posture: &str,
     ready_task_candidates: Vec<TaskContinuationCandidate>,
@@ -2942,6 +2945,7 @@ fn pass_task_next_lawful_receipt(
     TaskNextLawfulReceipt {
         status: task_json_success_status().to_string(),
         active_bounded_unit,
+        binding_source,
         why_this_unit: why_this_unit.to_string(),
         sequential_vs_parallel_posture: sequential_vs_parallel_posture.to_string(),
         ready_task_candidates,
@@ -3013,6 +3017,7 @@ fn task_next_lawful_receipt(
         }
         return pass_task_next_lawful_receipt(
             binding.active_bounded_unit.clone(),
+            Some(binding.binding_source.clone()),
             &binding.why_this_unit,
             &binding.sequential_vs_parallel_posture,
             ready_task_candidates,
@@ -3038,6 +3043,7 @@ fn task_next_lawful_receipt(
             }
             pass_task_next_lawful_receipt(
                 task_continuation_active_unit(active),
+                None,
                 "single TaskFlow in_progress task is the lawful continuation",
                 "sequential_only_active_task",
                 ready_task_candidates,
@@ -3052,6 +3058,7 @@ fn task_next_lawful_receipt(
                     "status": candidate.status,
                     "issue_type": candidate.issue_type,
                 }),
+                None,
                 "single ready TaskFlow candidate after close/release automation",
                 if candidate.ready_parallel_safe {
                     "parallel_safe_single_candidate"
@@ -4952,6 +4959,7 @@ mod tests {
             receipt.sequential_vs_parallel_posture,
             "sequential_only_single_candidate"
         );
+        assert_eq!(receipt.binding_source, None);
         assert!(receipt.blocker_codes.is_empty());
         assert!(receipt
             .source_surfaces
@@ -5162,6 +5170,36 @@ mod tests {
         assert_eq!(
             receipt.why_this_unit,
             "consume_continue_after_downstream_chain selects closed-feature-task"
+        );
+        assert_eq!(
+            receipt.binding_source.as_deref(),
+            Some("consume_continue_after_downstream_chain")
+        );
+    }
+
+    #[test]
+    fn task_next_lawful_surfaces_exception_takeover_binding_source() {
+        let runtime_task = owned_task_record("exception-task", vec![]);
+        let mut binding = test_continuation_binding(
+            "exception-run",
+            "exception-task",
+            "latest_run_graph_exception_takeover_dispatch",
+            "run_graph_task",
+        );
+        binding.active_bounded_unit = serde_json::json!({
+            "active_node": "specification",
+            "kind": "run_graph_task",
+            "run_id": "exception-run",
+            "task_id": "exception-task",
+        });
+
+        let receipt = task_next_lawful_receipt(&[runtime_task], Vec::new(), Some(&binding));
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.active_bounded_unit["active_node"], "specification");
+        assert_eq!(
+            receipt.binding_source.as_deref(),
+            Some("latest_run_graph_exception_takeover_dispatch")
         );
     }
 
