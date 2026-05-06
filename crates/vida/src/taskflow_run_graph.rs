@@ -366,6 +366,18 @@ fn next_lawful_operator_action_for_status(status: &RunGraphStatus) -> Option<Str
 }
 
 fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -> Option<&str> {
+    if receipt.lane_status == "lane_exception_takeover"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Some("active_exception_takeover");
+    }
     if receipt.dispatch_status != "blocked" && receipt.lane_status != "lane_blocked" {
         return None;
     }
@@ -402,6 +414,9 @@ fn next_lawful_operator_action_for_dispatch_resolution(
         ));
     }
     if receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some() {
+        if !status.recovery_ready || status.resume_target == "none" {
+            return Some(format!("vida lane show {} --json", status.run_id));
+        }
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
             return Some(format!(
                 "vida taskflow continuation bind {} --task-id <task-id> --json",
@@ -703,6 +718,89 @@ fn projection_reason_for_status(
             .to_string();
     }
     "run-graph status reflects authoritative persisted state".to_string()
+}
+
+fn continuation_binding_matches_reconciled_status(
+    status: &RunGraphStatus,
+    binding: &RunGraphContinuationBinding,
+) -> bool {
+    if binding.run_id != status.run_id || binding.task_id != status.task_id {
+        return false;
+    }
+    if binding
+        .active_bounded_unit
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        != Some("run_graph_task")
+    {
+        return true;
+    }
+    if status.status == "completed" {
+        return true;
+    }
+    binding
+        .active_bounded_unit
+        .get("active_node")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|active_node| active_node == status.active_node)
+}
+
+fn active_exception_takeover_receipt_matches_status(
+    status: &RunGraphStatus,
+    receipt: Option<&RunGraphDispatchReceipt>,
+) -> bool {
+    let Some(receipt) = receipt else {
+        return false;
+    };
+    receipt.run_id == status.run_id
+        && receipt.lane_status == "lane_exception_takeover"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn status_derived_exception_takeover_binding(
+    status: &RunGraphStatus,
+) -> RunGraphContinuationBinding {
+    RunGraphContinuationBinding {
+        run_id: status.run_id.clone(),
+        task_id: status.task_id.clone(),
+        status: "bound".to_string(),
+        active_bounded_unit: serde_json::json!({
+            "kind": "run_graph_task",
+            "task_id": status.task_id,
+            "run_id": status.run_id,
+            "active_node": status.active_node,
+        }),
+        binding_source: "latest_run_graph_exception_takeover_dispatch".to_string(),
+        why_this_unit: format!(
+            "Latest runtime dispatch records exception-takeover evidence for task `{}` at node `{}`.",
+            status.task_id, status.active_node
+        ),
+        primary_path: "normal_delivery_path".to_string(),
+        sequential_vs_parallel_posture: "sequential_only_exception_takeover".to_string(),
+        request_text: None,
+        recorded_at: String::new(),
+    }
+}
+
+fn effective_projection_continuation_binding(
+    status: &RunGraphStatus,
+    receipt: Option<&RunGraphDispatchReceipt>,
+    binding: Option<RunGraphContinuationBinding>,
+) -> Option<RunGraphContinuationBinding> {
+    if let Some(binding) = binding {
+        if continuation_binding_matches_reconciled_status(status, &binding) {
+            return Some(binding);
+        }
+    }
+    active_exception_takeover_receipt_matches_status(status, receipt)
+        .then(|| status_derived_exception_takeover_binding(status))
 }
 
 fn continuation_binding_source_from_status_surface(
@@ -1207,7 +1305,13 @@ pub(crate) async fn run_graph_projection_truth(
     status: &RunGraphStatus,
 ) -> Result<RunGraphProjectionTruth, StateStoreError> {
     let dispatch_receipt = store.run_graph_dispatch_receipt(&status.run_id).await?;
-    let continuation_binding = store.run_graph_continuation_binding(&status.run_id).await?;
+    let persisted_continuation_binding =
+        store.run_graph_continuation_binding(&status.run_id).await?;
+    let continuation_binding = effective_projection_continuation_binding(
+        status,
+        dispatch_receipt.as_ref(),
+        persisted_continuation_binding,
+    );
     let terminal_consume_continue_run_id =
         crate::latest_terminal_consume_continue_snapshot_run_id(store.root())
             .ok()
@@ -5099,6 +5203,96 @@ mod tests {
     }
 
     #[test]
+    fn exception_takeover_projection_replaces_stale_dispatch_init_binding() {
+        let status = RunGraphStatus {
+            run_id: "run-stale-binding".to_string(),
+            task_id: "run-stale-binding".to_string(),
+            task_class: "scope_discussion".to_string(),
+            active_node: "specification".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "spec-pack".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "business_analyst_lane".to_string(),
+            lifecycle_stage: "specification_blocked".to_string(),
+            policy_gate: "single_task_scope_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("exc-stale-binding".to_string()),
+            exception_path_receipt_id: Some("exc-stale-binding".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --dispatch-packet packet.json".to_string()),
+            dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: Some("work-pool-pack".to_string()),
+            downstream_dispatch_command: Some("vida task ensure feature-x".to_string()),
+            downstream_dispatch_note: Some("wait for bounded evidence return".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![
+                "pending_specification_evidence".to_string(),
+                "pending_design_finalize".to_string(),
+                "pending_spec_task_close".to_string(),
+            ],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("specification".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-06T10:10:26Z".to_string(),
+        };
+        let stale_binding = RunGraphContinuationBinding {
+            run_id: status.run_id.clone(),
+            task_id: status.task_id.clone(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "run_graph_task",
+                "task_id": status.task_id,
+                "run_id": status.run_id,
+                "active_node": "planning"
+            }),
+            binding_source: "run_graph_dispatch_init".to_string(),
+            why_this_unit: "stale dispatch-init binding".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+            request_text: None,
+            recorded_at: "2026-05-06T10:10:26Z".to_string(),
+        };
+
+        let effective =
+            effective_projection_continuation_binding(&status, Some(&receipt), Some(stale_binding))
+                .expect("exception takeover should synthesize current binding");
+
+        assert_eq!(
+            effective.binding_source,
+            "latest_run_graph_exception_takeover_dispatch"
+        );
+        assert_eq!(
+            effective.active_bounded_unit["active_node"],
+            "specification"
+        );
+        assert_eq!(
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None).as_deref(),
+            Some("vida lane show run-stale-binding --json")
+        );
+    }
+
+    #[test]
     fn recovery_status_payload_for_terminal_write_blocker_is_actionable_and_parity_safe() {
         let summary = crate::state_store::RunGraphRecoverySummary {
             run_id: "run-terminal-write-blocked".to_string(),
@@ -5313,8 +5507,8 @@ mod tests {
             handoff_state: "none".to_string(),
             context_state: "sealed".to_string(),
             checkpoint_kind: "none".to_string(),
-            resume_target: "none".to_string(),
-            recovery_ready: false,
+            resume_target: "dispatch.analysis_lane".to_string(),
+            recovery_ready: true,
         };
         let receipt = RunGraphDispatchReceipt {
             run_id: status.run_id.clone(),
@@ -5370,8 +5564,8 @@ mod tests {
             handoff_state: "none".to_string(),
             context_state: "sealed".to_string(),
             checkpoint_kind: "none".to_string(),
-            resume_target: "none".to_string(),
-            recovery_ready: false,
+            resume_target: "dispatch.analysis_lane".to_string(),
+            recovery_ready: true,
         };
         let receipt = RunGraphDispatchReceipt {
             run_id: status.run_id.clone(),

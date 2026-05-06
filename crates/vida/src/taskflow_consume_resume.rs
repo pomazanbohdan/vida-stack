@@ -447,10 +447,19 @@ async fn validate_run_graph_resume_state(
     {
         return Ok(());
     }
+    let active_receipt = store
+        .run_graph_dispatch_receipt(run_id)
+        .await
+        .ok()
+        .flatten();
     match validate_run_graph_resume_gate(&status) {
         Ok(()) => Ok(()),
         Err(_error) if resume_from_persisted_final_snapshot(store, run_id)? => Ok(()),
-        Err(error) => Err(error),
+        Err(error) => Err(active_exception_takeover_resume_blocker_error(
+            &status,
+            active_receipt.as_ref(),
+        )
+        .unwrap_or(error)),
     }
 }
 
@@ -474,7 +483,44 @@ async fn validate_run_graph_resume_state_strict(
     {
         return Ok(());
     }
-    validate_run_graph_resume_gate(&status)
+    let active_receipt = store
+        .run_graph_dispatch_receipt(run_id)
+        .await
+        .ok()
+        .flatten();
+    validate_run_graph_resume_gate(&status).map_err(|error| {
+        active_exception_takeover_resume_blocker_error(&status, active_receipt.as_ref())
+            .unwrap_or(error)
+    })
+}
+
+fn active_exception_takeover_resume_blocker_error(
+    status: &crate::state_store::RunGraphStatus,
+    receipt: Option<&crate::state_store::RunGraphDispatchReceipt>,
+) -> Option<String> {
+    let receipt = receipt?;
+    let exception_takeover_active = receipt.run_id == status.run_id
+        && receipt.lane_status == "lane_exception_takeover"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+    if !exception_takeover_active || status.recovery_ready || status.resume_target != "none" {
+        return None;
+    }
+    Some(format!(
+        "Run-graph resume gate denied for `{}`: active exception takeover `{}` supersedes delegated dispatch while recovery_ready is false and resume_target is none. Inspect `vida lane show {} --json`; continue only within the active owned_write_scope or record a new bounded exception takeover for the next architectural repair.",
+        status.run_id,
+        receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .unwrap_or("unknown"),
+        status.run_id
+    ))
 }
 
 fn persisted_dispatch_packet_lineage_task_id(packet: &serde_json::Value) -> Option<&str> {
@@ -4403,6 +4449,7 @@ pub(crate) async fn run_taskflow_consume_advance_command(
 #[cfg(test)]
 mod tests {
     use super::{
+        active_exception_takeover_resume_blocker_error,
         blocked_external_dispatch_artifact_mismatched_as_internal_activation,
         build_failure_control_evidence, canonical_resume_dispatch_status,
         canonical_resume_lane_status, canonical_resume_string_array_entries,
@@ -7456,6 +7503,59 @@ agent_system:
             .expect("closure-complete receipt lineage should allow downstream resume validation");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn active_exception_takeover_resume_blocker_error_names_lane_show() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-exception-takeover",
+            "scope_discussion",
+            "spec-pack",
+        );
+        status.task_id = "run-exception-takeover".to_string();
+        status.active_node = "specification".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "specification_blocked".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("exc-recovery-projection".to_string()),
+            exception_path_receipt_id: Some("exc-recovery-projection".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --dispatch-packet packet.json".to_string()),
+            dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: Some("work-pool-pack".to_string()),
+            downstream_dispatch_command: Some("vida task ensure feature-x".to_string()),
+            downstream_dispatch_note: Some("wait for bounded evidence return".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_specification_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("specification".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-06T10:51:18Z".to_string(),
+        };
+
+        let error = active_exception_takeover_resume_blocker_error(&status, Some(&receipt))
+            .expect("active exception takeover should replace the generic resume error");
+
+        assert!(error.contains("active exception takeover"));
+        assert!(error.contains("recovery_ready is false"));
+        assert!(error.contains("vida lane show run-exception-takeover --json"));
+        assert!(error.contains("owned_write_scope"));
     }
 
     #[tokio::test]

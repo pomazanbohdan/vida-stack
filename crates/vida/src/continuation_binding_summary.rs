@@ -88,9 +88,16 @@ fn active_exception_takeover_binding_summary_json(
     continuation_required_now: bool,
     pause_boundary_gate: &str,
 ) -> serde_json::Value {
+    let continuation_resumable = status.recovery_ready && status.resume_target != "none";
     serde_json::json!({
         "status": binding.status,
         "continuation_allowed": binding.status == "bound",
+        "continuation_resumable": continuation_resumable,
+        "resume_blocker": if continuation_resumable {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String("recovery_ready_false".to_string())
+        },
         "continuation_required_now": continuation_required_now,
         "active_bounded_unit": binding.active_bounded_unit,
         "binding_source": binding.binding_source,
@@ -100,12 +107,7 @@ fn active_exception_takeover_binding_summary_json(
         "pause_boundary_gate": pause_boundary_gate,
         "ambiguity_reason": serde_json::Value::Null,
         "active_exception_takeover": true,
-        "next_actions": [
-            format!(
-                "Continue the active exception-backed bounded unit with `vida taskflow consume continue --run-id {} --json`.",
-                status.run_id
-            )
-        ]
+        "next_actions": active_exception_takeover_next_actions(status)
     })
 }
 
@@ -114,9 +116,16 @@ fn active_exception_takeover_status_summary_json(
     continuation_required_now: bool,
     pause_boundary_gate: &str,
 ) -> serde_json::Value {
+    let continuation_resumable = status.recovery_ready && status.resume_target != "none";
     serde_json::json!({
         "status": "bound",
         "continuation_allowed": true,
+        "continuation_resumable": continuation_resumable,
+        "resume_blocker": if continuation_resumable {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String("recovery_ready_false".to_string())
+        },
         "continuation_required_now": continuation_required_now,
         "active_bounded_unit": {
             "kind": "run_graph_task",
@@ -134,13 +143,29 @@ fn active_exception_takeover_status_summary_json(
         "pause_boundary_gate": pause_boundary_gate,
         "ambiguity_reason": serde_json::Value::Null,
         "active_exception_takeover": true,
-        "next_actions": [
-            format!(
-                "Continue the active exception-backed bounded unit with `vida taskflow consume continue --run-id {} --json`.",
-                status.run_id
-            )
-        ]
+        "next_actions": active_exception_takeover_next_actions(status)
     })
+}
+
+fn active_exception_takeover_next_actions(
+    status: &crate::state_store::RunGraphStatus,
+) -> Vec<String> {
+    if status.recovery_ready && status.resume_target != "none" {
+        return vec![format!(
+            "Continue the active exception-backed bounded unit with `vida taskflow consume continue --run-id {} --json`.",
+            status.run_id
+        )];
+    }
+    vec![
+        format!(
+            "Inspect the active exception-takeover scope with `vida lane show {} --json` before attempting resume.",
+            status.run_id
+        ),
+        format!(
+            "Do not run `vida taskflow consume continue --run-id {} --json` until recovery_ready is true and resume_target is a dispatch target.",
+            status.run_id
+        ),
+    ]
 }
 
 fn binding_summary_json(
@@ -864,6 +889,16 @@ mod tests {
             "runtime-audit-state-store-init-lock-timeout"
         );
         assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+        assert_eq!(summary["continuation_resumable"], false);
+        assert_eq!(summary["resume_blocker"], "recovery_ready_false");
+        assert!(summary["next_actions"].as_array().is_some_and(|actions| {
+            actions.iter().any(|action| action
+                .as_str()
+                .is_some_and(|value| value.contains("vida lane show")))
+                && actions.iter().all(|action| action
+                    .as_str()
+                    .is_some_and(|value| !value.starts_with("Continue the active exception-backed bounded unit with `vida taskflow consume continue")))
+        }));
     }
 
     #[test]
@@ -953,6 +988,15 @@ mod tests {
             "runtime-audit-state-store-init-lock-timeout"
         );
         assert_eq!(summary["active_exception_takeover"], true);
+        assert_eq!(summary["continuation_resumable"], false);
+        assert_eq!(summary["resume_blocker"], "recovery_ready_false");
+        assert!(summary["next_actions"].as_array().is_some_and(|actions| {
+            actions.iter().any(|action| {
+                action
+                    .as_str()
+                    .is_some_and(|value| value.contains("vida lane show"))
+            })
+        }));
     }
 
     #[test]
