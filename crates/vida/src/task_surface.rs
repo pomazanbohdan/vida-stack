@@ -2876,6 +2876,15 @@ fn continuation_binding_is_historical_task_close_reconcile(
     explicit.binding_source == "task_close_reconcile" && explicit.run_id != current.run_id
 }
 
+fn current_exception_takeover_supersedes_stale_explicit_same_task(
+    explicit: &state_store::RunGraphContinuationBinding,
+    current: &state_store::RunGraphContinuationBinding,
+) -> bool {
+    explicit.binding_source == "explicit_continuation_bind_task"
+        && current.binding_source == "latest_run_graph_exception_takeover_dispatch"
+        && explicit.task_id == current.task_id
+}
+
 fn select_task_next_lawful_binding<'a>(
     tasks: &[state_store::TaskRecord],
     explicit_binding: Option<&'a state_store::RunGraphContinuationBinding>,
@@ -2884,6 +2893,9 @@ fn select_task_next_lawful_binding<'a>(
     match (explicit_binding, current_binding) {
         (Some(explicit), Some(current)) if !continuation_bindings_same_unit(explicit, current) => {
             if continuation_binding_is_historical_task_close_reconcile(explicit, current) {
+                return Ok(Some(current));
+            }
+            if current_exception_takeover_supersedes_stale_explicit_same_task(explicit, current) {
                 return Ok(Some(current));
             }
             let explicit_status = task_status_for_binding(tasks, explicit);
@@ -5114,6 +5126,43 @@ mod tests {
         assert_eq!(
             selected.binding_source,
             "consume_continue_after_downstream_chain"
+        );
+    }
+
+    #[test]
+    fn task_next_lawful_prefers_current_exception_takeover_over_stale_explicit_same_task() {
+        let runtime_task = owned_task_record("runtime-task", vec![]);
+        let explicit = test_continuation_binding(
+            "old-run",
+            "runtime-task",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+        let mut current = test_continuation_binding(
+            "current-run",
+            "runtime-task",
+            "latest_run_graph_exception_takeover_dispatch",
+            "run_graph_task",
+        );
+        current.active_bounded_unit = serde_json::json!({
+            "active_node": "specification",
+            "kind": "run_graph_task",
+            "run_id": "current-run",
+            "task_id": "runtime-task",
+        });
+
+        let selected = select_task_next_lawful_binding(
+            &[runtime_task],
+            Some(&explicit),
+            Some(&current),
+        )
+        .expect("active exception takeover should supersede stale explicit binding for same task")
+        .expect("current binding should select");
+
+        assert_eq!(selected.run_id, "current-run");
+        assert_eq!(
+            selected.binding_source,
+            "latest_run_graph_exception_takeover_dispatch"
         );
     }
 

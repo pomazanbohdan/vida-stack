@@ -1535,6 +1535,16 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
     let dispatch_target =
         canonical_dispatch_target_from_latest_status(role_selection, &latest_status)
             .unwrap_or_else(|| role_selection.selected_role.clone());
+    let (dispatch_assignment, _dispatch_assignment_source) =
+        super::runtime_dispatch_state::dispatch_target_runtime_assignment(
+            &role_selection.execution_plan,
+            &dispatch_target,
+        );
+    let dispatch_blockers = super::json_string_list(latest_status.get("dispatch_blockers"));
+    let dispatch_ready = super::json_bool(
+        latest_status.get("dispatch_ready"),
+        super::json_bool(run_graph_bootstrap.get("handoff_ready"), false),
+    );
     let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
         super::downstream_activation_fields(role_selection, &dispatch_target);
     let activation_agent_type = activation_agent_type.or_else(|| {
@@ -1542,6 +1552,13 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
             role_selection.execution_plan["default_route"]["activation_agent_type"]
                 .as_str()
                 .map(str::to_string)
+                .or_else(|| {
+                    dispatch_ready.then(|| {
+                        dispatch_assignment["activation_agent_type"]
+                            .as_str()
+                            .map(str::to_string)
+                    })?
+                })
         } else {
             super::dispatch_contract_lane(&role_selection.execution_plan, &dispatch_target)
                 .and_then(|route| route.get("activation_agent_type"))
@@ -1553,6 +1570,11 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
                         .as_str()
                         .map(str::to_string)
                 })
+                .or_else(|| {
+                    dispatch_assignment["activation_agent_type"]
+                        .as_str()
+                        .map(str::to_string)
+                })
         }
     });
     let activation_runtime_role = activation_runtime_role.or_else(|| {
@@ -1560,6 +1582,13 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
             role_selection.execution_plan["default_route"]["activation_runtime_role"]
                 .as_str()
                 .map(str::to_string)
+                .or_else(|| {
+                    dispatch_ready.then(|| {
+                        dispatch_assignment["activation_runtime_role"]
+                            .as_str()
+                            .map(str::to_string)
+                    })?
+                })
         } else {
             super::dispatch_contract_lane(&role_selection.execution_plan, &dispatch_target)
                 .and_then(|route| route.get("activation_runtime_role"))
@@ -1568,6 +1597,11 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
                 .or_else(|| {
                     super::runtime_assignment_from_execution_plan(&role_selection.execution_plan)
                         ["activation_runtime_role"]
+                        .as_str()
+                        .map(str::to_string)
+                })
+                .or_else(|| {
+                    dispatch_assignment["activation_runtime_role"]
                         .as_str()
                         .map(str::to_string)
                 })
@@ -1582,11 +1616,6 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
     .filter(|value| !value.is_empty());
     let dispatch_command =
         super::runtime_dispatch_command_for_target(role_selection, &dispatch_target);
-    let dispatch_blockers = super::json_string_list(latest_status.get("dispatch_blockers"));
-    let dispatch_ready = super::json_bool(
-        latest_status.get("dispatch_ready"),
-        super::json_bool(run_graph_bootstrap.get("handoff_ready"), false),
-    );
     crate::state_store::RunGraphDispatchReceipt {
         run_id: run_id.clone(),
         dispatch_target: dispatch_target.clone(),
@@ -1816,6 +1845,63 @@ mod tests {
             Some("business_analyst")
         );
         assert_eq!(receipt.dispatch_command.as_deref(), Some("vida agent-init"));
+    }
+
+    #[test]
+    fn runtime_consumption_dispatch_receipt_uses_plan_assignment_for_pm_specification_without_lane_catalog(
+    ) {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "shape the next bounded task".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("pbi_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("work-pool-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec!["task".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {}
+                    }
+                },
+                "runtime_assignment": {
+                    "enabled": true,
+                    "selected_backend_id": "middle",
+                    "selected_carrier_id": "middle",
+                    "selected_model_profile_id": "codex_gpt55_medium_write",
+                    "selected_tier": "middle",
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "pm",
+                    "runtime_role": "pm",
+                    "task_class": "specification"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-pm-specification",
+            "handoff_ready": true,
+            "latest_status": {
+                "active_node": "planning",
+                "next_node": "pm",
+                "route_task_class": "work-pool-pack",
+                "task_class": "pbi_discussion"
+            }
+        });
+
+        let receipt =
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+
+        assert_eq!(receipt.dispatch_target, "specification");
+        assert_eq!(receipt.activation_agent_type.as_deref(), Some("middle"));
+        assert_eq!(receipt.activation_runtime_role.as_deref(), Some("pm"));
+        assert_eq!(receipt.selected_backend.as_deref(), Some("middle"));
     }
 
     #[test]

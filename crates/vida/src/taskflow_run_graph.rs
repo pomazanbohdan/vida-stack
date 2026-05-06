@@ -378,16 +378,16 @@ fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -
     {
         return Some("active_exception_takeover");
     }
-    if receipt.dispatch_status != "blocked" && receipt.lane_status != "lane_blocked" {
-        return None;
-    }
     if receipt.blocker_code.as_deref() == Some("configured_backend_dispatch_failed") {
         return Some("configured_backend_dispatch_failed");
     }
+    let root_lane_still_open =
+        receipt.dispatch_status != "executed" && receipt.lane_status != "lane_completed";
     if receipt
         .downstream_dispatch_blockers
         .iter()
         .any(|value| value == "pending_terminal_write_evidence")
+        && root_lane_still_open
     {
         return Some("pending_terminal_write_evidence");
     }
@@ -395,11 +395,43 @@ fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -
         .blocker_code
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty())
-        || !receipt.downstream_dispatch_blockers.is_empty()
+        || (root_lane_still_open && !receipt.downstream_dispatch_blockers.is_empty())
     {
         return Some("blocked_dispatch_receipt");
     }
+    if receipt.dispatch_status != "blocked" && receipt.lane_status != "lane_blocked" {
+        return None;
+    }
     None
+}
+
+fn active_root_dispatch_packet_execute_command(
+    receipt: &RunGraphDispatchReceipt,
+) -> Option<String> {
+    if !matches!(receipt.dispatch_status.as_str(), "routed" | "packet_ready")
+        || receipt.blocker_code.is_some()
+        || receipt.exception_path_receipt_id.is_some()
+        || receipt.supersedes_receipt_id.is_some()
+    {
+        return None;
+    }
+    let packet_path = receipt
+        .dispatch_packet_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    receipt
+        .dispatch_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| value.contains("--execute-dispatch"))
+        .map(str::to_string)
+        .or_else(|| {
+            Some(format!(
+                "vida agent-init --dispatch-packet {} --execute-dispatch --json",
+                shell_quote(packet_path)
+            ))
+        })
 }
 
 fn next_lawful_operator_action_for_dispatch_resolution(
@@ -408,6 +440,9 @@ fn next_lawful_operator_action_for_dispatch_resolution(
     terminal_consume_continue_run_id: Option<&str>,
 ) -> Option<String> {
     let _reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
+    if let Some(command) = active_root_dispatch_packet_execute_command(receipt) {
+        return Some(command);
+    }
     if let Some(receipt_id) = receipt
         .exception_path_receipt_id
         .as_deref()
@@ -5297,6 +5332,70 @@ mod tests {
         assert_eq!(
             next_lawful_operator_action_for_projection(&status, Some(&receipt), None).as_deref(),
             Some("vida lane show run-stale-binding --json")
+        );
+    }
+
+    #[test]
+    fn routed_dispatch_receipt_with_pending_spec_evidence_recommends_packet_execution() {
+        let status = RunGraphStatus {
+            run_id: "run-routed-specification".to_string(),
+            task_id: "run-routed-specification".to_string(),
+            task_class: "pbi_discussion".to_string(),
+            active_node: "specification".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "work-pool-pack".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "pm_lane".to_string(),
+            lifecycle_stage: "specification_blocked".to_string(),
+            policy_gate: "single_task_scope_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some(
+                "vida agent-init --dispatch-packet packet.json --execute-dispatch --json"
+                    .to_string(),
+            ),
+            dispatch_packet_path: Some("packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: Some("work-pool-pack".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: Some("wait for bounded evidence return".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![
+                "pending_specification_evidence".to_string(),
+                "pending_design_finalize".to_string(),
+                "pending_spec_task_close".to_string(),
+            ],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("specification".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("pm".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-06T10:10:26Z".to_string(),
+        };
+
+        assert_eq!(
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None).as_deref(),
+            Some("vida agent-init --dispatch-packet packet.json --execute-dispatch --json")
         );
     }
 

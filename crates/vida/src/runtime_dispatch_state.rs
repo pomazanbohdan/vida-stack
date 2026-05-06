@@ -868,6 +868,21 @@ fn assignment_selects_backend(assignment: &serde_json::Value, backend_id: &str) 
     .any(|value| value.trim() == backend_id)
 }
 
+fn assignment_backend_hint(assignment: &serde_json::Value) -> Option<String> {
+    [
+        "selected_backend_id",
+        "selected_carrier_id",
+        "selected_agent_id",
+        "selected_carrier_agent_id",
+        "selected_tier",
+        "activation_agent_type",
+    ]
+    .iter()
+    .filter_map(|key| json_string(assignment.get(*key)))
+    .map(|value| value.trim().to_string())
+    .find(|value| !value.is_empty())
+}
+
 fn assignment_is_internal_host_carrier(
     execution_plan: &serde_json::Value,
     assignment: &serde_json::Value,
@@ -949,6 +964,7 @@ fn admissible_backend_candidates_for_dispatch_target(
     let route_is_backend_agnostic = !route_has_backend_hints(execution_plan, route);
     let mut candidates = Vec::new();
     let inherited = inherited_selected_backend.map(str::to_string);
+    let runtime_assignment = runtime_assignment_backend_for_route(execution_plan, route);
     let route_primary = route_primary_backend_hint_from_route(route);
     let route_fallback = fallback_executor_backend_from_route(route);
     let route_fanout = fanout_executor_backends_from_route(route);
@@ -966,6 +982,9 @@ fn admissible_backend_candidates_for_dispatch_target(
             candidates.push(fallback.clone());
         }
         candidates.extend(route_fanout.iter().cloned());
+        if let Some(runtime_assignment) = runtime_assignment.as_ref() {
+            candidates.push(runtime_assignment.clone());
+        }
     }
     if let Some(inherited) = inherited {
         candidates.push(inherited);
@@ -978,6 +997,11 @@ fn admissible_backend_candidates_for_dispatch_target(
             candidates.push(fallback.clone());
         }
         candidates.extend(route_fanout.iter().cloned());
+    }
+    if !prefer_route_backends_first {
+        if let Some(runtime_assignment) = runtime_assignment.as_ref() {
+            candidates.push(runtime_assignment.clone());
+        }
     }
     if let Some(activation) = activation_agent_type
         .filter(|_| route_is_backend_agnostic)
@@ -1050,12 +1074,23 @@ pub(crate) fn downstream_selected_backend(
         "spec-pack" | "work-pool-pack" | "dev-pack" | "closure" => activation_agent_type
             .map(str::to_string)
             .or_else(|| inherited_selected_backend.map(str::to_string)),
-        _ => admissible_selected_backend_for_dispatch_target(
-            &role_selection.execution_plan,
-            dispatch_target,
-            activation_agent_type,
-            inherited_selected_backend,
-        ),
+        _ => {
+            let selected = admissible_selected_backend_for_dispatch_target(
+                &role_selection.execution_plan,
+                dispatch_target,
+                activation_agent_type,
+                inherited_selected_backend,
+            );
+            if selected.is_some()
+                || dispatch_target_requires_strict_backend_admissibility(dispatch_target)
+            {
+                selected
+            } else {
+                assignment_backend_hint(runtime_assignment_from_execution_plan(
+                    &role_selection.execution_plan,
+                ))
+            }
+        }
     }
 }
 
@@ -12826,6 +12861,50 @@ mod tests {
         assert_eq!(
             downstream_selected_backend(&role_selection, "analysis", Some("junior"), None),
             Some("junior".to_string())
+        );
+    }
+
+    #[test]
+    fn downstream_selected_backend_resolves_specification_from_plan_runtime_assignment_without_route(
+    ) {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "shape the next bounded specification task".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("pbi_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("work-pool-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["task".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "runtime_assignment": {
+                    "enabled": true,
+                    "selected_backend_id": "middle",
+                    "selected_carrier_id": "middle",
+                    "selected_model_profile_id": "codex_gpt55_medium_write",
+                    "selected_tier": "middle",
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "pm",
+                    "runtime_role": "pm",
+                    "task_class": "specification"
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {}
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+
+        assert_eq!(
+            downstream_selected_backend(&role_selection, "specification", None, None),
+            Some("middle".to_string())
         );
     }
 
