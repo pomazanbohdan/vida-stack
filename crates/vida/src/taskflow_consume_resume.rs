@@ -1108,6 +1108,16 @@ fn runtime_consumption_resume_receipt_blocker_codes(
     dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Vec<String> {
     let mut blocker_codes = Vec::new();
+    let blocked_evidence_present = matches!(
+        dispatch_receipt.dispatch_status.as_str(),
+        "blocked" | "failed"
+    ) || matches!(
+        dispatch_receipt.lane_status.as_str(),
+        "lane_blocked" | "lane_failed"
+    ) || dispatch_receipt
+        .downstream_dispatch_status
+        .as_deref()
+        .is_some_and(|status| matches!(status, "blocked" | "failed"));
     if let Some(blocker_code) = dispatch_receipt
         .blocker_code
         .as_deref()
@@ -1130,7 +1140,26 @@ fn runtime_consumption_resume_receipt_blocker_codes(
                 .cloned(),
         );
     }
-    crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes)
+    if blocker_codes
+        .iter()
+        .any(|code| code == "configured_backend_dispatch_failed")
+    {
+        blocker_codes.push(
+            crate::contract_profile_adapter::blocker_code_str(
+                crate::contract_profile_adapter::BlockerCode::ToolExecutionFailed,
+            )
+            .to_string(),
+        );
+    }
+    let normalized = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    if normalized.is_empty() && blocked_evidence_present {
+        vec![crate::contract_profile_adapter::blocker_code_str(
+            crate::contract_profile_adapter::BlockerCode::ToolExecutionFailed,
+        )
+        .to_string()]
+    } else {
+        normalized
+    }
 }
 
 fn runtime_consumption_resume_receipt_next_actions(
@@ -4352,10 +4381,24 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     return ExitCode::from(1);
                 }
             };
+            if dispatch_receipt.dispatch_kind == "agent_lane" {
+                dispatch_receipt.selected_backend = super::canonical_selected_backend_for_receipt(
+                    &role_selection,
+                    &dispatch_receipt,
+                );
+            }
+            if let Err(error) = store
+                .record_run_graph_dispatch_receipt(&dispatch_receipt)
+                .await
+            {
+                eprintln!("Failed to record resumed run-graph dispatch receipt: {error}");
+                return ExitCode::from(1);
+            }
             // Re-sync continuation binding after downstream dispatch chain advances the run-graph.
             // Downstream execution inside execute_downstream_dispatch_chain updates run-graph status
             // via execute_and_record_dispatch_receipt, but the root-level continuation binding must
-            // be refreshed to reflect the final downstream target.
+            // be refreshed after the final receipt is persisted so reconciled status sees blocked
+            // downstream truth rather than stale upstream status.
             if let Some(run_id) = run_graph_bootstrap
                 .get("run_id")
                 .and_then(serde_json::Value::as_str)
@@ -4376,19 +4419,6 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         return ExitCode::from(1);
                     }
                 }
-            }
-            if dispatch_receipt.dispatch_kind == "agent_lane" {
-                dispatch_receipt.selected_backend = super::canonical_selected_backend_for_receipt(
-                    &role_selection,
-                    &dispatch_receipt,
-                );
-            }
-            if let Err(error) = store
-                .record_run_graph_dispatch_receipt(&dispatch_receipt)
-                .await
-            {
-                eprintln!("Failed to record resumed run-graph dispatch receipt: {error}");
-                return ExitCode::from(1);
             }
             match emit_runtime_consumption_resume_json(
                 &store,
@@ -4858,6 +4888,130 @@ mod tests {
         assert!(blocker_codes
             .iter()
             .any(|code| code == "pending_review_clean_evidence"));
+    }
+
+    #[test]
+    fn configured_backend_dispatch_failure_maps_to_tool_execution_blocker() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-configured-backend-blocked".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/downstream-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["configured_backend_dispatch_failed".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("implementer".to_string()),
+            downstream_dispatch_last_target: Some("implementer".to_string()),
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-06T00:00:00Z".to_string(),
+        };
+
+        let blocker_codes = runtime_consumption_resume_receipt_blocker_codes(&receipt);
+
+        assert_eq!(blocker_codes, vec!["tool_execution_failed".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn continuation_sync_after_persisted_blocked_receipt_uses_reconciled_status() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-blocked-reconciled-binding-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-blocked-reconciled-binding";
+        let mut stale_status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "specification", "scope");
+        stale_status.task_id = run_id.to_string();
+        stale_status.active_node = "specification".to_string();
+        stale_status.status = "completed".to_string();
+        stale_status.lifecycle_stage = "specification_complete".to_string();
+        stale_status.resume_target = "none".to_string();
+        stale_status.recovery_ready = false;
+        store
+            .record_run_graph_status(&stale_status)
+            .await
+            .expect("persist stale upstream status");
+
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/downstream-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("implementer".to_string()),
+            downstream_dispatch_last_target: Some("implementer".to_string()),
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-06T00:00:00Z".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist blocked receipt before continuation sync");
+
+        let reconciled_status = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read reconciled status");
+        assert_eq!(reconciled_status.status, "blocked");
+        assert_eq!(reconciled_status.active_node, "implementer");
+
+        let binding = crate::taskflow_continuation::sync_run_graph_continuation_binding(
+            &store,
+            &reconciled_status,
+            crate::taskflow_continuation::CONSUME_CONTINUE_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE,
+        )
+        .await
+        .expect("sync continuation binding")
+        .expect("blocked status still has an active bounded unit");
+
+        assert_eq!(
+            binding.binding_source,
+            "consume_continue_after_downstream_chain"
+        );
+        assert_eq!(binding.active_bounded_unit["active_node"], "implementer");
+        drop(store);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

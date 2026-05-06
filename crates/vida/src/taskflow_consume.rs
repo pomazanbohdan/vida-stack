@@ -642,10 +642,20 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         };
+                        if !consume_final_mode.is_read_only() {
+                            if let Err(error) = store
+                                .record_run_graph_dispatch_receipt(&dispatch_receipt)
+                                .await
+                            {
+                                eprintln!("Failed to record run-graph dispatch receipt: {error}");
+                                return ExitCode::from(1);
+                            }
+                        }
                         // Re-sync continuation binding after downstream dispatch chain advances the run-graph.
                         // Downstream execution inside execute_downstream_dispatch_chain updates run-graph status
                         // via execute_and_record_dispatch_receipt, but the root-level continuation binding must
-                        // be refreshed to reflect the final downstream target.
+                        // be refreshed after the final receipt is persisted so reconciled status sees blocked
+                        // downstream truth rather than stale upstream status.
                         if !consume_final_mode.is_read_only() && direct_consumption_ready {
                             if let Some(run_id) = run_graph_bootstrap
                                 .get("run_id")
@@ -668,15 +678,6 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         }
                         let dispatch_receipt_json = serde_json::to_value(&dispatch_receipt)
                             .unwrap_or(serde_json::Value::Null);
-                        if !consume_final_mode.is_read_only() {
-                            if let Err(error) = store
-                                .record_run_graph_dispatch_receipt(&dispatch_receipt)
-                                .await
-                            {
-                                eprintln!("Failed to record run-graph dispatch receipt: {error}");
-                                return ExitCode::from(1);
-                            }
-                        }
                         let generated_at = time::OffsetDateTime::now_utc()
                             .format(&super::Rfc3339)
                             .expect("rfc3339 timestamp should render");
