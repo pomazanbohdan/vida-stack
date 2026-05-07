@@ -50,6 +50,56 @@ pub(crate) struct RunGraphLatestRow {
     pub(crate) run_id: String,
 }
 
+fn legacy_runtime_owner_status() -> String {
+    "legacy_global_owner_unknown".to_string()
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue, PartialEq, Eq)]
+pub struct RuntimeOwnerEvidence {
+    #[serde(default = "legacy_runtime_owner_status")]
+    pub owner_status: String,
+    #[serde(default)]
+    pub orchestrator_session_id: Option<String>,
+    #[serde(default)]
+    pub orchestrator_lease_id: Option<String>,
+    #[serde(default)]
+    pub execution_context_id: Option<String>,
+    #[serde(default)]
+    pub publication_context_id: Option<String>,
+    #[serde(default)]
+    pub recorded_at: Option<String>,
+}
+
+impl RuntimeOwnerEvidence {
+    pub(crate) fn legacy_global_owner_unknown() -> Self {
+        Self {
+            owner_status: legacy_runtime_owner_status(),
+            orchestrator_session_id: None,
+            orchestrator_lease_id: None,
+            execution_context_id: None,
+            publication_context_id: None,
+            recorded_at: None,
+        }
+    }
+
+    pub(crate) fn current_session(
+        session_id: &str,
+        lease_id: &str,
+        execution_context_id: &str,
+        publication_context_id: &str,
+        recorded_at: &str,
+    ) -> Self {
+        Self {
+            owner_status: "current_owner".to_string(),
+            orchestrator_session_id: Some(session_id.to_string()),
+            orchestrator_lease_id: Some(lease_id.to_string()),
+            execution_context_id: Some(execution_context_id.to_string()),
+            publication_context_id: Some(publication_context_id.to_string()),
+            recorded_at: Some(recorded_at.to_string()),
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
 pub(crate) struct GovernanceStateRow {
@@ -843,6 +893,20 @@ mod tests {
             resume_target: "dispatch.approval".to_string(),
             recovery_ready: true,
         }
+    }
+
+    #[test]
+    fn runtime_owner_evidence_defaults_legacy_ownerless_rows() {
+        let evidence: RuntimeOwnerEvidence =
+            serde_json::from_value(serde_json::json!({})).expect("legacy owner evidence defaults");
+
+        assert_eq!(
+            evidence,
+            RuntimeOwnerEvidence::legacy_global_owner_unknown()
+        );
+        assert_eq!(evidence.owner_status, "legacy_global_owner_unknown");
+        assert!(evidence.orchestrator_session_id.is_none());
+        assert!(evidence.orchestrator_lease_id.is_none());
     }
 
     fn approval_receipt(

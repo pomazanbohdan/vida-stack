@@ -84,7 +84,7 @@ pub(crate) use state_store_run_graph_state::{
 pub use state_store_run_graph_state::{
     RunGraphContinuationBinding, RunGraphDispatchContext, RunGraphDispatchReceipt,
     RunGraphMemoryGovernanceProjection, RunGraphPrincipalDelegationProjection, RunGraphStatus,
-    RunGraphSummary,
+    RunGraphSummary, RuntimeOwnerEvidence,
 };
 pub(crate) use state_store_run_graph_summary::{
     default_run_graph_lane_status, deserialize_run_graph_lane_status,
@@ -175,6 +175,7 @@ DEFINE TABLE run_graph_dispatch_context SCHEMALESS;
 DEFINE TABLE run_graph_projection_checkpoint_record SCHEMALESS;
 DEFINE TABLE run_graph_replay_lineage_receipt SCHEMALESS;
 DEFINE TABLE scheduler_dispatch_reservation SCHEMALESS;
+DEFINE TABLE orchestrator_session_record SCHEMALESS;
 "#;
 
 fn state_store_recovery_hint_for_message(message: &str) -> Option<&'static str> {
@@ -380,6 +381,54 @@ impl From<surrealdb::Error> for StateStoreError {
     }
 }
 
+impl StateStore {
+    pub async fn record_orchestrator_session_heartbeat(
+        &self,
+        record: &crate::orchestrator_session_identity::OrchestratorSessionRecord,
+    ) -> Result<(), StateStoreError> {
+        let record_id = sanitize_record_id(&record.session_id);
+        let _: Option<crate::orchestrator_session_identity::OrchestratorSessionRecord> = self
+            .db
+            .upsert(("orchestrator_session_record", record_id.as_str()))
+            .content(record.clone())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn orchestrator_session_records_for_state_root(
+        &self,
+        state_root: &Path,
+    ) -> Result<Vec<crate::orchestrator_session_identity::OrchestratorSessionRecord>, StateStoreError>
+    {
+        let state_root = std::fs::canonicalize(state_root)
+            .unwrap_or_else(|_| state_root.to_path_buf())
+            .display()
+            .to_string();
+        let query_result = self
+            .db
+            .query(
+                "SELECT * FROM orchestrator_session_record WHERE state_root = $state_root ORDER BY heartbeat_at DESC, session_id ASC;",
+            )
+            .bind(("state_root", state_root))
+            .await;
+        let mut query = match query_result {
+            Ok(query) => query,
+            Err(error) if error.to_string().contains("orchestrator_session_record") => {
+                return Ok(Vec::new());
+            }
+            Err(error) => return Err(StateStoreError::Db(error)),
+        };
+        let rows: Vec<crate::orchestrator_session_identity::OrchestratorSessionRecord> = match query
+            .take(0)
+        {
+            Ok(rows) => rows,
+            Err(error) if error.to_string().contains("orchestrator_session_record") => Vec::new(),
+            Err(error) => return Err(StateStoreError::Db(error)),
+        };
+        Ok(rows)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,6 +481,61 @@ mod tests {
             "artifact_id: framework-prompt-template-config\nartifact_kind: prompt_template_configuration\nversion: 1\nownership_class: framework\nmutability_class: immutable\nactivation_class: always_on\nhierarchy: framework\n",
         )
         .expect("write prompt template config");
+    }
+
+    #[tokio::test]
+    async fn orchestrator_session_heartbeat_record_round_trips_from_state_store() {
+        let root = unique_temp_root("vida-orchestrator-session-store");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let record = crate::orchestrator_session_identity::OrchestratorSessionRecord {
+            session_id: "session-test".to_string(),
+            lease_id: "lease-test".to_string(),
+            state_root: std::fs::canonicalize(&root)
+                .unwrap_or_else(|_| root.clone())
+                .display()
+                .to_string(),
+            project_root: "C:/tmp/project".to_string(),
+            workspace_fingerprint: "workspace-test".to_string(),
+            execution_context_id: "execution-test".to_string(),
+            publication_context_id: "publication-test".to_string(),
+            host_app: "codex-desktop".to_string(),
+            host_thread_id: "thread-test".to_string(),
+            process_id: 42,
+            active_bounded_unit: "github-116-orchestrator-session-identity".to_string(),
+            started_at: "2026-05-07T00:00:00Z".to_string(),
+            heartbeat_at: "2026-05-07T00:00:01Z".to_string(),
+            lease_expires_at: "2026-05-07T02:00:01Z".to_string(),
+            status: "active".to_string(),
+        };
+
+        store
+            .record_orchestrator_session_heartbeat(&record)
+            .await
+            .expect("record heartbeat");
+        let records = store
+            .orchestrator_session_records_for_state_root(&root)
+            .await
+            .expect("read session records");
+
+        assert_eq!(records, vec![record]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn orchestrator_session_records_default_empty_for_legacy_state_without_table() {
+        let root = unique_temp_root("vida-orchestrator-session-legacy-store");
+        fs::create_dir_all(&root).expect("legacy state root should create");
+        let store = StateStore::open_existing_read_only(root.clone())
+            .await
+            .expect("legacy read-only store should open");
+
+        let records = store
+            .orchestrator_session_records_for_state_root(&root)
+            .await
+            .expect("missing session table should default empty");
+
+        assert!(records.is_empty());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

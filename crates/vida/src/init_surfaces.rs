@@ -86,6 +86,28 @@ fn build_orchestrator_runtime_contract(
     })
 }
 
+fn build_orchestrator_init_json_payload(
+    init_view: serde_json::Value,
+    dev_team_readiness: serde_json::Value,
+    orchestrator_runtime_contract: serde_json::Value,
+    orchestrator_session_identity: serde_json::Value,
+    runtime_bundle_summary: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "surface": "vida orchestrator-init",
+        "state_read": {
+            "mode": "authoritative_open",
+            "lock_resilient": true,
+            "fallback": "degraded_lock_contention_surface"
+        },
+        "init": init_view,
+        "dev_team_readiness": dev_team_readiness,
+        "orchestrator_runtime_contract": orchestrator_runtime_contract,
+        "orchestrator_session_identity": orchestrator_session_identity,
+        "runtime_bundle_summary": runtime_bundle_summary,
+    })
+}
+
 fn agent_init_dispatch_mode(
     args: &AgentInitArgs,
     selection: &serde_json::Value,
@@ -2250,19 +2272,55 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
             .await
             {
                 Ok(Ok(bundle)) => {
-                    let project_activation_view = match std::env::current_dir() {
-                        Ok(path) => {
-                            super::project_activator_surface::build_project_activator_view(&path)
-                        }
+                    let project_root = match std::env::current_dir() {
+                        Ok(path) => path,
                         Err(error) => {
                             eprintln!("Failed to resolve current directory: {error}");
                             return ExitCode::from(1);
                         }
                     };
+                    let project_activation_view =
+                        super::project_activator_surface::build_project_activator_view(
+                            &project_root,
+                        );
                     let init_view =
                         super::project_activator_surface::merge_project_activation_into_init_view(
                             bundle.orchestrator_init_view,
                             &project_activation_view,
+                        );
+                    let session_derivation =
+                        match crate::orchestrator_session_identity::derive_current_orchestrator_session(
+                            store.root(),
+                            &project_root,
+                        ) {
+                            Ok(identity) => identity,
+                            Err(error) => {
+                                eprintln!("Failed to derive orchestrator session identity: {error}");
+                                return ExitCode::from(1);
+                            }
+                        };
+                    if let Err(error) = store
+                        .record_orchestrator_session_heartbeat(&session_derivation.record)
+                        .await
+                    {
+                        eprintln!("Failed to record orchestrator session heartbeat: {error}");
+                        return ExitCode::from(1);
+                    }
+                    let session_records = match store
+                        .orchestrator_session_records_for_state_root(store.root())
+                        .await
+                    {
+                        Ok(records) => records,
+                        Err(error) => {
+                            eprintln!("Failed to read orchestrator session records: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let orchestrator_session_identity =
+                        crate::orchestrator_session_identity::build_orchestrator_session_surface(
+                            &session_derivation,
+                            &session_records,
+                            time::OffsetDateTime::now_utc(),
                         );
                     let dev_team_readiness =
                         super::taskflow_consume_bundle::build_dev_team_readiness(
@@ -2272,28 +2330,24 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                     let orchestrator_runtime_contract =
                         build_orchestrator_runtime_contract(&init_view, &dev_team_readiness);
                     if args.json {
+                        let payload = build_orchestrator_init_json_payload(
+                            init_view,
+                            dev_team_readiness,
+                            orchestrator_runtime_contract,
+                            orchestrator_session_identity,
+                            serde_json::json!({
+                                "bundle_id": bundle.metadata["bundle_id"],
+                                "root_artifact_id": bundle.control_core["root_artifact_id"],
+                                "activation_source": bundle.activation_source,
+                                "vida_root": bundle.vida_root,
+                                "state_dir": store.root().display().to_string(),
+                                "launcher_runtime_paths": bundle.launcher_runtime_paths,
+                            }),
+                        );
                         println!(
                             "{}",
-                            serde_json::to_string_pretty(&serde_json::json!({
-                                "surface": "vida orchestrator-init",
-                                "state_read": {
-                                    "mode": "authoritative_open",
-                                    "lock_resilient": true,
-                                    "fallback": "degraded_lock_contention_surface"
-                                },
-                                "init": init_view,
-                                "dev_team_readiness": dev_team_readiness,
-                                "orchestrator_runtime_contract": orchestrator_runtime_contract,
-                                "runtime_bundle_summary": {
-                                    "bundle_id": bundle.metadata["bundle_id"],
-                                    "root_artifact_id": bundle.control_core["root_artifact_id"],
-                                    "activation_source": bundle.activation_source,
-                                    "vida_root": bundle.vida_root,
-                                    "state_dir": store.root().display().to_string(),
-                                    "launcher_runtime_paths": bundle.launcher_runtime_paths,
-                                },
-                            }))
-                            .expect("orchestrator-init json should render")
+                            serde_json::to_string_pretty(&payload)
+                                .expect("orchestrator-init json should render")
                         );
                     } else {
                         print_surface_header(RenderMode::Plain, "vida orchestrator-init");
@@ -2312,6 +2366,13 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                             RenderMode::Plain,
                             "state dir",
                             &store.root().display().to_string(),
+                        );
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "orchestrator session",
+                            orchestrator_session_identity["current_owner"]["session_id"]
+                                .as_str()
+                                .unwrap_or("unknown"),
                         );
                         print_surface_line(
                             RenderMode::Plain,
@@ -3856,6 +3917,41 @@ mod agent_init_surface_tests {
             contract["write_and_continuation_authority_contract"]
                 ["continuation_binding_is_independent_of_exception_write_scope"],
             true
+        );
+    }
+
+    #[test]
+    fn orchestrator_init_json_payload_exposes_session_identity() {
+        let payload = build_orchestrator_init_json_payload(
+            serde_json::json!({"status": "ready"}),
+            serde_json::json!({"status": "ready", "roles": []}),
+            serde_json::json!({
+                "next_lawful_dispatch_action": {
+                    "command": "vida agent dispatch-next --dev-team --json"
+                }
+            }),
+            serde_json::json!({
+                "status": "current_owner",
+                "current_owner": {
+                    "session_id": "session-test",
+                    "lease_id": "lease-test"
+                },
+                "selected_owner_evidence": {
+                    "owner_status": "current_owner",
+                    "orchestrator_session_id": "session-test"
+                }
+            }),
+            serde_json::json!({"state_dir": "/tmp/state"}),
+        );
+
+        assert_eq!(payload["surface"], "vida orchestrator-init");
+        assert_eq!(
+            payload["orchestrator_session_identity"]["current_owner"]["session_id"],
+            "session-test"
+        );
+        assert_eq!(
+            payload["orchestrator_session_identity"]["selected_owner_evidence"]["owner_status"],
+            "current_owner"
         );
     }
 

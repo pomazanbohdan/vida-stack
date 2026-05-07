@@ -22,6 +22,7 @@ pub(crate) struct StatusTextReportInputs<'a> {
         Option<&'a crate::project_activator_surface::ProjectActivationStatusTruth>,
     pub(crate) project_activation_status: Option<&'a str>,
     pub(crate) project_activation_pending: bool,
+    pub(crate) orchestrator_session_identity: &'a serde_json::Value,
     pub(crate) latest_run_graph_status: Option<&'a crate::state_store::RunGraphStatus>,
     pub(crate) latest_run_graph_recovery: Option<&'a crate::state_store::RunGraphRecoverySummary>,
     pub(crate) latest_run_graph_checkpoint:
@@ -162,6 +163,13 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
         inputs.render,
         "state dir",
         &inputs.state_dir.display().to_string(),
+    );
+    crate::surface_render::print_surface_line(
+        inputs.render,
+        "orchestrator session",
+        inputs.orchestrator_session_identity["current_owner"]["session_id"]
+            .as_str()
+            .unwrap_or("unknown"),
     );
     crate::surface_render::print_surface_line(
         inputs.render,

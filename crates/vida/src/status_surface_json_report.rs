@@ -23,6 +23,7 @@ pub(crate) struct StatusJsonReportInputs<'a> {
         Option<&'a crate::project_activator_surface::ProjectActivationStatusTruth>,
     pub(crate) project_activation_status: Option<&'a str>,
     pub(crate) project_activation_pending: bool,
+    pub(crate) orchestrator_session_identity: &'a serde_json::Value,
     pub(crate) host_agents: Option<&'a serde_json::Value>,
     pub(crate) root_session_write_guard: &'a serde_json::Value,
     pub(crate) continuation_binding: &'a serde_json::Value,
@@ -121,6 +122,7 @@ pub(crate) fn build_status_json_report(
                 "authoritative_mutation_root": inputs.state_spine.authoritative_mutation_root,
             },
             "project_activation": project_activation,
+            "orchestrator_session_identity": inputs.orchestrator_session_identity,
             "protocol_binding": inputs.protocol_binding,
             "root_session_write_guard": inputs.root_session_write_guard,
             "continuation_binding": inputs.continuation_binding,
@@ -197,6 +199,7 @@ pub(crate) fn build_status_json_report(
             "runtime_consumption": inputs.runtime_consumption,
             "protocol_binding": inputs.protocol_binding,
             "project_activation": project_activation,
+            "orchestrator_session_identity": inputs.orchestrator_session_identity,
             "host_agents": host_agents_json_value(inputs.host_agents),
             "root_session_write_guard": inputs.root_session_write_guard,
             "continuation_binding": inputs.continuation_binding,
@@ -562,6 +565,13 @@ mod tests {
         });
         let root_session_write_guard = serde_json::json!({"mode": "locked"});
         let continuation_binding = serde_json::json!({"status": "bound"});
+        let orchestrator_session_identity = serde_json::json!({
+            "status": "current_owner",
+            "current_owner": {
+                "session_id": "session-test",
+                "lease_id": "lease-test"
+            }
+        });
         let launcher_runtime_paths =
             crate::doctor_launcher_summary_for_root(std::path::Path::new("/tmp/project"))
                 .expect("launcher summary should build");
@@ -586,6 +596,7 @@ mod tests {
             activation_truth: None,
             project_activation_status: Some("pending"),
             project_activation_pending: true,
+            orchestrator_session_identity: &orchestrator_session_identity,
             host_agents: None,
             root_session_write_guard: &root_session_write_guard,
             continuation_binding: &continuation_binding,
@@ -621,6 +632,7 @@ mod tests {
             activation_truth: None,
             project_activation_status: Some("pending"),
             project_activation_pending: true,
+            orchestrator_session_identity: &orchestrator_session_identity,
             host_agents: None,
             root_session_write_guard: &root_session_write_guard,
             continuation_binding: &continuation_binding,
@@ -656,6 +668,14 @@ mod tests {
             .expect("full JSON should be an object")
             .get("latest_run_graph_activation_vs_execution_evidence")
             .is_none());
+        assert_eq!(
+            summary_json["orchestrator_session_identity"]["current_owner"]["session_id"],
+            "session-test"
+        );
+        assert_eq!(
+            full_json["orchestrator_session_identity"]["current_owner"]["lease_id"],
+            "lease-test"
+        );
         assert_eq!(
             full_json["latest_run_graph_status"]["mixed_posture"]["effective_execution_posture"],
             "hybrid_external_cli"
@@ -802,6 +822,13 @@ mod tests {
             "activation_kind": "activation_view",
             "receipt_backed": false
         });
+        let orchestrator_session_identity = serde_json::json!({
+            "status": "current_owner",
+            "current_owner": {
+                "session_id": "session-test",
+                "lease_id": "lease-test"
+            }
+        });
         let launcher_runtime_paths =
             crate::doctor_launcher_summary_for_root(std::path::Path::new("/tmp/project"))
                 .expect("launcher summary should build");
@@ -826,6 +853,7 @@ mod tests {
             activation_truth: None,
             project_activation_status: Some("pending"),
             project_activation_pending: true,
+            orchestrator_session_identity: &orchestrator_session_identity,
             host_agents: None,
             root_session_write_guard: &root_session_write_guard,
             continuation_binding: &continuation_binding,

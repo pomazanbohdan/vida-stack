@@ -312,6 +312,9 @@ Companion rule:
 51. [model-provider-price-catalog-lifecycle-design.md](model-provider-price-catalog-lifecycle-design.md)
    Config families: bounded model/provider price-catalog source-of-truth, provider/model availability inventory, freshness/source metadata, dry-run/apply receipt lifecycle, init/status readiness projection, and price-aware selected/rejected candidate diagnostics
    Registered path: `docs/product/spec/model-provider-price-catalog-lifecycle-design.md`
+52. [orchestrator-session-environment-identity-design.md](orchestrator-session-environment-identity-design.md)
+   Config families: bounded orchestrator session/environment identity, lease-backed runtime state ownership, session-aware latest/recovery/continuation diagnostics, execution-context versus publication-context separation, and stale owner reclaim/transfer paths
+   Registered path: `docs/product/spec/orchestrator-session-environment-identity-design.md`
 
 ### Support
 

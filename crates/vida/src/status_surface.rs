@@ -354,6 +354,33 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
+                let session_derivation =
+                    match crate::orchestrator_session_identity::derive_current_orchestrator_session(
+                        store.root(),
+                        &project_root,
+                    ) {
+                        Ok(identity) => identity,
+                        Err(error) => {
+                            eprintln!("Failed to derive orchestrator session identity: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                let session_records = match store
+                    .orchestrator_session_records_for_state_root(store.root())
+                    .await
+                {
+                    Ok(records) => records,
+                    Err(error) => {
+                        eprintln!("Failed to read orchestrator session records: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+                let orchestrator_session_identity =
+                    crate::orchestrator_session_identity::build_orchestrator_session_surface(
+                        &session_derivation,
+                        &session_records,
+                        time::OffsetDateTime::now_utc(),
+                    );
                 let latest_run_graph_surface_truth = latest_run_graph_dispatch_receipt
                     .as_ref()
                     .and_then(|receipt| {
@@ -468,6 +495,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         activation_truth: activation_truth.as_ref(),
                         project_activation_status: project_activation_status.as_deref(),
                         project_activation_pending,
+                        orchestrator_session_identity: &orchestrator_session_identity,
                         host_agents: host_agents.as_ref(),
                         root_session_write_guard: &root_session_write_guard,
                         continuation_binding: &continuation_binding,
@@ -511,6 +539,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     activation_truth: activation_truth.as_ref(),
                     project_activation_status: project_activation_status.as_deref(),
                     project_activation_pending,
+                    orchestrator_session_identity: &orchestrator_session_identity,
                     latest_run_graph_status: latest_run_graph_status.as_ref(),
                     latest_run_graph_recovery: latest_run_graph_recovery.as_ref(),
                     latest_run_graph_checkpoint: latest_run_graph_checkpoint.as_ref(),
