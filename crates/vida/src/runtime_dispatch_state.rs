@@ -1358,6 +1358,59 @@ fn preferred_selected_model_profile_for_role_selection(
         .filter(|value| !value.is_empty())
 }
 
+fn assignment_matches_backend(assignment: &serde_json::Value, backend_id: &str) -> bool {
+    [
+        "selected_backend_id",
+        "selected_carrier_id",
+        "selected_carrier_agent_id",
+        "selected_agent_id",
+        "activation_agent_type",
+        "selected_tier",
+    ]
+    .into_iter()
+    .any(|key| {
+        assignment
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            == Some(backend_id)
+    })
+}
+
+fn assignment_selected_model_profile_for_backend(
+    assignment: &serde_json::Value,
+    backend_id: &str,
+) -> Option<String> {
+    let backend_id = backend_id.trim();
+    if backend_id.is_empty()
+        || !runtime_assignment_has_authoritative_truth(assignment)
+        || !assignment_matches_backend(assignment, backend_id)
+    {
+        return None;
+    }
+    assignment
+        .get("selected_model_profile_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn route_assignment_selected_model_profile_for_backend(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+    backend_id: &str,
+) -> Option<String> {
+    let route = execution_plan_route_for_dispatch_target(execution_plan, dispatch_target)?;
+    assignment_selected_model_profile_for_backend(
+        route
+            .get("carrier_runtime_assignment")
+            .or_else(|| route.get("runtime_assignment"))
+            .unwrap_or(&serde_json::Value::Null),
+        backend_id,
+    )
+}
+
 pub(crate) fn route_selected_model_profile_for_backend(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
@@ -1415,11 +1468,20 @@ pub(crate) fn preferred_selected_model_profile_for_dispatch_target(
 ) -> Option<String> {
     selected_backend
         .and_then(|backend_id| {
-            route_selected_model_profile_for_backend(
+            route_assignment_selected_model_profile_for_backend(
                 &role_selection.execution_plan,
                 dispatch_target,
                 backend_id,
             )
+        })
+        .or_else(|| {
+            selected_backend.and_then(|backend_id| {
+                route_selected_model_profile_for_backend(
+                    &role_selection.execution_plan,
+                    dispatch_target,
+                    backend_id,
+                )
+            })
         })
         .or_else(|| {
             preferred_selected_model_profile_for_role_selection(role_selection).map(str::to_string)
@@ -6330,6 +6392,47 @@ mod tests {
         );
 
         assert_eq!(selected_profile.as_deref(), Some("internal_review"));
+    }
+
+    #[test]
+    fn route_assignment_profile_precedes_raw_route_profile_after_readiness_fallback() {
+        let mut execution_plan = agent_lane_test_execution_plan("internal_subagents");
+        execution_plan["development_flow"]["implementation"] = json!({
+            "executor_backend": "internal_subagents",
+            "profiles": {
+                "internal_subagents": "codex_gpt55_low_write"
+            },
+            "carrier_runtime_assignment": {
+                "selected_backend_id": "internal_subagents",
+                "selected_carrier_id": "internal_subagents",
+                "selected_model_profile_id": "codex_gpt54_low_write"
+            }
+        });
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: agent_lane_test_request().to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan,
+            reason: "test".to_string(),
+        };
+
+        let selected_profile = preferred_selected_model_profile_for_dispatch_target(
+            &role_selection,
+            "implementer",
+            Some("internal_subagents"),
+        );
+
+        assert_eq!(selected_profile.as_deref(), Some("codex_gpt54_low_write"));
     }
 
     #[test]
