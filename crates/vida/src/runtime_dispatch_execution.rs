@@ -808,6 +808,7 @@ fn apply_internal_subagent_profile_overlay(
         serde_json::json!(profile_id),
     );
     for (target_key, profile_key) in [
+        ("model", "model_ref"),
         ("selected_model_ref", "model_ref"),
         ("selected_model_provider", "provider"),
         ("selected_reasoning_effort", "reasoning_effort"),
@@ -3051,7 +3052,7 @@ agent_system:
         .expect("internal route profile should bridge through host carrier");
 
         assert_eq!(carrier["role_id"].as_str(), Some("middle"));
-        assert_eq!(carrier["model"].as_str(), Some("gpt-5.4"));
+        assert_eq!(carrier["model"].as_str(), Some("internal_review"));
         assert_eq!(
             carrier["selected_model_profile_id"].as_str(),
             Some("internal_review")
@@ -3065,6 +3066,47 @@ agent_system:
             Some("internal_review")
         );
         assert_eq!(carrier["model_reasoning_effort"].as_str(), Some("medium"));
+    }
+
+    #[test]
+    fn internal_subagent_profile_overlay_updates_internal_host_launch_model() {
+        let backend_entry = serde_yaml::from_str(
+            r#"
+model_profiles:
+  codex_gpt54_low_write:
+    provider: openai
+    model_ref: gpt-5.4
+    reasoning_effort: low
+    normalized_cost_units: 2
+    speed_tier: fast
+    quality_tier: medium
+    write_scope: workspace-write
+    runtime_roles: [worker]
+    task_classes: [implementation]
+"#,
+        )
+        .expect("backend entry should parse");
+        let carrier = serde_json::json!({
+            "role_id": "senior",
+            "model": "gpt-5.5",
+            "model_reasoning_effort": "high",
+            "sandbox_mode": "read-only"
+        });
+
+        let patched = super::apply_internal_subagent_profile_overlay(
+            &carrier,
+            "internal_subagents",
+            Some(&backend_entry),
+            Some("codex_gpt54_low_write"),
+        );
+
+        assert_eq!(patched["model"].as_str(), Some("gpt-5.4"));
+        assert_eq!(patched["selected_model_ref"].as_str(), Some("gpt-5.4"));
+        assert_eq!(
+            patched["selected_model_profile_id"].as_str(),
+            Some("codex_gpt54_low_write")
+        );
+        assert_eq!(patched["model_reasoning_effort"].as_str(), Some("low"));
     }
 
     #[test]
