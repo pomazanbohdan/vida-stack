@@ -3923,6 +3923,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
                             return ExitCode::from(1);
                         }
+                        if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_specification_task_into_latest_receipt(&store).await {
+                            eprintln!("Failed to bridge closed specification task into latest run-graph dispatch receipt: {error}");
+                            return ExitCode::from(1);
+                        }
                         let task_value = serde_json::to_value(&task)
                             .expect("task close payload should serialize");
                         let telemetry = task_close_host_agent_telemetry(
