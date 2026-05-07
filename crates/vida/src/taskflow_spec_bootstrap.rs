@@ -6,7 +6,7 @@ use clap::Parser;
 use docflow_cli::Cli as DocflowCli;
 use time::format_description::well_known::Rfc3339;
 
-use crate::state_store::{CreateTaskRequest, StateStore};
+use crate::state_store::{CreateTaskRequest, StateStore, TaskPlannerMetadata, UpdateTaskRequest};
 use crate::taskflow_task_bridge::task_record_json;
 
 struct TaskCreationArgs<'a> {
@@ -19,6 +19,7 @@ struct TaskCreationArgs<'a> {
     parent_id: Option<&'a str>,
     labels: &'a [&'a str],
     description: Option<&'a str>,
+    planner_metadata: Option<TaskPlannerMetadata>,
 }
 
 fn create_task_if_missing_with_store(
@@ -34,9 +35,31 @@ fn create_task_if_missing_with_store(
         parent_id,
         labels,
         description,
+        planner_metadata,
     } = args;
 
     if let Ok(existing) = crate::block_on_state_store(store.show_task(task_id)) {
+        if let Some(planner_metadata) = planner_metadata {
+            if existing.planner_metadata != planner_metadata {
+                let empty_labels: Vec<String> = Vec::new();
+                let updated = crate::block_on_state_store(store.update_task(UpdateTaskRequest {
+                    task_id,
+                    status: None,
+                    notes: None,
+                    description: None,
+                    parent_id: None,
+                    add_labels: &empty_labels,
+                    remove_labels: &empty_labels,
+                    set_labels: None,
+                    execution_mode: None,
+                    order_bucket: None,
+                    parallel_group: None,
+                    conflict_domain: None,
+                    planner_metadata: Some(planner_metadata),
+                }))?;
+                return Ok((task_record_json(&updated), false));
+            }
+        }
         return Ok((task_record_json(&existing), false));
     }
     let label_rows = labels
@@ -56,7 +79,7 @@ fn create_task_if_missing_with_store(
         parent_id,
         labels: &label_rows,
         execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
-        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+        planner_metadata: planner_metadata.unwrap_or_default(),
         created_by: "vida taskflow",
         source_repo: &source_repo,
     })) {
@@ -67,6 +90,34 @@ fn create_task_if_missing_with_store(
         }
         Err(error) => Err(error),
     }
+}
+
+fn tracked_task_planner_metadata(
+    project_root: &Path,
+    packet_key: &str,
+    tracked: &serde_json::Value,
+) -> Option<TaskPlannerMetadata> {
+    if packet_key != "dev_task" {
+        return None;
+    }
+
+    let tracked_design_doc_path = tracked
+        .get("design_doc_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let design_doc_path = tracked_design_doc_path.map(|path| project_root.join(path));
+    let design_doc_path = design_doc_path
+        .as_ref()
+        .map(|path| path.display().to_string());
+
+    Some(TaskPlannerMetadata {
+        owned_paths: crate::runtime_dispatch_packets::tracked_design_doc_bounded_file_set_paths(
+            design_doc_path.as_deref(),
+        ),
+        ..TaskPlannerMetadata::default()
+    })
 }
 
 pub(crate) fn run_docflow_cli_command(
@@ -456,6 +507,7 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         parent_id: None,
         labels: &["feature-request", "spec-first"],
         description: Some(request_text),
+        planner_metadata: None,
     })?;
     if epic_created {
         changed_files.push(format!("taskflow:{epic_task_id}"));
@@ -471,6 +523,7 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         parent_id: Some(epic_task_id),
         labels: &["spec-pack", "documentation"],
         description: Some("bounded design/spec packet for the feature request"),
+        planner_metadata: None,
     })?;
     if spec_created {
         changed_files.push(format!("taskflow:{spec_task_id}"));
@@ -619,6 +672,7 @@ pub(crate) fn execute_work_packet_create_with_store(
         "tracked dev packet created from runtime consumption"
     };
     let mut changed_files = Vec::new();
+    let packet_planner_metadata = tracked_task_planner_metadata(project_root, packet_key, &tracked);
 
     let (_, epic_created) = create_task_if_missing_with_store(TaskCreationArgs {
         store,
@@ -630,6 +684,7 @@ pub(crate) fn execute_work_packet_create_with_store(
         parent_id: None,
         labels: &["feature-request"],
         description: Some("tracked feature epic for runtime-consumption dispatch"),
+        planner_metadata: None,
     })?;
     if epic_created {
         changed_files.push(format!("taskflow:{epic_task_id}"));
@@ -645,10 +700,13 @@ pub(crate) fn execute_work_packet_create_with_store(
         parent_id: Some(epic_task_id),
         labels: &[packet_label],
         description: Some(packet_description),
+        planner_metadata: packet_planner_metadata,
     })?;
     if packet_created {
         changed_files.push(format!("taskflow:{task_id}"));
     }
+
+    crate::block_on_state_store(store.refresh_task_snapshot())?;
 
     Ok(serde_json::json!({
         "surface": "vida task ensure",
@@ -717,6 +775,81 @@ mod tests {
                 .exists(),
             ".vida receipt latest pointer should exist"
         );
+        fs::remove_dir_all(&unique_root).expect("cleanup should succeed");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn execute_work_packet_create_with_store_projects_design_scope_into_dev_task_planner_metadata_and_snapshot(
+    ) {
+        let unique_root = std::env::temp_dir().join(format!(
+            "vida-dev-pack-planner-metadata-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time should flow")
+                .as_nanos()
+        ));
+        fs::create_dir_all(unique_root.join(crate::state_store::default_state_dir()))
+            .expect("state root should be creatable");
+        let design_doc_path = unique_root.join("docs/product/spec/example-design.md");
+        fs::create_dir_all(
+            design_doc_path
+                .parent()
+                .expect("design doc parent should exist"),
+        )
+        .expect("design doc parent should be creatable");
+        fs::write(
+            &design_doc_path,
+            "## Bounded File Set\n- `crates/vida/src/runtime_dispatch_state.rs`\n- `crates/vida/src/taskflow_spec_bootstrap.rs`\n",
+        )
+        .expect("design doc should write");
+
+        let state_root = unique_root.join(crate::state_store::default_state_dir());
+        let store = crate::StateStore::open(state_root.clone())
+            .await
+            .expect("state store should open");
+        let tracked = serde_json::json!({
+            "epic": {
+                "task_id": "feature-example",
+                "title": "Feature example"
+            },
+            "dev_task": {
+                "task_id": "feature-example-dev",
+                "title": "Dev pack"
+            },
+            "design_doc_path": "docs/product/spec/example-design.md"
+        });
+
+        execute_work_packet_create_with_store(
+            &unique_root,
+            &store,
+            "continue development",
+            &tracked,
+            "dev_task",
+        )
+        .expect("dev packet ensure should succeed");
+
+        let task = crate::block_on_state_store(store.show_task("feature-example-dev"))
+            .expect("dev task should exist");
+        assert_eq!(
+            task.planner_metadata.owned_paths,
+            vec![
+                "crates/vida/src/runtime_dispatch_state.rs".to_string(),
+                "crates/vida/src/taskflow_spec_bootstrap.rs".to_string()
+            ]
+        );
+        let snapshot_path =
+            crate::StateStore::canonical_task_snapshot_path_for_state_root(&state_root);
+        let snapshot_rows = crate::StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path)
+            .expect("task snapshot should refresh after taskflow-pack task mutation");
+        let snapshot_task = snapshot_rows
+            .iter()
+            .find(|row| row.id == "feature-example-dev")
+            .expect("dev task should be present in refreshed task snapshot");
+        assert_eq!(
+            snapshot_task.planner_metadata.owned_paths,
+            task.planner_metadata.owned_paths
+        );
+
         fs::remove_dir_all(&unique_root).expect("cleanup should succeed");
     }
 }

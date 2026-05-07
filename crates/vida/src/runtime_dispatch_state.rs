@@ -25,7 +25,7 @@ use crate::runtime_dispatch_packets::explicit_request_scope_paths;
 #[cfg(test)]
 use crate::runtime_dispatch_packets::runtime_delivery_task_packet;
 use crate::runtime_dispatch_packets::{
-    delivery_packet_owned_paths, request_has_explicit_owned_scope, runtime_coach_review_packet,
+    delivery_packet_owned_paths, runtime_coach_review_packet,
     runtime_delivery_task_packet_with_scope_context, runtime_escalation_packet,
     runtime_execution_block_packet, runtime_verifier_proof_packet, single_task_move_scope_paths,
 };
@@ -4878,8 +4878,23 @@ fn request_missing_owned_write_scope_for_dispatch_target(
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_target: &str,
 ) -> bool {
-    dispatch_target_requires_owned_write_scope(role_selection, dispatch_target)
-        && !request_has_explicit_owned_scope(&role_selection.request)
+    if !dispatch_target_requires_owned_write_scope(role_selection, dispatch_target) {
+        return false;
+    }
+
+    let (_, _, _, activation_runtime_role) =
+        downstream_activation_fields(role_selection, dispatch_target);
+    let handoff_runtime_role = activation_runtime_role
+        .as_deref()
+        .unwrap_or(role_selection.selected_role.as_str());
+    let handoff_task_class =
+        runtime_packet_handoff_task_class(dispatch_target, handoff_runtime_role);
+    delivery_packet_owned_paths(
+        handoff_task_class,
+        &role_selection.request,
+        tracked_design_doc_path(role_selection),
+    )
+    .is_empty()
 }
 
 fn single_task_move_scope_owned_paths(packet: &serde_json::Value) -> Option<Vec<String>> {
