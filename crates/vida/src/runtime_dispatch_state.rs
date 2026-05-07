@@ -4458,7 +4458,15 @@ pub(crate) fn runtime_dispatch_packet_kind(
     dispatch_contract_lane(execution_plan, dispatch_target)
         .and_then(|lane| json_string(lane.get("packet_template_kind")))
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "delivery_task_packet".to_string())
+        .unwrap_or_else(|| match dispatch_target {
+            "coach" => "coach_review_packet".to_string(),
+            "verification" => "verifier_proof_packet".to_string(),
+            "escalation" => "escalation_packet".to_string(),
+            "specification" | "analysis" | "planning" | "implementer" | "orchestrator" => {
+                "delivery_task_packet".to_string()
+            }
+            _ => "delivery_task_packet".to_string(),
+        })
 }
 
 pub(crate) async fn derive_downstream_dispatch_preview(
@@ -4575,7 +4583,18 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     .and_then(serde_json::Value::as_str)
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .unwrap_or("writer");
+                    .filter(|value| {
+                        dispatch_contract_lane(&role_selection.execution_plan, value).is_some()
+                            || execution_lane_sequence
+                                .iter()
+                                .any(|candidate| candidate == value)
+                    })
+                    .or_else(|| execution_lane_sequence.first().map(String::as_str))
+                    .unwrap_or("implementer");
+                let missing_owned_scope = request_missing_owned_write_scope_for_dispatch_target(
+                    role_selection,
+                    writer_target,
+                );
                 return (
                     Some(writer_target.to_string()),
                     Some("vida agent-init".to_string()),
@@ -4583,8 +4602,12 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                         "after `{}` validation evidence is recorded, activate `{}` for the first implementation lane",
                         receipt.dispatch_target, writer_target
                     )),
-                    true,
-                    Vec::new(),
+                    !missing_owned_scope,
+                    if missing_owned_scope {
+                        vec![missing_owned_write_scope_blocker()]
+                    } else {
+                        Vec::new()
+                    },
                 );
             }
             if current_lane.and_then(|lane| lane["stage"].as_str()) == Some("design_gate")
@@ -7062,6 +7085,39 @@ mod tests {
             ),
         });
         assert!(validate_runtime_dispatch_packet_contract(&verifier, "test packet").is_ok());
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_kind_defaults_role_targets_to_packet_families() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "lanes": [
+                        { "id": "coach" },
+                        { "id": "verification" },
+                        { "id": "escalation" },
+                        { "id": "implementer" }
+                    ]
+                }
+            }
+        });
+
+        assert_eq!(
+            runtime_dispatch_packet_kind(&execution_plan, "coach", "agent_lane"),
+            "coach_review_packet"
+        );
+        assert_eq!(
+            runtime_dispatch_packet_kind(&execution_plan, "verification", "agent_lane"),
+            "verifier_proof_packet"
+        );
+        assert_eq!(
+            runtime_dispatch_packet_kind(&execution_plan, "escalation", "agent_lane"),
+            "escalation_packet"
+        );
+        assert_eq!(
+            runtime_dispatch_packet_kind(&execution_plan, "implementer", "agent_lane"),
+            "delivery_task_packet"
+        );
     }
 
     #[test]
@@ -12563,7 +12619,7 @@ mod tests {
     }
 
     #[test]
-    fn derive_downstream_dispatch_preview_routes_analysis_evidence_to_first_execution_lane() {
+    fn derive_downstream_dispatch_preview_ignores_unconfigured_writer_alias_after_analysis() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let state_root = harness.path().join(crate::state_store::default_state_dir());
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
@@ -12610,10 +12666,10 @@ mod tests {
             let (next_target, command, note, next_ready, next_blockers) =
                 derive_downstream_dispatch_preview(&store, &role_selection, &receipt).await;
 
-            assert_eq!(next_target.as_deref(), Some("writer"));
+            assert_eq!(next_target.as_deref(), Some("implementer"));
             assert_eq!(command.as_deref(), Some("vida agent-init"));
-            assert!(next_ready);
-            assert!(next_blockers.is_empty());
+            assert!(!next_ready);
+            assert_eq!(next_blockers, vec!["missing_owned_write_scope".to_string()]);
             assert!(note
                 .as_deref()
                 .unwrap_or_default()
