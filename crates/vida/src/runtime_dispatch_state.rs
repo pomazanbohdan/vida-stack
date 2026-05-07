@@ -6216,6 +6216,198 @@ mod tests {
         }
     }
 
+    fn work_pool_pack_test_role_selection() -> RuntimeConsumptionLaneSelection {
+        RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "shape tracked work pool".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("work-pool-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["work-pool".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: json!({
+                "tracked_flow_bootstrap": {
+                    "epic": {
+                        "task_id": "feature-x",
+                        "title": "Feature X"
+                    },
+                    "work_pool_task": {
+                        "task_id": "feature-x-work-pool",
+                        "title": "Work-pool pack",
+                        "runtime": "vida taskflow",
+                        "inspect_command": "vida task show feature-x-work-pool --json",
+                        "ensure_command": "vida task ensure feature-x-work-pool \"Work-pool pack\" --type task --status open --json",
+                        "create_command": "vida task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json",
+                        "close_command": "vida task close feature-x-work-pool --reason \"work-pool shaped\" --json",
+                        "required": true
+                    },
+                    "dev_task": {
+                        "task_id": "feature-x-dev",
+                        "title": "Dev pack",
+                        "runtime": "vida taskflow",
+                        "inspect_command": "vida task show feature-x-dev --json",
+                        "ensure_command": "vida task ensure feature-x-dev \"Dev pack\" --type task --status open --json",
+                        "create_command": "vida task create feature-x-dev \"Dev pack\" --type task --status open --json",
+                        "close_command": "vida task close feature-x-dev --reason \"implemented\" --json",
+                        "required": true
+                    }
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["implementer", "coach"],
+                        "lane_catalog": {
+                            "implementer": {
+                                "dispatch_target": "implementer",
+                                "completion_blocker": "pending_implementation_evidence",
+                                "activation": {
+                                    "activation_agent_type": "junior",
+                                    "activation_runtime_role": "worker"
+                                }
+                            },
+                            "coach": {
+                                "dispatch_target": "coach",
+                                "completion_blocker": "pending_review_clean_evidence",
+                                "activation": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "coach"
+                                }
+                            }
+                        }
+                    }
+                },
+                "orchestration_contract": {}
+            }),
+            reason: "test".to_string(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn work_pool_taskflow_pack_execute_dispatch_persists_executed_receipt() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-work-pool-taskflow-pack-execute-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let state_root = root.join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let store = crate::StateStore::open(state_root.clone())
+            .await
+            .expect("state store should open");
+        store
+            .record_run_graph_status(&crate::state_store::RunGraphStatus {
+                run_id: "run-work-pool-execute".to_string(),
+                task_id: "run-work-pool-execute".to_string(),
+                task_class: "pbi_discussion".to_string(),
+                active_node: "work-pool-pack".to_string(),
+                next_node: None,
+                status: "ready".to_string(),
+                route_task_class: "work-pool-pack".to_string(),
+                selected_backend: "taskflow_state_store".to_string(),
+                lane_id: "work_pool_pack_direct".to_string(),
+                lifecycle_stage: "work_pool_pack_ready".to_string(),
+                policy_gate: "single_task_scope_required".to_string(),
+                handoff_state: "none".to_string(),
+                context_state: "sealed".to_string(),
+                checkpoint_kind: "conversation_cursor".to_string(),
+                resume_target: "dispatch.work-pool-pack".to_string(),
+                recovery_ready: true,
+            })
+            .await
+            .expect("run graph status should persist");
+        drop(store);
+
+        let role_selection = work_pool_pack_test_role_selection();
+        let run_graph_bootstrap = json!({ "run_id": "run-work-pool-execute" });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-work-pool-execute".to_string(),
+            dispatch_target: "work-pool-pack".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida task ensure".to_string()),
+            dispatch_command: Some(
+                "vida task ensure feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+                    .to_string(),
+            ),
+            dispatch_packet_path: Some("/tmp/work-pool-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: Some("dev-pack".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_work_pool_shape".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("work-pool-pack".to_string()),
+            downstream_dispatch_last_target: Some("work-pool-pack".to_string()),
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("taskflow_state_store".to_string()),
+            recorded_at: "2026-05-07T00:00:00Z".to_string(),
+        };
+
+        execute_and_record_dispatch_receipt(
+            &state_root,
+            &role_selection,
+            &run_graph_bootstrap,
+            &mut receipt,
+        )
+        .await
+        .expect("work-pool taskflow pack execution should persist");
+
+        let store = crate::StateStore::open_existing(state_root.clone())
+            .await
+            .expect("state store should reopen");
+        let persisted = store
+            .run_graph_dispatch_receipt("run-work-pool-execute")
+            .await
+            .expect("receipt lookup should succeed")
+            .expect("receipt should persist");
+        assert_eq!(persisted.dispatch_status, "executed");
+        assert_eq!(persisted.blocker_code, None);
+        assert_eq!(
+            persisted.downstream_dispatch_target.as_deref(),
+            Some("dev-pack")
+        );
+        assert!(persisted.downstream_dispatch_ready);
+        assert!(persisted.downstream_dispatch_blockers.is_empty());
+
+        let result_path = persisted
+            .dispatch_result_path
+            .as_deref()
+            .expect("dispatch result path should persist");
+        let result_body =
+            fs::read_to_string(result_path).expect("dispatch result artifact should load");
+        let result: serde_json::Value =
+            serde_json::from_str(&result_body).expect("dispatch result should parse");
+        assert_eq!(
+            result["activation_vs_execution_evidence"]["activation_kind"],
+            "execution_evidence"
+        );
+        assert_eq!(
+            result["execution_evidence"]["evidence_kind"],
+            "taskflow_pack_execution"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn build_taskflow_handoff_plan_emits_canonical_execution_preparation_artifacts() {
         let role_selection = RuntimeConsumptionLaneSelection {

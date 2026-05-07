@@ -653,6 +653,7 @@ pub(crate) fn execute_work_packet_create_with_store(
     Ok(serde_json::json!({
         "surface": "vida task ensure",
         "status": "pass",
+        "execution_state": "executed",
         "packet_key": packet_key,
         "epic": {
             "task_id": epic_task_id,
@@ -663,6 +664,14 @@ pub(crate) fn execute_work_packet_create_with_store(
             "created": packet_created,
             "reused_existing": !packet_created,
             "label": packet_label,
+        },
+        "execution_evidence": {
+            "status": "recorded",
+            "receipt_backed": true,
+            "evidence_kind": "taskflow_pack_execution",
+            "surface": "vida task ensure",
+            "packet_key": packet_key,
+            "task_id": task_id,
         },
         "changed_files": changed_files,
     }))
