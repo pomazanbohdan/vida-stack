@@ -1470,9 +1470,11 @@ fn assignment_selected_model_profile_for_backend(
     backend_id: &str,
 ) -> Option<String> {
     let backend_id = backend_id.trim();
-    if backend_id.is_empty()
-        || !runtime_assignment_has_authoritative_truth(assignment)
-        || !assignment_matches_backend(assignment, backend_id)
+    if backend_id.is_empty() || !runtime_assignment_has_authoritative_truth(assignment) {
+        return None;
+    }
+    if !assignment_matches_backend(assignment, backend_id)
+        && !assignment_selected_model_profile_can_bridge_internal_subagents(assignment, backend_id)
     {
         return None;
     }
@@ -1482,6 +1484,25 @@ fn assignment_selected_model_profile_for_backend(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn assignment_selected_model_profile_can_bridge_internal_subagents(
+    assignment: &serde_json::Value,
+    backend_id: &str,
+) -> bool {
+    if backend_id != "internal_subagents" {
+        return false;
+    }
+    let provider = json_string(assignment.get("selected_model_provider"))
+        .or_else(|| json_string(assignment.get("model_provider")))
+        .unwrap_or_default();
+    if !matches!(provider.as_str(), "openai" | "internal") {
+        return false;
+    }
+    assignment
+        .get("selected_codex_cli_readiness")
+        .filter(|readiness| readiness["blocked"].as_bool() == Some(true))
+        .is_none()
 }
 
 fn route_assignment_selected_model_profile_for_backend(
@@ -6521,6 +6542,56 @@ mod tests {
         );
 
         assert_eq!(selected_profile.as_deref(), Some("codex_gpt54_low_write"));
+    }
+
+    #[test]
+    fn verification_internal_subagents_bridge_profile_uses_route_assignment_readiness() {
+        let mut execution_plan = agent_lane_test_execution_plan("internal_subagents");
+        execution_plan["development_flow"]["verification"] = json!({
+            "executor_backend": "hermes_cli",
+            "fallback_executor_backend": "internal_subagents",
+            "profiles": {
+                "internal_subagents": "codex_gpt55_high_readonly"
+            },
+            "carrier_runtime_assignment": {
+                "selected_backend_id": "senior",
+                "selected_carrier_id": "senior",
+                "selected_model_provider": "openai",
+                "selected_model_profile_id": "codex_gpt54_high_readonly",
+                "selected_codex_cli_readiness": {
+                    "blocked": false,
+                    "status": "codex_cli_ready"
+                }
+            }
+        });
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "verify the bounded implementation".to_string(),
+            selected_role: "verifier".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["verification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan,
+            reason: "test".to_string(),
+        };
+
+        let selected_profile = preferred_selected_model_profile_for_dispatch_target(
+            &role_selection,
+            "verification",
+            Some("internal_subagents"),
+        );
+
+        assert_eq!(
+            selected_profile.as_deref(),
+            Some("codex_gpt54_high_readonly")
+        );
     }
 
     #[test]
