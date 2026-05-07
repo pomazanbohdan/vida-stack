@@ -184,7 +184,7 @@ jobs:
             vida init >/tmp/vida-init.txt
           )
 
-          grep -q "TaskFlow CLI" /tmp/taskflow-help.txt
+          grep -q "VIDA TaskFlow runtime family" /tmp/taskflow-help.txt
           grep -q "Standalone DocFlow CLI" /tmp/docflow-help.txt
           grep -q "mode: agent_bootstrap" /tmp/docflow-init.txt
           grep -q '"mode":"agent_bootstrap"' /tmp/docflow-init.json
