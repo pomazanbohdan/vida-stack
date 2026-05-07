@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use time::format_description::well_known::Rfc3339;
@@ -9,6 +9,7 @@ pub(crate) const DOCFLOW_READINESS_CURRENT_PATH: &str =
     "vida/config/docflow-readiness.current.jsonl";
 pub(crate) const DOCFLOW_PROOF_CURRENT_PATH: &str = "vida/config/docflow-proof.current.jsonl";
 const MAX_LAUNCHER_BINARY_BYTES: u64 = 256 * 1024 * 1024;
+const OVERSIZED_LAUNCHER_FINGERPRINT_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, serde::Serialize, Clone, PartialEq, Eq)]
 pub(crate) struct LauncherBinaryEvidence {
@@ -90,7 +91,7 @@ pub(crate) fn doctor_launcher_summary_for_root(
 }
 
 fn launcher_binary_fingerprint(path: &Path) -> Result<String, String> {
-    let file = std::fs::File::open(path).map_err(|error| {
+    let mut file = std::fs::File::open(path).map_err(|error| {
         format!(
             "failed to open launcher binary `{}`: {error}",
             path.display()
@@ -98,11 +99,7 @@ fn launcher_binary_fingerprint(path: &Path) -> Result<String, String> {
     })?;
     let size = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
     if size > MAX_LAUNCHER_BINARY_BYTES {
-        return Err(format!(
-            "launcher binary `{}` exceeds max fingerprint size of {} bytes",
-            path.display(),
-            MAX_LAUNCHER_BINARY_BYTES
-        ));
+        return oversized_launcher_binary_fingerprint(&mut file, path, size);
     }
     let mut reader = std::io::BufReader::new(file);
     let mut hasher = blake3::Hasher::new();
@@ -129,6 +126,43 @@ fn launcher_binary_fingerprint(path: &Path) -> Result<String, String> {
         hasher.update(&chunk[..read]);
     }
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn oversized_launcher_binary_fingerprint(
+    file: &mut std::fs::File,
+    path: &Path,
+    size: u64,
+) -> Result<String, String> {
+    let head = launcher_binary_chunk_hash(file, path, 0)?;
+    let tail_offset = size.saturating_sub(OVERSIZED_LAUNCHER_FINGERPRINT_CHUNK_BYTES as u64);
+    let tail = launcher_binary_chunk_hash(file, path, tail_offset)?;
+    Ok(format!(
+        "oversized-partial-blake3:size={size}:head={head}:tail={tail}"
+    ))
+}
+
+fn launcher_binary_chunk_hash(
+    file: &mut std::fs::File,
+    path: &Path,
+    offset: u64,
+) -> Result<String, String> {
+    file.seek(SeekFrom::Start(offset)).map_err(|error| {
+        format!(
+            "failed to seek launcher binary `{}` at byte {}: {error}",
+            path.display(),
+            offset
+        )
+    })?;
+    let mut buffer = vec![0_u8; OVERSIZED_LAUNCHER_FINGERPRINT_CHUNK_BYTES];
+    let read = file.read(&mut buffer).map_err(|error| {
+        format!(
+            "failed to read launcher binary `{}` at byte {}: {error}",
+            path.display(),
+            offset
+        )
+    })?;
+    buffer.truncate(read);
+    Ok(blake3::hash(&buffer).to_hex().to_string())
 }
 
 fn installed_launcher_binary_evidence(
@@ -755,6 +789,31 @@ mod tests {
                 == PathBuf::from(&summary.active_executable_path)
                     .canonicalize()
                     .expect("active executable path should canonicalize")));
+    }
+
+    #[test]
+    fn launcher_binary_fingerprint_handles_oversized_debug_harnesses() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-oversized-launcher-fingerprint-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&root).expect("temp root should write");
+        let binary = root.join("vida-debug-harness");
+        let file = std::fs::File::create(&binary).expect("oversized fixture should create");
+        file.set_len(super::MAX_LAUNCHER_BINARY_BYTES + 1)
+            .expect("oversized fixture length should set");
+        drop(file);
+
+        let fingerprint = super::launcher_binary_fingerprint(&binary)
+            .expect("oversized fingerprint should build");
+
+        assert!(fingerprint.starts_with("oversized-partial-blake3:size="));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

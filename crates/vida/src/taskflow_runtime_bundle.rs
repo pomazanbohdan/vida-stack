@@ -2881,9 +2881,8 @@ mod tests {
 
     #[test]
     fn bundle_project_root_prefers_authoritative_state_root_over_config_parent() {
-        let state_root = std::env::current_dir()
-            .expect("current dir should resolve")
-            .join(".vida/data/state");
+        let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let state_root = project_root.join(".vida/data/state");
         let selected = bundle_project_root(&state_root, "")
             .expect("project root should resolve from authoritative state root");
         let expected = crate::taskflow_task_bridge::infer_project_root_from_state_root(&state_root)

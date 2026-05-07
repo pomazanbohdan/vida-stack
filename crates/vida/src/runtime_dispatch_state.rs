@@ -6,8 +6,9 @@ use super::*;
 use crate::release1_contracts::canonical_lane_status_str;
 use crate::runtime_contract_vocab::{
     RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM,
-    RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER, TASK_CLASS_ARCHITECTURE,
-    TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION, TASK_CLASS_VERIFICATION,
+    RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER, RUNTIME_ROLE_WORKER,
+    TASK_CLASS_ARCHITECTURE, TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION,
+    TASK_CLASS_VERIFICATION,
 };
 #[cfg(test)]
 use crate::runtime_dispatch_downstream_packets::downstream_dispatch_packet_body;
@@ -618,6 +619,24 @@ fn missing_agent_lane_dispatch_packet_error(dispatch_target: &str) -> String {
     format!("Agent lane dispatch for `{dispatch_target}` is missing dispatch_packet_path")
 }
 
+fn default_runtime_role_for_dispatch_target(dispatch_target: &str) -> Option<&'static str> {
+    match dispatch_target {
+        "specification" | "spec-pack" => Some(RUNTIME_ROLE_BUSINESS_ANALYST),
+        "implementer" | "implementation" | "dev-pack" => Some(RUNTIME_ROLE_WORKER),
+        "coach" => Some(RUNTIME_ROLE_COACH),
+        "verification" => Some(RUNTIME_ROLE_VERIFIER),
+        "execution_preparation" | "architecture" => Some(RUNTIME_ROLE_SOLUTION_ARCHITECT),
+        _ => None,
+    }
+}
+
+fn runtime_assignment_runtime_role(execution_plan: &serde_json::Value) -> Option<String> {
+    let assignment = runtime_assignment_from_execution_plan(execution_plan);
+    json_string(assignment.get("activation_runtime_role"))
+        .or_else(|| json_string(assignment.get("runtime_role")))
+        .or_else(|| json_string(assignment.get("selected_runtime_role")))
+}
+
 pub(crate) fn downstream_activation_fields(
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_target: &str,
@@ -647,6 +666,11 @@ pub(crate) fn downstream_activation_fields(
                     json_string(
                         dispatch_contract_lane_activation(row).get("activation_runtime_role"),
                     )
+                    .or_else(|| json_string(row.get("runtime_role")))
+                })
+                .or_else(|| runtime_assignment_runtime_role(&role_selection.execution_plan))
+                .or_else(|| {
+                    default_runtime_role_for_dispatch_target(dispatch_target).map(str::to_string)
                 }),
             )
         }
