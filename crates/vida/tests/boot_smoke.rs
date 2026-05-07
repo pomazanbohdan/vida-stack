@@ -174,6 +174,172 @@ fn write_executable_script(path: &str, body: &str) {
     set_executable_permissions(path, "script");
 }
 
+struct FakeHostCliFixture {
+    bin_dir: String,
+    home_dir: String,
+}
+
+impl FakeHostCliFixture {
+    fn new(command_versions: &[(&str, &str)]) -> Self {
+        let root = unique_state_dir();
+        let bin_dir = format!("{root}/bin");
+        let home_dir = format!("{root}/home");
+        fs::create_dir_all(&bin_dir).expect("fake host CLI bin dir should exist");
+        fs::create_dir_all(&home_dir).expect("fake host CLI home should exist");
+
+        for (command, version_output) in command_versions {
+            write_fake_host_cli_command(&bin_dir, command, version_output);
+        }
+        seed_fake_external_cli_readiness_home(&home_dir);
+
+        Self { bin_dir, home_dir }
+    }
+
+    fn launch_script_path(&self, command: &str) -> String {
+        fake_host_cli_launch_script_path(&self.bin_dir, command)
+    }
+
+    fn apply_to(&self, command: &mut Command) {
+        prepend_command_path(command, &self.bin_dir);
+        command.env("HOME", &self.home_dir);
+        #[cfg(windows)]
+        command.env("USERPROFILE", &self.home_dir);
+    }
+}
+
+fn fake_host_cli_command_path(bin_dir: &str, command: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("{bin_dir}/{command}.cmd")
+    }
+    #[cfg(not(windows))]
+    {
+        format!("{bin_dir}/{command}")
+    }
+}
+
+fn fake_host_cli_launch_script_path(bin_dir: &str, command: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("{bin_dir}/{command}.ps1")
+    }
+    #[cfg(not(windows))]
+    {
+        fake_host_cli_command_path(bin_dir, command)
+    }
+}
+
+fn write_fake_host_cli_command(bin_dir: &str, command: &str, version_output: &str) {
+    let path = fake_host_cli_command_path(bin_dir, command);
+    #[cfg(windows)]
+    let body = format!(
+        "@echo off\r\n\
+         if \"%~1\"==\"--version\" (\r\n\
+         echo {version_output}\r\n\
+         exit /b 0\r\n\
+         )\r\n\
+         if \"%~1\"==\"version\" (\r\n\
+         echo {version_output}\r\n\
+         exit /b 0\r\n\
+         )\r\n\
+         echo {{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"fixture host CLI completed\"}}}}\r\n\
+         exit /b 0\r\n"
+    );
+    #[cfg(not(windows))]
+    let body = format!(
+        "#!/bin/sh\n\
+         case \"${{1:-}}\" in\n\
+         --version|version|-V)\n\
+           printf '%s\\n' '{version_output}'\n\
+           exit 0\n\
+           ;;\n\
+         esac\n\
+         printf '%s\\n' '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"fixture host CLI completed\"}}}}'\n\
+         exit 0\n"
+    );
+    write_executable_script(&path, &body);
+    #[cfg(windows)]
+    {
+        let ps1_path = fake_host_cli_launch_script_path(bin_dir, command);
+        let ps1_body = format!(
+            "param([Parameter(ValueFromRemainingArguments=$true)][string[]]$RemainingArgs)\r\n\
+             if ($RemainingArgs.Count -gt 0 -and ($RemainingArgs[0] -in @('--version', 'version', '-V')) {{\r\n\
+             Write-Output '{version_output}'\r\n\
+             exit 0\r\n\
+             }}\r\n\
+             Write-Output '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"fixture host CLI completed\"}}}}'\r\n\
+             exit 0\r\n"
+        );
+        fs::write(&ps1_path, ps1_body).expect("PowerShell fake host CLI should be written");
+    }
+}
+
+fn prepend_command_path(command: &mut Command, first_path: &str) {
+    let mut entries = vec![PathBuf::from(first_path)];
+    if let Some(existing) = std::env::var_os("PATH") {
+        entries.extend(std::env::split_paths(&existing));
+    }
+    let joined = std::env::join_paths(entries).expect("test PATH should join");
+    command.env("PATH", joined);
+}
+
+fn seed_fake_external_cli_readiness_home(home_dir: &str) {
+    write_file(
+        &format!("{home_dir}/.local/share/opencode/auth.json"),
+        "{}\n",
+    );
+    write_file(
+        &format!("{home_dir}/.local/state/opencode/model.json"),
+        &serde_json::json!({
+            "recent": [{
+                "providerID": "opencode",
+                "modelID": "minimax-m2.5-free"
+            }]
+        })
+        .to_string(),
+    );
+    write_file(&format!("{home_dir}/.local/share/kilo/auth.json"), "{}\n");
+    write_file(
+        &format!("{home_dir}/.local/state/kilo/model.json"),
+        &serde_json::json!({
+            "model": {
+                "code": {
+                    "providerID": "x-ai",
+                    "modelID": "grok-code-fast-1:optimized:free"
+                }
+            }
+        })
+        .to_string(),
+    );
+    write_file(&format!("{home_dir}/.vibe/.env"), "VIBE_API_KEY=test\n");
+    write_file(
+        &format!("{home_dir}/.vibe/config.toml"),
+        "active_model = \"devstral-2\"\n",
+    );
+}
+
+fn override_project_codex_dispatch_command(project_root: &str, command_path: &str) {
+    let config_path = format!("{project_root}/vida.config.yaml");
+    let body = fs::read_to_string(&config_path).expect("project config should read");
+    let command_path = portable_test_path(command_path).replace('"', "\\\"");
+    let command_block =
+        "        command: codex\n        static_args:\n          - exec\n          - --json\n";
+    #[cfg(windows)]
+    let replacement = format!(
+        "        command: powershell\n        static_args:\n          - -NoProfile\n          - -ExecutionPolicy\n          - Bypass\n          - -File\n          - \"{command_path}\"\n          - exec\n          - --json\n"
+    );
+    #[cfg(not(windows))]
+    let replacement = format!(
+        "        command: \"{command_path}\"\n        static_args:\n          - exec\n          - --json\n"
+    );
+    let updated = body.replacen(command_block, &replacement, 1);
+    assert_ne!(
+        body, updated,
+        "project config should expose codex dispatch command"
+    );
+    atomic_write_file(&config_path, &updated);
+}
+
 fn copy_executable(from: &str, to: &str) {
     fs::copy(from, to).expect("binary should be copied");
     set_executable_permissions(to, "copied binary");
@@ -1848,12 +2014,30 @@ fn taskflow_graph_summary_reports_ready_blocked_and_critical_path() {
 
 #[test]
 fn taskflow_graph_explain_reports_projection_truth() {
-    let output = vida()
-        .args(["taskflow", "graph", "explain", "--json"])
-        .output()
-        .expect("taskflow graph explain should run");
+    let state_dir = unique_state_dir();
+    let boot = boot_with_retry(&state_dir);
+    assert!(
+        boot.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&boot.stdout),
+        String::from_utf8_lossy(&boot.stderr)
+    );
 
+    let output = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "taskflow graph explain should run",
+        |command| {
+            command
+                .args(["taskflow", "graph", "explain", "--json"])
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.trim().is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("taskflow graph explain json should parse");
     assert_eq!(parsed["surface"], "vida taskflow graph explain");
@@ -2294,6 +2478,13 @@ fn agent_dispatch_next_preview_aligns_scheduler_preview_selected_lanes_and_unsaf
         String::from_utf8_lossy(&boot.stderr)
     );
     seed_scheduler_execute_smoke_tasks(&state_dir);
+    let fake_host_cli = FakeHostCliFixture::new(&[
+        ("codex", "codex-cli 0.114.0"),
+        ("hermes", "hermes 1.0.0"),
+        ("opencode", "opencode 1.0.0"),
+        ("kilo", "kilo 1.0.0"),
+        ("vibe", "vibe 1.0.0"),
+    ]);
 
     let scheduler_output = bounded_vida_output(
         &["-k", "5s", "20s"],
@@ -2322,11 +2513,10 @@ fn agent_dispatch_next_preview_aligns_scheduler_preview_selected_lanes_and_unsaf
     let scheduler: serde_json::Value =
         serde_json::from_slice(&scheduler_output.stdout).expect("scheduler json should parse");
 
-    let agent_output = bounded_vida_output(
-        &["-k", "5s", "20s"],
-        "agent dispatch-next preview should run",
-        |command| {
-            command.args([
+    let agent_output = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
                 "agent",
                 "dispatch-next",
                 "--current-task-id",
@@ -2336,9 +2526,11 @@ fn agent_dispatch_next_preview_aligns_scheduler_preview_selected_lanes_and_unsaf
                 "--lanes",
                 "2",
                 "--json",
-            ]);
-        },
-    );
+            ])
+            .env("VIDA_TEST_CODEX_CLI_VERSION_OUTPUT", "codex-cli 0.114.0");
+        fake_host_cli.apply_to(&mut command);
+        command
+    });
     assert!(
         agent_output.status.success(),
         "{}{}",
@@ -4940,6 +5132,11 @@ fn taskflow_consume_continue_accepts_explicit_downstream_packet_path() {
         "continue-explicit-downstream-packet",
         "Continue Explicit Downstream Packet",
     );
+    let fake_host_cli = FakeHostCliFixture::new(&[("codex", "codex-cli 0.114.0")]);
+    override_project_codex_dispatch_command(
+        &project_root,
+        &fake_host_cli.launch_script_path("codex"),
+    );
 
     let initial = project_bound_taskflow_consume_final_with_timeout(
         &project_root,
@@ -5001,14 +5198,24 @@ fn taskflow_consume_continue_accepts_explicit_downstream_packet_path() {
         snapshot_path,
         &serde_json::to_string_pretty(&snapshot_body).expect("mutated snapshot should render"),
     );
-    let resumed = project_bound_taskflow_consume_continue_with_timeout(
-        &project_root,
-        &state_dir,
-        &[
-            "--downstream-packet",
-            downstream_dispatch_packet_path,
-            "--json",
-        ],
+    let resumed = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "taskflow consume continue should run",
+        |command| {
+            command
+                .args(["taskflow", "consume", "continue"])
+                .args([
+                    "--downstream-packet",
+                    downstream_dispatch_packet_path,
+                    "--json",
+                ])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .env("VIDA_TEST_CODEX_CLI_VERSION_OUTPUT", "codex-cli 0.114.0");
+            fake_host_cli.apply_to(command);
+        },
     );
     assert!(
         resumed.status.success(),
