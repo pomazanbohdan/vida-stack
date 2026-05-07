@@ -978,6 +978,91 @@ fn route_has_backend_hints(execution_plan: &serde_json::Value, route: &serde_jso
         || !fanout_executor_backends_from_route(route).is_empty()
 }
 
+fn rejected_candidate_matches_backend(candidate: &serde_json::Value, backend_id: &str) -> bool {
+    ["carrier_id", "backend_id", "selected_backend_id"]
+        .into_iter()
+        .any(|key| {
+            candidate
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                == Some(backend_id)
+        })
+}
+
+fn rejected_candidate_marks_external_backend_unready(
+    candidate: &serde_json::Value,
+    backend_id: &str,
+) -> bool {
+    if !rejected_candidate_matches_backend(candidate, backend_id) {
+        return false;
+    }
+    let readiness = &candidate["external_backend_readiness"];
+    if readiness["blocked"].as_bool() == Some(true)
+        || readiness["status"].as_str().is_some_and(|status| {
+            matches!(
+                status,
+                "external_cli_command_not_found"
+                    | "interactive_auth_required"
+                    | "external_cli_provider_auth_failed"
+                    | "tool_contract_incomplete"
+            )
+        })
+    {
+        return true;
+    }
+    candidate["reason"].as_str() == Some("external_backend_not_ready")
+        || candidate["reasons"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|reason| reason.as_str() == Some("external_backend_not_ready"))
+}
+
+fn assignment_marks_backend_unready(assignment: &serde_json::Value, backend_id: &str) -> bool {
+    let selected_external_readiness = assignment
+        .get("selected_external_backend_readiness")
+        .filter(|readiness| {
+            readiness["backend_id"].as_str() == Some(backend_id)
+                && readiness["blocked"].as_bool() == Some(true)
+        })
+        .is_some();
+    selected_external_readiness
+        || assignment["rejected_candidates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|candidate| {
+                rejected_candidate_marks_external_backend_unready(candidate, backend_id)
+            })
+}
+
+fn backend_known_unready_for_dispatch_selection(
+    execution_plan: &serde_json::Value,
+    backend_id: &str,
+) -> bool {
+    let backend_id = backend_id.trim();
+    if backend_id.is_empty() {
+        return false;
+    }
+    assignment_marks_backend_unready(
+        runtime_assignment_from_execution_plan(execution_plan),
+        backend_id,
+    ) || execution_plan["development_flow"]
+        .as_object()
+        .into_iter()
+        .flat_map(|routes| routes.values())
+        .any(|route| {
+            assignment_marks_backend_unready(
+                route
+                    .get("carrier_runtime_assignment")
+                    .or_else(|| route.get("runtime_assignment"))
+                    .unwrap_or(&serde_json::Value::Null),
+                backend_id,
+            )
+        })
+}
+
 fn admissible_backend_candidates_for_dispatch_target(
     execution_plan: &serde_json::Value,
     _dispatch_target: &str,
@@ -1037,6 +1122,9 @@ fn admissible_backend_candidates_for_dispatch_target(
     candidates
         .into_iter()
         .filter(|candidate| !candidate.trim().is_empty())
+        .filter(|candidate| {
+            !backend_known_unready_for_dispatch_selection(execution_plan, candidate)
+        })
         .filter(|candidate| unique.insert(candidate.clone()))
         .collect()
 }
@@ -14944,6 +15032,84 @@ agent_system:
         );
 
         assert_eq!(selected.as_deref(), Some("hermes_cli"));
+    }
+
+    #[test]
+    fn admissible_selected_backend_skips_known_unready_external_primary_for_coach_lane() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "hermes_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "coach": true
+                    }
+                },
+                {
+                    "backend_id": "opencode_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "coach": true
+                    }
+                },
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "coach": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "coach": {
+                    "executor_backend": "hermes_cli",
+                    "fallback_executor_backend": "internal_subagents",
+                    "fanout_executor_backends": ["hermes_cli", "opencode_cli"],
+                    "carrier_runtime_assignment": {
+                        "selected_backend_id": "middle",
+                        "selected_carrier_id": "middle",
+                        "selected_model_profile_id": "codex_gpt54_medium_write",
+                        "selected_codex_cli_readiness": {
+                            "blocked": false,
+                            "status": "codex_cli_ready"
+                        },
+                        "rejected_candidates": [
+                            {
+                                "carrier_id": "hermes_cli",
+                                "reason": "external_backend_not_ready",
+                                "reasons": ["external_backend_not_ready"],
+                                "external_backend_readiness": {
+                                    "backend_id": "hermes_cli",
+                                    "blocked": true,
+                                    "status": "external_cli_command_not_found",
+                                    "blocker_code": "tool_execution_failed"
+                                }
+                            },
+                            {
+                                "carrier_id": "opencode_cli",
+                                "reason": "external_backend_not_ready",
+                                "reasons": ["external_backend_not_ready"],
+                                "external_backend_readiness": {
+                                    "backend_id": "opencode_cli",
+                                    "blocked": true,
+                                    "status": "external_cli_command_not_found",
+                                    "blocker_code": "tool_execution_failed"
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        });
+
+        let selected = admissible_selected_backend_for_dispatch_target(
+            &execution_plan,
+            "coach",
+            Some("middle"),
+            Some("hermes_cli"),
+        );
+
+        assert_eq!(selected.as_deref(), Some("internal_subagents"));
     }
 
     #[test]
