@@ -1763,6 +1763,25 @@ mod tests {
         ))
     }
 
+    fn write_minimal_bootstrap_source_root(root: &Path) {
+        std::fs::write(root.join("AGENTS.md"), "# test agents\n").expect("write AGENTS");
+        std::fs::write(root.join("AGENTS.sidecar.md"), "# test sidecar\n").expect("write sidecar");
+        std::fs::create_dir_all(root.join("docs/framework/templates"))
+            .expect("create template dir");
+        std::fs::write(
+            root.join("docs/framework/templates/vida.config.yaml.template"),
+            "host_environment:\n  systems:\n    codex:\n      runtime_root: .codex\n",
+        )
+        .expect("write config template");
+        std::fs::create_dir_all(root.join(crate::state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT))
+            .expect("create instruction source root");
+        std::fs::create_dir_all(
+            root.join(crate::state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT),
+        )
+        .expect("create framework memory source root");
+        std::fs::create_dir_all(root.join(".codex")).expect("create host runtime root");
+    }
+
     fn write_project_protocol_projection_fixture(
         root: &Path,
         relative_path: &str,
@@ -2881,17 +2900,22 @@ mod tests {
 
     #[test]
     fn bundle_project_root_prefers_authoritative_state_root_over_config_parent() {
-        let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .canonicalize()
-            .expect("manifest-relative project root should canonicalize");
+        let project_root = unique_projection_fixture_root().join("source-root");
+        std::fs::create_dir_all(&project_root).expect("source root should create");
+        write_minimal_bootstrap_source_root(&project_root);
         let state_root = project_root.join(".vida/data/state");
+        std::fs::create_dir_all(&state_root).expect("state root should create");
         let selected = bundle_project_root(&state_root, "")
             .expect("project root should resolve from authoritative state root");
         let expected = crate::taskflow_task_bridge::infer_project_root_from_state_root(&state_root)
             .expect("authoritative state root should map back to the project root");
         assert_eq!(selected, expected);
+        assert_eq!(selected, project_root);
+        let _ = std::fs::remove_dir_all(
+            selected
+                .parent()
+                .expect("fixture source root should have parent"),
+        );
     }
 
     #[test]

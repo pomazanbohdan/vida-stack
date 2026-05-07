@@ -53,7 +53,10 @@ pub(crate) fn set_test_proxy_state_dir_override(path: Option<PathBuf>) {
 pub(crate) fn infer_project_root_from_state_root(state_root: &Path) -> Option<PathBuf> {
     state_root
         .ancestors()
-        .find(|path| super::looks_like_project_root(path))
+        .find(|path| {
+            super::looks_like_project_root(path)
+                || super::init_surfaces::looks_like_init_bootstrap_source_root(path)
+        })
         .map(|path| {
             if path.as_os_str().is_empty() {
                 std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
