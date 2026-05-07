@@ -136,6 +136,28 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         status.recovery_ready = false;
         return Ok(status);
     }
+    let receipt_runtime: RunGraphDispatchReceipt = receipt.clone().into();
+    let downstream_packet_ready = receipt_runtime.dispatch_status == "executed"
+        && receipt_runtime.blocker_code.is_none()
+        && receipt_runtime.downstream_dispatch_ready
+        && receipt_runtime.downstream_dispatch_blockers.is_empty()
+        && matches!(
+            receipt_runtime.downstream_dispatch_status.as_deref(),
+            Some("packet_ready") | Some("executed")
+        )
+        && receipt_runtime
+            .downstream_dispatch_target
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+    if downstream_packet_ready && status.status == "blocked" {
+        return Ok(
+            crate::runtime_dispatch_state::apply_first_handoff_execution_to_run_graph_status(
+                &status,
+                &receipt_runtime,
+            ),
+        );
+    }
     if status.status == "completed" {
         return Ok(status);
     }
@@ -2831,6 +2853,123 @@ mod tests {
             reconciled.delegation_gate().delegated_cycle_state,
             "clear".to_string()
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn executed_specification_receipt_with_ready_downstream_packet_heals_blocked_status() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-spec-ready-heal-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let labels = vec!["spec-pack".to_string()];
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "task-spec-ready-heal",
+                title: "Closed spec pack",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create closed spec task");
+
+        let status = RunGraphStatus {
+            run_id: "run-spec-ready-heal".to_string(),
+            task_id: "task-spec-ready-heal".to_string(),
+            task_class: "scope_discussion".to_string(),
+            active_node: "specification".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "spec-pack".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "specification_lane".to_string(),
+            lifecycle_stage: "specification_complete".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked specification status");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-spec-ready-heal".to_string(),
+                dispatch_target: "specification".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/specification-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: Some("work-pool-pack".to_string()),
+                downstream_dispatch_command: Some("vida task ensure".to_string()),
+                downstream_dispatch_note: Some(
+                    "specification/planning evidence is recorded and the spec-pack is closed; ensure or reuse the tracked work-pool packet"
+                        .to_string(),
+                ),
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: Some("/tmp/work-pool-packet.json".to_string()),
+                downstream_dispatch_status: Some("packet_ready".to_string()),
+                downstream_dispatch_result_path: Some("/tmp/specification-result.json".to_string()),
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: Some("specification".to_string()),
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("middle".to_string()),
+                recorded_at: "2026-05-07T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist bridged specification receipt");
+
+        let reconciled = store
+            .run_graph_status("run-spec-ready-heal")
+            .await
+            .expect("load reconciled run-graph status");
+        assert_eq!(reconciled.active_node, "specification");
+        assert_eq!(reconciled.next_node.as_deref(), Some("work_pool_pack"));
+        assert_eq!(reconciled.status, "ready");
+        assert_eq!(reconciled.lifecycle_stage, "specification_active");
+        assert_eq!(reconciled.handoff_state, "awaiting_work_pool_pack");
+        assert_eq!(reconciled.resume_target, "dispatch.work_pool_pack");
+        assert!(reconciled.recovery_ready);
+
+        let latest = store
+            .latest_run_graph_status()
+            .await
+            .expect("load latest run-graph status")
+            .expect("latest run-graph status should exist");
+        assert_eq!(latest.run_id, "run-spec-ready-heal");
+        assert_eq!(latest.status, "ready");
+        assert_eq!(latest.next_node.as_deref(), Some("work_pool_pack"));
 
         let _ = fs::remove_dir_all(&root);
     }

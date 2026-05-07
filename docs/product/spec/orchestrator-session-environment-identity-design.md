@@ -35,6 +35,7 @@ Status: `approved`
   - owner/publication context: upstream repository/issue tracker used for VIDA runtime defects and publication
   - worker/carrier identity: delegated execution carrier and runtime role, not the root orchestrator owner
 - Provide explicit stale-owner reclaim and transfer paths instead of silently treating another session's latest state as current-session truth.
+- Treat this design as a deeper architecture follow-up under the broader post-commit/runtime-reconciliation umbrella tracked in GitHub issue #114.
 - Out of scope:
   - changing TaskFlow task graph scheduling semantics
   - replacing run ids, task ids, or carrier/runtime-role assignment
@@ -320,6 +321,39 @@ Will implement / choose:
   - `orchestrator_session_transfer_required`
 - Next actions should name exact commands and preserve the affected run id/session id.
 
+## Acceptance Mapping
+- GitHub issue #116 acceptance: VIDA can detect and report two active orchestrators in the same project root.
+  - Covered by:
+    - `vida orchestrator-init --json` sibling-owner reporting
+    - `active_orchestrator_sessions`
+    - `stale_orchestrator_sessions`
+- GitHub issue #116 acceptance: runtime state mutations record the owning orchestrator session/environment identity.
+  - Covered by:
+    - `RuntimeOwnerEvidence`
+    - owner fields on run-graph status, dispatch receipts/context, continuation bindings, replay lineage, projection checkpoints, lane exception metadata, and runtime-consumption snapshots
+- GitHub issue #116 acceptance: latest TaskFlow/run-graph/lane projections are scoped to the active session or explicitly marked global/cross-session.
+  - Covered by:
+    - session-aware latest selector
+    - `latest_scope`
+    - `selected_owner_evidence`
+    - fail-closed latest gating for other live owners
+- GitHub issue #116 acceptance: cross-session continuation ambiguity gets a specific blocker code instead of falling back to generic ambiguity/tool-failure output.
+  - Covered by:
+    - blocker code `orchestrator_session_owner_conflict`
+    - owner-aware recovery/consume/continuation output
+- GitHub issue #116 acceptance: there is an explicit reclaim/transfer path for stale orchestrator ownership.
+  - Covered by:
+    - `vida taskflow session reclaim`
+    - `vida taskflow session transfer`
+    - `OrchestratorSessionTransferReceipt`
+- GitHub issue #116 acceptance: post-commit and epic-closure diagnostics include a session/environment binding check.
+  - Covered by:
+    - `vida status --json`
+    - `vida taskflow status --summary --json`
+    - `vida taskflow recovery latest --json`
+    - `vida taskflow consume continue --json`
+    - owner/publication/execution context split
+
 ## Rollout Strategy
 - Roll out additively behind default single-session-compatible behavior.
 - Treat legacy rows as readable but owner-unknown until explicit reclaim/transfer or fresh mutation records owner evidence.
@@ -355,5 +389,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/orchestrator-session-environment-identity-design.md
 created_at: 2026-05-07T00:00:00+03:00
-updated_at: 2026-05-07T00:00:00+03:00
+updated_at: 2026-05-07T14:14:32.7824162Z
 changelog_ref: orchestrator-session-environment-identity-design.changelog.jsonl
