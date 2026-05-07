@@ -1,12 +1,12 @@
 # Orchestrator Session Environment Identity Design
 
-Status: `proposed`
+Status: `approved`
 
 ## Summary
 - Feature / change: bind VIDA runtime state mutations and diagnostics to a concrete orchestrator session/environment identity, with stale-owner reclaim and transfer paths.
 - Owner layer: `runtime-family`
 - Runtime surface: `launcher | taskflow | status | lane | project activation`
-- Status: `proposed for bounded implementation`
+- Status: `approved for bounded implementation`
 
 ## Current Context
 - Existing system overview

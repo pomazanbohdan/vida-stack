@@ -315,6 +315,9 @@ Companion rule:
 52. [orchestrator-session-environment-identity-design.md](orchestrator-session-environment-identity-design.md)
    Config families: bounded orchestrator session/environment identity, lease-backed runtime state ownership, session-aware latest/recovery/continuation diagnostics, execution-context versus publication-context separation, and stale owner reclaim/transfer paths
    Registered path: `docs/product/spec/orchestrator-session-environment-identity-design.md`
+53. [continue-github-116-orchestrator-session-environ-design.md](continue-github-116-orchestrator-session-environ-design.md)
+   Config families: tracked TaskFlow design-gate wrapper for GitHub #116 orchestrator session/environment identity work, canonical-design handoff, proof evidence, and work-pool transition readiness
+   Registered path: `docs/product/spec/continue-github-116-orchestrator-session-environ-design.md`
 
 ### Support
 
