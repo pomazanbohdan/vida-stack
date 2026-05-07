@@ -27,6 +27,9 @@ Use this template for one bounded feature/change design before implementation.
   - A task with an already created and finalized design document can still seed or resume into `specification`, because request text mentioning the design/spec is treated like fresh design intake.
   - That misrouting then selects `business_analyst` / `specification` and can hit a non-executing internal dispatch path instead of lawful implementer routing.
   - The result is a blocked delegated cycle even though design-gate work is already complete and implementation should be the next bounded step.
+  - Fresh evidence on 2026-05-07 showed the same class on GitHub #116 continuation: `consume continue` shaped `docs/product/spec/resume-github-116-after-repairing-windows-design.md` even though `docs/product/spec/continue-github-116-orchestrator-session-environ-design.md` and its canonical #116 design were already approved.
+  - The same run also showed internal Codex `exec` can return exit code 0 and a terminal `agent_message` while emitting non-fatal Codex state/memory warnings; those warnings must not erase the delegated result, while true error items still fail closed.
+  - Once that dispatch evidence was accepted, recovery still projected `status=ready`, `recovery_ready=true`, and `resume_target=none`, then recommended `vida taskflow run-graph status ...`, which is a non-advancing operator loop.
 
 ## Goal
 - What this change should achieve
@@ -50,6 +53,9 @@ Use this template for one bounded feature/change design before implementation.
 - Must keep `spec-pack` routing for genuine research/specification/planning requests that have not yet satisfied the design gate.
 - Must ensure run-graph fallback/bootstrap and dispatch receipt projection do not drift back to `specification` once the task is implementation-ready.
 - Must keep delegated execution fail-closed when the selected backend is inadmissible or activation-view-only, but must not choose a non-executing specification path for an implementation-ready task.
+- Must reuse an approved GitHub issue design document when the continuation request names the issue, instead of generating a synthetic spec-first design path for the continuation wording.
+- Must distinguish non-fatal Codex warnings from actual provider failure when an internal `codex exec --json` run returns a terminal agent result with exit code 0.
+- Must never project an executed lane without a downstream target as ready-to-continue with `resume_target=none`; surface an explicit next-bounded-unit binding requirement instead.
 
 ### Non-Functional Requirements
 - Performance

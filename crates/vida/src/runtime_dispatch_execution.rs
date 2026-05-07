@@ -666,8 +666,37 @@ fn internal_codex_output_confirms_execution(
             .as_deref()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
-        && stderr.trim().is_empty()
-        && parsed_output.error_messages.is_empty()
+        && !internal_codex_stderr_blocks_execution(stderr)
+        && !parsed_output
+            .error_messages
+            .iter()
+            .any(|message| internal_codex_error_message_blocks_execution(message))
+}
+
+fn internal_codex_error_message_blocks_execution(message: &str) -> bool {
+    let normalized = message.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    !normalized.starts_with("under-development features enabled:")
+}
+
+fn internal_codex_stderr_blocks_execution(stderr: &str) -> bool {
+    let lines = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return false;
+    }
+    lines
+        .iter()
+        .any(|line| !internal_codex_stderr_line_is_nonfatal_warning(line))
+}
+
+fn internal_codex_stderr_line_is_nonfatal_warning(line: &str) -> bool {
+    line.contains(" WARN codex_")
 }
 
 fn should_render_store_backed_activation_view_for_internal_failure(
@@ -2307,6 +2336,19 @@ mod tests {
             &parsed_clean,
             "",
             true
+        ));
+    }
+
+    #[test]
+    fn internal_codex_output_accepts_terminal_result_with_nonfatal_codex_warnings() {
+        let parsed = parse_internal_codex_exec_output(
+            r#"{"type":"item.completed","item":{"id":"1","type":"error","message":"Under-development features enabled: memories. Under-development features are incomplete and may behave unpredictably."}}
+{"type":"item.completed","item":{"id":"2","type":"agent_message","text":"Bounded blocker ready for orchestrator reroute."}}"#,
+        );
+        let stderr = "2026-05-07T10:39:40.619776Z  WARN codex_state::runtime: failed to open state db\n2026-05-07T10:39:40.633429Z  WARN codex_core::memories::start: state db unavailable";
+
+        assert!(internal_codex_output_confirms_execution(
+            &parsed, stderr, true
         ));
     }
 

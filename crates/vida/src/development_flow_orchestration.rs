@@ -58,10 +58,23 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
     let work_pool_title = format!("Work-pool pack: {feature_title}");
     let dev_title = format!("Dev pack: {feature_title}");
     let quoted_request = crate::shell_quote(&canonical_request);
+    let existing_design_doc_path = approved_design_doc_path_for_request(&canonical_request);
+    let existing_design_doc = existing_design_doc_path.is_some();
+    let design_doc_path = existing_design_doc_path.unwrap_or(design_doc_path);
+    let artifact_path = design_doc_path
+        .strip_prefix("docs/")
+        .and_then(|path| path.strip_suffix(".md"))
+        .unwrap_or(&artifact_path)
+        .to_string();
 
     serde_json::json!({
         "required": true,
-        "status": "pending",
+        "status": if existing_design_doc {
+            "ready_existing_design"
+        } else {
+            "pending"
+        },
+        "existing_design_doc": existing_design_doc,
         "bootstrap_command": format!(
             "vida taskflow bootstrap-spec {} --json",
             quoted_request,
@@ -172,6 +185,7 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
         "docflow": {
             "required": true,
             "runtime": "vida docflow",
+            "existing_design_doc": existing_design_doc,
             "init_command": format!(
                 "vida docflow init {} {} product_spec {}",
                 design_doc_path,
@@ -198,6 +212,92 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
             "shape dev packet in TaskFlow before delegated implementation"
         ]
     })
+}
+
+fn approved_design_doc_path_for_request(request: &str) -> Option<String> {
+    let issue_token = github_issue_token(request)?;
+    let spec_root = find_product_spec_root()?;
+    let entries = std::fs::read_dir(spec_root).ok()?;
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+                return None;
+            }
+            let path_text = product_spec_doc_relative_path(&path);
+            let contents = std::fs::read_to_string(&path).ok()?;
+            if !design_doc_content_is_approved(&contents) {
+                return None;
+            }
+            let searchable = format!("{}\n{}", path_text, contents).to_ascii_lowercase();
+            if !searchable.contains(&issue_token) {
+                return None;
+            }
+            let score = approved_design_doc_score(&path_text, &contents);
+            Some((score, path_text))
+        })
+        .max_by_key(|(score, _)| *score)
+        .map(|(_, path)| path)
+}
+
+fn product_spec_doc_relative_path(path: &std::path::Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| format!("docs/product/spec/{name}"))
+        .unwrap_or_else(|| path.to_string_lossy().replace('\\', "/"))
+}
+
+fn find_product_spec_root() -> Option<std::path::PathBuf> {
+    let mut current = std::env::current_dir().ok()?;
+    loop {
+        let candidate = current.join("docs/product/spec");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn github_issue_token(request: &str) -> Option<String> {
+    let normalized = request.to_ascii_lowercase();
+    for marker in ["github #", "github-", "github issue #", "#"] {
+        let Some(start) = normalized.find(marker) else {
+            continue;
+        };
+        let number_start = start + marker.len();
+        let number = normalized[number_start..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>();
+        if !number.is_empty() {
+            return Some(format!("github #{}", number));
+        }
+    }
+    None
+}
+
+fn design_doc_content_is_approved(contents: &str) -> bool {
+    let normalized = contents.to_ascii_lowercase();
+    normalized.contains("status: `approved`") || normalized.contains("status: approved")
+}
+
+fn approved_design_doc_score(path: &str, contents: &str) -> usize {
+    let normalized_path = path.to_ascii_lowercase();
+    let normalized_contents = contents.to_ascii_lowercase();
+    let mut score = 0;
+    if normalized_path.contains("continue-github-") {
+        score += 100;
+    }
+    if normalized_contents.contains("approved for work-pool handoff") {
+        score += 50;
+    }
+    if normalized_contents.contains("canonical design:") {
+        score += 25;
+    }
+    score + normalized_path.len()
 }
 
 fn request_requires_execution_preparation(
@@ -983,6 +1083,24 @@ mod tests {
                 "cargo test -p vida project_activator_command_accepts_json_output -- --nocapture"
             ),
             "bootstrap command should not retain the bare moved-test proof target"
+        );
+    }
+
+    #[test]
+    fn design_first_bootstrap_reuses_approved_github_issue_design_doc() {
+        let request = "Resume GitHub #116 after repairing Windows Codex internal dispatch sandbox. Re-dispatch the business analyst/spec-pack lane with the approved #116 design context.";
+
+        let bootstrap = build_design_first_tracked_flow_bootstrap(request);
+
+        assert_eq!(bootstrap["existing_design_doc"], true);
+        assert_eq!(bootstrap["status"], "ready_existing_design");
+        assert_eq!(
+            bootstrap["design_doc_path"],
+            "docs/product/spec/continue-github-116-orchestrator-session-environ-design.md"
+        );
+        assert_eq!(
+            bootstrap["docflow"]["check_command"],
+            "vida docflow check --root . docs/product/spec/continue-github-116-orchestrator-session-environ-design.md"
         );
     }
 

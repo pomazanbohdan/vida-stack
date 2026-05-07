@@ -356,6 +356,12 @@ fn next_lawful_operator_action_for_status(status: &RunGraphStatus) -> Option<Str
             status.run_id
         ));
     }
+    if status.policy_gate == "next_bounded_unit_required" && status.resume_target == "none" {
+        return Some(format!(
+            "vida taskflow continuation bind {} --task-id <task-id> --json",
+            status.run_id
+        ));
+    }
     if status.status == "completed" {
         return None;
     }
@@ -8186,6 +8192,33 @@ mod tests {
         assert_eq!(
             next_lawful_operator_action_for_status(&status).as_deref(),
             Some("vida taskflow consume continue --run-id run-projection-continue --json")
+        );
+    }
+
+    #[test]
+    fn next_lawful_operator_action_uses_bind_for_executed_lane_without_downstream() {
+        let status = RunGraphStatus {
+            run_id: "run-ready-none".to_string(),
+            task_id: "task-ready-none".to_string(),
+            task_class: "scope_discussion".to_string(),
+            active_node: "business_analyst".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "spec-pack".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "business_analyst_lane".to_string(),
+            lifecycle_stage: "business_analyst_awaiting_next_binding".to_string(),
+            policy_gate: "next_bounded_unit_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "conversation_cursor".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+
+        assert_eq!(
+            next_lawful_operator_action_for_status(&status).as_deref(),
+            Some("vida taskflow continuation bind run-ready-none --task-id <task-id> --json")
         );
     }
 
