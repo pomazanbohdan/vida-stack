@@ -17,6 +17,7 @@ jobs:
   build-rust:
     name: Build Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +40,7 @@ jobs:
           cache-on-failure: false
 
       - name: Build workspace
+        timeout-minutes: 20
         shell: bash
         run: |
           set -euo pipefail
@@ -46,6 +48,7 @@ jobs:
 
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 75
 
     steps:
       - name: Check out repository
@@ -61,12 +64,14 @@ jobs:
           cache-on-failure: false
 
       - name: Run cargo test
+        timeout-minutes: 35
         shell: bash
         run: |
           set -euo pipefail
           cargo test --workspace --locked -- --test-threads=1
 
       - name: Build release assets and verify runtime-only package
+        timeout-minutes: 25
         shell: bash
         run: |
           set -euo pipefail
@@ -121,6 +126,7 @@ jobs:
           test -s /tmp/vida-install-ps-help.txt
 
       - name: Run local installer smoke
+        timeout-minutes: 10
         shell: bash
         run: |
           set -euo pipefail
@@ -196,6 +202,7 @@ jobs:
           test -f "$TMP_PROJECT/vida.config.yaml"
 
       - name: Run docflow validation
+        timeout-minutes: 10
         shell: bash
         run: |
           set -euo pipefail
@@ -204,6 +211,7 @@ jobs:
           cargo run -p vida -- docflow readiness-check --profile active-canon
 
       - name: Run runtime smoke
+        timeout-minutes: 10
         shell: bash
         run: |
           set -euo pipefail
@@ -222,6 +230,7 @@ jobs:
 
   validate-windows-installer:
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
@@ -237,6 +246,7 @@ jobs:
           cache-on-failure: false
 
       - name: Build Windows release assets
+        timeout-minutes: 30
         shell: bash
         run: |
           set -euo pipefail
@@ -244,6 +254,7 @@ jobs:
           bash scripts/build-release.sh
 
       - name: Run Windows installer smoke
+        timeout-minutes: 10
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
