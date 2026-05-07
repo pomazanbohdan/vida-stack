@@ -2881,7 +2881,11 @@ mod tests {
 
     #[test]
     fn bundle_project_root_prefers_authoritative_state_root_over_config_parent() {
-        let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .canonicalize()
+            .expect("manifest-relative project root should canonicalize");
         let state_root = project_root.join(".vida/data/state");
         let selected = bundle_project_root(&state_root, "")
             .expect("project root should resolve from authoritative state root");
