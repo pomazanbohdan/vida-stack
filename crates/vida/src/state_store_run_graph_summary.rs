@@ -1022,7 +1022,88 @@ impl RunGraphGateSummary {
     }
 }
 
+fn owner_evidence_record_id(scope: &str, run_id: &str) -> String {
+    format!("{scope}:{run_id}")
+}
+
 impl StateStore {
+    fn current_runtime_owner_evidence(&self) -> RuntimeOwnerEvidence {
+        let project_root =
+            crate::taskflow_task_bridge::infer_project_root_from_state_root(self.root())
+                .unwrap_or_else(|| self.root().to_path_buf());
+        crate::orchestrator_session_identity::derive_current_orchestrator_session(
+            self.root(),
+            &project_root,
+        )
+        .map(|derivation| {
+            crate::orchestrator_session_identity::current_runtime_owner_evidence(&derivation)
+        })
+        .unwrap_or_else(|_| RuntimeOwnerEvidence::legacy_global_owner_unknown())
+    }
+
+    async fn record_run_graph_artifact_owner_evidence(
+        &self,
+        scope: &str,
+        run_id: &str,
+    ) -> Result<(), StateStoreError> {
+        let record = RunGraphArtifactOwnerEvidence {
+            record_id: owner_evidence_record_id(scope, run_id),
+            scope: scope.to_string(),
+            run_id: run_id.to_string(),
+            owner_evidence: self.current_runtime_owner_evidence(),
+            recorded_at: unix_timestamp_nanos().to_string(),
+        };
+        let _: Option<RunGraphArtifactOwnerEvidence> = self
+            .db
+            .upsert((
+                "run_graph_artifact_owner_evidence",
+                record.record_id.as_str(),
+            ))
+            .content(record)
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn run_graph_artifact_owner_evidence(
+        &self,
+        scope: &str,
+        run_id: &str,
+    ) -> Result<Option<RuntimeOwnerEvidence>, StateStoreError> {
+        let record: Option<RunGraphArtifactOwnerEvidence> = self
+            .db
+            .select((
+                "run_graph_artifact_owner_evidence",
+                owner_evidence_record_id(scope, run_id),
+            ))
+            .await?;
+        Ok(record.map(|record| record.owner_evidence))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn record_run_graph_artifact_owner_evidence_for_test(
+        &self,
+        scope: &str,
+        run_id: &str,
+        owner_evidence: RuntimeOwnerEvidence,
+    ) -> Result<(), StateStoreError> {
+        let record = RunGraphArtifactOwnerEvidence {
+            record_id: owner_evidence_record_id(scope, run_id),
+            scope: scope.to_string(),
+            run_id: run_id.to_string(),
+            owner_evidence,
+            recorded_at: unix_timestamp_nanos().to_string(),
+        };
+        let _: Option<RunGraphArtifactOwnerEvidence> = self
+            .db
+            .upsert((
+                "run_graph_artifact_owner_evidence",
+                record.record_id.as_str(),
+            ))
+            .content(record)
+            .await?;
+        Ok(())
+    }
+
     pub async fn run_graph_summary(&self) -> Result<RunGraphSummary, StateStoreError> {
         Ok(RunGraphSummary {
             execution_plan_count: self.count_table_rows("execution_plan_state").await?,
@@ -1109,6 +1190,8 @@ impl StateStore {
             self.record_run_graph_approval_delegation_receipt(&receipt)
                 .await?;
         }
+        self.record_run_graph_artifact_owner_evidence("status", &status.run_id)
+            .await?;
         Ok(())
     }
 
@@ -1119,10 +1202,13 @@ impl StateStore {
     ) -> Result<(), StateStoreError> {
         let receipt: RunGraphDispatchReceiptStored = receipt.clone().into();
         Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
+        let run_id = receipt.run_id.clone();
         let _: Option<RunGraphDispatchReceiptStored> = self
             .db
-            .upsert(("run_graph_dispatch_receipt", receipt.run_id.as_str()))
+            .upsert(("run_graph_dispatch_receipt", run_id.as_str()))
             .content(receipt)
+            .await?;
+        self.record_run_graph_artifact_owner_evidence("dispatch_receipt", &run_id)
             .await?;
         Ok(())
     }
@@ -1147,6 +1233,8 @@ impl StateStore {
             .db
             .upsert(("run_graph_continuation_binding", binding.run_id.as_str()))
             .content(binding.clone())
+            .await?;
+        self.record_run_graph_artifact_owner_evidence("continuation_binding", &binding.run_id)
             .await?;
         Ok(())
     }
@@ -1462,6 +1550,8 @@ impl StateStore {
             .db
             .upsert(("run_graph_dispatch_context", context.run_id.as_str()))
             .content(context.clone())
+            .await?;
+        self.record_run_graph_artifact_owner_evidence("dispatch_context", &context.run_id)
             .await?;
         Ok(())
     }
@@ -4352,6 +4442,37 @@ mod tests {
         assert_eq!(latest.run_id, "run-projection-new");
         assert_eq!(latest.last_gapless_position, latest.updated_at);
         assert_eq!(latest.projector_id, "taskflow.run_graph.status_projection");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn record_run_graph_status_persists_owner_evidence_for_latest_run() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-owner-evidence-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-owner-evidence".to_string();
+        status.task_id = "task-owner-evidence".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let evidence = store
+            .run_graph_artifact_owner_evidence("status", "run-owner-evidence")
+            .await
+            .expect("owner evidence should load")
+            .expect("owner evidence should exist");
+        assert!(!evidence.owner_status.trim().is_empty());
 
         let _ = fs::remove_dir_all(&root);
     }

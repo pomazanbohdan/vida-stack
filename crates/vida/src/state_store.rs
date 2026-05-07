@@ -77,8 +77,8 @@ pub use state_store_protocol_binding::{ProtocolBindingState, ProtocolBindingSumm
 #[allow(unused_imports)]
 pub(crate) use state_store_run_graph_state::{
     ExecutionPlanStateRow, GovernanceStateRow, ResumabilityCapsuleRow, RoutedRunStateRow,
-    RunGraphDispatchReceiptStored, RunGraphLatestRow, RunGraphProjectionCheckpointRecord,
-    RunGraphReplayLineageReceipt,
+    RunGraphArtifactOwnerEvidence, RunGraphDispatchReceiptStored, RunGraphLatestRow,
+    RunGraphProjectionCheckpointRecord, RunGraphReplayLineageReceipt,
 };
 #[allow(unused_imports)]
 pub use state_store_run_graph_state::{
@@ -174,6 +174,7 @@ DEFINE TABLE run_graph_continuation_binding SCHEMALESS;
 DEFINE TABLE run_graph_dispatch_context SCHEMALESS;
 DEFINE TABLE run_graph_projection_checkpoint_record SCHEMALESS;
 DEFINE TABLE run_graph_replay_lineage_receipt SCHEMALESS;
+DEFINE TABLE run_graph_artifact_owner_evidence SCHEMALESS;
 DEFINE TABLE scheduler_dispatch_reservation SCHEMALESS;
 DEFINE TABLE orchestrator_session_record SCHEMALESS;
 "#;

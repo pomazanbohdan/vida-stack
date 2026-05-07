@@ -3346,6 +3346,8 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
     let Some(status) = latest_status else {
         return Err("No persisted run-graph dispatch receipt is available".to_string());
     };
+    fail_closed_for_cross_session_latest_status(store, &status, "vida taskflow consume continue")
+        .await?;
     let explicit_continuation_binding = store
         .latest_explicit_run_graph_continuation_binding()
         .await
@@ -3431,6 +3433,63 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
         ));
     }
     Ok(status.run_id)
+}
+
+async fn fail_closed_for_cross_session_latest_status(
+    store: &super::StateStore,
+    status: &crate::state_store::RunGraphStatus,
+    surface: &str,
+) -> Result<(), String> {
+    let Some(owner_evidence) = store
+        .run_graph_artifact_owner_evidence("status", &status.run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read persisted owner evidence for latest run `{}`: {error}",
+                status.run_id
+            )
+        })?
+    else {
+        return Ok(());
+    };
+    if owner_evidence.owner_status == "legacy_global_owner_unknown"
+        || owner_evidence.orchestrator_session_id.is_none()
+    {
+        return Ok(());
+    }
+    let project_root =
+        crate::taskflow_task_bridge::infer_project_root_from_state_root(store.root())
+            .unwrap_or_else(|| store.root().to_path_buf());
+    let derivation = crate::orchestrator_session_identity::derive_current_orchestrator_session(
+        store.root(),
+        &project_root,
+    )
+    .map_err(|error| format!("Failed to derive orchestrator session identity: {error}"))?;
+    let records = store
+        .orchestrator_session_records_for_state_root(store.root())
+        .await
+        .map_err(|error| format!("Failed to read orchestrator session records: {error}"))?;
+    let classified = crate::orchestrator_session_identity::classify_runtime_owner_evidence(
+        &derivation,
+        &records,
+        &owner_evidence,
+        time::OffsetDateTime::now_utc(),
+    );
+    let owner_session_id = classified
+        .orchestrator_session_id
+        .as_deref()
+        .unwrap_or("unknown");
+    match classified.owner_status.as_str() {
+        "other_owner_live" => Err(format!(
+            "orchestrator_session_owner_conflict: latest run `{}` is owned by live orchestrator session `{owner_session_id}`, not the current session `{}`. {surface} must fail closed until the operator selects `--run-id`, or reclaims/transfers ownership explicitly.",
+            status.run_id, derivation.record.session_id
+        )),
+        "other_owner_stale" => Err(format!(
+            "orchestrator_session_stale_owner_reclaim_required: latest run `{}` is still bound to stale orchestrator session `{owner_session_id}`. {surface} must fail closed until the operator records an explicit reclaim or transfer for that session.",
+            status.run_id
+        )),
+        _ => Ok(()),
+    }
 }
 
 async fn resolve_runtime_consumption_resume_inputs_for_run_id(

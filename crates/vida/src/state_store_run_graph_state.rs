@@ -100,6 +100,22 @@ impl RuntimeOwnerEvidence {
     }
 }
 
+impl Default for RuntimeOwnerEvidence {
+    fn default() -> Self {
+        Self::legacy_global_owner_unknown()
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue, PartialEq, Eq)]
+pub(crate) struct RunGraphArtifactOwnerEvidence {
+    pub(crate) record_id: String,
+    pub(crate) scope: String,
+    pub(crate) run_id: String,
+    #[serde(default)]
+    pub(crate) owner_evidence: RuntimeOwnerEvidence,
+    pub(crate) recorded_at: String,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
 pub(crate) struct GovernanceStateRow {

@@ -218,6 +218,39 @@ pub(crate) fn build_orchestrator_session_surface(
     })
 }
 
+pub(crate) fn current_runtime_owner_evidence(
+    derivation: &OrchestratorSessionDerivation,
+) -> crate::state_store::RuntimeOwnerEvidence {
+    crate::state_store::RuntimeOwnerEvidence::current_session(
+        &derivation.record.session_id,
+        &derivation.record.lease_id,
+        &derivation.record.execution_context_id,
+        &derivation.record.publication_context_id,
+        &derivation.record.heartbeat_at,
+    )
+}
+
+pub(crate) fn classify_runtime_owner_evidence(
+    derivation: &OrchestratorSessionDerivation,
+    records: &[OrchestratorSessionRecord],
+    evidence: &crate::state_store::RuntimeOwnerEvidence,
+    now_utc: OffsetDateTime,
+) -> crate::state_store::RuntimeOwnerEvidence {
+    let Some(session_id) = evidence.orchestrator_session_id.as_deref() else {
+        return crate::state_store::RuntimeOwnerEvidence::legacy_global_owner_unknown();
+    };
+    if session_id == derivation.record.session_id {
+        return current_runtime_owner_evidence(derivation);
+    }
+    let mut classified = evidence.clone();
+    classified.owner_status = records
+        .iter()
+        .find(|record| record.session_id == session_id)
+        .map(|record| lease_status(record, now_utc))
+        .unwrap_or_else(|| "other_owner_lease_unknown".to_string());
+    classified
+}
+
 pub(crate) fn lease_status(record: &OrchestratorSessionRecord, now_utc: OffsetDateTime) -> String {
     match OffsetDateTime::parse(&record.lease_expires_at, &Rfc3339) {
         Ok(expires_at) if expires_at < now_utc => "other_owner_stale".to_string(),
@@ -383,5 +416,40 @@ mod tests {
             surface["stale_orchestrator_sessions"][0]["lease_status"],
             "other_owner_stale"
         );
+    }
+
+    #[test]
+    fn classify_runtime_owner_evidence_marks_live_other_owner() {
+        let derivation = derive_orchestrator_session(OrchestratorSessionDerivationInputs {
+            state_root: PathBuf::from("C:/tmp/state"),
+            project_root: PathBuf::from("C:/tmp/project"),
+            current_executable: PathBuf::from("C:/tmp/vida.exe"),
+            process_id: 42,
+            now_utc: fixed_time(),
+            lease_ttl_seconds: 60,
+            env: BTreeMap::new(),
+        })
+        .expect("identity should derive");
+        let mut other = derivation.record.clone();
+        other.session_id = "other-live".to_string();
+        other.lease_id = "lease-live".to_string();
+        other.lease_expires_at = "2026-05-07T00:10:00Z".to_string();
+
+        let evidence = crate::state_store::RuntimeOwnerEvidence {
+            owner_status: "current_owner".to_string(),
+            orchestrator_session_id: Some("other-live".to_string()),
+            orchestrator_lease_id: Some("lease-live".to_string()),
+            execution_context_id: Some("ctx".to_string()),
+            publication_context_id: Some("pub".to_string()),
+            recorded_at: Some("2026-05-07T00:00:00Z".to_string()),
+        };
+        let classified = classify_runtime_owner_evidence(
+            &derivation,
+            &[derivation.record.clone(), other],
+            &evidence,
+            fixed_time(),
+        );
+
+        assert_eq!(classified.owner_status, "other_owner_live");
     }
 }
