@@ -83,6 +83,14 @@ fn run_command_capture(args: &[&str], state_dir: &str) -> std::process::Output {
     })
 }
 
+fn boot_with_state_lock_retry(state_dir: &str) -> std::process::Output {
+    run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command.arg("boot").env("VIDA_STATE_DIR", state_dir);
+        command
+    })
+}
+
 fn run_command_json(args: &[&str], state_dir: &str) -> serde_json::Value {
     let output = run_with_state_lock_retry(|| {
         let mut command = vida();
@@ -2755,39 +2763,33 @@ fn consume_final_blocks_when_execution_preparation_is_required_without_handoff_e
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
 
-    let boot = vida()
-        .arg("boot")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("boot should run");
+    let boot = boot_with_state_lock_retry(&state_dir);
     assert!(
         boot.status.success(),
         "{}",
         String::from_utf8_lossy(&boot.stderr)
     );
 
-    let sync = vida()
-        .args(["taskflow", "protocol-binding", "sync", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("protocol-binding sync should run");
+    let sync = run_command_capture(
+        &["taskflow", "protocol-binding", "sync", "--json"],
+        &state_dir,
+    );
     assert!(
         sync.status.success(),
         "{}",
         String::from_utf8_lossy(&sync.stderr)
     );
 
-    let output = vida()
-        .args([
+    let output = run_command_capture(
+        &[
             "taskflow",
             "consume",
             "final",
             "architecture refactor implementation patch",
             "--json",
-        ])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("consume final should run");
+        ],
+        &state_dir,
+    );
     let parsed: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("consume final json should parse");
 
@@ -2956,22 +2958,17 @@ fn protocol_binding_check_fails_closed_on_retrieval_decision_gate_when_not_synce
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
 
-    let boot = vida()
-        .arg("boot")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("boot should run");
+    let boot = boot_with_state_lock_retry(&state_dir);
     assert!(
         boot.status.success(),
         "{}",
         String::from_utf8_lossy(&boot.stderr)
     );
 
-    let check = vida()
-        .args(["taskflow", "protocol-binding", "check", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("protocol-binding check should run");
+    let check = run_command_capture(
+        &["taskflow", "protocol-binding", "check", "--json"],
+        &state_dir,
+    );
     assert!(!check.status.success());
 
     let parsed: serde_json::Value =
@@ -3160,28 +3157,23 @@ fn consume_final_fails_closed_on_retrieval_policy_gate_when_not_synced() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
 
-    let boot = vida()
-        .arg("boot")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("boot should run");
+    let boot = boot_with_state_lock_retry(&state_dir);
     assert!(
         boot.status.success(),
         "{}",
         String::from_utf8_lossy(&boot.stderr)
     );
 
-    let output = vida()
-        .args([
+    let output = run_command_capture(
+        &[
             "taskflow",
             "consume",
             "final",
             "architecture refactor implementation patch",
             "--json",
-        ])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("consume final should run");
+        ],
+        &state_dir,
+    );
     assert!(
         !output.status.success(),
         "consume final must fail closed when protocol binding evidence is missing"
