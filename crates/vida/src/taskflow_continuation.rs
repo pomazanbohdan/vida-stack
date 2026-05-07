@@ -33,6 +33,20 @@ fn terminal_completed_without_next_unit(status: &RunGraphStatus) -> bool {
             .is_none()
 }
 
+fn explicit_task_binding_admissible(status: &RunGraphStatus) -> bool {
+    if terminal_completed_without_next_unit(status) {
+        return true;
+    }
+    status.policy_gate == "next_bounded_unit_required"
+        && status.resume_target == "none"
+        && status
+            .next_node
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+}
+
 fn run_graph_active_bounded_unit(status: &RunGraphStatus) -> Option<serde_json::Value> {
     if terminal_completed_without_next_unit(status) {
         return None;
@@ -341,9 +355,9 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
         }
     };
     let binding = if let Some(task_id) = task_id.as_deref() {
-        if !terminal_completed_without_next_unit(&status) {
+        if !explicit_task_binding_admissible(&status) {
             eprintln!(
-                "Explicit --task-id continuation binding is only allowed after run `{run_id}` reaches closure_complete with no downstream target."
+                "Explicit --task-id continuation binding is only allowed after run `{run_id}` reaches closure_complete with no downstream target or reports next_bounded_unit_required with no downstream target."
             );
             return ExitCode::from(1);
         }
@@ -420,7 +434,8 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         build_run_graph_continuation_binding, build_task_graph_continuation_binding,
-        parse_bind_args, sync_run_graph_continuation_binding, terminal_completed_without_next_unit,
+        explicit_task_binding_admissible, parse_bind_args, sync_run_graph_continuation_binding,
+        terminal_completed_without_next_unit,
     };
     use std::{
         fs,
@@ -567,7 +582,29 @@ mod tests {
         status.resume_target = "none".to_string();
 
         assert!(terminal_completed_without_next_unit(&status));
+        assert!(explicit_task_binding_admissible(&status));
         assert!(build_run_graph_continuation_binding(&status, None, "test", None).is_none());
+    }
+
+    #[test]
+    fn next_bounded_unit_required_without_downstream_allows_explicit_task_binding() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-1",
+            "scope_discussion",
+            "spec-pack",
+        );
+        status.task_id = "run-1".to_string();
+        status.active_node = "business_analyst".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "business_analyst_awaiting_next_binding".to_string();
+        status.policy_gate = "next_bounded_unit_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+
+        assert!(!terminal_completed_without_next_unit(&status));
+        assert!(explicit_task_binding_admissible(&status));
     }
 
     #[tokio::test]
