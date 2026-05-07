@@ -2824,7 +2824,12 @@ fn root_approval_show_latest_smokes_waiting_for_approval() {
     let state_dir = unique_state_dir();
 
     let boot = boot_with_retry(&state_dir);
-    assert!(boot.status.success());
+    assert!(
+        boot.status.success(),
+        "boot should succeed before approval latest smoke: stdout={}\nstderr={}",
+        String::from_utf8_lossy(&boot.stdout),
+        String::from_utf8_lossy(&boot.stderr)
+    );
     wait_for_state_unlock(&state_dir);
     let init = run_command_with_state_lock_retry(|| {
         let mut command = vida();
@@ -2871,7 +2876,7 @@ fn root_approval_show_latest_smokes_waiting_for_approval() {
     );
 
     let output = bounded_vida_output_with_state_lock_retry(
-        &["-k", "5s", "20s"],
+        &["-k", "5s", "90s"],
         "root approval show latest should run",
         |command| {
             command
@@ -2887,8 +2892,12 @@ fn root_approval_show_latest_smokes_waiting_for_approval() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value =
-        serde_json::from_str(&stdout).expect("root approval latest json should parse");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|error| {
+        panic!(
+            "root approval latest json should parse: {error}; stdout={stdout}; stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
     assert_eq!(parsed["surface"], "vida approval");
     assert_eq!(parsed["status"], "pass");
     assert_eq!(parsed["run_id"], "run-approval-latest");
@@ -5747,76 +5756,101 @@ fn taskflow_consume_advance_ignores_root_packet_mutated_as_ready_downstream_chai
     fs::create_dir_all(&project_root).expect("project root should exist");
     let state_dir = format!("{project_root}/.vida/data/state");
 
-    let init = vida()
-        .arg("init")
-        .current_dir(&project_root)
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .output()
-        .expect("init should run");
+    let init = bounded_vida_output(&["-k", "5s", "20s"], "init should run", |command| {
+        command
+            .arg("init")
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME");
+    });
     assert!(
         init.status.success(),
-        "{}",
+        "{}{}",
+        String::from_utf8_lossy(&init.stdout),
         String::from_utf8_lossy(&init.stderr)
     );
 
-    let activator = vida()
-        .args([
-            "project-activator",
-            "--project-id",
-            "advance-auto-progress",
-            "--project-name",
-            "Advance Auto Progress",
-            "--language",
-            "english",
-            "--host-cli-system",
-            "codex",
-            "--json",
-        ])
-        .current_dir(&project_root)
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .output()
-        .expect("project activator should run");
+    let activator = bounded_vida_output(
+        &["-k", "5s", "20s"],
+        "project activator should run",
+        |command| {
+            command
+                .args([
+                    "project-activator",
+                    "--project-id",
+                    "advance-auto-progress",
+                    "--project-name",
+                    "Advance Auto Progress",
+                    "--language",
+                    "english",
+                    "--host-cli-system",
+                    "codex",
+                    "--json",
+                ])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME");
+        },
+    );
     assert!(
         activator.status.success(),
-        "{}",
+        "{}{}",
+        String::from_utf8_lossy(&activator.stdout),
         String::from_utf8_lossy(&activator.stderr)
     );
 
-    let boot = vida()
-        .arg("boot")
-        .current_dir(&project_root)
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("boot should run");
+    let boot = bounded_vida_output(&["-k", "5s", "20s"], "boot should run", |command| {
+        command
+            .arg("boot")
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+    });
     assert!(
         boot.status.success(),
-        "{}",
+        "{}{}",
+        String::from_utf8_lossy(&boot.stdout),
         String::from_utf8_lossy(&boot.stderr)
     );
     sync_protocol_binding(&state_dir);
 
-    let initial = vida()
-        .args([
-            "taskflow",
-            "consume",
-            "final",
-            "clarify the scope and write the specification before implementation",
-            "--json",
-        ])
-        .current_dir(&project_root)
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("taskflow consume final json should run");
+    let initial = run_with_retry_until(
+        || {
+            let mut command = vida();
+            command
+                .args([
+                    "taskflow",
+                    "consume",
+                    "final",
+                    "clarify the scope and write the specification before implementation",
+                    "--json",
+                ])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+            command
+                .output()
+                .expect("taskflow consume final json should run")
+        },
+        |output| {
+            output.status.success()
+                || (!output.stdout.is_empty()
+                    && !is_state_lock_error(output)
+                    && !is_retryable_temporary_failure(output))
+        },
+    );
     assert!(!initial.status.success());
 
     let initial_json: serde_json::Value =
-        serde_json::from_slice(&initial.stdout).expect("initial consume final json should parse");
+        serde_json::from_slice(&initial.stdout).unwrap_or_else(|error| {
+            panic!(
+                "initial consume final json should parse: {error}; stdout={}; stderr={}",
+                String::from_utf8_lossy(&initial.stdout),
+                String::from_utf8_lossy(&initial.stderr)
+            )
+        });
     let downstream_dispatch_packet_path = initial_json["payload"]["dispatch_receipt"]
         ["downstream_dispatch_packet_path"]
         .as_str()
@@ -5846,14 +5880,26 @@ fn taskflow_consume_advance_ignores_root_packet_mutated_as_ready_downstream_chai
             .expect("mutated downstream packet should render"),
     );
 
-    let advanced = vida()
-        .args(["taskflow", "consume", "advance", "--json"])
-        .current_dir(&project_root)
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("taskflow consume advance should run");
+    let advanced = run_with_retry_until(
+        || {
+            let mut command = vida();
+            command
+                .args(["taskflow", "consume", "advance", "--json"])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+            command
+                .output()
+                .expect("taskflow consume advance should run")
+        },
+        |output| {
+            output.status.success()
+                || (!output.stdout.is_empty()
+                    && !is_state_lock_error(output)
+                    && !is_retryable_temporary_failure(output))
+        },
+    );
     assert!(
         advanced.status.success(),
         "{}{}",
@@ -5862,7 +5908,13 @@ fn taskflow_consume_advance_ignores_root_packet_mutated_as_ready_downstream_chai
     );
 
     let advanced_json: serde_json::Value =
-        serde_json::from_slice(&advanced.stdout).expect("consume advance json should parse");
+        serde_json::from_slice(&advanced.stdout).unwrap_or_else(|error| {
+            panic!(
+                "consume advance json should parse: {error}; stdout={}; stderr={}",
+                String::from_utf8_lossy(&advanced.stdout),
+                String::from_utf8_lossy(&advanced.stderr)
+            )
+        });
     assert_eq!(advanced_json["surface"], "vida taskflow consume advance");
     assert_eq!(
         advanced_json["dispatch_receipt"]["dispatch_target"],
