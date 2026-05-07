@@ -58,6 +58,9 @@ pub(crate) fn downstream_dispatch_packet_body(
         .as_deref()
         .or(receipt.activation_runtime_role.as_deref())
         .unwrap_or(role_selection.selected_role.as_str());
+    let packet_activation_runtime_role = activation_runtime_role
+        .clone()
+        .or_else(|| Some(handoff_runtime_role.to_string()));
     let packet_template_kind = if downstream_target.is_empty() {
         "delivery_task_packet".to_string()
     } else {
@@ -282,7 +285,7 @@ pub(crate) fn downstream_dispatch_packet_body(
     );
     body.insert(
         "activation_runtime_role".to_string(),
-        serde_json::json!(activation_runtime_role),
+        serde_json::json!(packet_activation_runtime_role),
     );
     body.insert(
         "selected_backend".to_string(),
@@ -322,6 +325,81 @@ pub(crate) fn downstream_dispatch_packet_body(
         role_selection.execution_plan["orchestration_contract"].clone(),
     );
     serde_json::Value::Object(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state_store::RunGraphDispatchReceipt;
+
+    fn role_selection_for_closure() -> RuntimeConsumptionLaneSelection {
+        RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "runtime".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue #116 closure".to_string(),
+            selected_role: "verifier".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["closure".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::Value::Null,
+            reason: "test".to_string(),
+        }
+    }
+
+    fn downstream_closure_receipt() -> RunGraphDispatchReceipt {
+        RunGraphDispatchReceipt {
+            run_id: "github-116-role-propagation".to_string(),
+            dispatch_target: "verification".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("previous-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("closure handoff".to_string()),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("closure-result.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("verification".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-07T13:13:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn downstream_packet_promotes_handoff_runtime_role_to_activation_runtime_role() {
+        let packet = downstream_dispatch_packet_body(
+            &role_selection_for_closure(),
+            &serde_json::json!({ "run_id": "github-116-role-propagation" }),
+            &downstream_closure_receipt(),
+            None,
+        );
+
+        assert_eq!(
+            packet["delivery_task_packet"]["handoff_runtime_role"],
+            "verifier"
+        );
+        assert_eq!(packet["activation_runtime_role"], "verifier");
+    }
 }
 
 pub(crate) fn write_runtime_downstream_dispatch_packet_at(

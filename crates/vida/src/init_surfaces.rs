@@ -3040,6 +3040,7 @@ fn agent_init_packet_selection(
                 .and_then(|value| value.get("selected_role"))
                 .and_then(serde_json::Value::as_str)
         })
+        .or_else(|| packet_embedded_handoff_runtime_role(&packet))
         .filter(|value| !value.is_empty())
         .unwrap_or("unknown");
     if selected_role == "orchestrator" || selected_role == "unknown" {
@@ -3070,6 +3071,24 @@ fn agent_init_packet_selection(
         "packet_template_kind": packet.get("packet_template_kind").cloned().unwrap_or(serde_json::Value::Null),
         "packet": packet,
     }))
+}
+
+fn packet_embedded_handoff_runtime_role(packet: &serde_json::Value) -> Option<&str> {
+    [
+        "delivery_task_packet",
+        "execution_block_packet",
+        "coach_review_packet",
+        "verifier_proof_packet",
+        "escalation_packet",
+    ]
+    .into_iter()
+    .find_map(|packet_key| {
+        packet
+            .get(packet_key)
+            .and_then(|value| value.get("handoff_runtime_role"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+    })
 }
 
 fn agent_init_execution_truth(selection: &serde_json::Value) -> serde_json::Value {
@@ -3261,6 +3280,35 @@ fn rebuilt_embedded_runtime_assignment(
     )
 }
 
+fn stale_disabled_assignment_for_selection(
+    selection: &serde_json::Value,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    assignment: &serde_json::Value,
+) -> bool {
+    if assignment
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        != Some(false)
+    {
+        return false;
+    }
+    let selected_role = selection
+        .get("selected_role")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(role_selection.selected_role.as_str());
+    let dispatch_target = agent_init_selection_dispatch_target(selection);
+    let expected_task_class = task_class_for_dispatch_target(dispatch_target, selected_role);
+    assignment
+        .get("runtime_role")
+        .and_then(serde_json::Value::as_str)
+        != Some(selected_role)
+        || assignment
+            .get("task_class")
+            .and_then(serde_json::Value::as_str)
+            != Some(expected_task_class)
+}
+
 fn packet_level_runtime_assignment(
     selection: &serde_json::Value,
 ) -> Option<(serde_json::Value, &'static str)> {
@@ -3295,7 +3343,12 @@ fn packet_level_runtime_assignment(
         &role_selection.execution_plan,
         dispatch_target,
     );
-    (!assignment.is_null()).then_some((assignment, source))
+    if assignment.is_null() {
+        return None;
+    }
+    let stale_disabled_assignment =
+        stale_disabled_assignment_for_selection(selection, &role_selection, &assignment);
+    (!stale_disabled_assignment).then_some((assignment, source))
 }
 
 fn agent_init_runtime_assignment_resolution(
@@ -3316,7 +3369,13 @@ fn agent_init_runtime_assignment_resolution(
     if let Some(role_selection) = agent_init_role_selection(selection) {
         let runtime_assignment =
             super::runtime_assignment_from_execution_plan(&role_selection.execution_plan).clone();
-        if !runtime_assignment.is_null() {
+        if !runtime_assignment.is_null()
+            && !stale_disabled_assignment_for_selection(
+                selection,
+                &role_selection,
+                &runtime_assignment,
+            )
+        {
             return (runtime_assignment, "embedded_runtime_assignment");
         }
         if matches!(
@@ -4099,6 +4158,106 @@ mod agent_init_surface_tests {
             "internal_subagents"
         );
         assert_eq!(payload["backend_truth"]["override_status"], "lawful");
+    }
+
+    #[test]
+    fn agent_init_packet_selection_uses_embedded_handoff_runtime_role_for_legacy_downstream_packet()
+    {
+        let selection = agent_init_packet_selection(
+            "/tmp/downstream.json",
+            serde_json::json!({
+                "request_text": "close #116 verifier handoff",
+                "downstream_dispatch_target": "closure",
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": {
+                    "handoff_runtime_role": "verifier"
+                },
+                "role_selection_full": test_role_selection(),
+            }),
+            true,
+        )
+        .expect("legacy downstream packet should select from embedded handoff role");
+
+        assert_eq!(selection["selected_role"], "verifier");
+        assert_eq!(selection["mode"], "downstream_packet");
+    }
+
+    #[test]
+    fn downstream_packet_assignment_rebuilds_when_embedded_runtime_assignment_is_stale() {
+        let mut role_selection = test_role_selection();
+        role_selection.selected_role = "business_analyst".to_string();
+        role_selection.execution_plan = serde_json::json!({
+            "runtime_assignment": {
+                "enabled": false,
+                "reason": "no_carrier_declares_runtime_role_and_task_class",
+                "runtime_role": "business_analyst",
+                "task_class": "verification"
+            }
+        });
+        let selection = agent_init_packet_selection(
+            "/tmp/downstream.json",
+            serde_json::json!({
+                "request_text": "close #116 verifier handoff",
+                "downstream_dispatch_target": "closure",
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": {
+                    "handoff_runtime_role": "verifier"
+                },
+                "role_selection_full": role_selection,
+            }),
+            true,
+        )
+        .expect("legacy downstream packet should select from embedded handoff role");
+        let activation_bundle = serde_json::json!({
+            "carrier_runtime": {
+                "selection_rule": "role_task_then_readiness_then_score_then_cost_quality",
+                "model_selection": {
+                    "enabled": true,
+                    "default_strategy": "balanced_cost_quality",
+                    "candidate_scope": "unified_carrier_model_profiles"
+                },
+                "roles": [
+                    {
+                        "role_id": "senior",
+                        "tier": "senior",
+                        "enabled": true,
+                        "rate": 17,
+                        "normalized_cost_units": 17,
+                        "model_provider": "openai",
+                        "model_reasoning_effort": "high",
+                        "quality_tier": "high",
+                        "runtime_roles": ["verifier"],
+                        "task_classes": ["verification"],
+                        "default_model_profile": "codex_gpt54_high_readonly",
+                        "model_profiles": {
+                            "codex_gpt54_high_readonly": {
+                                "profile_id": "codex_gpt54_high_readonly",
+                                "model_ref": "gpt-5.4",
+                                "provider": "openai",
+                                "reasoning_effort": "high",
+                                "quality_tier": "high",
+                                "speed_tier": "medium",
+                                "write_scope": "read-only",
+                                "normalized_cost_units": 17,
+                                "runtime_roles": ["verifier"],
+                                "task_classes": ["verification"],
+                                "readiness": { "required": true, "ready": true }
+                            }
+                        }
+                    }
+                ]
+            }
+        });
+
+        let (assignment, source) =
+            agent_init_runtime_assignment_resolution(&selection, &activation_bundle);
+
+        assert_eq!(source, "rebuilt_legacy_embedded_selection");
+        assert_eq!(assignment["selected_carrier_id"], "senior");
+        assert_eq!(assignment["activation_runtime_role"], "verifier");
+        assert_eq!(assignment["task_class"], "verification");
     }
 
     #[test]
