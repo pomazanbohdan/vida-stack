@@ -64,6 +64,7 @@ mod runtime_lane_summary;
 mod shell_runtime_helpers;
 mod state_store;
 mod status_surface;
+mod status_surface_codex_cli;
 mod status_surface_external_cli;
 mod status_surface_host_agents;
 mod status_surface_host_cli_summary;

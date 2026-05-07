@@ -653,6 +653,22 @@ fn external_cli_readiness_verdict_for_candidate(
     )
 }
 
+fn codex_cli_readiness_verdict_for_candidate(
+    compiled_bundle: &serde_json::Value,
+    role: &serde_json::Value,
+    profile: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let (selected_cli_system, dispatch_command, command_source) =
+        crate::status_surface_codex_cli::codex_dispatch_command_from_json_config(compiled_bundle);
+    crate::status_surface_codex_cli::codex_cli_readiness_verdict_for_profile(
+        Some(&selected_cli_system),
+        &command_source,
+        dispatch_command.as_deref(),
+        role["role_id"].as_str().unwrap_or_default(),
+        profile,
+    )
+}
+
 fn task_class_requires_write_scope(task_class: &str) -> bool {
     matches!(
         task_class,
@@ -681,6 +697,8 @@ fn reasoning_control_mode(profile: &serde_json::Value) -> Option<&'static str> {
 
 fn first_rejected_metadata_reason(rejected_candidates: &[serde_json::Value]) -> Option<String> {
     let metadata_reasons = [
+        "codex_cli_model_incompatible",
+        "codex_cli_not_ready",
         "selected_model_profile_id_missing",
         "selected_model_ref_missing",
         "selected_rate_missing",
@@ -721,6 +739,7 @@ struct ProfileCandidate {
     supports_task_class: bool,
     readiness_status: String,
     external_backend_readiness: Option<serde_json::Value>,
+    codex_cli_readiness: Option<serde_json::Value>,
 }
 
 impl ProfileCandidate {
@@ -1084,9 +1103,16 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
                         role,
                         &profile,
                     );
-                    let readiness_status = external_backend_readiness
+                    let codex_cli_readiness =
+                        codex_cli_readiness_verdict_for_candidate(compiled_bundle, role, &profile);
+                    let readiness_status = codex_cli_readiness
                         .as_ref()
                         .and_then(|verdict| verdict["status"].as_str())
+                        .or_else(|| {
+                            external_backend_readiness
+                                .as_ref()
+                                .and_then(|verdict| verdict["status"].as_str())
+                        })
                         .map(str::to_string)
                         .unwrap_or_else(|| profile_readiness_status(&profile));
                     ProfileCandidate {
@@ -1115,6 +1141,7 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
                         reasoning_rank: reasoning_effort_rank(reasoning_effort),
                         readiness_status,
                         external_backend_readiness,
+                        codex_cli_readiness,
                         role: role.clone(),
                         profile,
                     }
@@ -1144,6 +1171,23 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
             "rejected_candidates": rejected_candidates
         });
     }
+
+    let codex_incompatible_mapped_profiles = candidates
+        .iter()
+        .filter_map(|candidate| {
+            let role_id = candidate.role["role_id"].as_str().unwrap_or_default();
+            let mapped_profile_id = mapped_profile_for_carrier(route_profiles, role_id)?;
+            if candidate.profile["profile_id"].as_str() != Some(mapped_profile_id.as_str()) {
+                return None;
+            }
+            let blocked_by_codex_cli = candidate
+                .codex_cli_readiness
+                .as_ref()
+                .and_then(|verdict| verdict["blocker_code"].as_str())
+                == Some("codex_cli_model_incompatible");
+            blocked_by_codex_cli.then(|| (role_id.to_string(), mapped_profile_id))
+        })
+        .collect::<std::collections::HashSet<_>>();
 
     candidates.retain(|candidate| {
         let mut reasons = Vec::new();
@@ -1230,11 +1274,31 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         {
             reasons.push("external_backend_not_ready".to_string());
         }
+        if let Some(verdict) = candidate.codex_cli_readiness.as_ref() {
+            if verdict["blocked"].as_bool().unwrap_or(false) {
+                reasons.push(
+                    verdict["blocker_code"]
+                        .as_str()
+                        .unwrap_or("codex_cli_not_ready")
+                        .to_string(),
+                );
+            }
+        }
         if let Some(mapped_profile_id) = mapped_profile_for_carrier(
             route_profiles,
             candidate.role["role_id"].as_str().unwrap_or_default(),
         ) {
-            if candidate.profile["profile_id"].as_str() != Some(mapped_profile_id.as_str()) {
+            let mapped_profile_blocked_by_codex_cli =
+                codex_incompatible_mapped_profiles.contains(&(
+                    candidate.role["role_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    mapped_profile_id.clone(),
+                ));
+            if candidate.profile["profile_id"].as_str() != Some(mapped_profile_id.as_str())
+                && !mapped_profile_blocked_by_codex_cli
+            {
                 reasons.push("route_profile_mapping_mismatch".to_string());
             }
         }
@@ -1269,6 +1333,11 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
             if let Some(readiness) = candidate.external_backend_readiness.clone() {
                 if let Some(row) = rejected_candidate.as_object_mut() {
                     row.insert("external_backend_readiness".to_string(), readiness);
+                }
+            }
+            if let Some(readiness) = candidate.codex_cli_readiness.clone() {
+                if let Some(row) = rejected_candidate.as_object_mut() {
+                    row.insert("codex_cli_readiness".to_string(), readiness);
                 }
             }
             if let Some(row) = rejected_candidate.as_object_mut() {
@@ -1442,6 +1511,7 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         "selected_speed_tier": selected_profile["speed_tier"],
         "selected_model_profile_readiness_status": selected_candidate.readiness_status,
         "selected_external_backend_readiness": selected_candidate.external_backend_readiness,
+        "selected_codex_cli_readiness": selected_candidate.codex_cli_readiness,
         "pricing_readiness": serde_json::json!({
             "pricing": selected_candidate.pricing,
             "pricing_source_path": selected_candidate.pricing_source_path,
@@ -1470,6 +1540,7 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
             "selection_precedence".to_string(),
             serde_json::json!([
                 "runtime_role_and_task_class_admissibility",
+                "internal_backend_readiness",
                 "carrier_score_lifecycle_readiness",
                 "route_profile_mapping",
                 "write_scope",
@@ -2857,6 +2928,172 @@ mod tests {
         assert_eq!(
             assignment["selected_external_backend_readiness"]["status"],
             "carrier_ready_with_override"
+        );
+    }
+
+    #[test]
+    fn codex_cli_incompatible_gpt55_profile_falls_back_to_gpt54_profile() {
+        let _guard = crate::status_surface_codex_cli::CODEX_CLI_TEST_ENV_LOCK
+            .lock()
+            .expect("Codex CLI test env lock should not be poisoned");
+        std::env::set_var("VIDA_TEST_CODEX_CLI_VERSION_OUTPUT", "codex-cli 0.114.0");
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "junior",
+            "tier": "junior",
+            "rate": 1,
+            "normalized_cost_units": 1,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "reasoning_band": "low",
+            "default_model_profile": "codex_gpt55_low_write",
+            "model_profiles": {
+                "codex_gpt55_low_write": {
+                    "profile_id": "codex_gpt55_low_write",
+                    "model_ref": "gpt-5.5",
+                    "provider": "openai",
+                    "reasoning_effort": "low",
+                    "normalized_cost_units": 1,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": {
+                        "mode": "codex_profile",
+                        "required": true,
+                        "codex_cli": { "min_version": "0.115.0" }
+                    }
+                },
+                "codex_gpt54_low_write": {
+                    "profile_id": "codex_gpt54_low_write",
+                    "model_ref": "gpt-5.4",
+                    "provider": "openai",
+                    "reasoning_effort": "low",
+                    "normalized_cost_units": 2,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": {
+                        "mode": "codex_profile",
+                        "required": true,
+                        "codex_cli": { "min_version": "0.114.0" }
+                    }
+                }
+            }
+        })]);
+        compiled_bundle["host_environment"] = serde_json::json!({
+            "cli_system": "codex",
+            "systems": {
+                "codex": {
+                    "dispatch": {
+                        "command": "codex"
+                    }
+                }
+            }
+        });
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "routing": {
+                "implementation": {
+                    "profiles": {
+                        "junior": "codex_gpt55_low_write"
+                    }
+                }
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+        std::env::remove_var("VIDA_TEST_CODEX_CLI_VERSION_OUTPUT");
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(
+            assignment["selected_model_profile_id"],
+            "codex_gpt54_low_write"
+        );
+        assert_eq!(assignment["selected_model_ref"], "gpt-5.4");
+        assert_eq!(
+            assignment["selected_codex_cli_readiness"]["status"],
+            "codex_cli_ready"
+        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["model_profile_id"] == "codex_gpt55_low_write"
+                    && row["reason"] == "codex_cli_model_incompatible"
+                    && row["codex_cli_readiness"]["detected_cli_version"] == "0.114.0"
+                    && row["codex_cli_readiness"]["required_cli_version"] == "0.115.0"
+            }));
+    }
+
+    #[test]
+    fn codex_cli_incompatible_profile_fails_closed_when_no_fallback_exists() {
+        let _guard = crate::status_surface_codex_cli::CODEX_CLI_TEST_ENV_LOCK
+            .lock()
+            .expect("Codex CLI test env lock should not be poisoned");
+        std::env::set_var("VIDA_TEST_CODEX_CLI_VERSION_OUTPUT", "codex-cli 0.114.0");
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "junior",
+            "tier": "junior",
+            "rate": 1,
+            "normalized_cost_units": 1,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "reasoning_band": "low",
+            "default_model_profile": "codex_gpt55_low_write",
+            "model_profiles": {
+                "codex_gpt55_low_write": {
+                    "profile_id": "codex_gpt55_low_write",
+                    "model_ref": "gpt-5.5",
+                    "provider": "openai",
+                    "reasoning_effort": "low",
+                    "normalized_cost_units": 1,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": {
+                        "mode": "codex_profile",
+                        "required": true,
+                        "codex_cli": { "min_version": "0.115.0" }
+                    }
+                }
+            }
+        })]);
+        compiled_bundle["host_environment"] = serde_json::json!({
+            "cli_system": "codex",
+            "systems": {
+                "codex": {
+                    "dispatch": {
+                        "command": "codex"
+                    }
+                }
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+        std::env::remove_var("VIDA_TEST_CODEX_CLI_VERSION_OUTPUT");
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(assignment["reason"], "codex_cli_model_incompatible");
+        assert_eq!(
+            assignment["rejected_candidates"][0]["codex_cli_readiness"]["blocker_code"],
+            "codex_cli_model_incompatible"
         );
     }
 

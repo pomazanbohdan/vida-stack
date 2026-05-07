@@ -66,6 +66,29 @@ host_environment:
             readiness:
               mode: codex_profile
               required: true
+              codex_cli:
+                min_version: 0.115.0
+          codex_gpt54_low_write:
+            provider: openai
+            model_ref: gpt-5.4
+            reasoning_effort: low
+            plan_mode_reasoning_effort: medium
+            sandbox_mode: workspace-write
+            normalized_cost_units: 2
+            speed_tier: fast
+            quality_tier: medium
+            write_scope: workspace-write
+            runtime_roles:
+              - worker
+            task_classes:
+              - implementation
+              - delivery_task
+              - execution_block
+            readiness:
+              mode: codex_profile
+              required: true
+              codex_cli:
+                min_version: 0.114.0
         default_runtime_role: worker
         runtime_roles:
           - worker
@@ -106,6 +129,33 @@ host_environment:
             readiness:
               mode: codex_profile
               required: true
+              codex_cli:
+                min_version: 0.115.0
+          codex_gpt54_medium_write:
+            provider: openai
+            model_ref: gpt-5.4
+            reasoning_effort: medium
+            plan_mode_reasoning_effort: high
+            sandbox_mode: workspace-write
+            normalized_cost_units: 5
+            speed_tier: fast
+            quality_tier: medium
+            write_scope: workspace-write
+            runtime_roles:
+              - business_analyst
+              - pm
+              - coach
+              - worker
+            task_classes:
+              - specification
+              - planning
+              - coach
+              - implementation_medium
+            readiness:
+              mode: codex_profile
+              required: true
+              codex_cli:
+                min_version: 0.114.0
         default_runtime_role: coach
         runtime_roles:
           - business_analyst
@@ -148,6 +198,31 @@ host_environment:
             readiness:
               mode: codex_profile
               required: true
+              codex_cli:
+                min_version: 0.115.0
+          codex_gpt54_high_readonly:
+            provider: openai
+            model_ref: gpt-5.4
+            reasoning_effort: high
+            plan_mode_reasoning_effort: high
+            sandbox_mode: read-only
+            normalized_cost_units: 17
+            speed_tier: medium
+            quality_tier: high
+            write_scope: read-only
+            runtime_roles:
+              - verifier
+              - prover
+            task_classes:
+              - verification
+              - review
+              - quality_gate
+              - release_readiness
+            readiness:
+              mode: codex_profile
+              required: true
+              codex_cli:
+                min_version: 0.114.0
         default_runtime_role: verifier
         runtime_roles:
           - verifier
@@ -187,6 +262,30 @@ host_environment:
             readiness:
               mode: codex_profile
               required: true
+              codex_cli:
+                min_version: 0.115.0
+          codex_gpt54_high_arch:
+            provider: openai
+            model_ref: gpt-5.4
+            reasoning_effort: high
+            plan_mode_reasoning_effort: high
+            sandbox_mode: read-only
+            normalized_cost_units: 33
+            speed_tier: medium
+            quality_tier: high
+            write_scope: read-only
+            runtime_roles:
+              - solution_architect
+            task_classes:
+              - architecture
+              - execution_preparation
+              - hard_escalation
+              - meta_analysis
+            readiness:
+              mode: codex_profile
+              required: true
+              codex_cli:
+                min_version: 0.114.0
           codex_gpt55_xhigh_arch:
             provider: openai
             model_ref: gpt-5.5
@@ -206,6 +305,29 @@ host_environment:
             readiness:
               mode: codex_profile
               required: true
+              codex_cli:
+                min_version: 0.115.0
+          codex_gpt54_xhigh_arch:
+            provider: openai
+            model_ref: gpt-5.4
+            reasoning_effort: xhigh
+            plan_mode_reasoning_effort: xhigh
+            sandbox_mode: read-only
+            normalized_cost_units: 49
+            speed_tier: slow
+            quality_tier: very_high
+            write_scope: read-only
+            runtime_roles:
+              - solution_architect
+            task_classes:
+              - hard_escalation
+              - architecture
+              - meta_analysis
+            readiness:
+              mode: codex_profile
+              required: true
+              codex_cli:
+                min_version: 0.114.0
         default_runtime_role: solution_architect
         runtime_roles:
           - solution_architect
@@ -857,7 +979,7 @@ agent_system:
       orchestration_tier: senior
       cost_priority: premium
       budget_cost_units: 10
-      profiles: codex_gpt55_low_write,codex_gpt55_medium_write,codex_gpt55_high_readonly,codex_gpt55_xhigh_arch
+      profiles: codex_gpt55_low_write,codex_gpt54_low_write,codex_gpt55_medium_write,codex_gpt54_medium_write,codex_gpt55_high_readonly,codex_gpt54_high_readonly,codex_gpt55_xhigh_arch,codex_gpt54_xhigh_arch
       default_profile: codex_gpt55_low_write
       default_model_profile: codex_gpt55_low_write
       capability_band: implementation_safe,architecture_safe,review_safe
@@ -916,6 +1038,36 @@ agent_system:
           readiness:
             mode: codex_profile
             required: true
+            codex_cli:
+              min_version: 0.115.0
+        codex_gpt54_low_write:
+          provider: openai
+          model_ref: gpt-5.4
+          reasoning_effort: low
+          normalized_cost_units: 2
+          pricing:
+            price_source_kind: provider_catalog
+            source_paths:
+              - docs/process/codex-agent-configuration-guide.md
+            freshness:
+              required: false
+              diagnostic_only: true
+              enforced: false
+          speed_tier: fast
+          quality_tier: medium_high
+          write_scope: orchestrator_native
+          runtime_roles:
+            - worker
+            - business_analyst
+          task_classes:
+            - implementation
+            - analysis
+            - delivery_task
+          readiness:
+            mode: codex_profile
+            required: true
+            codex_cli:
+              min_version: 0.114.0
         codex_gpt55_medium_write:
           provider: openai
           model_ref: gpt-5.5
@@ -946,6 +1098,40 @@ agent_system:
           readiness:
             mode: codex_profile
             required: true
+            codex_cli:
+              min_version: 0.115.0
+        codex_gpt54_medium_write:
+          provider: openai
+          model_ref: gpt-5.4
+          reasoning_effort: medium
+          normalized_cost_units: 5
+          pricing:
+            price_source_kind: provider_catalog
+            source_paths:
+              - docs/process/codex-agent-configuration-guide.md
+            freshness:
+              required: false
+              diagnostic_only: true
+              enforced: false
+          speed_tier: fast
+          quality_tier: medium
+          write_scope: orchestrator_native
+          runtime_roles:
+            - business_analyst
+            - pm
+            - coach
+            - worker
+          task_classes:
+            - specification
+            - planning
+            - coach
+            - implementation_medium
+            - analysis
+          readiness:
+            mode: codex_profile
+            required: true
+            codex_cli:
+              min_version: 0.114.0
         codex_gpt55_high_readonly:
           provider: openai
           model_ref: gpt-5.5
@@ -966,6 +1152,30 @@ agent_system:
           readiness:
             mode: codex_profile
             required: true
+            codex_cli:
+              min_version: 0.115.0
+        codex_gpt54_high_readonly:
+          provider: openai
+          model_ref: gpt-5.4
+          reasoning_effort: high
+          normalized_cost_units: 17
+          speed_tier: medium
+          quality_tier: high
+          write_scope: read_or_review
+          runtime_roles:
+            - coach
+            - verifier
+            - prover
+          task_classes:
+            - review
+            - verification
+            - coach
+            - release_readiness
+          readiness:
+            mode: codex_profile
+            required: true
+            codex_cli:
+              min_version: 0.114.0
         codex_gpt55_xhigh_arch:
           provider: openai
           model_ref: gpt-5.5
@@ -983,6 +1193,27 @@ agent_system:
           readiness:
             mode: codex_profile
             required: true
+            codex_cli:
+              min_version: 0.115.0
+        codex_gpt54_xhigh_arch:
+          provider: openai
+          model_ref: gpt-5.4
+          reasoning_effort: xhigh
+          normalized_cost_units: 49
+          speed_tier: medium
+          quality_tier: very_high
+          write_scope: architecture_safe
+          runtime_roles:
+            - solution_architect
+          task_classes:
+            - architecture
+            - execution_preparation
+            - hard_escalation
+          readiness:
+            mode: codex_profile
+            required: true
+            codex_cli:
+              min_version: 0.114.0
       specialties: implementation,architecture,integration,review,verification
     hermes_cli:
       enabled: true

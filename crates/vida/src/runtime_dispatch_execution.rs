@@ -1321,6 +1321,108 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
     let carrier_id = carrier["role_id"]
         .as_str()
         .unwrap_or(selected_cli_system.as_str());
+    let codex_cli_readiness =
+        crate::status_surface_codex_cli::codex_cli_readiness_verdict_for_carrier(
+            &selected_cli_system,
+            selected_cli_entry.as_ref(),
+            &carrier,
+        );
+    if codex_cli_readiness
+        .as_ref()
+        .and_then(|verdict| verdict["blocked"].as_bool())
+        .unwrap_or(false)
+    {
+        let readiness_verdict =
+            codex_cli_readiness.expect("blocked codex CLI readiness verdict should exist");
+        let readiness_status = readiness_verdict["status"]
+            .as_str()
+            .unwrap_or("codex_cli_not_ready");
+        let selected_model_profile = readiness_verdict["selected_model_profile"]
+            .as_str()
+            .unwrap_or("unknown");
+        let model_ref = readiness_verdict["model_ref"].as_str().unwrap_or("unknown");
+        let next_action = readiness_verdict["next_actions"]
+            .as_array()
+            .and_then(|actions| actions.iter().filter_map(serde_json::Value::as_str).next())
+            .unwrap_or("Repair the Codex CLI readiness blocker before dispatch.");
+        let blocker_code = readiness_verdict
+            .get("blocker_code")
+            .cloned()
+            .filter(|value| !value.is_null())
+            .unwrap_or_else(|| serde_json::json!("codex_cli_not_ready"));
+        let activation_view = bounded_activation_view(
+            state_root,
+            project_root,
+            dispatch_packet_path,
+            receipt,
+            role_selection,
+        )
+        .await;
+        let mut result = agent_lane_dispatch_result(
+            activation_view,
+            dispatch_packet_path,
+            preferred_backend,
+            role_selection,
+            receipt,
+            host_runtime,
+        );
+        let body = result
+            .as_object_mut()
+            .expect("internal agent lane dispatch result should serialize to an object");
+        body.insert(
+            "surface".to_string(),
+            serde_json::json!(format!("internal_cli:{selected_cli_system}")),
+        );
+        body.insert("blocker_code".to_string(), blocker_code);
+        body.insert(
+            "blocker_reason".to_string(),
+            serde_json::json!(format!(
+                "Codex CLI is not dispatch-ready before internal launch: {readiness_status}; selected_model_profile={selected_model_profile}; model_ref={model_ref}. {next_action}"
+            )),
+        );
+        body.insert("status".to_string(), serde_json::json!("blocked"));
+        body.insert("execution_state".to_string(), serde_json::json!("blocked"));
+        body.insert("codex_cli_readiness".to_string(), readiness_verdict.clone());
+        if let Some(dispatch) = body
+            .get_mut("backend_dispatch")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            dispatch.insert("backend_class".to_string(), serde_json::json!("internal"));
+            dispatch.insert("backend_id".to_string(), serde_json::json!(carrier_id));
+            dispatch.insert(
+                "carrier_id".to_string(),
+                serde_json::json!(carrier["role_id"].clone()),
+            );
+            dispatch.insert(
+                "model".to_string(),
+                serde_json::json!(carrier["model"].clone()),
+            );
+            dispatch.insert(
+                "model_reasoning_effort".to_string(),
+                serde_json::json!(carrier["model_reasoning_effort"].clone()),
+            );
+            dispatch.insert(
+                "sandbox_mode".to_string(),
+                serde_json::json!(carrier["sandbox_mode"].clone()),
+            );
+            for key in [
+                "selected_model_profile_id",
+                "selected_model_ref",
+                "selected_model_provider",
+                "selected_reasoning_effort",
+                "selected_sandbox_mode",
+                "internal_subagent_backend_id",
+                "internal_subagent_model_profile_id",
+            ] {
+                if !carrier[key].is_null() {
+                    dispatch.insert(key.to_string(), carrier[key].clone());
+                }
+            }
+            dispatch.insert("codex_cli_readiness".to_string(), readiness_verdict);
+        }
+        refresh_execution_truth(body, role_selection, receipt, Some(carrier_id), "missing");
+        return Ok(Some(result));
+    }
     let (command, args, stdin_payload) = configured_internal_host_activation_parts(
         selected_cli_entry.as_ref(),
         project_root,
@@ -1978,9 +2080,9 @@ mod tests {
         agent_lane_dispatch_result, configured_internal_host_activation_parts,
         configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
         dispatch_packet_prompt, execute_external_agent_lane_dispatch,
-        external_provider_output_confirms_execution, internal_codex_output_confirms_execution,
-        mark_dispatch_result_execution_evidence, parse_external_provider_output,
-        parse_internal_codex_exec_output,
+        execute_internal_agent_lane_dispatch, external_provider_output_confirms_execution,
+        internal_codex_output_confirms_execution, mark_dispatch_result_execution_evidence,
+        parse_external_provider_output, parse_internal_codex_exec_output,
         should_render_store_backed_activation_view_for_internal_failure,
         wrap_command_with_optional_timeout, CommandTimeoutWrapper,
     };
@@ -3323,6 +3425,177 @@ agent_system:
         assert_eq!(
             result["backend_dispatch"]["provider_error"],
             serde_json::Value::Null
+        );
+        assert!(!result["blocker_reason"]
+            .as_str()
+            .expect("blocker reason should render")
+            .contains("SHOULD_NOT_LAUNCH"));
+
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn execute_internal_agent_lane_dispatch_blocks_codex_cli_incompatibility_before_launch() {
+        let _guard = crate::status_surface_codex_cli::CODEX_CLI_TEST_ENV_LOCK
+            .lock()
+            .expect("Codex CLI test env lock should not be poisoned");
+        std::env::set_var("VIDA_TEST_CODEX_CLI_VERSION_OUTPUT", "codex-cli 0.114.0");
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-internal-dispatch-codex-cli-readiness-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      dispatch:
+        command: sh
+        static_args: ["-c", "echo SHOULD_NOT_LAUNCH >&2; exit 99"]
+        prompt_mode: positional
+      carriers:
+        middle:
+          model: gpt-5.5
+          model_reasoning_effort: medium
+          sandbox_mode: workspace-write
+          default_model_profile: codex_gpt55_medium_write
+          runtime_roles: [worker]
+          task_classes: [implementation]
+          model_profiles:
+            codex_gpt55_medium_write:
+              model_ref: gpt-5.5
+              provider: openai
+              reasoning_effort: medium
+              sandbox_mode: workspace-write
+              normalized_cost_units: 4
+              runtime_roles: [worker]
+              task_classes: [implementation]
+              readiness:
+                mode: codex_profile
+                required: true
+                codex_cli:
+                  min_version: 0.115.0
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("write overlay");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Implement the task".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ],
+                "development_flow": {
+                    "implementation": {
+                        "executor_backend": "internal_subagents"
+                    }
+                },
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "selected_tier": "middle",
+                    "selected_backend_id": "internal_subagents",
+                    "selected_model_profile_id": "codex_gpt55_medium_write"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-1".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let result = runtime
+            .block_on(async {
+                execute_internal_agent_lane_dispatch(
+                    project_root.join("missing-state").as_path(),
+                    &project_root,
+                    "/tmp/dispatch-packet.json",
+                    Some("internal_subagents"),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "internal"
+                    }),
+                )
+                .await
+            })
+            .expect("dispatch should return result")
+            .expect("internal dispatch should return blocked result");
+        std::env::remove_var("VIDA_TEST_CODEX_CLI_VERSION_OUTPUT");
+
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["blocker_code"], "codex_cli_model_incompatible");
+        assert_eq!(result["backend_dispatch"]["backend_id"], "middle");
+        assert_eq!(
+            result["codex_cli_readiness"]["status"],
+            "codex_cli_model_incompatible"
+        );
+        assert_eq!(
+            result["backend_dispatch"]["codex_cli_readiness"]["detected_cli_version"],
+            "0.114.0"
         );
         assert!(!result["blocker_reason"]
             .as_str()

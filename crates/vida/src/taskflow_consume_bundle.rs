@@ -893,7 +893,13 @@ pub(crate) fn build_dev_team_readiness(
     let pricing_catalog = &activation_bundle["agent_system"]["pricing"];
 
     let mut blockers = Vec::new();
-    let roles = dev_team_roles(dev_team, &carrier_catalog, pricing_catalog, &mut blockers);
+    let roles = dev_team_roles(
+        dev_team,
+        activation_bundle,
+        &carrier_catalog,
+        pricing_catalog,
+        &mut blockers,
+    );
     let flows = dev_team_flows(dev_team, &roles, &mut blockers);
     let sequence = default_dev_team_sequence(&flows);
 
@@ -956,6 +962,7 @@ fn carrier_catalog_by_id(
 
 fn dev_team_roles(
     dev_team: &serde_yaml::Value,
+    activation_bundle: &serde_json::Value,
     carrier_catalog: &BTreeMap<String, serde_json::Value>,
     pricing_catalog: &serde_json::Value,
     blockers: &mut Vec<String>,
@@ -1007,13 +1014,21 @@ fn dev_team_roles(
         if default_carrier.is_some() && carrier.is_none() {
             blockers.push(format!("unknown_default_carrier:{role_id}"));
         }
+        let runtime_assignment = dev_team_runtime_assignment(
+            activation_bundle,
+            runtime_role.as_deref(),
+            task_classes.first().map(String::as_str),
+        );
         let selected_model = dev_team_selected_model_projection(
             role_id,
             default_model.as_deref(),
             carrier,
+            runtime_assignment.as_ref(),
             pricing_catalog,
             blockers,
         );
+        let selected_carrier =
+            dev_team_selected_carrier_projection(carrier, runtime_assignment.as_ref());
 
         roles.push(serde_json::json!({
             "role_id": role_id,
@@ -1043,18 +1058,7 @@ fn dev_team_roles(
                 ),
             },
             "selected_model": selected_model,
-            "selected_carrier": carrier.cloned().map(|carrier| {
-                serde_json::json!({
-                    "carrier_id": carrier["role_id"],
-                    "model": carrier["model"],
-                    "model_provider": carrier["model_provider"],
-                    "reasoning_effort": carrier["model_reasoning_effort"],
-                    "normalized_cost_units": carrier["normalized_cost_units"],
-                    "rate": carrier["rate"],
-                    "runtime_roles": carrier["runtime_roles"],
-                    "task_classes": carrier["task_classes"],
-                })
-            }).unwrap_or(serde_json::Value::Null),
+            "selected_carrier": selected_carrier,
         }));
     }
 
@@ -1067,13 +1071,88 @@ fn dev_team_roles(
     roles
 }
 
+fn dev_team_runtime_assignment(
+    activation_bundle: &serde_json::Value,
+    runtime_role: Option<&str>,
+    task_class: Option<&str>,
+) -> Option<serde_json::Value> {
+    if activation_bundle["carrier_runtime"]["model_selection"]["enabled"].as_bool() != Some(true) {
+        return None;
+    }
+    let runtime_role = runtime_role
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let task_class = task_class
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(crate::build_runtime_assignment_from_resolved_constraints(
+        activation_bundle,
+        runtime_role,
+        task_class,
+        runtime_role,
+    ))
+}
+
+fn dev_team_selected_carrier_projection(
+    configured_carrier: Option<&serde_json::Value>,
+    runtime_assignment: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    if let Some(assignment) = runtime_assignment {
+        if assignment["enabled"].as_bool() == Some(true) {
+            return serde_json::json!({
+                "selection_mode": "runtime_assignment",
+                "carrier_id": assignment["selected_carrier_id"],
+                "model": assignment["selected_model_ref"],
+                "model_provider": assignment["selected_model_provider"],
+                "reasoning_effort": assignment["selected_reasoning_effort"],
+                "normalized_cost_units": assignment["normalized_cost_units"],
+                "rate": assignment["rate"],
+                "runtime_role": assignment["runtime_role"],
+                "task_class": assignment["task_class"],
+                "model_profile_id": assignment["selected_model_profile_id"],
+                "codex_cli_readiness": assignment["selected_codex_cli_readiness"],
+                "selection_source_paths": assignment["selection_source_paths"],
+                "rationale": assignment["rationale"],
+            });
+        }
+        return serde_json::json!({
+            "selection_mode": "runtime_assignment",
+            "status": "blocked",
+            "reason": assignment["reason"],
+            "runtime_role": assignment["runtime_role"],
+            "task_class": assignment["task_class"],
+            "rejected_candidates": assignment["rejected_candidates"],
+        });
+    }
+    configured_carrier
+        .cloned()
+        .map(|carrier| {
+            serde_json::json!({
+                "selection_mode": "configured_default",
+                "carrier_id": carrier["role_id"],
+                "model": carrier["model"],
+                "model_provider": carrier["model_provider"],
+                "reasoning_effort": carrier["model_reasoning_effort"],
+                "normalized_cost_units": carrier["normalized_cost_units"],
+                "rate": carrier["rate"],
+                "runtime_roles": carrier["runtime_roles"],
+                "task_classes": carrier["task_classes"],
+            })
+        })
+        .unwrap_or(serde_json::Value::Null)
+}
+
 fn dev_team_selected_model_projection(
     role_id: &str,
     default_model: Option<&str>,
     carrier: Option<&serde_json::Value>,
+    runtime_assignment: Option<&serde_json::Value>,
     pricing_catalog: &serde_json::Value,
     blockers: &mut Vec<String>,
 ) -> serde_json::Value {
+    if let Some(assignment) = runtime_assignment {
+        return dev_team_selected_model_from_runtime_assignment(role_id, assignment, blockers);
+    }
     let Some(carrier) = carrier else {
         return serde_json::Value::Null;
     };
@@ -1318,6 +1397,86 @@ fn dev_team_selected_model_projection(
         "pricing": pricing,
         "pricing_freshness": pricing_freshness,
         "pricing_freshness_status": pricing_freshness_status,
+    })
+}
+
+fn dev_team_selected_model_from_runtime_assignment(
+    role_id: &str,
+    assignment: &serde_json::Value,
+    blockers: &mut Vec<String>,
+) -> serde_json::Value {
+    if assignment["enabled"].as_bool() != Some(true) {
+        let reason = assignment["reason"]
+            .as_str()
+            .unwrap_or("runtime_assignment_not_ready");
+        blockers.push(format!("runtime_assignment_not_ready:{role_id}:{reason}"));
+        return serde_json::json!({
+            "selection_mode": "runtime_assignment",
+            "status": "blocked",
+            "reason": assignment["reason"],
+            "model_profile_id": serde_json::Value::Null,
+            "model_ref": serde_json::Value::Null,
+            "runtime_role": assignment["runtime_role"],
+            "task_class": assignment["task_class"],
+            "rejected_candidates": assignment["rejected_candidates"],
+        });
+    }
+
+    let pricing_readiness = &assignment["pricing_readiness"];
+    let pricing_freshness_status = pricing_readiness["pricing_freshness_status"]
+        .as_str()
+        .unwrap_or("missing");
+    match pricing_freshness_status {
+        "missing" => {
+            let rejected_for_freshness = pricing_readiness["pricing_rejection_reasons"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|reason| reason.as_str() == Some("model_price_freshness_policy_incomplete"));
+            if rejected_for_freshness {
+                blockers.push(format!("model_price_freshness_policy_incomplete:{role_id}"));
+            }
+        }
+        "stale" => {
+            let rejected_for_freshness = pricing_readiness["pricing_rejection_reasons"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|reason| reason.as_str() == Some("model_price_freshness_stale"));
+            if rejected_for_freshness {
+                blockers.push(format!("model_price_freshness_stale:{role_id}"));
+            }
+        }
+        _ => {}
+    }
+
+    serde_json::json!({
+        "selection_mode": "runtime_assignment",
+        "status": "ready",
+        "carrier_id": assignment["selected_carrier_id"],
+        "model_profile_id": assignment["selected_model_profile_id"],
+        "model_profile_id_source_path": assignment["selection_source_paths"]["selected_model_profile_id"],
+        "model_ref": assignment["selected_model_ref"],
+        "model_ref_source_path": assignment["selection_source_paths"]["selected_model_ref"],
+        "model_provider": assignment["selected_model_provider"],
+        "model_reasoning_effort": assignment["selected_reasoning_effort"],
+        "selected_rate": assignment["normalized_cost_units"],
+        "selected_rate_source_path": assignment["selection_source_paths"]["selected_rate"],
+        "pricing": pricing_readiness["pricing"],
+        "pricing_freshness": pricing_readiness["pricing_freshness"],
+        "pricing_freshness_status": pricing_readiness["pricing_freshness_status"],
+        "pricing_rejection_reasons": pricing_readiness["pricing_rejection_reasons"],
+        "runtime_role": assignment["runtime_role"],
+        "task_class": assignment["task_class"],
+        "selected_model_profile_readiness_status": assignment["selected_model_profile_readiness_status"],
+        "codex_cli_readiness": assignment["selected_codex_cli_readiness"],
+        "external_backend_readiness": assignment["selected_external_backend_readiness"],
+        "selection_source_paths": assignment["selection_source_paths"],
+        "selection_override_reasons": assignment["selection_override_reasons"],
+        "selection_strategy": assignment["selection_strategy"],
+        "selection_rule": assignment["selection_rule"],
+        "rationale": assignment["rationale"],
+        "rejected_candidates": assignment["rejected_candidates"],
     })
 }
 
@@ -1836,6 +1995,193 @@ dev_team:
             readiness["roles"][0]["selected_model"]["pricing_freshness_status"],
             "ready"
         );
+    }
+
+    #[test]
+    fn build_dev_team_readiness_uses_runtime_assignment_codex_cli_fallback() {
+        let _guard = crate::status_surface_codex_cli::CODEX_CLI_TEST_ENV_LOCK
+            .lock()
+            .expect("Codex CLI test env lock should not be poisoned");
+        std::env::set_var("VIDA_TEST_CODEX_CLI_VERSION_OUTPUT", "codex-cli 0.114.0");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+dev_team:
+  enabled: true
+  roles:
+    analyst:
+      runtime_role: business_analyst
+      task_classes: [specification]
+      default_carrier: middle
+      default_model: gpt-5.5
+      default_model_reasoning_effort: medium
+      cost_policy:
+        budget_units: 4
+      handoff:
+        next_role: analyst
+        required_outputs: [detailed_task_brief]
+  flows:
+    default_delivery:
+      enabled: true
+      sequential: true
+      allow_parallel_handoffs: false
+      steps: [analyst]
+"#,
+        )
+        .expect("config should write");
+        let readiness = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &serde_json::json!({
+                "host_environment": {
+                    "cli_system": "codex",
+                    "systems": {
+                        "codex": {
+                            "dispatch": {
+                                "command": "codex"
+                            }
+                        }
+                    }
+                },
+                "carrier_runtime": {
+                    "roles": [
+                        {
+                            "role_id": "middle",
+                            "tier": "middle",
+                            "model": "gpt-5.5",
+                            "model_provider": "openai",
+                            "model_reasoning_effort": "medium",
+                            "normalized_cost_units": 4,
+                            "rate": 4,
+                            "runtime_roles": ["business_analyst"],
+                            "task_classes": ["specification"],
+                            "default_runtime_role": "business_analyst",
+                            "default_model_profile": "codex_gpt55_medium_write",
+                            "reasoning_band": "medium",
+                            "model_profiles": {
+                                "codex_gpt55_medium_write": {
+                                    "profile_id": "codex_gpt55_medium_write",
+                                    "provider": "openai",
+                                    "model_ref": "gpt-5.5",
+                                    "reasoning_effort": "medium",
+                                    "normalized_cost_units": 4,
+                                    "speed_tier": "fast",
+                                    "quality_tier": "medium",
+                                    "write_scope": "workspace-write",
+                                    "runtime_roles": ["business_analyst"],
+                                    "task_classes": ["specification"],
+                                    "readiness": {
+                                        "mode": "codex_profile",
+                                        "required": true,
+                                        "codex_cli": { "min_version": "0.115.0" }
+                                    }
+                                },
+                                "codex_gpt54_medium_write": {
+                                    "profile_id": "codex_gpt54_medium_write",
+                                    "provider": "openai",
+                                    "model_ref": "gpt-5.4",
+                                    "reasoning_effort": "medium",
+                                    "normalized_cost_units": 5,
+                                    "speed_tier": "fast",
+                                    "quality_tier": "medium",
+                                    "write_scope": "workspace-write",
+                                    "runtime_roles": ["business_analyst"],
+                                    "task_classes": ["specification"],
+                                    "readiness": {
+                                        "mode": "codex_profile",
+                                        "required": true,
+                                        "codex_cli": { "min_version": "0.114.0" }
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "dispatch_aliases": [],
+                    "worker_strategy": {
+                        "selection_policy": {
+                            "demotion_score": 45
+                        },
+                        "agents": {
+                            "middle": {
+                                "effective_score": 70,
+                                "lifecycle_state": "active"
+                            }
+                        },
+                        "store_path": ".vida/state/worker-strategy.json",
+                        "scorecards_path": ".vida/state/worker-scorecards.json"
+                    },
+                    "model_selection": {
+                        "enabled": true,
+                        "default_strategy": "balanced_cost_quality",
+                        "selection_rule": "role_task_then_readiness_then_score_then_cost_quality",
+                        "free_profiles_allowed": true,
+                        "quality_floor_by_runtime_role": {
+                            "business_analyst": "medium"
+                        },
+                        "reasoning_floor_by_task_class": {
+                            "specification": "medium"
+                        }
+                    }
+                },
+                "agent_system": {
+                    "routing": {
+                        "specification": {
+                            "profiles": {
+                                "middle": "codex_gpt55_medium_write"
+                            }
+                        }
+                    },
+                    "pricing": {
+                        "model_profile_defaults": {
+                            "pricing": {
+                                "price_source_kind": "provider_catalog",
+                                "freshness": {
+                                    "required": false,
+                                    "diagnostic_only": true,
+                                    "enforced": false
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+        );
+        std::env::remove_var("VIDA_TEST_CODEX_CLI_VERSION_OUTPUT");
+
+        let analyst = readiness["roles"]
+            .as_array()
+            .expect("roles should render")
+            .iter()
+            .find(|role| role["role_id"] == "analyst")
+            .expect("analyst role should render");
+        assert_eq!(readiness["status"], "ready");
+        assert_eq!(
+            analyst["selected_model"]["selection_mode"],
+            "runtime_assignment"
+        );
+        assert_eq!(
+            analyst["selected_model"]["model_profile_id"],
+            "codex_gpt54_medium_write"
+        );
+        assert_eq!(analyst["selected_model"]["model_ref"], "gpt-5.4");
+        assert_eq!(
+            analyst["selected_model"]["codex_cli_readiness"]["status"],
+            "codex_cli_ready"
+        );
+        assert!(analyst["selected_model"]["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["model_profile_id"] == "codex_gpt55_medium_write"
+                    && row["reason"] == "codex_cli_model_incompatible"
+            }));
+        assert_eq!(
+            analyst["selected_carrier"]["selection_mode"],
+            "runtime_assignment"
+        );
+        assert_eq!(analyst["selected_carrier"]["model"], "gpt-5.4");
     }
 
     #[test]
