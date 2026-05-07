@@ -952,7 +952,7 @@ fn configured_internal_host_activation_parts(
     project_root: &Path,
     dispatch_packet_path: &str,
     carrier: &serde_json::Value,
-) -> Result<(String, Vec<String>, Option<String>), String> {
+) -> Result<(String, Vec<String>, Option<String>, String, Option<String>), String> {
     let dispatch = system_entry
         .and_then(|entry| yaml_lookup(entry, &["dispatch"]))
         .ok_or_else(|| "Configured internal host system is missing `dispatch`".to_string())?;
@@ -980,6 +980,8 @@ fn configured_internal_host_activation_parts(
                 .to_string(),
         );
     }
+    let (effective_sandbox_mode, sandbox_mode_override_source) =
+        effective_internal_host_dispatch_sandbox_mode(system_entry, sandbox_mode)?;
     let reasoning_effort = carrier["model_reasoning_effort"]
         .as_str()
         .map(str::trim)
@@ -994,7 +996,7 @@ fn configured_internal_host_activation_parts(
     }
     if let Some(sandbox_flag) = crate::yaml_string(yaml_lookup(dispatch, &["sandbox_flag"])) {
         args.push(sandbox_flag);
-        args.push(sandbox_mode.to_string());
+        args.push(effective_sandbox_mode.clone());
     }
     if let Some(model_flag) = crate::yaml_string(yaml_lookup(dispatch, &["model_flag"])) {
         args.push(model_flag);
@@ -1024,7 +1026,64 @@ fn configured_internal_host_activation_parts(
             ));
         }
     }
-    Ok((command, args, stdin_payload))
+    Ok((
+        command,
+        args,
+        stdin_payload,
+        effective_sandbox_mode,
+        sandbox_mode_override_source,
+    ))
+}
+
+fn effective_internal_host_dispatch_sandbox_mode(
+    system_entry: Option<&serde_yaml::Value>,
+    configured_sandbox_mode: &str,
+) -> Result<(String, Option<String>), String> {
+    #[cfg(windows)]
+    {
+        let override_candidates = [
+            (
+                &[
+                    "app",
+                    "platform_overrides",
+                    "windows",
+                    "internal_dispatch",
+                    "sandbox_mode",
+                ][..],
+                "host_environment.systems.codex.app.platform_overrides.windows.internal_dispatch.sandbox_mode",
+            ),
+            (
+                &[
+                    "app",
+                    "platform_overrides",
+                    "windows",
+                    "dispatch",
+                    "sandbox_mode",
+                ][..],
+                "host_environment.systems.codex.app.platform_overrides.windows.dispatch.sandbox_mode",
+            ),
+        ];
+        for (path, source) in override_candidates {
+            if let Some(value) = system_entry
+                .and_then(|entry| yaml_lookup(entry, path))
+                .and_then(serde_yaml::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                if !matches!(
+                    value,
+                    "read-only" | "workspace-write" | "danger-full-access"
+                ) {
+                    return Err(format!(
+                        "Configured Windows internal host dispatch sandbox override `{value}` is unsupported"
+                    ));
+                }
+                return Ok((value.to_string(), Some(source.to_string())));
+            }
+        }
+    }
+
+    Ok((configured_sandbox_mode.to_string(), None))
 }
 
 pub(crate) fn agent_lane_dispatch_result(
@@ -1423,12 +1482,13 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         refresh_execution_truth(body, role_selection, receipt, Some(carrier_id), "missing");
         return Ok(Some(result));
     }
-    let (command, args, stdin_payload) = configured_internal_host_activation_parts(
-        selected_cli_entry.as_ref(),
-        project_root,
-        dispatch_packet_path,
-        &carrier,
-    )?;
+    let (command, args, stdin_payload, effective_sandbox_mode, sandbox_mode_override_source) =
+        configured_internal_host_activation_parts(
+            selected_cli_entry.as_ref(),
+            project_root,
+            dispatch_packet_path,
+            &carrier,
+        )?;
     let wall_timeout_seconds = Some(configured_internal_host_dispatch_wall_timeout_seconds(
         project_root,
         role_selection,
@@ -1541,6 +1601,16 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
             "sandbox_mode".to_string(),
             serde_json::json!(carrier["sandbox_mode"].clone()),
         );
+        dispatch.insert(
+            "effective_sandbox_mode".to_string(),
+            serde_json::json!(effective_sandbox_mode),
+        );
+        if let Some(source) = sandbox_mode_override_source {
+            dispatch.insert(
+                "sandbox_mode_override_source".to_string(),
+                serde_json::json!(source),
+            );
+        }
         for key in [
             "selected_model_profile_id",
             "selected_model_ref",
@@ -2348,15 +2418,18 @@ dispatch:
             "sandbox_mode": "workspace-write"
         });
 
-        let (command, args, stdin_payload) = configured_internal_host_activation_parts(
-            Some(&system_entry),
-            Path::new("/tmp/project"),
-            "/tmp/project/.vida/dispatch.json",
-            &carrier,
-        )
-        .expect("internal host activation parts");
+        let (command, args, stdin_payload, effective_sandbox_mode, sandbox_override_source) =
+            configured_internal_host_activation_parts(
+                Some(&system_entry),
+                Path::new("/tmp/project"),
+                "/tmp/project/.vida/dispatch.json",
+                &carrier,
+            )
+            .expect("internal host activation parts");
 
         assert_eq!(command, "codex");
+        assert_eq!(effective_sandbox_mode, "workspace-write");
+        assert_eq!(sandbox_override_source, None);
         assert_eq!(
             args,
             vec![
@@ -2398,15 +2471,18 @@ dispatch:
             "sandbox_mode": "workspace-write"
         });
 
-        let (command, args, stdin_payload) = configured_internal_host_activation_parts(
-            Some(&system_entry),
-            Path::new("/tmp/project"),
-            "/tmp/project/.vida/dispatch.json",
-            &carrier,
-        )
-        .expect("internal host activation parts");
+        let (command, args, stdin_payload, effective_sandbox_mode, sandbox_override_source) =
+            configured_internal_host_activation_parts(
+                Some(&system_entry),
+                Path::new("/tmp/project"),
+                "/tmp/project/.vida/dispatch.json",
+                &carrier,
+            )
+            .expect("internal host activation parts");
 
         assert_eq!(command, "codex");
+        assert_eq!(effective_sandbox_mode, "workspace-write");
+        assert_eq!(sandbox_override_source, None);
         assert_eq!(
             args,
             vec![
@@ -2455,6 +2531,49 @@ dispatch:
         )
         .expect_err("danger-full-access should be rejected");
         assert!(error.contains("forbidden sandbox_mode"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn configured_internal_host_activation_parts_applies_windows_dispatch_sandbox_override() {
+        let system_entry = serde_yaml::from_str(
+            r#"
+app:
+  platform_overrides:
+    windows:
+      internal_dispatch:
+        sandbox_mode: danger-full-access
+dispatch:
+  command: codex
+  static_args: ["exec", "--json"]
+  sandbox_flag: -s
+  model_flag: -m
+  prompt_mode: positional
+"#,
+        )
+        .expect("system entry should parse");
+        let carrier = serde_json::json!({
+            "model": "gpt-5.4",
+            "sandbox_mode": "workspace-write"
+        });
+
+        let (_, args, _, effective_sandbox_mode, sandbox_override_source) =
+            configured_internal_host_activation_parts(
+                Some(&system_entry),
+                Path::new("/tmp/project"),
+                "/tmp/project/.vida/dispatch.json",
+                &carrier,
+            )
+            .expect("internal host activation parts");
+
+        assert_eq!(effective_sandbox_mode, "danger-full-access");
+        assert_eq!(
+            sandbox_override_source.as_deref(),
+            Some("host_environment.systems.codex.app.platform_overrides.windows.internal_dispatch.sandbox_mode")
+        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-s", "danger-full-access"]));
     }
 
     #[test]

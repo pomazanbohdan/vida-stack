@@ -115,6 +115,7 @@ The 2026-05-01 Codex App environment probe for this repository showed:
 8. The main project config records `host_environment.systems.codex.app` for Codex App materialization and `host_environment.systems.codex.legacy_cli` for CLI launchers.
 9. `agent_system.subagents.internal_subagents` carries the same GPT-5.5 low/medium/high/xhigh model-profile ladder used by the visible carrier catalog and internal routing aliases, with GPT-5.4 fallback profiles for hosts whose PATH-first Codex CLI cannot run GPT-5.5.
 10. On Windows Codex App, observed child-agent shells may miss PATH/core Windows environment inherited by a normal terminal; Windows-only recovery belongs under `vida.config.yaml -> host_environment.systems.codex.app.platform_overrides.windows`, not in global carrier definitions or non-Windows projections.
+11. Windows Codex CLI sandboxed modes can fail before any delegated lane can read the repository; the platform-scoped `internal_dispatch.sandbox_mode` override is the effective `codex exec -s` value for Windows internal lanes, while carrier `sandbox_mode` and `write_scope` remain the role policy recorded in the runtime packet.
 
 Operational conclusion:
 
