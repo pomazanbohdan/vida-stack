@@ -1092,6 +1092,7 @@ fn is_retryable_temporary_failure(output: &std::process::Output) -> bool {
 fn is_state_lock_error_text(text: &str) -> bool {
     text.contains(support::STATE_LOCK_ERROR_MESSAGE)
         || text.contains("timed out while waiting for authoritative datastore lock")
+        || text.contains("Timed out verifying authoritative state store release")
         || text.contains("Timed out opening authoritative state store")
         || text.contains("another VIDA process still holds the authoritative datastore lock")
         || text.contains("The process cannot access the file because another process has locked")
@@ -1585,14 +1586,12 @@ fn protocol_view_accepts_multiple_targets_in_plain_mode() {
 
 #[test]
 fn boot_succeeds() {
-    let output = vida()
-        .arg("boot")
-        .env("VIDA_STATE_DIR", unique_state_dir())
-        .output()
-        .expect("boot should run");
+    let state_dir = unique_state_dir();
+    let output = boot_with_retry(&state_dir);
     assert!(
         output.status.success(),
-        "{}",
+        "boot stdout={}\nboot stderr={}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
