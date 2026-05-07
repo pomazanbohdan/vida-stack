@@ -675,6 +675,100 @@ async fn validate_explicit_task_graph_binding_lineage_for_resume(
     ))
 }
 
+async fn reseed_default_resume_from_explicit_task_binding(
+    store: &super::StateStore,
+    status: &crate::state_store::RunGraphStatus,
+    binding: &crate::state_store::RunGraphContinuationBinding,
+) -> Result<Option<String>, String> {
+    if binding.status != "bound"
+        || binding.binding_source != "explicit_continuation_bind_task"
+        || binding.active_bounded_unit["kind"].as_str() != Some("task_graph_task")
+    {
+        return Ok(None);
+    }
+    if binding.run_id != status.run_id
+        || binding.active_bounded_unit["run_id"].as_str() != Some(status.run_id.as_str())
+    {
+        return Ok(None);
+    }
+    let binding_target_is_admissible = (status.policy_gate == "next_bounded_unit_required"
+        && status.resume_target == "none")
+        || (status.status == "completed" && status.lifecycle_stage == "closure_complete");
+    if !binding_target_is_admissible
+        || status
+            .next_node
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+    {
+        return Ok(None);
+    }
+
+    let bound_task_id = binding.active_bounded_unit["task_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(binding.task_id.as_str());
+    if bound_task_id == status.task_id {
+        return Ok(None);
+    }
+    let request_text = if let Some(request_text) = binding
+        .request_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        request_text.to_string()
+    } else if let Some(context) = store
+        .run_graph_dispatch_context(&status.run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read persisted dispatch context for `{}` while reseeding explicit continuation binding: {error}",
+                status.run_id
+            )
+        })?
+    {
+        context.request_text
+    } else {
+        return Err(format!(
+            "Run `{}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but no persisted request text is available to reseed default consume-continue for the bound task.",
+            status.run_id
+        ));
+    };
+
+    let payload = crate::taskflow_run_graph::derive_seeded_run_graph_status(
+        store,
+        bound_task_id,
+        &request_text,
+    )
+    .await?;
+    crate::taskflow_run_graph::persist_seed_artifacts(store, &payload).await?;
+    let why = format!(
+        "Default consume-continue reseeded explicit task_graph_task `{bound_task_id}` from run `{}` before resolving resume inputs.",
+        status.run_id
+    );
+    if let Some(reseeded_binding) =
+        crate::taskflow_continuation::build_run_graph_continuation_binding(
+            &payload.status,
+            Some(&request_text),
+            "explicit_continuation_bind",
+            Some(&why),
+        )
+    {
+        store
+            .record_run_graph_continuation_binding(&reseeded_binding)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to record reseeded continuation binding for `{bound_task_id}`: {error}"
+                )
+            })?;
+    }
+    Ok(Some(bound_task_id.to_string()))
+}
+
 async fn validate_completed_run_downstream_resume_candidate(
     store: &super::StateStore,
     run_id: &str,
@@ -3257,21 +3351,10 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
         .await
         .map_err(|error| format!("Failed to read explicit continuation binding: {error}"))?;
     if let Some(binding) = explicit_continuation_binding.as_ref() {
-        let bound_run_id = binding
-            .active_bounded_unit
-            .get("run_id")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if binding.status == "bound"
-            && binding.binding_source == "explicit_continuation_bind_task"
-            && bound_run_id.is_some_and(|binding_run_id| binding_run_id != status.run_id)
+        if let Some(reseeded_run_id) =
+            reseed_default_resume_from_explicit_task_binding(store, &status, binding).await?
         {
-            let binding_run_id = bound_run_id.unwrap_or("unknown");
-            return Err(format!(
-                "Latest explicit continuation binding points to run `{binding_run_id}` while the latest run-graph status is `{}`. Default `vida taskflow consume continue --json` must not silently reselect the stale latest run; pass `--run-id {binding_run_id}` or refresh/bind the intended bounded unit explicitly.",
-                status.run_id
-            ));
+            return Ok(reseeded_run_id);
         }
     }
     let latest_run_graph_recovery = store
@@ -12531,6 +12614,76 @@ agent_system:
                 .expect("replay lineage lookup should succeed")
                 .is_none(),
             "fail-closed status mismatch must not persist a replay-lineage receipt"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_runtime_consumption_resume_inputs_without_run_id_reseeds_explicit_next_bounded_task_binding(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-explicit-next-task-reseed-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let run_id = "run-next-bounded";
+        let bound_task_id = "task-next-bounded";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "closure", "delivery");
+        status.task_id = "task-closed".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "next_bounded_unit_wait".to_string();
+        status.policy_gate = "next_bounded_unit_required".to_string();
+        status.next_node = None;
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist upstream next-bounded status");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: run_id.to_string(),
+                    task_id: bound_task_id.to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": bound_task_id,
+                        "run_id": run_id,
+                        "task_status": "open",
+                        "issue_type": "task"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "operator rebound work to the next bounded task".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
+                    request_text: Some("continue implementation".to_string()),
+                    recorded_at: "2026-04-16T09:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist explicit continuation binding");
+
+        let resume = resolve_runtime_consumption_resume_inputs(&store, None, None, None)
+            .await
+            .expect("default resume should reseed the explicitly bound task");
+        assert_eq!(resume.dispatch_receipt.run_id, bound_task_id);
+        assert_eq!(
+            store
+                .run_graph_status(bound_task_id)
+                .await
+                .expect("reseeded run status should exist")
+                .task_id,
+            bound_task_id
         );
 
         let _ = fs::remove_dir_all(&root);

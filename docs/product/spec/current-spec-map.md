@@ -270,53 +270,56 @@ Companion rule:
 38. [lawful-closure-continuation-rebinding-design.md](lawful-closure-continuation-rebinding-design.md)
    Config families: bounded explicit post-closure continuation rebinding, backlog-task continuation artifacts, completed-run summary admissibility, and fail-closed rejection of stale in-flight bindings
    Registered path: `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
-39. [export-canonical-operator-command-map-through-design.md](export-canonical-operator-command-map-through-design.md)
+39. [fix-continuation-reconciliation-resumed-executed-design.md](fix-continuation-reconciliation-resumed-executed-design.md)
+   Config families: bounded refresh of resumed executed dispatch receipts, downstream preview recomputation from current persisted task/doc evidence, and status/run-graph parity after continuation reconciliation
+   Registered path: `docs/product/spec/fix-continuation-reconciliation-resumed-executed-design.md`
+40. [export-canonical-operator-command-map-through-design.md](export-canonical-operator-command-map-through-design.md)
    Config families: bounded operator command-family export through orchestrator-init and agent-init, help/discoverability alignment across root/task/taskflow surfaces, and canonical command-map parity between init views and primary help entrypoints
    Registered path: `docs/product/spec/export-canonical-operator-command-map-through-design.md`
-40. [reconciled-runtime-projection-output-design.md](reconciled-runtime-projection-output-design.md)
+41. [reconciled-runtime-projection-output-design.md](reconciled-runtime-projection-output-design.md)
    Config families: bounded reconciled runtime projection truth output, effective projection source/reason reporting, downstream target/blocker parity, stale-state suspicion, and next-lawful-operator-action surfaces across init/status/recovery/continue
    Registered path: `docs/product/spec/reconciled-runtime-projection-output-design.md`
-41. [repair-task-close-closure-truth-exception-design.md](repair-task-close-closure-truth-exception-design.md)
+42. [repair-task-close-closure-truth-exception-design.md](repair-task-close-closure-truth-exception-design.md)
    Config families: bounded downstream closure/task-close receipt sanitation for exception-path lineage, authoritative closure truth after lawful exception-backed task close, and resume/run-graph parity without stale implementer rebinding
    Registered path: `docs/product/spec/repair-task-close-closure-truth-exception-design.md`
-42. [reconcile-qwen-cli-carrier-drift-design.md](reconcile-qwen-cli-carrier-drift-design.md)
+43. [reconcile-qwen-cli-carrier-drift-design.md](reconcile-qwen-cli-carrier-drift-design.md)
    Config families: bounded reconciliation of stale `qwen_cli` assumptions across active docs/specs and Rust test fixtures, template-only retention policy for qwen references, and runtime/operator parity with the current config-driven external carrier catalog
    Registered path: `docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md`
-43. [repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md](repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md)
+44. [repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md](repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md)
    Config families: bounded repair for explicit post-closure task binding authority, agent-init activation-view truth preservation, and fail-closed consume-continue behavior until fresh same-task packet evidence exists
    Registered path: `docs/product/spec/repair-explicit-continuation-bind-preservation-after-qwen-rebind-design.md`
-44. [repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md](repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md)
+45. [repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md](repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md)
    Config families: design-backed reseed routing, dispatch-target canonicalization, and activation/backend alignment so explicit qwen remediation does not deadlock in `pbi_discussion/specification`
    Registered path: `docs/product/spec/repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen-design.md`
-45. [coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md](coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md)
+46. [coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md](coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md)
    Config families: coach-lane retry artifact law, explicit review-backend rotation before internal fallback, fresh runtime-dispatch packet materialization for lawful retries, and fail-closed prevention of identical same-packet timeout loops
    Registered path: `docs/product/spec/coach-retry-reuses-same-blocked-hermes-packet-without-fallback-design.md`
-46. [codex-app-agent-lifecycle-cleanup-design.md](codex-app-agent-lifecycle-cleanup-design.md)
+47. [codex-app-agent-lifecycle-cleanup-design.md](codex-app-agent-lifecycle-cleanup-design.md)
    Config families: bounded Codex App agent lifecycle cleanup discipline, debug-safe `agent-init` startup rendering, configured reasoning-profile projection proof, and `.codex/**` materialization parity with `vida.config.yaml`
    Registered path: `docs/product/spec/codex-app-agent-lifecycle-cleanup-design.md`
-46. [analysis-lane-can-close-implementation-without-write-evidence-design.md](analysis-lane-can-close-implementation-without-write-evidence-design.md)
+48. [analysis-lane-can-close-implementation-without-write-evidence-design.md](analysis-lane-can-close-implementation-without-write-evidence-design.md)
    Config families: implementation completion truth, closure-candidate reconciliation gates, diagnostic-lane versus write-evidence law, and fail-closed prevention of closure-ready projection from read-only analysis execution
    Registered path: `docs/product/spec/analysis-lane-can-close-implementation-without-write-evidence-design.md`
-47. [explicit-implementation-seed-drops-design-backed-owned-paths-design.md](explicit-implementation-seed-drops-design-backed-owned-paths-design.md)
+49. [explicit-implementation-seed-drops-design-backed-owned-paths-design.md](explicit-implementation-seed-drops-design-backed-owned-paths-design.md)
    Config families: design-backed explicit implementation seeding, tracked design-doc injection into run-graph seed, implementer packet owned-path derivation from bounded file sets, and fail-closed dispatch-init without generic placeholder scope
    Registered path: `docs/product/spec/explicit-implementation-seed-drops-design-backed-owned-paths-design.md`
-48. [carrier-model-profile-selection-runtime-design.md](carrier-model-profile-selection-runtime-design.md)
+50. [carrier-model-profile-selection-runtime-design.md](carrier-model-profile-selection-runtime-design.md)
    Config families: bounded carrier plus model-profile contract normalization across Codex/internal/external execution surfaces, profile-aware runtime assignment truth, dispatch/status profile projection, and parity-safe materialization from legacy and new-style config
    Registered path: `docs/product/spec/carrier-model-profile-selection-runtime-design.md`
-49. [unified-hybrid-runtime-selection-policy-design.md](unified-hybrid-runtime-selection-policy-design.md)
+51. [unified-hybrid-runtime-selection-policy-design.md](unified-hybrid-runtime-selection-policy-design.md)
    Config families: bounded follow-up wave after the carrier/model-profile contract rollout, including dynamic-versus-route selection truth, budget and route policy enforcement, internal-subagent candidate pooling, external reasoning/readiness enforcement, operator diagnostics, and residual qwen drift closure
    Registered path: `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
-50. [task-graph-adaptive-planner-design.md](task-graph-adaptive-planner-design.md)
+52. [task-graph-adaptive-planner-design.md](task-graph-adaptive-planner-design.md)
    Config families: bounded TaskFlow PlanGraph generation and materialization, adaptive task split/spawn/replan mutations, graph explain diagnostics, scheduler dispatch preview, and task-linked execution-preparation artifact shape
    Registered path: `docs/product/spec/task-graph-adaptive-planner-design.md`
-51. [model-provider-price-catalog-lifecycle-design.md](model-provider-price-catalog-lifecycle-design.md)
+53. [model-provider-price-catalog-lifecycle-design.md](model-provider-price-catalog-lifecycle-design.md)
    Config families: bounded model/provider price-catalog source-of-truth, provider/model availability inventory, freshness/source metadata, dry-run/apply receipt lifecycle, init/status readiness projection, and price-aware selected/rejected candidate diagnostics
    Registered path: `docs/product/spec/model-provider-price-catalog-lifecycle-design.md`
-52. [orchestrator-session-environment-identity-design.md](orchestrator-session-environment-identity-design.md)
+54. [orchestrator-session-environment-identity-design.md](orchestrator-session-environment-identity-design.md)
    Config families: bounded orchestrator session/environment identity, lease-backed runtime state ownership, session-aware latest/recovery/continuation diagnostics, execution-context versus publication-context separation, and stale owner reclaim/transfer paths
    Registered path: `docs/product/spec/orchestrator-session-environment-identity-design.md`
-53. [continue-github-116-orchestrator-session-environ-design.md](continue-github-116-orchestrator-session-environ-design.md)
-   Config families: tracked TaskFlow design-gate wrapper for GitHub #116 orchestrator session/environment identity work, canonical-design handoff, proof evidence, and work-pool transition readiness
+55. [continue-github-116-orchestrator-session-environ-design.md](continue-github-116-orchestrator-session-environ-design.md)
+   Config families: tracked design-gate wrapper for the GitHub #116 consume-continue run-graph reconciliation slice, canonical design handoff, proof evidence, and developer/work-pool transition readiness
    Registered path: `docs/product/spec/continue-github-116-orchestrator-session-environ-design.md`
 
 ### Support
@@ -373,5 +376,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-26T14:59:05.605112109Z
+updated_at: 2026-05-07T13:47:08.7496685Z
 changelog_ref: current-spec-map.changelog.jsonl
