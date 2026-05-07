@@ -146,11 +146,31 @@ jobs:
 
           bash dist/vida-install.sh doctor --root "$INSTALL_ROOT" --bin-dir "$TMP_BIN"
 
+          retry_vida_state_read() {
+            local output_path="$1"
+            shift
+            local stderr_path="${output_path}.stderr"
+            for attempt in $(seq 1 20); do
+              if "$@" >"$output_path" 2>"$stderr_path"; then
+                rm -f "$stderr_path"
+                return 0
+              fi
+              if grep -qiE "lock|locked|timed out while waiting for authoritative datastore lock|another VIDA process still holds" "$stderr_path"; then
+                sleep 0.25
+                continue
+              fi
+              cat "$stderr_path" >&2
+              return 1
+            done
+            cat "$stderr_path" >&2
+            return 1
+          }
+
           vida --help >/tmp/vida-help.txt
           vida boot --state-dir "$TMP_STATE"
-          vida doctor --state-dir "$TMP_STATE" >/tmp/vida-doctor.txt
-          vida status --state-dir "$TMP_STATE" --json >/tmp/vida-status.json
-          vida doctor --state-dir "$TMP_STATE" --json >/tmp/vida-doctor-json.txt
+          retry_vida_state_read /tmp/vida-doctor.txt vida doctor --state-dir "$TMP_STATE"
+          retry_vida_state_read /tmp/vida-status.json vida status --state-dir "$TMP_STATE" --json
+          retry_vida_state_read /tmp/vida-doctor-json.txt vida doctor --state-dir "$TMP_STATE" --json
           taskflow help >/tmp/taskflow-help.txt
           docflow --help >/tmp/docflow-help.txt
           vida taskflow help >/tmp/vida-taskflow-help.txt
