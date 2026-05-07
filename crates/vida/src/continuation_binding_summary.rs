@@ -7,6 +7,10 @@ fn explicit_binding_is_admissible_for_status(
         .get("kind")
         .and_then(serde_json::Value::as_str);
 
+    if explicit_task_binding_targets_next_bounded_unit(binding, status) {
+        return true;
+    }
+
     if binding.run_id != status.run_id {
         return binding.binding_source == "explicit_continuation_bind_task"
             && binding_kind == Some("task_graph_task");
@@ -32,6 +36,33 @@ fn explicit_binding_is_admissible_for_status(
         binding_kind,
         Some("downstream_dispatch_target") | Some("task_graph_task")
     )
+}
+
+fn explicit_task_binding_targets_next_bounded_unit(
+    binding: &crate::state_store::RunGraphContinuationBinding,
+    status: &crate::state_store::RunGraphStatus,
+) -> bool {
+    binding.status == "bound"
+        && binding.run_id == status.run_id
+        && binding.binding_source == "explicit_continuation_bind_task"
+        && binding
+            .active_bounded_unit
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            == Some("task_graph_task")
+        && binding
+            .active_bounded_unit
+            .get("run_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(status.run_id.as_str())
+        && status.policy_gate == "next_bounded_unit_required"
+        && status.resume_target == "none"
+        && status
+            .next_node
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
 }
 
 fn run_graph_status_is_blocked(value: &str) -> bool {
@@ -352,6 +383,23 @@ pub(crate) fn build_continuation_binding_summary_with_idle_policy(
                     continuation_required_now,
                     pause_boundary_gate,
                 );
+            }
+
+            if let Some(binding) = explicit_binding {
+                let binding_kind = binding
+                    .active_bounded_unit
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str);
+                if binding_kind == Some("task_graph_task")
+                    && explicit_binding_is_admissible_for_status(binding, status)
+                {
+                    return binding_summary_json(
+                        binding,
+                        continuation_required_now,
+                        pause_boundary_gate,
+                        continuation_next_actions.clone(),
+                    );
+                }
             }
 
             return serde_json::json!({
@@ -838,6 +886,106 @@ mod tests {
                     .is_some_and(|value| value.contains("resolve the blocker"))
             })
         }));
+    }
+
+    #[test]
+    fn blocked_next_bounded_unit_required_accepts_explicit_task_binding() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "feature-resume-github-116-after-repairing-windows-spec",
+            "feature-resume-github-116-after-repairing-windows-spec",
+            "business_analyst",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "business_analyst_awaiting_next_binding".to_string();
+        status.policy_gate = "next_bounded_unit_required".to_string();
+        status.resume_target = "none".to_string();
+        status.next_node = None;
+
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: status.run_id.clone(),
+            task_id: "github-116-explicit-binding-projection-not-read".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": "github-116-explicit-binding-projection-not-read",
+                "run_id": status.run_id,
+                "task_status": "open",
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "P1 blocker is now the explicit next bounded unit.".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: None,
+            recorded_at: "2026-05-07T12:46:23Z".to_string(),
+        };
+
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            None,
+            None,
+            false,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["continuation_allowed"], true);
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "github-116-explicit-binding-projection-not-read"
+        );
+        assert_eq!(summary["binding_source"], "explicit_continuation_bind_task");
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn blocked_status_accepts_explicit_task_graph_binding_from_different_run() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "feature-resume-github-116-after-repairing-windows-spec",
+            "feature-resume-github-116-after-repairing-windows-spec",
+            "business_analyst",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "business_analyst_awaiting_next_binding".to_string();
+        status.policy_gate = "next_bounded_unit_required".to_string();
+        status.resume_target = "none".to_string();
+        status.next_node = None;
+
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "github-114-status-next-lawful-continuation-parity".to_string(),
+            task_id: "github-116-orchestrator-session-identity".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": "github-116-orchestrator-session-identity",
+                "run_id": "github-114-status-next-lawful-continuation-parity",
+                "task_status": "open",
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "Next-lawful selected the next open P1 task after task close."
+                .to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: None,
+            recorded_at: "2026-05-07T12:56:00Z".to_string(),
+        };
+
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            None,
+            None,
+            false,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "github-116-orchestrator-session-identity"
+        );
+        assert_eq!(summary["binding_source"], "explicit_continuation_bind_task");
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
     }
 
     #[test]

@@ -2885,6 +2885,23 @@ fn current_exception_takeover_supersedes_stale_explicit_same_task(
         && explicit.task_id == current.task_id
 }
 
+fn lane_complete_binding_is_recovery_artifact(
+    binding: &state_store::RunGraphContinuationBinding,
+) -> bool {
+    binding.binding_source == "lane_complete"
+        && binding.run_id == binding.task_id
+        && continuation_binding_active_kind(binding) == "run_graph_task"
+}
+
+fn explicit_task_binding_points_to_open_task(
+    binding: &state_store::RunGraphContinuationBinding,
+    task_status: Option<&str>,
+) -> bool {
+    binding.binding_source == "explicit_continuation_bind_task"
+        && continuation_binding_active_kind(binding) == "task_graph_task"
+        && matches!(task_status, Some(status) if status != "closed")
+}
+
 fn select_task_next_lawful_binding<'a>(
     tasks: &[state_store::TaskRecord],
     explicit_binding: Option<&'a state_store::RunGraphContinuationBinding>,
@@ -2892,13 +2909,18 @@ fn select_task_next_lawful_binding<'a>(
 ) -> Result<Option<&'a state_store::RunGraphContinuationBinding>, TaskNextLawfulReceipt> {
     match (explicit_binding, current_binding) {
         (Some(explicit), Some(current)) if !continuation_bindings_same_unit(explicit, current) => {
+            let explicit_status = task_status_for_binding(tasks, explicit);
             if continuation_binding_is_historical_task_close_reconcile(explicit, current) {
                 return Ok(Some(current));
             }
             if current_exception_takeover_supersedes_stale_explicit_same_task(explicit, current) {
                 return Ok(Some(current));
             }
-            let explicit_status = task_status_for_binding(tasks, explicit);
+            if lane_complete_binding_is_recovery_artifact(current)
+                && explicit_task_binding_points_to_open_task(explicit, explicit_status)
+            {
+                return Ok(Some(explicit));
+            }
             if continuation_binding_requires_open_task(explicit)
                 && matches!(explicit_status, Some("closed"))
             {
@@ -5127,6 +5149,33 @@ mod tests {
             selected.binding_source,
             "consume_continue_after_downstream_chain"
         );
+    }
+
+    #[test]
+    fn task_next_lawful_prefers_open_explicit_task_over_lane_complete_artifact() {
+        let explicit_task = owned_task_record("github-116-orchestrator-session-identity", vec![]);
+        let explicit = test_continuation_binding(
+            "github-114-status-next-lawful-continuation-parity",
+            "github-116-orchestrator-session-identity",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+        let current = test_continuation_binding(
+            "feature-resume-github-116-after-repairing-windows-spec",
+            "feature-resume-github-116-after-repairing-windows-spec",
+            "lane_complete",
+            "run_graph_task",
+        );
+
+        let selected =
+            select_task_next_lawful_binding(&[explicit_task], Some(&explicit), Some(&current))
+                .expect(
+                    "lane_complete recovery artifact should yield to explicit open task binding",
+                )
+                .expect("explicit binding should select");
+
+        assert_eq!(selected.task_id, "github-116-orchestrator-session-identity");
+        assert_eq!(selected.binding_source, "explicit_continuation_bind_task");
     }
 
     #[test]

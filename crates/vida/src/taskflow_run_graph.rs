@@ -371,6 +371,33 @@ fn next_lawful_operator_action_for_status(status: &RunGraphStatus) -> Option<Str
     ))
 }
 
+fn explicit_task_binding_targets_next_bounded_unit(
+    status: &RunGraphStatus,
+    binding: &RunGraphContinuationBinding,
+) -> bool {
+    binding.status == "bound"
+        && binding.run_id == status.run_id
+        && binding.binding_source == "explicit_continuation_bind_task"
+        && binding
+            .active_bounded_unit
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            == Some("task_graph_task")
+        && binding
+            .active_bounded_unit
+            .get("run_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(status.run_id.as_str())
+        && status.policy_gate == "next_bounded_unit_required"
+        && status.resume_target == "none"
+        && status
+            .next_node
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+}
+
 fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -> Option<&str> {
     if dispatch_receipt_has_active_exception_takeover(receipt) {
         return Some("active_exception_takeover");
@@ -567,6 +594,9 @@ fn next_lawful_operator_action_for_projection(
 fn recommended_surface_for_command(command: &str) -> String {
     if command.starts_with("vida taskflow consume continue") {
         return "vida taskflow consume continue".to_string();
+    }
+    if command.starts_with("vida task next-lawful") {
+        return "vida task next-lawful".to_string();
     }
     if command.starts_with("vida taskflow recovery latest") {
         return "vida taskflow recovery latest".to_string();
@@ -786,6 +816,9 @@ fn continuation_binding_matches_reconciled_status(
     status: &RunGraphStatus,
     binding: &RunGraphContinuationBinding,
 ) -> bool {
+    if explicit_task_binding_targets_next_bounded_unit(status, binding) {
+        return true;
+    }
     if binding.run_id != status.run_id || binding.task_id != status.task_id {
         return false;
     }
@@ -1398,11 +1431,18 @@ pub(crate) async fn run_graph_projection_truth(
             dispatch_receipt.as_ref(),
         ),
         stale_state_suspected,
-        next_lawful_operator_action: next_lawful_operator_action_for_projection(
-            status,
-            dispatch_receipt.as_ref(),
-            terminal_consume_continue_run_id.as_deref(),
-        ),
+        next_lawful_operator_action: if continuation_binding
+            .as_ref()
+            .is_some_and(|binding| explicit_task_binding_targets_next_bounded_unit(status, binding))
+        {
+            Some("vida task next-lawful --json".to_string())
+        } else {
+            next_lawful_operator_action_for_projection(
+                status,
+                dispatch_receipt.as_ref(),
+                terminal_consume_continue_run_id.as_deref(),
+            )
+        },
         dispatch_receipt,
         continuation_binding,
     })
@@ -5352,6 +5392,61 @@ mod tests {
             next_lawful_operator_action_for_projection(&status, Some(&receipt), None).as_deref(),
             Some("vida lane show run-stale-binding --json")
         );
+    }
+
+    #[test]
+    fn next_bounded_unit_required_projection_keeps_explicit_task_binding() {
+        let status = RunGraphStatus {
+            run_id: "feature-resume-github-116-after-repairing-windows-spec".to_string(),
+            task_id: "feature-resume-github-116-after-repairing-windows-spec".to_string(),
+            task_class: "scope_discussion".to_string(),
+            active_node: "business_analyst".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "spec-pack".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "business_analyst_lane".to_string(),
+            lifecycle_stage: "business_analyst_awaiting_next_binding".to_string(),
+            policy_gate: "next_bounded_unit_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let binding = RunGraphContinuationBinding {
+            run_id: status.run_id.clone(),
+            task_id: "github-116-explicit-binding-projection-not-read".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": "github-116-explicit-binding-projection-not-read",
+                "run_id": status.run_id,
+                "task_status": "open",
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "P1 blocker is now the explicit next bounded unit.".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: None,
+            recorded_at: "2026-05-07T12:46:23Z".to_string(),
+        };
+
+        let effective = effective_projection_continuation_binding(&status, None, Some(binding))
+            .expect("explicit task binding should project over next_bounded_unit_required status");
+
+        assert_eq!(
+            effective.task_id,
+            "github-116-explicit-binding-projection-not-read"
+        );
+        assert_eq!(effective.binding_source, "explicit_continuation_bind_task");
+        assert_eq!(
+            effective.active_bounded_unit["task_id"],
+            "github-116-explicit-binding-projection-not-read"
+        );
+        assert!(explicit_task_binding_targets_next_bounded_unit(
+            &status, &effective
+        ));
     }
 
     #[test]
