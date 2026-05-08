@@ -7523,6 +7523,14 @@ mod tests {
                 "crates/vida/src/runtime_dispatch_state.rs"
             ])
         );
+        assert_eq!(
+            dispatch_packet["owned_paths"],
+            dispatch_packet["delivery_task_packet"]["owned_paths"]
+        );
+        assert_eq!(
+            dispatch_packet["read_only_paths"],
+            dispatch_packet["delivery_task_packet"]["read_only_paths"]
+        );
     }
 
     #[tokio::test]

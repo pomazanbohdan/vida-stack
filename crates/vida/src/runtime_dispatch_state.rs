@@ -25,7 +25,7 @@ use crate::runtime_dispatch_packets::explicit_request_scope_paths;
 #[cfg(test)]
 use crate::runtime_dispatch_packets::runtime_delivery_task_packet;
 use crate::runtime_dispatch_packets::{
-    delivery_packet_owned_paths, runtime_coach_review_packet,
+    delivery_packet_owned_paths, projected_packet_scope_paths, runtime_coach_review_packet,
     runtime_delivery_task_packet_with_scope_context, runtime_escalation_packet,
     runtime_execution_block_packet, runtime_verifier_proof_packet, single_task_move_scope_paths,
 };
@@ -4983,6 +4983,25 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
     packet_label: &str,
 ) -> Result<(), String> {
     let (packet_template_kind, active_packet) = active_runtime_packet(packet)?;
+    let (expected_owned_paths, expected_read_only_paths) =
+        projected_packet_scope_paths(active_packet);
+    let top_level_scope_projection_present =
+        packet.get("owned_paths").is_some() || packet.get("read_only_paths").is_some();
+    if top_level_scope_projection_present {
+        let (projected_owned_paths, projected_read_only_paths) =
+            projected_packet_scope_paths(packet);
+        if projected_owned_paths != expected_owned_paths
+            || projected_read_only_paths != expected_read_only_paths
+        {
+            return Err(format!(
+                "{packet_label} `{packet_template_kind}` top-level scope projection drifted from the active packet body; expected owned_paths {:?} and read_only_paths {:?}, got owned_paths {:?} and read_only_paths {:?}",
+                expected_owned_paths,
+                expected_read_only_paths,
+                projected_owned_paths,
+                projected_read_only_paths
+            ));
+        }
+    }
     if let Some(expected_owned_paths) = single_task_move_scope_owned_paths(packet) {
         let actual_owned_paths = active_packet
             .get("owned_paths")
@@ -5324,6 +5343,33 @@ fn build_runtime_dispatch_packet_body(
         handoff_task_class,
         closure_class,
     );
+    let coach_review_packet = runtime_coach_review_packet(
+        &ctx.receipt.run_id,
+        &ctx.receipt.dispatch_target,
+        "bounded implementation result versus approved spec and definition of done",
+    );
+    let verifier_proof_packet = runtime_verifier_proof_packet(
+        &ctx.receipt.run_id,
+        &ctx.receipt.dispatch_target,
+        "independent bounded proof and closure readiness",
+    );
+    let escalation_packet =
+        runtime_escalation_packet(&ctx.receipt.run_id, &ctx.receipt.dispatch_target);
+    let active_packet_for_scope_projection = if packet_template_kind == "delivery_task_packet" {
+        &delivery_task_packet
+    } else if packet_template_kind == "execution_block_packet" {
+        &execution_block_packet
+    } else if packet_template_kind == "coach_review_packet" {
+        &coach_review_packet
+    } else if packet_template_kind == "verifier_proof_packet" {
+        &verifier_proof_packet
+    } else if packet_template_kind == "escalation_packet" {
+        &escalation_packet
+    } else {
+        &serde_json::Value::Null
+    };
+    let (projected_owned_paths, projected_read_only_paths) =
+        projected_packet_scope_paths(active_packet_for_scope_projection);
     let mut packet = serde_json::json!({
         "packet_kind": "runtime_dispatch_packet",
         "packet_template_kind": packet_template_kind,
@@ -5338,25 +5384,17 @@ fn build_runtime_dispatch_packet_body(
             serde_json::Value::Null
         },
         "coach_review_packet": if packet_template_kind == "coach_review_packet" {
-            runtime_coach_review_packet(
-                &ctx.receipt.run_id,
-                &ctx.receipt.dispatch_target,
-                "bounded implementation result versus approved spec and definition of done",
-            )
+            coach_review_packet
         } else {
             serde_json::Value::Null
         },
         "verifier_proof_packet": if packet_template_kind == "verifier_proof_packet" {
-            runtime_verifier_proof_packet(
-                &ctx.receipt.run_id,
-                &ctx.receipt.dispatch_target,
-                "independent bounded proof and closure readiness",
-            )
+            verifier_proof_packet
         } else {
             serde_json::Value::Null
         },
         "escalation_packet": if packet_template_kind == "escalation_packet" {
-            runtime_escalation_packet(&ctx.receipt.run_id, &ctx.receipt.dispatch_target)
+            escalation_packet
         } else {
             serde_json::Value::Null
         },
@@ -5424,6 +5462,16 @@ fn build_runtime_dispatch_packet_body(
             "runtime_assignment_source".to_string(),
             serde_json::Value::String(runtime_assignment_source.to_string()),
         );
+        object.insert(
+            "owned_paths".to_string(),
+            serde_json::to_value(projected_owned_paths)
+                .expect("projected owned_paths should serialize"),
+        );
+        object.insert(
+            "read_only_paths".to_string(),
+            serde_json::to_value(projected_read_only_paths)
+                .expect("projected read_only_paths should serialize"),
+        );
     }
     Ok(packet)
 }
@@ -5443,6 +5491,7 @@ pub(crate) fn runtime_dispatch_packet_preview(
         .get(packet_template_kind.as_str())
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    let (owned_paths, read_only_paths) = projected_packet_scope_paths(&active_packet);
     let validation_error =
         validate_runtime_dispatch_packet_contract(&packet, "Runtime dispatch packet preview").err();
     let packet_contract_missing_fields = validation_error
@@ -5462,14 +5511,8 @@ pub(crate) fn runtime_dispatch_packet_preview(
         "packet_template_kind": packet_template_kind,
         "packet_contract_missing_fields": packet_contract_missing_fields,
         "contract_validation_error": validation_error,
-        "owned_paths": active_packet
-            .get("owned_paths")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!([])),
-        "read_only_paths": active_packet
-            .get("read_only_paths")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!([])),
+        "owned_paths": owned_paths,
+        "read_only_paths": read_only_paths,
         "packet": packet,
     }))
 }
@@ -7322,6 +7365,32 @@ mod tests {
         let error = validate_runtime_dispatch_packet_contract(&malformed, "test packet")
             .expect_err("specification delivery packet with code-owned scope should fail closed");
         assert!(error.contains("tracked design-doc scope"));
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_contract_rejects_top_level_scope_projection_drift() {
+        let malformed = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": ["crates/vida/src/taskflow_run_graph.rs"],
+            "read_only_paths": ["docs/process"],
+            "delivery_task_packet": {
+                "packet_id": "run-1::implementer::delivery",
+                "goal": "Execute bounded implementer handoff",
+                "scope_in": ["dispatch_target:implementer"],
+                "owned_paths": ["crates/vida/src/runtime_dispatch_state.rs"],
+                "read_only_paths": ["docs/process"],
+                "definition_of_done": ["done"],
+                "verification_command": "vida taskflow consume continue --run-id run-1 --json",
+                "proof_target": "proof",
+                "stop_rules": ["stop"],
+                "blocking_question": "what next?",
+                "handoff_task_class": "implementation"
+            }
+        });
+
+        let error = validate_runtime_dispatch_packet_contract(&malformed, "test packet")
+            .expect_err("scope projection drift should fail closed");
+        assert!(error.contains("top-level scope projection drifted"));
     }
 
     #[test]
@@ -16439,6 +16508,15 @@ agent_system:
         assert_eq!(
             packet["delivery_task_packet"]["owned_paths"],
             serde_json::json!([])
+        );
+        assert_eq!(packet["owned_paths"], serde_json::json!([]));
+        assert_eq!(
+            packet["read_only_paths"],
+            serde_json::json!([
+                ".vida/data/state/runtime-consumption",
+                "docs/product/spec",
+                "docs/process"
+            ])
         );
     }
 }

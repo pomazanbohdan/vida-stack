@@ -232,6 +232,30 @@ pub(crate) fn delivery_packet_owned_paths(
     }
 }
 
+pub(crate) fn projected_packet_scope_paths(
+    active_packet: &serde_json::Value,
+) -> (Vec<String>, Vec<String>) {
+    fn collect_paths(active_packet: &serde_json::Value, field: &str) -> Vec<String> {
+        active_packet
+            .get(field)
+            .and_then(serde_json::Value::as_array)
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    (
+        collect_paths(active_packet, "owned_paths"),
+        collect_paths(active_packet, "read_only_paths"),
+    )
+}
+
 #[cfg(test)]
 pub(crate) fn runtime_delivery_task_packet(
     run_id: &str,
@@ -447,7 +471,7 @@ pub(crate) fn runtime_escalation_packet(run_id: &str, dispatch_target: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::tracked_design_doc_owned_paths;
+    use super::{projected_packet_scope_paths, tracked_design_doc_owned_paths};
 
     #[test]
     fn tracked_design_doc_owned_paths_rejects_absolute_and_traversal_paths() {
@@ -462,5 +486,21 @@ mod tests {
             tracked_design_doc_owned_paths(Some(" docs/product/spec/example.md ")),
             vec!["docs/product/spec/example.md".to_string()]
         );
+    }
+
+    #[test]
+    fn projected_packet_scope_paths_trim_empty_entries() {
+        let packet = serde_json::json!({
+            "owned_paths": [" crates/vida/src/runtime_dispatch_state.rs ", "", "   "],
+            "read_only_paths": [" docs/process ", ""]
+        });
+
+        let (owned_paths, read_only_paths) = projected_packet_scope_paths(&packet);
+
+        assert_eq!(
+            owned_paths,
+            vec!["crates/vida/src/runtime_dispatch_state.rs".to_string()]
+        );
+        assert_eq!(read_only_paths, vec!["docs/process".to_string()]);
     }
 }
