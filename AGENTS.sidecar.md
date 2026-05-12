@@ -113,6 +113,7 @@ Project-routing rule:
 23. Do not apply hotfix-style write mutations based on the first visible symptom alone; first study the related code paths, runtime state, and relevant specs so the bounded unit is anchored in the surrounding architecture.
 24. Prefer architectural corrections over narrow symptom patches: once the affected codebase slice and spec contract are understood, fix the underlying invariant or routing rule rather than layering one-off local exceptions.
 25. During active development, if a newly uncovered runtime defect is found, immediately analyze the related code paths, relevant specs, operator and runtime impact, architectural integrity, and severity; create or update the corresponding work item under the correct epic; reconsider development flow and ordering against the project goal; and then fix the defect architecturally rather than routing around it.
+25a. For active defect work, keep the current working cadence explicitly numbered as steps 1 through 3 and repeat that cycle as needed; one numbered step may read several code files during investigation; step 3 in each cycle must perform a code fix for the current defect; and writing or fixing tests may ignore this cadence rule.
 26. During active development, in addition to continuously tracking and fixing runtime defects, the system must also continuously track command surfaces, command options, and operator information output; when gaps, missing commands/options, or needed output additions are detected, immediately analyze the related code paths, relevant specs, and operator/runtime impact, then add or correct those command and output surfaces proactively and automatically rather than deferring them.
 27. When a user explicitly orders post-fix release actions, treat that sequence as mandatory: after the bounded implementation wave is complete, run a fresh release build, update the system-installed binary, create a commit, and push it before declaring that wave finished.
 27a. When a user explicitly requires release actions after task closure, treat that rule as sticky for the active session: immediately after closing each bounded task, run a fresh release build, update the system-installed binary, create a commit, push it, and then bind the next lawful agent task without waiting for another user prompt.
@@ -162,5 +163,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-05-06T06:16:26.9582364Z
+updated_at: 2026-05-12T22:54:22.6287522Z
 changelog_ref: AGENTS.sidecar.changelog.jsonl

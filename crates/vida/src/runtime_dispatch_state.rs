@@ -3847,6 +3847,55 @@ pub(crate) async fn maybe_bridge_closed_implementer_task_into_latest_receipt(
     Ok(true)
 }
 
+pub(crate) async fn maybe_bridge_closed_specification_task_into_receipt(
+    store: &StateStore,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+    closed_task_id: Option<&str>,
+) -> Result<bool, String> {
+    let (role_selection, run_graph_bootstrap) = decode_receipt_packet_context(receipt)?;
+    if closed_task_id
+        .is_some_and(|value| tracked_specification_task_id(&role_selection) != Some(value))
+    {
+        return Ok(false);
+    }
+    try_bridge_bounded_specification_completion_to_downstream_receipt(
+        store,
+        &role_selection,
+        &run_graph_bootstrap,
+        receipt,
+    )
+    .await
+}
+
+pub(crate) async fn maybe_bridge_closed_specification_task_into_latest_receipt(
+    store: &StateStore,
+    closed_task_id: &str,
+) -> Result<bool, String> {
+    let Some(mut receipt) = store
+        .latest_run_graph_dispatch_receipt()
+        .await
+        .map_err(|error| format!("Failed to load latest run-graph dispatch receipt: {error}"))?
+    else {
+        return Ok(false);
+    };
+    if !maybe_bridge_closed_specification_task_into_receipt(
+        store,
+        &mut receipt,
+        Some(closed_task_id),
+    )
+    .await?
+    {
+        return Ok(false);
+    }
+    store
+        .record_run_graph_dispatch_receipt(&receipt)
+        .await
+        .map_err(|error| {
+            format!("Failed to persist bridged run-graph dispatch receipt: {error}")
+        })?;
+    Ok(true)
+}
+
 fn receipt_waiting_on_implementer_evidence(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
@@ -12933,6 +12982,120 @@ mod tests {
             Some("packet_ready")
         );
         assert!(receipt.downstream_dispatch_packet_path.is_some());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn maybe_bridge_closed_specification_task_into_receipt_ignores_other_task_ids() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-specification-bridge-filter-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.join("state"))
+            .await
+            .expect("open state store");
+
+        let spec_task_id = "feature-spec-bridge-filter-spec";
+        let design_doc_path = root.join("docs/specification-bridge-filter-design.md");
+        std::fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
+            .expect("create design doc directory");
+        std::fs::write(
+            &design_doc_path,
+            "# Specification Bridge Filter\n\nStatus: `approved`\n",
+        )
+        .expect("write approved design doc");
+
+        let labels = vec!["spec-pack".to_string()];
+        store
+            .create_task(CreateTaskRequest {
+                task_id: spec_task_id,
+                title: "Closed spec pack",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create closed spec task");
+
+        let role_selection = specification_test_role_selection(
+            spec_task_id,
+            design_doc_path
+                .to_str()
+                .expect("design doc path should be utf-8"),
+        );
+        let packet_path = root.join("specification-dispatch-packet.json");
+        std::fs::write(
+            &packet_path,
+            serde_json::to_string_pretty(&json!({
+                "role_selection_full": role_selection,
+                "run_graph_bootstrap": { "run_id": "run-spec-bridge-filter" }
+            }))
+            .expect("dispatch packet should encode"),
+        )
+        .expect("dispatch packet should write");
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-spec-bridge-filter".to_string(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("exc-spec-bridge-filter".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: Some("/tmp/specification-started.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("work-pool-pack".to_string()),
+            downstream_dispatch_command: Some(
+                "vida task ensure feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+                    .to_string(),
+            ),
+            downstream_dispatch_note: Some("waiting on specification evidence".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![
+                "pending_specification_evidence".to_string(),
+                "pending_design_finalize".to_string(),
+                "pending_spec_task_close".to_string(),
+            ],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("specification".to_string()),
+            downstream_dispatch_last_target: Some("specification".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-04-17T00:00:00Z".to_string(),
+        };
+
+        let bridged = maybe_bridge_closed_specification_task_into_receipt(
+            &store,
+            &mut receipt,
+            Some("other-task"),
+        )
+        .await
+        .expect("bridge should evaluate cleanly");
+
+        assert!(!bridged);
+        assert_eq!(receipt.dispatch_status, "executing");
+        assert!(!receipt.downstream_dispatch_ready);
 
         let _ = std::fs::remove_dir_all(&root);
     }

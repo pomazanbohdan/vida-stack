@@ -3935,6 +3935,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         {
                             return code;
                         }
+                        if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_specification_task_into_latest_receipt(&store, &command.task_id).await {
+                            eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
+                            return ExitCode::from(1);
+                        }
                         if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_implementer_task_into_latest_receipt(&store, &command.task_id).await {
                             eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
                             return ExitCode::from(1);
