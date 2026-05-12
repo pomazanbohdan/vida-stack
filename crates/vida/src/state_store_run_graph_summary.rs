@@ -33,6 +33,8 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         status.recovery_ready = false;
         return Ok(status);
     }
+    let stale_downstream_blockers_are_superseded_by_ready_handoff =
+        ready_dispatch_handoff_matches_downstream_receipt(&status, &receipt);
     let blocked_receipt = matches!(receipt.dispatch_status.as_str(), "blocked" | "failed")
         || matches!(
             receipt.lane_status.as_deref(),
@@ -45,7 +47,8 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             .blocker_code
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
-        || !receipt.downstream_dispatch_blockers.is_empty();
+        || (!stale_downstream_blockers_are_superseded_by_ready_handoff
+            && !receipt.downstream_dispatch_blockers.is_empty());
     let spec_post_design_gate_blocked = receipt.dispatch_status == "executed"
         && receipt.downstream_dispatch_target.as_deref() == Some("work-pool-pack")
         && receipt.downstream_dispatch_blockers.iter().any(|blocker| {
@@ -164,6 +167,45 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         }
     }
     Ok(status)
+}
+
+fn ready_dispatch_handoff_matches_downstream_receipt(
+    status: &RunGraphStatus,
+    receipt: &RunGraphDispatchReceiptStored,
+) -> bool {
+    if status.status != "ready"
+        || !status.recovery_ready
+        || !is_dispatch_resume_handoff_complete(status)
+        || receipt.dispatch_status != "executed"
+        || receipt
+            .blocker_code
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || matches!(
+            receipt.lane_status.as_deref(),
+            Some("lane_blocked")
+                | Some("lane_failed")
+                | Some("lane_exception_recorded")
+                | Some("lane_exception_takeover")
+        )
+    {
+        return false;
+    }
+    let Some(downstream_target) = receipt
+        .downstream_dispatch_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    if status.active_node != receipt.dispatch_target {
+        return false;
+    }
+    let downstream_node = downstream_target.replace('-', "_");
+    status.next_node.as_deref() == Some(downstream_node.as_str())
+        && status.handoff_state == format!("awaiting_{downstream_node}")
+        && status.resume_target == format!("dispatch.{downstream_node}_lane")
 }
 
 fn has_receipt_evidence_id(value: Option<&str>) -> bool {
@@ -3034,6 +3076,91 @@ mod tests {
             Some("internal_activation_view_only")
         );
         assert_eq!(persisted.lane_status, "lane_exception_recorded");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_status_preserves_ready_handoff_against_stale_downstream_blockers() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-ready-handoff-stale-downstream-blocker-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-ready-handoff",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "task-ready-handoff".to_string();
+        status.active_node = "analysis".to_string();
+        status.next_node = Some("writer".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "analysis_active".to_string();
+        status.policy_gate = "targeted_verification".to_string();
+        status.handoff_state = "awaiting_writer".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.writer_lane".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist ready writer handoff");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-ready-handoff".to_string(),
+                dispatch_target: "analysis".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/analysis-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/analysis-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: Some("writer".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some(
+                    "stale preview before planner metadata repair".to_string(),
+                ),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["missing_owned_write_scope".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: Some("/tmp/analysis-result.json".to_string()),
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("internal_subagents".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-05-12T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist stale downstream receipt");
+
+        let reconciled = store
+            .run_graph_status("run-ready-handoff")
+            .await
+            .expect("load reconciled status");
+        assert_eq!(reconciled.status, "ready");
+        assert_eq!(reconciled.active_node, "analysis");
+        assert_eq!(reconciled.next_node.as_deref(), Some("writer"));
+        assert_eq!(reconciled.lifecycle_stage, "analysis_active");
+        assert_eq!(reconciled.handoff_state, "awaiting_writer");
+        assert_eq!(reconciled.resume_target, "dispatch.writer_lane");
+        assert!(reconciled.recovery_ready);
 
         let _ = fs::remove_dir_all(&root);
     }
