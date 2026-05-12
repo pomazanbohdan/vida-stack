@@ -249,11 +249,9 @@ fn dispatch_handoff_uses_internal_host(
                     backend_id,
                 )
             });
-    let internal_agent_backend = preferred_backend.as_deref() == Some("internal_subagents")
-        || receipt.selected_backend.as_deref() == Some("internal_subagents")
-        || internal_host_carrier_backend
-        || selected_backend_class.as_deref() == Some("internal")
-        || lane_dispatch_backend_class == Some("internal");
+    let internal_agent_backend = internal_host_carrier_backend
+        || backend_class_is_internal(selected_backend_class.as_deref())
+        || backend_class_is_internal(lane_dispatch_backend_class);
     lane_dispatch.surface == "vida agent-init"
         && host_execution_class == "internal"
         && internal_agent_backend
@@ -1360,6 +1358,10 @@ fn backend_class_from_execution_plan(
         .map(str::to_string)
 }
 
+fn backend_class_is_internal(backend_class: Option<&str>) -> bool {
+    backend_class.is_some_and(|value| matches!(value.trim(), "internal" | "internal_cli"))
+}
+
 fn route_execution_posture_from_classes(classes: &[String]) -> &'static str {
     let has_internal = classes.iter().any(|value| value == "internal");
     let has_external = classes.iter().any(|value| value == "external_cli");
@@ -2124,7 +2126,12 @@ fn configured_internal_host_carrier_exists(
     carriers
         .iter()
         .any(|row| row["role_id"].as_str() == Some(backend_id))
-        || (backend_id == "internal_subagents" && !carriers.is_empty())
+        || (!carriers.is_empty()
+            && overlay
+                .and_then(|overlay| configured_subagent_entry(overlay, backend_id))
+                .and_then(|entry| yaml_string(yaml_lookup(entry, &["subagent_backend_class"])))
+                .as_deref()
+                .is_some_and(|backend_class| backend_class_is_internal(Some(backend_class))))
 }
 
 pub(crate) fn configured_external_backend_entry<'a>(
@@ -16332,7 +16339,11 @@ fn stale_in_flight_dispatch_preserves_internal_activation_view(
     if explicit_external_dispatch_evidence {
         return false;
     }
-    receipt.selected_backend.as_deref() == Some("internal_subagents")
+    let result_selected_backend_class = result["route_policy"]["selected_backend_class"]
+        .as_str()
+        .or_else(|| result["mixed_posture"]["selected_backend_class"].as_str())
+        .or_else(|| result["effective_execution_posture"]["selected_backend_class"].as_str());
+    backend_class_is_internal(result_selected_backend_class)
         || receipt
             .dispatch_surface
             .as_deref()

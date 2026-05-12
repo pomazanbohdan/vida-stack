@@ -2062,7 +2062,11 @@ fn dispatch_receipt_retry_eligible(
         && dispatch_receipt.dispatch_status == "blocked"
         && matches!(
             dispatch_receipt.blocker_code.as_deref(),
-            Some("configured_backend_dispatch_failed" | "timeout_without_takeover_authority")
+            Some(
+                "configured_backend_dispatch_failed"
+                    | "timeout_without_takeover_authority"
+                    | "tool_execution_failed"
+            )
         )
         && dispatch_receipt
             .dispatch_packet_path
@@ -2309,8 +2313,45 @@ fn dispatch_receipt_internal_retry_eligible(
         carriers
             .iter()
             .any(|row| row["role_id"].as_str() == Some(*backend_id))
-            || (*backend_id == "internal_subagents" && has_internal_carriers)
+            || (has_internal_carriers
+                && backend_id_is_configured_internal_bridge(&overlay, role_selection, backend_id))
     })
+}
+
+fn backend_id_is_configured_internal_bridge(
+    overlay: &serde_yaml::Value,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    backend_id: &str,
+) -> bool {
+    fn internal_class(value: &str) -> bool {
+        matches!(value.trim(), "internal" | "internal_cli")
+    }
+
+    let execution_plan_class = role_selection.execution_plan["backend_admissibility_matrix"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["backend_id"].as_str() == Some(backend_id))
+        .and_then(|entry| entry["backend_class"].as_str());
+    if execution_plan_class.is_some_and(internal_class) {
+        return true;
+    }
+
+    super::yaml_lookup(overlay, &["agent_system", "subagents"])
+        .and_then(serde_yaml::Value::as_mapping)
+        .and_then(|entries| {
+            entries.iter().find_map(|(key, value)| {
+                let id = key.as_str()?.trim();
+                (id == backend_id
+                    && super::yaml_bool(super::yaml_lookup(value, &["enabled"]), false))
+                .then_some(value)
+            })
+        })
+        .and_then(|entry| {
+            super::yaml_string(super::yaml_lookup(entry, &["subagent_backend_class"]))
+        })
+        .as_deref()
+        .is_some_and(internal_class)
 }
 
 fn primary_backend_for_dispatch_receipt(
@@ -4982,6 +5023,42 @@ mod tests {
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
+        };
+
+        assert!(dispatch_receipt_retry_eligible(&receipt));
+    }
+
+    #[test]
+    fn tool_execution_failed_with_packet_is_retry_eligible() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-tool-execution-retry".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:hermes_cli".to_string()),
+            dispatch_command: Some("hermes ...".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
+            blocker_code: Some("tool_execution_failed".to_string()),
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("after review".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["tool_execution_failed".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-05-12T00:00:00Z".to_string(),
         };
 
         assert!(dispatch_receipt_retry_eligible(&receipt));
