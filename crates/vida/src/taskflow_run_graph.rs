@@ -3807,6 +3807,10 @@ pub(crate) async fn prepare_run_graph_dispatch_init_artifacts(
         &role_selection,
         &run_graph_bootstrap,
     );
+    crate::runtime_dispatch_state::sync_receipt_configured_activation_assignment(
+        &role_selection,
+        &mut dispatch_receipt,
+    );
     dispatch_receipt.dispatch_command = crate::runtime_dispatch_command_for_target(
         &role_selection,
         &dispatch_receipt.dispatch_target,

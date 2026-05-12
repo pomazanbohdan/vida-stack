@@ -29,10 +29,11 @@ use crate::runtime_dispatch_packets::{
     runtime_execution_block_packet, runtime_verifier_proof_packet, single_task_move_scope_paths,
 };
 use crate::taskflow_routing::{
-    activation_backend_from_route, backend_selection_source, fallback_executor_backend_from_route,
-    fanout_executor_backends_from_route, route_primary_backend_hint_from_route,
-    runtime_assignment_backend_for_route, runtime_assignment_from_execution_plan,
-    runtime_assignment_from_route, runtime_assignment_source_from_execution_plan,
+    activation_backend_from_route, backend_selection_source, dispatch_target_for_runtime_role,
+    fallback_executor_backend_from_route, fanout_executor_backends_from_route,
+    route_primary_backend_hint_from_route, runtime_assignment_backend_for_route,
+    runtime_assignment_from_execution_plan, runtime_assignment_from_route,
+    runtime_assignment_source_from_execution_plan,
 };
 
 pub(crate) fn normalize_persisted_runtime_path(path: &str) -> std::path::PathBuf {
@@ -645,6 +646,16 @@ pub(crate) fn execution_plan_route_for_dispatch_target<'a>(
             .get("implementation")
             .filter(|value| !value.is_null());
     }
+    if let Some(canonical_target) =
+        dispatch_target_for_runtime_role(execution_plan, dispatch_target)
+            .filter(|target| target != dispatch_target)
+    {
+        if let Some(route) =
+            execution_plan_route_for_dispatch_target(execution_plan, &canonical_target)
+        {
+            return Some(route);
+        }
+    }
     let canonical_route_key = match dispatch_target {
         "implementer" => Some("implementation"),
         "execution_preparation" => Some("architecture"),
@@ -918,6 +929,7 @@ fn admissible_backend_candidates_for_dispatch_target(
     let route_is_backend_agnostic = !route_has_backend_hints(execution_plan, route);
     let mut candidates = Vec::new();
     let inherited = inherited_selected_backend.map(str::to_string);
+    let runtime_assignment_backend = runtime_assignment_backend_for_route(execution_plan, route);
     let route_primary = route_primary_backend_hint_from_route(route);
     let route_fallback = fallback_executor_backend_from_route(route);
     let route_fanout = fanout_executor_backends_from_route(route);
@@ -927,6 +939,9 @@ fn admissible_backend_candidates_for_dispatch_target(
         .chain(route_fanout.iter())
         .any(|backend_id| backend_policy_from_execution_plan(execution_plan, backend_id).is_some());
     let prefer_route_backends_first = !route_is_backend_agnostic && route_backends_have_policy;
+    if let Some(runtime_assignment_backend) = runtime_assignment_backend.as_ref() {
+        candidates.push(runtime_assignment_backend.clone());
+    }
     if prefer_route_backends_first {
         if let Some(primary) = route_primary.as_ref() {
             candidates.push(primary.clone());
@@ -1000,8 +1015,11 @@ pub(crate) fn admissible_selected_backend_for_dispatch_target(
         return candidates.into_iter().next();
     }
     candidates.into_iter().find(|candidate| {
-        backend_is_admissible_for_dispatch_target(execution_plan, candidate, dispatch_target)
-            || activation_agent_type == Some(candidate.as_str())
+        backend_is_admissible_or_runtime_selected_carrier_for_dispatch_target(
+            execution_plan,
+            candidate,
+            dispatch_target,
+        ) || activation_agent_type == Some(candidate.as_str())
             || route_activation_backend.as_deref() == Some(candidate.as_str())
             || (route_is_backend_agnostic
                 && backend_class_from_execution_plan(execution_plan, candidate).as_deref()
@@ -1231,6 +1249,50 @@ pub(crate) fn canonical_selected_backend_for_receipt(
         receipt.activation_agent_type.as_deref(),
         receipt.selected_backend.as_deref(),
     )
+}
+
+pub(crate) fn sync_receipt_configured_activation_assignment(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) {
+    if receipt.dispatch_kind != "agent_lane" {
+        return;
+    }
+    let execution_plan = &role_selection.execution_plan;
+    let canonical_target =
+        dispatch_target_for_runtime_role(execution_plan, &receipt.dispatch_target)
+            .unwrap_or_else(|| receipt.dispatch_target.clone());
+    let lane_activation = dispatch_contract_lane(execution_plan, &canonical_target)
+        .map(dispatch_contract_lane_activation);
+    let (assignment, _) =
+        dispatch_target_runtime_assignment(execution_plan, &receipt.dispatch_target);
+    if receipt.activation_agent_type.is_none() {
+        receipt.activation_agent_type = lane_activation
+            .and_then(|activation| json_string(activation.get("activation_agent_type")))
+            .or_else(|| json_string(assignment.get("activation_agent_type")))
+            .or_else(|| json_string(assignment.get("selected_tier")))
+            .or_else(|| json_string(assignment.get("selected_carrier_id")));
+    }
+    if receipt.activation_runtime_role.is_none() {
+        receipt.activation_runtime_role = lane_activation
+            .and_then(|activation| json_string(activation.get("activation_runtime_role")))
+            .or_else(|| json_string(assignment.get("activation_runtime_role")))
+            .or_else(|| json_string(assignment.get("runtime_role")));
+    }
+    let selected_backend = canonical_selected_backend_for_receipt(role_selection, receipt)
+        .or_else(|| json_string(assignment.get("selected_backend_id")))
+        .or_else(|| json_string(assignment.get("selected_carrier_id")));
+    if let Some(selected_backend) = selected_backend {
+        if receipt
+            .selected_backend
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != "unknown")
+            .is_none()
+        {
+            receipt.selected_backend = Some(selected_backend);
+        }
+    }
 }
 
 fn persisted_selected_backend_override_for_packet_path(packet_path: &str) -> Option<String> {
@@ -15187,6 +15249,128 @@ agent_system:
         );
 
         assert_eq!(selected.as_deref(), Some("hermes_cli"));
+    }
+
+    #[test]
+    fn runtime_role_dispatch_target_resolves_configured_runtime_assignment_backend() {
+        let execution_plan = serde_json::json!({
+            "runtime_assignment": {
+                "enabled": true,
+                "selected_carrier_id": "middle",
+                "selected_model_profile_id": "codex_gpt55_medium_write",
+                "selected_model_provider": "openai"
+            },
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "middle",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "specification": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "dispatch_contract": {
+                    "specification_activation": {
+                        "activation_agent_type": "middle",
+                        "activation_runtime_role": "business_analyst"
+                    }
+                }
+            }
+        });
+
+        let selected = admissible_selected_backend_for_dispatch_target(
+            &execution_plan,
+            "business_analyst",
+            None,
+            None,
+        );
+
+        assert_eq!(selected.as_deref(), Some("middle"));
+    }
+
+    #[test]
+    fn receipt_sync_fills_runtime_role_activation_from_configured_dispatch_contract() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "spec task".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["specification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "runtime_assignment": {
+                    "enabled": true,
+                    "selected_carrier_id": "middle",
+                    "selected_model_profile_id": "codex_gpt55_medium_write",
+                    "selected_model_provider": "openai"
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "middle",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "specification": true
+                        }
+                    }
+                ],
+                "development_flow": {
+                    "dispatch_contract": {
+                        "specification_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "business_analyst"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: "spec-run".to_string(),
+            dispatch_target: "business_analyst".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: None,
+            recorded_at: "2026-05-12T00:00:00Z".to_string(),
+        };
+
+        sync_receipt_configured_activation_assignment(&role_selection, &mut receipt);
+
+        assert_eq!(receipt.activation_agent_type.as_deref(), Some("middle"));
+        assert_eq!(
+            receipt.activation_runtime_role.as_deref(),
+            Some("business_analyst")
+        );
+        assert_eq!(receipt.selected_backend.as_deref(), Some("middle"));
     }
 
     #[test]
