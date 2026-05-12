@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\n  vida task --help\n  vida taskflow help parallelism\n  vida docflow help";
+const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\n  vida task --help\n  vida taskflow help parallelism\n  vida docflow help\n  vida docs update --json";
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
 
@@ -100,6 +100,8 @@ pub(crate) enum Command {
     Doctor(DoctorArgs),
     #[command(about = "run canonical runtime diagnostics for completed slices")]
     Diagnostics(DiagnosticsArgs),
+    #[command(about = "update scoped VIDA project documentation carriers")]
+    Docs(DocsArgs),
     #[command(about = "inspect or reclaim VIDA orchestrator session ownership evidence")]
     OrchestratorSession(OrchestratorSessionArgs),
     #[command(about = "thin root alias to the TaskFlow consume family")]
@@ -244,6 +246,28 @@ pub(crate) struct ReleaseInstallArgs {
     )]
     pub(crate) install_root: Option<PathBuf>,
 
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct DocsArgs {
+    #[command(subcommand)]
+    pub(crate) command: DocsCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum DocsCommand {
+    #[command(
+        about = "update only AGENTS.md and VIDA instruction protocol docs",
+        long_about = "Update the current project's scoped VIDA documentation carriers.\n\nThis command is intentionally narrow: it rewrites only AGENTS.md and protocol markdown files ending in `-protocol.md` under vida/config/instructions. It does not update AGENTS.sidecar.md, vida.config.yaml, non-protocol instruction files, README.md, product docs, runtime state, or receipts."
+    )]
+    Update(DocsUpdateArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct DocsUpdateArgs {
     #[arg(long = "json")]
     pub(crate) json: bool,
 }

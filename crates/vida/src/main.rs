@@ -23,6 +23,7 @@ mod development_request_analysis;
 mod diagnostics_surface;
 mod docflow_proxy;
 mod docflow_runtime_verdict;
+mod docs_surface;
 mod doctor_surface;
 mod host_agent_state;
 mod host_runtime_materialization;
