@@ -3090,6 +3090,46 @@ fn inject_tracked_design_doc_path(execution_plan: &mut serde_json::Value, design
     );
 }
 
+fn inject_task_planner_metadata(
+    execution_plan: &mut serde_json::Value,
+    planner_metadata: &crate::state_store::TaskPlannerMetadata,
+) {
+    if planner_metadata.owned_paths.is_empty()
+        && planner_metadata.acceptance_targets.is_empty()
+        && planner_metadata.proof_targets.is_empty()
+        && planner_metadata.risk.is_none()
+        && planner_metadata.estimate.is_none()
+        && planner_metadata.lane_hint.is_none()
+    {
+        return;
+    }
+    let Some(plan) = execution_plan.as_object_mut() else {
+        return;
+    };
+    let tracked_flow_bootstrap = plan
+        .entry("tracked_flow_bootstrap".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if tracked_flow_bootstrap.is_null() {
+        *tracked_flow_bootstrap = serde_json::json!({});
+    }
+    let Some(tracked_flow_bootstrap) = tracked_flow_bootstrap.as_object_mut() else {
+        return;
+    };
+    let dev_task = tracked_flow_bootstrap
+        .entry("dev_task".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if dev_task.is_null() {
+        *dev_task = serde_json::json!({});
+    }
+    let Some(dev_task) = dev_task.as_object_mut() else {
+        return;
+    };
+    dev_task.insert(
+        "planner_metadata".to_string(),
+        serde_json::to_value(planner_metadata).unwrap_or_else(|_| serde_json::json!({})),
+    );
+}
+
 async fn try_existing_design_backed_implementation_override(
     store: &StateStore,
     task_id: &str,
@@ -3755,9 +3795,12 @@ pub(crate) async fn prepare_run_graph_dispatch_init_artifacts(
                 effective_run_id
             )
         })?;
-    let role_selection = context
+    let mut role_selection = context
         .role_selection()
         .map_err(|error| format!("Failed to decode persisted seeded dispatch context: {error}"))?;
+    if let Ok(task) = store.show_task(&effective_run_id).await {
+        inject_task_planner_metadata(&mut role_selection.execution_plan, &task.planner_metadata);
+    }
     let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
     let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
     let mut dispatch_receipt = crate::taskflow_consume::build_runtime_consumption_dispatch_receipt(
@@ -6801,6 +6844,151 @@ mod tests {
         assert_eq!(receipt.dispatch_target, "implementer");
         assert!(receipt.dispatch_packet_path.is_some());
         assert!(payload["dispatch_packet_path"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_uses_task_planner_metadata_owned_paths_for_writer_packet() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        let owned_paths = vec![
+            "crates/vida/src/runtime_dispatch_state.rs".to_string(),
+            "crates/vida/src/runtime_dispatch_downstream_packets.rs".to_string(),
+        ];
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "task-writer-planner-scope",
+                title: "Writer planner scope",
+                display_id: None,
+                description: "dev packet with planner-owned paths",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &["dev-pack".to_string()],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: owned_paths.clone(),
+                    acceptance_targets: vec![
+                        "writer dispatch packet has owned scope".to_string(),
+                    ],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_uses_task_planner_metadata_owned_paths_for_writer_packet -- --nocapture".to_string(),
+                    ],
+                    risk: None,
+                    estimate: None,
+                    lane_hint: None,
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create scoped task");
+        let status = RunGraphStatus {
+            run_id: "task-writer-planner-scope".to_string(),
+            task_id: "task-writer-planner-scope".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: Some("writer".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "analysis_lane".to_string(),
+            lifecycle_stage: "analysis_active".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "awaiting_writer".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.writer_lane".to_string(),
+            recovery_ready: true,
+        };
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "worker".to_string(),
+            request: "tracked dev packet created from runtime consumption".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "fallback".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: json!({
+                "orchestration_contract": {},
+                "runtime_assignment": {
+                    "selected_agent_id": "junior",
+                    "activation_agent_type": "junior",
+                    "activation_runtime_role": "worker"
+                },
+                "development_flow": {
+                    "implementation": {
+                        "analysis_route_task_class": "analysis",
+                        "writer_route_task_class": "writer"
+                    },
+                    "lane_sequence": ["analysis", "writer", "coach", "verification"],
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "analysis": {
+                                "activation": {
+                                    "activation_agent_type": "senior",
+                                    "activation_runtime_role": "verifier"
+                                },
+                                "closure_class": "analysis"
+                            },
+                            "writer": {
+                                "activation": {
+                                    "activation_agent_type": "junior",
+                                    "activation_runtime_role": "worker"
+                                },
+                                "closure_class": "implementation"
+                            }
+                        }
+                    }
+                },
+                "tracked_flow_bootstrap": null
+            }),
+            reason: "test".to_string(),
+        };
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("record run status");
+        store
+            .record_run_graph_dispatch_context(&crate::state_store::RunGraphDispatchContext {
+                run_id: "task-writer-planner-scope".to_string(),
+                task_id: "task-writer-planner-scope".to_string(),
+                request_text: role_selection.request.clone(),
+                role_selection: serde_json::to_value(&role_selection)
+                    .expect("role selection should encode"),
+                recorded_at: "2026-04-10T10:00:00Z".to_string(),
+            })
+            .await
+            .expect("record dispatch context");
+
+        let artifacts =
+            prepare_run_graph_dispatch_init_artifacts(&store, "task-writer-planner-scope")
+                .await
+                .expect("dispatch init artifacts should be prepared from planner metadata");
+        assert_eq!(artifacts.dispatch_receipt.dispatch_target, "writer");
+        assert!(artifacts
+            .dispatch_receipt
+            .downstream_dispatch_blockers
+            .is_empty());
+
+        let packet =
+            crate::read_json_file_if_present(std::path::Path::new(&artifacts.dispatch_packet_path))
+                .expect("dispatch packet should load");
+        assert_eq!(
+            packet["delivery_task_packet"]["owned_paths"],
+            serde_json::json!([
+                "crates/vida/src/runtime_dispatch_downstream_packets.rs",
+                "crates/vida/src/runtime_dispatch_state.rs"
+            ])
+        );
     }
 
     #[tokio::test]

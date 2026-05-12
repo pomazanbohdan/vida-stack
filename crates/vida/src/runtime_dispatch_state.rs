@@ -4590,12 +4590,66 @@ fn missing_owned_write_scope_blocker() -> String {
     "missing_owned_write_scope".to_string()
 }
 
+pub(crate) fn planner_metadata_owned_paths_from_role_selection(
+    role_selection: &RuntimeConsumptionLaneSelection,
+) -> Vec<String> {
+    let mut owned_paths = Vec::new();
+    for value in role_selection.execution_plan["tracked_flow_bootstrap"]["dev_task"]
+        ["planner_metadata"]["owned_paths"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let Some(path) = value
+            .as_str()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        else {
+            continue;
+        };
+        if !owned_paths.iter().any(|existing| existing == path) {
+            owned_paths.push(path.to_string());
+        }
+    }
+    owned_paths
+}
+
+pub(crate) fn implementation_owned_paths_for_role_selection(
+    role_selection: &RuntimeConsumptionLaneSelection,
+) -> Vec<String> {
+    let derived_paths = delivery_packet_owned_paths(
+        TASK_CLASS_IMPLEMENTATION,
+        &role_selection.request,
+        tracked_design_doc_path(role_selection),
+    );
+    if derived_paths.is_empty() {
+        planner_metadata_owned_paths_from_role_selection(role_selection)
+    } else {
+        derived_paths
+    }
+}
+
+pub(crate) fn apply_owned_paths_if_missing(
+    packet: &mut serde_json::Value,
+    owned_paths: &[String],
+) -> bool {
+    if owned_paths.is_empty() || packet_nonempty_string_array(packet, "owned_paths") {
+        return false;
+    }
+    let Some(object) = packet.as_object_mut() else {
+        return false;
+    };
+    object.insert("owned_paths".to_string(), serde_json::json!(owned_paths));
+    true
+}
+
 fn request_missing_owned_write_scope_for_dispatch_target(
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_target: &str,
 ) -> bool {
     dispatch_target_requires_owned_write_scope(role_selection, dispatch_target)
         && !request_has_explicit_owned_scope(&role_selection.request)
+        && implementation_owned_paths_for_role_selection(role_selection).is_empty()
 }
 
 fn single_task_move_scope_owned_paths(packet: &serde_json::Value) -> Option<Vec<String>> {
@@ -4999,7 +5053,7 @@ fn build_runtime_dispatch_packet_body(
         &ctx.receipt.dispatch_target,
     );
     let activation_evidence = dispatch_activation_evidence_summary(ctx.receipt);
-    let delivery_task_packet = runtime_delivery_task_packet_with_scope_context(
+    let mut delivery_task_packet = runtime_delivery_task_packet_with_scope_context(
         &ctx.receipt.run_id,
         &ctx.receipt.dispatch_target,
         handoff_runtime_role,
@@ -5008,6 +5062,10 @@ fn build_runtime_dispatch_packet_body(
         &ctx.role_selection.request,
         tracked_design_doc_path(ctx.role_selection),
     );
+    if handoff_task_class == TASK_CLASS_IMPLEMENTATION {
+        let owned_paths = implementation_owned_paths_for_role_selection(ctx.role_selection);
+        apply_owned_paths_if_missing(&mut delivery_task_packet, &owned_paths);
+    }
     let execution_block_packet = runtime_execution_block_packet(
         &ctx.receipt.run_id,
         &ctx.receipt.dispatch_target,

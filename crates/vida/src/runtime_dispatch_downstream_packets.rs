@@ -83,7 +83,7 @@ pub(crate) fn downstream_dispatch_packet_body(
         activation_agent_type.as_deref(),
         receipt.selected_backend.as_deref(),
     );
-    let delivery_task_packet = runtime_delivery_task_packet_with_scope_context(
+    let mut delivery_task_packet = runtime_delivery_task_packet_with_scope_context(
         &receipt.run_id,
         downstream_target,
         handoff_runtime_role,
@@ -92,6 +92,16 @@ pub(crate) fn downstream_dispatch_packet_body(
         &role_selection.request,
         crate::runtime_dispatch_state::tracked_design_doc_path(role_selection),
     );
+    if handoff_task_class == crate::runtime_contract_vocab::TASK_CLASS_IMPLEMENTATION {
+        let owned_paths =
+            crate::runtime_dispatch_state::implementation_owned_paths_for_role_selection(
+                role_selection,
+            );
+        crate::runtime_dispatch_state::apply_owned_paths_if_missing(
+            &mut delivery_task_packet,
+            &owned_paths,
+        );
+    }
     let execution_block_packet = runtime_execution_block_packet(
         &receipt.run_id,
         downstream_target,
