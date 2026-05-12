@@ -4497,6 +4497,23 @@ fn packet_nonempty_string_array(packet: &serde_json::Value, key: &str) -> bool {
         })
 }
 
+fn packet_string_array(packet: &serde_json::Value, key: &str) -> Option<Vec<String>> {
+    packet
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    row.as_str()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                })
+                .collect::<Option<Vec<_>>>()
+        })
+        .flatten()
+}
+
 fn packet_has_owned_or_read_only_paths(packet: &serde_json::Value) -> bool {
     packet_nonempty_string_array(packet, "owned_paths")
         || packet_nonempty_string_array(packet, "read_only_paths")
@@ -4603,6 +4620,19 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
     packet_label: &str,
 ) -> Result<(), String> {
     let (packet_template_kind, active_packet) = active_runtime_packet(packet)?;
+    for key in ["owned_paths", "read_only_paths"] {
+        if let (Some(top_level), Some(active)) = (
+            packet_string_array(packet, key),
+            packet_string_array(active_packet, key),
+        ) {
+            if top_level != active {
+                return Err(format!(
+                    "{packet_label} `{packet_template_kind}` top-level {key} must mirror the active packet body; expected {:?}, got {:?}",
+                    active, top_level
+                ));
+            }
+        }
+    }
     if let Some(expected_owned_paths) = single_task_move_scope_owned_paths(packet) {
         let actual_owned_paths = active_packet
             .get("owned_paths")
@@ -6486,6 +6516,32 @@ mod tests {
 
         validate_runtime_dispatch_packet_contract(&packet, "test packet")
             .expect("analysis delivery packet should remain read-only capable");
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_contract_rejects_top_level_scope_drift() {
+        let packet = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "owned_paths": ["crates/vida/src/taskflow_run_graph.rs"],
+            "read_only_paths": ["docs/process"],
+            "delivery_task_packet": {
+                "packet_id": "run-1::implementer::delivery",
+                "goal": "Execute bounded implementer handoff",
+                "scope_in": ["dispatch_target:implementer"],
+                "owned_paths": ["crates/vida/src/runtime_dispatch_state.rs"],
+                "read_only_paths": ["docs/process"],
+                "definition_of_done": ["done"],
+                "verification_command": "vida taskflow consume continue --run-id run-1 --json",
+                "proof_target": "proof",
+                "stop_rules": ["stop"],
+                "blocking_question": "what next?",
+                "handoff_task_class": "implementation"
+            }
+        });
+
+        let error = validate_runtime_dispatch_packet_contract(&packet, "test packet")
+            .expect_err("top-level owned_paths drift should fail closed");
+        assert!(error.contains("top-level owned_paths must mirror"));
     }
 
     #[test]

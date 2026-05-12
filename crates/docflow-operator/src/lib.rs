@@ -73,7 +73,9 @@ fn sanitize_terminal_text(value: &str) -> String {
             '\n' => "\\n".chars().collect::<Vec<_>>(),
             '\r' => "\\r".chars().collect::<Vec<_>>(),
             '\t' => "\\t".chars().collect::<Vec<_>>(),
-            _ if ch.is_control() => format!("\\u{{{:x}}}", ch as u32).chars().collect::<Vec<_>>(),
+            _ if ch.is_control() => format!("\\u{{{:x}}}", ch as u32)
+                .chars()
+                .collect::<Vec<_>>(),
             _ => vec![ch],
         })
         .collect()
@@ -213,12 +215,18 @@ mod tests {
             "task\u{1b}[2J",
             "/tmp/root\nnext",
             &["docs/touched\u{1b}[K.md"],
-            &[("source\u{1b}[1m", "docs/path\n.md", "footer_ref\rmarkdown_link")],
+            &[(
+                "source\u{1b}[1m",
+                "docs/path\n.md",
+                "footer_ref\rmarkdown_link",
+            )],
         );
         assert!(task.contains("task_id: task\\u{1b}[2J"));
         assert!(task.contains("root: /tmp/root\\nnext"));
         assert!(task.contains("touched_path: docs/touched\\u{1b}[K.md"));
-        assert!(task.contains("indirect_impact: docs/path\\n.md <= source\\u{1b}[1m [footer_ref\\rmarkdown_link]"));
+        assert!(task.contains(
+            "indirect_impact: docs/path\\n.md <= source\\u{1b}[1m [footer_ref\\rmarkdown_link]"
+        ));
     }
 
     #[test]

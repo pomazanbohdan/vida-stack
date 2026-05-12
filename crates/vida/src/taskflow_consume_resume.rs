@@ -429,39 +429,96 @@ fn validate_receipt_packet_pair(
 }
 
 fn dispatch_packet_paths_equivalent(left: &str, right: &str) -> bool {
-    left == right
-        || dispatch_packet_path_compare_key(left) == dispatch_packet_path_compare_key(right)
+    match (
+        canonical_runtime_packet_identity(left),
+        canonical_runtime_packet_identity(right),
+    ) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
-fn dispatch_packet_path_compare_key(path: &str) -> String {
-    let path = path.trim().replace('\\', "/");
-    let path = path.strip_prefix("//?/").unwrap_or(path.as_str());
-    let absolute = path.starts_with('/');
-    let mut parts = Vec::new();
-    for part in path.split('/') {
-        if part.is_empty() || part == "." {
-            continue;
-        }
-        if part == ".." {
-            if parts
-                .last()
-                .map(|last: &&str| *last != ".." && !last.ends_with(':'))
-                .unwrap_or(false)
-            {
-                parts.pop();
-            } else {
-                parts.push(part);
-            }
-            continue;
-        }
-        parts.push(part);
-    }
-    let normalized = parts.join("/");
-    if absolute {
-        format!("/{normalized}")
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PacketPathPlatform {
+    Windows,
+    Posix,
+}
+
+fn current_packet_path_platform() -> PacketPathPlatform {
+    if cfg!(windows) {
+        PacketPathPlatform::Windows
     } else {
-        normalized
+        PacketPathPlatform::Posix
     }
+}
+
+fn packet_path_components_for_platform(path: &str, platform: PacketPathPlatform) -> Vec<&str> {
+    let trimmed = path.trim();
+    let stripped = match platform {
+        PacketPathPlatform::Windows => trimmed
+            .strip_prefix(r"\\?\")
+            .or_else(|| trimmed.strip_prefix("//?/"))
+            .unwrap_or(trimmed),
+        PacketPathPlatform::Posix => trimmed,
+    };
+    match platform {
+        PacketPathPlatform::Windows => stripped
+            .split(['/', '\\'])
+            .filter(|part| !part.is_empty())
+            .collect(),
+        PacketPathPlatform::Posix => stripped
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect(),
+    }
+}
+
+fn packet_path_has_dot_segment(path: &str, platform: PacketPathPlatform) -> bool {
+    packet_path_components_for_platform(path, platform)
+        .iter()
+        .any(|part| *part == "." || *part == "..")
+}
+
+fn canonical_runtime_packet_identity(path: &str) -> Result<std::path::PathBuf, String> {
+    if packet_path_has_dot_segment(path, current_packet_path_platform()) {
+        return Err(format!(
+            "Runtime packet path `{}` contains dot-segment traversal and is not admissible.",
+            path.trim()
+        ));
+    }
+    let normalized = crate::runtime_dispatch_state::normalize_persisted_runtime_path(path);
+    let canonical = std::fs::canonicalize(&normalized).map_err(|error| {
+        format!(
+            "Failed to canonicalize runtime packet path `{}`: {error}",
+            normalized.display()
+        )
+    })?;
+    let parent = canonical.parent().ok_or_else(|| {
+        format!(
+            "Runtime packet path `{}` has no canonical parent.",
+            canonical.display()
+        )
+    })?;
+    let parent_name = parent
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let grandparent_name = parent
+        .parent()
+        .and_then(|value| value.file_name())
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let packet_dir_allowed = matches!(
+        parent_name,
+        "dispatch-packets" | "downstream-dispatch-packets"
+    ) && grandparent_name == "runtime-consumption";
+    if !packet_dir_allowed {
+        return Err(format!(
+            "Runtime packet path `{}` is outside VIDA runtime packet directories.",
+            canonical.display()
+        ));
+    }
+    Ok(canonical)
 }
 
 async fn validate_run_graph_resume_state(
@@ -4623,7 +4680,8 @@ mod tests {
         dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
         enforce_consume_continue_execution_preparation_gate,
         fail_fast_state_store_open_read_only_with_timeout, normalize_runtime_dispatch_packet,
-        normalize_stale_in_flight_dispatch_receipt, persisted_dispatch_packet_lineage_task_id,
+        normalize_stale_in_flight_dispatch_receipt, packet_path_components_for_platform,
+        persisted_dispatch_packet_lineage_task_id,
         prefer_ready_downstream_packet_over_active_result, prepare_explicit_resume_retry_artifact,
         primary_backend_for_dispatch_receipt, read_dispatch_packet,
         reconcile_blocked_implementer_timeout_with_tracked_close_evidence,
@@ -4636,7 +4694,7 @@ mod tests {
         runtime_consumption_snapshot_has_failure_control_evidence,
         should_refresh_resumed_downstream_preview, sync_run_graph_after_retry_artifact,
         validate_receipt_packet_pair, validate_run_graph_resume_state,
-        validate_run_graph_resume_state_for_downstream_packet,
+        validate_run_graph_resume_state_for_downstream_packet, PacketPathPlatform,
         DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
@@ -4648,6 +4706,21 @@ mod tests {
 
     #[test]
     fn validate_receipt_packet_pair_accepts_mixed_windows_separator_dispatch_path() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-mixed-separator-packet-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path = packet_dir.join("packet.json");
+        fs::write(&packet_path, "{}").expect("write packet file");
+        let expected_path = packet_path.display().to_string().replace('/', r"\");
+        let resolved_path = packet_path.display().to_string().replace('\\', "/");
         let receipt = crate::state_store::RunGraphDispatchReceipt {
             run_id: "mixed-separator-run".to_string(),
             dispatch_target: "specification".to_string(),
@@ -4658,10 +4731,7 @@ mod tests {
             dispatch_kind: "agent_lane".to_string(),
             dispatch_surface: Some("vida agent-init".to_string()),
             dispatch_command: None,
-            dispatch_packet_path: Some(
-                r"C:\project\vida-stack\.vida/data/state\runtime-consumption\dispatch-packets\packet.json"
-                    .to_string(),
-            ),
+            dispatch_packet_path: Some(expected_path),
             dispatch_result_path: None,
             blocker_code: None,
             downstream_dispatch_target: None,
@@ -4688,10 +4758,80 @@ mod tests {
             "supersedes_receipt_id": "takeover-receipt",
             "exception_path_receipt_id": "takeover-receipt"
         });
-        let resolved_path = r"C:\project\vida-stack\.vida\data\state\runtime-consumption\dispatch-packets\packet.json";
 
-        validate_receipt_packet_pair(&receipt, &packet, resolved_path, "dispatch packet")
+        validate_receipt_packet_pair(&receipt, &packet, &resolved_path, "dispatch packet")
             .expect("mixed separators should not invalidate the same dispatch packet path");
+    }
+
+    #[test]
+    fn posix_backslash_path_collision_is_not_separator_equivalent() {
+        let left =
+            packet_path_components_for_platform("packets/a\\b.json", PacketPathPlatform::Posix);
+        let right =
+            packet_path_components_for_platform("packets/a/b.json", PacketPathPlatform::Posix);
+        assert_ne!(left, right);
+    }
+
+    #[test]
+    fn validate_receipt_packet_pair_rejects_dot_segment_packet_path_escape() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dot-segment-packet-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path = packet_dir.join("packet.json");
+        fs::write(&packet_path, "{}").expect("write packet file");
+        let dot_segment_path = packet_dir.join("../dispatch-packets/packet.json");
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "dot-segment-run".to_string(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-06T00:00:00Z".to_string(),
+        };
+        let packet = serde_json::json!({
+            "run_id": "dot-segment-run",
+            "lane_status": "lane_blocked",
+            "dispatch_status": "routed"
+        });
+
+        let error = validate_receipt_packet_pair(
+            &receipt,
+            &packet,
+            &dot_segment_path.display().to_string(),
+            "dispatch packet",
+        )
+        .expect_err("dot-segment packet path should fail closed");
+        assert!(error.contains("expects dispatch_packet_path"));
     }
 
     #[test]

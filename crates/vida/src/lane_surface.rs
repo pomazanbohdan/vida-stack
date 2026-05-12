@@ -911,6 +911,17 @@ fn read_lane_packet(path: &str) -> Result<serde_json::Value, String> {
 fn canonicalize_for_lane_packet_validation(
     path: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
+    if path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
+    }) {
+        return Err(format!(
+            "Failed to canonicalize lane packet path `{}`: dot-segment traversal is not admissible",
+            path.display()
+        ));
+    }
     if path.exists() {
         return std::fs::canonicalize(path).map_err(|error| {
             format!(
@@ -919,17 +930,10 @@ fn canonicalize_for_lane_packet_validation(
             )
         });
     }
-    let Some(parent) = path.parent().filter(|parent| *parent != path) else {
-        return Err(format!(
-            "Failed to canonicalize lane packet path `{}`: no existing parent",
-            path.display()
-        ));
-    };
-    let canonical_parent = canonicalize_for_lane_packet_validation(parent)?;
-    Ok(path
-        .file_name()
-        .map(|file_name| canonical_parent.join(file_name))
-        .unwrap_or(canonical_parent))
+    Err(format!(
+        "Failed to canonicalize lane packet path `{}`: packet file does not exist",
+        path.display()
+    ))
 }
 
 fn validate_lane_packet_path(
@@ -940,17 +944,35 @@ fn validate_lane_packet_path(
 ) -> Result<std::path::PathBuf, String> {
     let normalized = crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
     let canonical_packet_path = canonicalize_for_lane_packet_validation(&normalized)?;
-    let allowed_downstream_dir = canonicalize_for_lane_packet_validation(
-        &state_root.join("runtime-consumption/downstream-dispatch-packets"),
-    )?;
-    if canonical_packet_path.starts_with(&allowed_downstream_dir) {
+    let parent_name = canonical_packet_path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let grandparent_name = canonical_packet_path
+        .parent()
+        .and_then(|parent| parent.parent())
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let under_state_root =
+        canonical_packet_path.starts_with(std::fs::canonicalize(state_root).map_err(|error| {
+            format!(
+                "Failed to canonicalize VIDA state root `{}`: {error}",
+                state_root.display()
+            )
+        })?);
+    if under_state_root
+        && grandparent_name == "runtime-consumption"
+        && parent_name == "downstream-dispatch-packets"
+    {
         return Ok(canonical_packet_path);
     }
     if takeover_active {
-        let allowed_dispatch_dir = canonicalize_for_lane_packet_validation(
-            &state_root.join("runtime-consumption/dispatch-packets"),
-        )?;
-        if canonical_packet_path.starts_with(&allowed_dispatch_dir) {
+        if under_state_root
+            && grandparent_name == "runtime-consumption"
+            && parent_name == "dispatch-packets"
+        {
             return Ok(canonical_packet_path);
         }
     }
@@ -1173,6 +1195,12 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 eprintln!(
                     "Lane `{run_id}` packet `{validated_packet_path}` does not belong to the requested run."
                 );
+                return ExitCode::from(2);
+            }
+            if let Err(error) =
+                crate::validate_runtime_dispatch_packet_contract(&packet, "Lane completion packet")
+            {
+                eprintln!("{error}");
                 return ExitCode::from(2);
             }
             let completed_target = packet
@@ -2217,6 +2245,24 @@ mod tests {
             &packet_path,
             serde_json::json!({
                 "run_id": run_id,
+                "dispatch_target": "implementer",
+                "activation_runtime_role": "worker",
+                "packet_template_kind": "delivery_task_packet",
+                "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"],
+                "delivery_task_packet": {
+                    "goal": "Complete implementer lane evidence.",
+                    "scope_in": ["dispatch_target:implementer"],
+                    "handoff_task_class": "implementation",
+                    "handoff_runtime_role": "worker",
+                    "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
+                    "definition_of_done": ["lane completion is receipt-backed"],
+                    "verification_command": "cargo test -p vida lane_complete",
+                    "proof_target": "lane completion receipt",
+                    "stop_rules": ["stop if packet contract is invalid"],
+                    "blocking_question": "none"
+                },
                 "downstream_dispatch_target": "coach",
                 "downstream_dispatch_active_target": "implementer",
                 "downstream_dispatch_ready": false,
@@ -2367,6 +2413,23 @@ mod tests {
             serde_json::json!({
                 "run_id": run_id,
                 "dispatch_target": "implementer",
+                "activation_runtime_role": "worker",
+                "packet_template_kind": "delivery_task_packet",
+                "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"],
+                "delivery_task_packet": {
+                    "goal": "Complete exception-backed implementer lane evidence.",
+                    "scope_in": ["dispatch_target:implementer"],
+                    "handoff_task_class": "implementation",
+                    "handoff_runtime_role": "worker",
+                    "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
+                    "definition_of_done": ["lane completion is receipt-backed"],
+                    "verification_command": "cargo test -p vida lane_complete",
+                    "proof_target": "lane completion receipt",
+                    "stop_rules": ["stop if packet contract is invalid"],
+                    "blocking_question": "none"
+                },
                 "role_selection_full": lane_complete_role_selection(run_id),
                 "run_graph_bootstrap": {
                     "run_id": run_id
