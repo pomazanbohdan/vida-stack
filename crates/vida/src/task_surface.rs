@@ -434,6 +434,35 @@ fn parse_optional_label_value(value: Option<&str>) -> Option<Vec<String>> {
     })
 }
 
+fn task_update_planner_metadata_requested(command: &crate::TaskUpdateArgs) -> bool {
+    !command.owned_paths.is_empty()
+        || !command.acceptance_targets.is_empty()
+        || !command.proof_targets.is_empty()
+}
+
+fn task_update_planner_metadata_arg(
+    existing: &state_store::TaskPlannerMetadata,
+    command: &crate::TaskUpdateArgs,
+) -> Option<state_store::TaskPlannerMetadata> {
+    if !task_update_planner_metadata_requested(command) {
+        return None;
+    }
+    let mut metadata = existing.clone();
+    let owned_paths = parse_label_values(&command.owned_paths);
+    if !owned_paths.is_empty() {
+        metadata.owned_paths = owned_paths;
+    }
+    let acceptance_targets = parse_label_values(&command.acceptance_targets);
+    if !acceptance_targets.is_empty() {
+        metadata.acceptance_targets = acceptance_targets;
+    }
+    let proof_targets = parse_label_values(&command.proof_targets);
+    if !proof_targets.is_empty() {
+        metadata.proof_targets = proof_targets;
+    }
+    Some(metadata)
+}
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 struct TaskMutationPlannedTask {
     task_id: String,
@@ -3167,6 +3196,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
         TaskCommand::ImportJsonl(command) => {
             let state_dir = command
                 .state_dir
+                .clone()
                 .unwrap_or_else(state_store::default_state_dir);
             match StateStore::open(state_dir).await {
                 Ok(store) => match store.import_tasks_from_jsonl(&command.path).await {
@@ -3756,6 +3786,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
         TaskCommand::Update(command) => {
             let state_dir = command
                 .state_dir
+                .clone()
                 .unwrap_or_else(state_store::default_state_dir);
             let notes = match resolve_optional_text_arg(
                 "notes",
@@ -3821,43 +3852,62 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     }
                 };
             match StateStore::open_existing(state_dir).await {
-                Ok(store) => match store
-                    .update_task(state_store::UpdateTaskRequest {
-                        task_id: &command.task_id,
-                        status: command.status.as_deref(),
-                        notes: notes.as_deref(),
-                        description: command.description.as_deref(),
-                        parent_id,
-                        add_labels: &add_labels,
-                        remove_labels: &remove_labels,
-                        set_labels: set_labels.as_deref(),
-                        execution_mode,
-                        order_bucket,
-                        parallel_group,
-                        conflict_domain,
-                        planner_metadata: None,
-                    })
-                    .await
-                {
-                    Ok(task) => {
-                        if let Err(code) =
-                            refresh_task_snapshot_after_mutation(&store, "vida task update").await
-                        {
-                            return code;
+                Ok(store) => {
+                    let planner_metadata = if task_update_planner_metadata_requested(&command) {
+                        match store.show_task(&command.task_id).await {
+                            Ok(existing) => task_update_planner_metadata_arg(
+                                &existing.planner_metadata,
+                                &command,
+                            ),
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to read task before planner metadata update: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
                         }
-                        print_task_mutation(
-                            command.render,
-                            "vida task update",
-                            &task,
-                            command.json,
-                        );
-                        ExitCode::SUCCESS
+                    } else {
+                        None
+                    };
+                    match store
+                        .update_task(state_store::UpdateTaskRequest {
+                            task_id: &command.task_id,
+                            status: command.status.as_deref(),
+                            notes: notes.as_deref(),
+                            description: command.description.as_deref(),
+                            parent_id,
+                            add_labels: &add_labels,
+                            remove_labels: &remove_labels,
+                            set_labels: set_labels.as_deref(),
+                            execution_mode,
+                            order_bucket,
+                            parallel_group,
+                            conflict_domain,
+                            planner_metadata,
+                        })
+                        .await
+                    {
+                        Ok(task) => {
+                            if let Err(code) =
+                                refresh_task_snapshot_after_mutation(&store, "vida task update")
+                                    .await
+                            {
+                                return code;
+                            }
+                            print_task_mutation(
+                                command.render,
+                                "vida task update",
+                                &task,
+                                command.json,
+                            );
+                            ExitCode::SUCCESS
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to update task: {error}");
+                            ExitCode::from(1)
+                        }
                     }
-                    Err(error) => {
-                        eprintln!("Failed to update task: {error}");
-                        ExitCode::from(1)
-                    }
-                },
+                }
                 Err(error) => {
                     eprintln!("Failed to open authoritative state store: {error}");
                     ExitCode::from(1)
@@ -4393,7 +4443,8 @@ mod tests {
         task_close_uses_isolated_state_dir, task_create_title, task_handoff_accept_receipt,
         task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
         task_json_success_status, task_next_lawful_receipt, task_owned_status_receipt,
-        task_parent_id, validate_task_handoff_accept_receipt, ADAPTIVE_REPLAN_FINDING_KINDS,
+        task_parent_id, task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
+        ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
@@ -4488,6 +4539,46 @@ mod tests {
             },
             dependencies: Vec::new(),
         }
+    }
+
+    #[test]
+    fn task_update_planner_metadata_sets_requested_lists_and_preserves_existing_fields() {
+        let existing = crate::state_store::TaskPlannerMetadata {
+            owned_paths: vec!["old/path.rs".to_string()],
+            acceptance_targets: vec!["old acceptance".to_string()],
+            proof_targets: vec!["old proof".to_string()],
+            risk: Some("high".to_string()),
+            estimate: Some("small".to_string()),
+            lane_hint: Some("worker".to_string()),
+        };
+        let command = crate::TaskUpdateArgs {
+            task_id: "task-owned".to_string(),
+            owned_paths: vec![
+                "crates/vida/src/task_surface.rs".to_string(),
+                "crates/vida/src/cli.rs".to_string(),
+            ],
+            proof_targets: vec!["cargo test -p vida task_update_planner_metadata".to_string()],
+            ..Default::default()
+        };
+
+        let metadata = task_update_planner_metadata_arg(&existing, &command)
+            .expect("metadata update should be requested");
+
+        assert_eq!(
+            metadata.owned_paths,
+            vec![
+                "crates/vida/src/task_surface.rs".to_string(),
+                "crates/vida/src/cli.rs".to_string(),
+            ]
+        );
+        assert_eq!(metadata.acceptance_targets, existing.acceptance_targets);
+        assert_eq!(
+            metadata.proof_targets,
+            vec!["cargo test -p vida task_update_planner_metadata".to_string()]
+        );
+        assert_eq!(metadata.risk, existing.risk);
+        assert_eq!(metadata.estimate, existing.estimate);
+        assert_eq!(metadata.lane_hint, existing.lane_hint);
     }
 
     #[test]

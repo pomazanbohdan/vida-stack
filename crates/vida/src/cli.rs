@@ -684,6 +684,27 @@ pub(crate) struct TaskUpdateArgs {
     #[arg(long = "conflict-domain")]
     pub(crate) conflict_domain: Option<String>,
 
+    #[arg(
+        long = "owned-path",
+        value_delimiter = ',',
+        help = "Planner metadata owned paths to set. Accepts comma-separated values and repeated flags."
+    )]
+    pub(crate) owned_paths: Vec<String>,
+
+    #[arg(
+        long = "acceptance-target",
+        value_delimiter = ',',
+        help = "Planner metadata acceptance targets to set. Accepts comma-separated values and repeated flags."
+    )]
+    pub(crate) acceptance_targets: Vec<String>,
+
+    #[arg(
+        long = "proof-target",
+        value_delimiter = ',',
+        help = "Planner metadata proof targets to set. Accepts comma-separated values and repeated flags."
+    )]
+    pub(crate) proof_targets: Vec<String>,
+
     #[arg(long = "clear-execution-mode")]
     pub(crate) clear_execution_mode: bool,
 
