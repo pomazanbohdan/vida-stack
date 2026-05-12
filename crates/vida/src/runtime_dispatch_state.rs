@@ -4214,6 +4214,21 @@ pub(crate) async fn derive_downstream_dispatch_preview(
             )
         }
         _ if receipt.dispatch_kind == "agent_lane" => {
+            if matches!(
+                receipt.dispatch_status.as_str(),
+                "routed" | "executing"
+            ) {
+                return (
+                    None,
+                    Some("vida agent-init".to_string()),
+                    Some(format!(
+                        "`{}` dispatch is in flight; wait for terminal execution evidence before deriving downstream lane blockers",
+                        receipt.dispatch_target
+                    )),
+                    false,
+                    Vec::new(),
+                );
+            }
             let current_lane =
                 dispatch_contract_lane(&role_selection.execution_plan, &receipt.dispatch_target);
             let implementation = &role_selection.execution_plan["development_flow"]["implementation"];
@@ -4234,6 +4249,10 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .unwrap_or("writer");
+                let missing_owned_scope = request_missing_owned_write_scope_for_dispatch_target(
+                    role_selection,
+                    writer_target,
+                );
                 return (
                     Some(writer_target.to_string()),
                     Some("vida agent-init".to_string()),
@@ -4241,8 +4260,12 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                         "after `{}` validation evidence is recorded, activate `{}` for the first implementation lane",
                         receipt.dispatch_target, writer_target
                     )),
-                    true,
-                    Vec::new(),
+                    !missing_owned_scope,
+                    if missing_owned_scope {
+                        vec![missing_owned_write_scope_blocker()]
+                    } else {
+                        Vec::new()
+                    },
                 );
             }
             if current_lane.and_then(|lane| lane["stage"].as_str()) == Some("design_gate")
@@ -4463,7 +4486,7 @@ pub(crate) fn runtime_packet_handoff_task_class(
         "coach" => TASK_CLASS_COACH,
         "verification" => TASK_CLASS_VERIFICATION,
         "escalation" => TASK_CLASS_ARCHITECTURE,
-        "implementer" => TASK_CLASS_IMPLEMENTATION,
+        "implementer" | "writer" => TASK_CLASS_IMPLEMENTATION,
         "orchestrator" => "analysis",
         _ => match handoff_runtime_role {
             RUNTIME_ROLE_BUSINESS_ANALYST => TASK_CLASS_SPECIFICATION,
@@ -10702,6 +10725,100 @@ mod tests {
     }
 
     #[test]
+    fn routed_analysis_lane_does_not_surface_evidence_blocker_before_execution() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: json!({
+                "development_flow": {
+                    "implementation": {
+                        "analysis_route_task_class": "analysis",
+                        "writer_route_task_class": "writer"
+                    },
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["analysis", "writer", "coach"],
+                        "analysis_activation": {
+                            "completion_blocker": "pending_analysis_evidence",
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        },
+                        "writer_activation": {
+                            "completion_blocker": "pending_implementation_evidence",
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        },
+                        "coach_activation": {
+                            "completion_blocker": "pending_review_clean_evidence",
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "coach"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-analysis-routed".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("analysis-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-05-12T00:00:00Z".to_string(),
+        };
+
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(crate::StateStore::open(
+                harness.path().join(crate::state_store::default_state_dir()),
+            ))
+            .expect("state store should initialize");
+        let (target, _command, note, ready, blockers) = runtime.block_on(
+            derive_downstream_dispatch_preview(&store, &role_selection, &receipt),
+        );
+        assert!(target.is_none());
+        assert!(!ready);
+        assert!(note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("wait for terminal execution evidence"));
+        assert!(blockers.is_empty());
+    }
+
+    #[test]
     fn activation_view_only_dispatch_result_surfaces_transport_blocker_and_does_not_unlock_the_next_lane(
     ) {
         let role_selection = RuntimeConsumptionLaneSelection {
@@ -11878,6 +11995,9 @@ mod tests {
                 .await
                 .expect("state store should open");
             let mut role_selection = bridge_test_role_selection("feature-x-dev");
+            role_selection.request =
+                "Implement the bounded writer fix in crates/vida/src/runtime_dispatch_state.rs"
+                    .to_string();
             role_selection.execution_plan["development_flow"]["implementation"] = json!({
                 "analysis_route_task_class": "analysis",
                 "writer_route_task_class": "writer"
@@ -11920,6 +12040,66 @@ mod tests {
             assert_eq!(command.as_deref(), Some("vida agent-init"));
             assert!(next_ready);
             assert!(next_blockers.is_empty());
+            assert!(note
+                .as_deref()
+                .unwrap_or_default()
+                .contains("validation evidence is recorded"));
+        });
+    }
+
+    #[test]
+    fn derive_downstream_dispatch_preview_blocks_analysis_to_writer_without_owned_scope() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let mut role_selection = bridge_test_role_selection("feature-x-dev");
+            role_selection.request = "continue development".to_string();
+            role_selection.execution_plan["development_flow"]["implementation"] = json!({
+                "analysis_route_task_class": "analysis",
+                "writer_route_task_class": "writer"
+            });
+            let receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-analysis-missing-scope-preview".to_string(),
+                dispatch_target: "analysis".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/analysis-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("analysis".to_string()),
+                downstream_dispatch_last_target: Some("analysis".to_string()),
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("verifier".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-23T00:00:00Z".to_string(),
+            };
+
+            let (next_target, command, note, next_ready, next_blockers) =
+                derive_downstream_dispatch_preview(&store, &role_selection, &receipt).await;
+
+            assert_eq!(next_target.as_deref(), Some("writer"));
+            assert_eq!(command.as_deref(), Some("vida agent-init"));
+            assert!(!next_ready);
+            assert_eq!(next_blockers, vec!["missing_owned_write_scope".to_string()]);
             assert!(note
                 .as_deref()
                 .unwrap_or_default()
