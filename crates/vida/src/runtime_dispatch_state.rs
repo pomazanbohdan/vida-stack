@@ -10506,6 +10506,91 @@ mod tests {
     }
 
     #[test]
+    fn runtime_downstream_dispatch_packet_uses_runtime_assignment_activation_fallback() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue writer lane".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: json!({
+                "tracked_flow_bootstrap": {},
+                "orchestration_contract": {},
+                "runtime_assignment": {
+                    "activation_agent_type": "configured_writer_backend",
+                    "activation_runtime_role": "worker",
+                    "selected_backend_id": "configured_writer_backend"
+                },
+                "development_flow": {
+                    "dispatch_contract": {}
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "configured_writer_backend",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-writer".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some("/tmp/analysis.json".to_string()),
+            dispatch_result_path: Some("/tmp/analysis-result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("writer".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("writer".to_string()),
+            downstream_dispatch_last_target: Some("analysis".to_string()),
+            activation_agent_type: Some("configured_analyst_backend".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("configured_analyst_backend".to_string()),
+            recorded_at: "2026-05-12T00:00:00Z".to_string(),
+        };
+
+        let packet = downstream_dispatch_packet_body(
+            &role_selection,
+            &json!({ "run_id": "run-writer" }),
+            &receipt,
+            None,
+        );
+
+        assert_eq!(packet["activation_agent_type"], "configured_writer_backend");
+        assert_eq!(packet["activation_runtime_role"], "worker");
+        assert_eq!(
+            packet["delivery_task_packet"]["handoff_runtime_role"],
+            "worker"
+        );
+    }
+
+    #[test]
     fn route_selected_backend_for_specification_prefers_contract_activation_tier() {
         let execution_plan = serde_json::json!({
             "development_flow": {

@@ -854,6 +854,12 @@ fn apply_internal_subagent_profile_overlay(
         ("quality_tier", "quality_tier"),
         ("write_scope", "write_scope"),
     ] {
+        if profile[profile_key]
+            .as_str()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            continue;
+        }
         if !profile[profile_key].is_null() {
             object.insert(target_key.to_string(), profile[profile_key].clone());
         }
@@ -872,10 +878,23 @@ fn apply_internal_subagent_profile_overlay(
         .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .or_else(|| internal_profile_sandbox_from_write_scope(profile["write_scope"].as_str()))
     {
+        object.insert(
+            "selected_sandbox_mode".to_string(),
+            serde_json::json!(sandbox),
+        );
         object.insert("sandbox_mode".to_string(), serde_json::json!(sandbox));
     }
     patched
+}
+
+fn internal_profile_sandbox_from_write_scope(write_scope: Option<&str>) -> Option<&'static str> {
+    match write_scope?.trim() {
+        "orchestrator_native" | "workspace-write" | "scoped_write" => Some("workspace-write"),
+        "read-only" | "read_or_review" | "none" => Some("read-only"),
+        _ => None,
+    }
 }
 
 fn selected_internal_host_carrier(
@@ -2918,6 +2937,52 @@ agent_system:
             Some("internal_review")
         );
         assert_eq!(carrier["model_reasoning_effort"].as_str(), Some("medium"));
+    }
+
+    #[test]
+    fn selected_internal_host_carrier_applies_internal_subagent_write_scope_sandbox() {
+        let carrier = serde_json::json!({
+            "role_id": "senior",
+            "model": "gpt-5.4",
+            "model_reasoning_effort": "high",
+            "sandbox_mode": "read-only"
+        });
+        let overlay = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+      write_scope: orchestrator_native
+      model_profiles:
+        internal_fast:
+          provider: internal
+          model_ref: internal_fast
+          reasoning_effort: low
+          normalized_cost_units: 1
+          write_scope: orchestrator_native
+          runtime_roles: [worker]
+          task_classes: [implementation]
+"#,
+        )
+        .expect("overlay should parse");
+        let backend_entry =
+            super::configured_subagent_backend_entry(&overlay, "internal_subagents");
+
+        let patched = super::apply_internal_subagent_profile_overlay(
+            &carrier,
+            "internal_subagents",
+            backend_entry,
+            Some("internal_fast"),
+        );
+
+        assert_eq!(patched["sandbox_mode"].as_str(), Some("workspace-write"));
+        assert_eq!(
+            patched["selected_sandbox_mode"].as_str(),
+            Some("workspace-write")
+        );
+        assert_eq!(patched["write_scope"].as_str(), Some("orchestrator_native"));
     }
 
     #[test]

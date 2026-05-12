@@ -603,16 +603,7 @@ fn active_exception_takeover_resume_blocker_error(
     receipt: Option<&crate::state_store::RunGraphDispatchReceipt>,
 ) -> Option<String> {
     let receipt = receipt?;
-    let exception_takeover_active = receipt.run_id == status.run_id
-        && receipt.lane_status == "lane_exception_takeover"
-        && receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        && receipt
-            .supersedes_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty());
+    let exception_takeover_active = receipt_has_active_exception_takeover(receipt, &status.run_id);
     if !exception_takeover_active || status.recovery_ready || status.resume_target != "none" {
         return None;
     }
@@ -625,6 +616,22 @@ fn active_exception_takeover_resume_blocker_error(
             .unwrap_or("unknown"),
         status.run_id
     ))
+}
+
+fn receipt_has_active_exception_takeover(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    run_id: &str,
+) -> bool {
+    receipt.run_id == run_id
+        && receipt.lane_status == "lane_exception_takeover"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn persisted_dispatch_packet_lineage_task_id(packet: &serde_json::Value) -> Option<&str> {
@@ -2476,8 +2483,16 @@ async fn resume_inputs_from_downstream_packet(
         "downstream dispatch packet",
     )
     .await?;
-    let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
+    let (dispatch_kind, dispatch_surface, mut activation_agent_type, mut activation_runtime_role) =
         super::downstream_activation_fields(&role_selection, dispatch_target);
+    if activation_agent_type.is_none() {
+        activation_agent_type =
+            downstream_packet_activation_field(&packet, &role_selection, "activation_agent_type");
+    }
+    if activation_runtime_role.is_none() {
+        activation_runtime_role =
+            downstream_packet_activation_field(&packet, &role_selection, "activation_runtime_role");
+    }
     let selected_backend = super::downstream_selected_backend(
         &role_selection,
         dispatch_target,
@@ -2650,6 +2665,22 @@ async fn resume_inputs_from_downstream_packet(
         packet,
         role_selection,
     ))
+}
+
+fn downstream_packet_activation_field(
+    packet: &serde_json::Value,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    field: &str,
+) -> Option<String> {
+    crate::json_string(packet.get(field))
+        .or_else(|| {
+            crate::json_string(role_selection.execution_plan["runtime_assignment"].get(field))
+        })
+        .or_else(|| {
+            crate::json_string(
+                role_selection.execution_plan["runtime_assignment"]["role_selection"].get(field),
+            )
+        })
 }
 
 async fn maybe_resume_inputs_from_ready_downstream_packet(
@@ -3463,6 +3494,29 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         .as_deref()
         .and_then(|path| read_dispatch_packet(path).ok())
         .and_then(|packet| decode_role_selection_from_packet(&packet, "dispatch packet").ok());
+    if strict_blocked_receipts && receipt_has_active_exception_takeover(&receipt, run_id) {
+        if let Some(packet_path) = receipt.dispatch_packet_path.as_deref() {
+            if read_dispatch_packet(packet_path)
+                .ok()
+                .and_then(|packet| {
+                    (packet["packet_kind"].as_str() == Some("runtime_downstream_dispatch_packet"))
+                        .then_some(())
+                })
+                .is_some()
+            {
+                let resume =
+                    resume_inputs_from_downstream_packet(store, Some(run_id), packet_path).await?;
+                record_run_graph_replay_lineage_receipt_for_resume(
+                    store,
+                    &receipt,
+                    &resume,
+                    "exception_takeover_downstream_packet",
+                )
+                .await?;
+                return Ok(resume);
+            }
+        }
+    }
     if !strict_blocked_receipts {
         if let Some(resume) =
             maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt).await?
@@ -8431,6 +8485,56 @@ agent_system:
             consume_continue_resume_error_payload(&error, "vida taskflow consume continue");
         assert_eq!(payload["run_id"], "run-exception-takeover");
         assert_eq!(payload["artifact_refs"]["run_id"], "run-exception-takeover");
+    }
+
+    #[test]
+    fn consume_continue_downstream_packet_activation_field_uses_runtime_assignment_fallback() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue writer".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "runtime_assignment": {
+                    "activation_agent_type": "configured_writer_backend",
+                    "activation_runtime_role": "worker"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let packet = serde_json::json!({
+            "packet_kind": "runtime_downstream_dispatch_packet",
+            "activation_agent_type": null,
+            "activation_runtime_role": null
+        });
+
+        assert_eq!(
+            crate::taskflow_consume_resume::downstream_packet_activation_field(
+                &packet,
+                &role_selection,
+                "activation_agent_type"
+            )
+            .as_deref(),
+            Some("configured_writer_backend")
+        );
+        assert_eq!(
+            crate::taskflow_consume_resume::downstream_packet_activation_field(
+                &packet,
+                &role_selection,
+                "activation_runtime_role"
+            )
+            .as_deref(),
+            Some("worker")
+        );
     }
 
     #[tokio::test]
