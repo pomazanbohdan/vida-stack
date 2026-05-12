@@ -3448,7 +3448,10 @@ async fn tracked_specification_task_closed(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
-    if receipt.dispatch_target != "specification" {
+    if !matches!(
+        receipt.dispatch_target.as_str(),
+        "specification" | "spec-pack"
+    ) {
         return false;
     }
     let Some(task_id) = tracked_specification_task_id(role_selection) else {
@@ -4153,12 +4156,23 @@ pub(crate) async fn derive_downstream_dispatch_preview(
             Vec::new(),
         ),
         "spec-pack" => {
-            let blockers = vec![
-                blocker_code_value(BlockerCode::PendingDesignFinalize)
-                    .expect("pending design finalize should stay registry-backed"),
-                blocker_code_value(BlockerCode::PendingSpecTaskClose)
-                    .expect("pending spec task close should stay registry-backed"),
-            ];
+            let design_doc_finalized = tracked_design_doc_finalized(role_selection);
+            let spec_task_closed =
+                tracked_specification_task_closed(store, role_selection, receipt).await;
+            let ready = design_doc_finalized && spec_task_closed;
+            let mut blockers = Vec::new();
+            if !design_doc_finalized {
+                blockers.push(
+                    blocker_code_value(BlockerCode::PendingDesignFinalize)
+                        .expect("pending design finalize should stay registry-backed"),
+                );
+            }
+            if !spec_task_closed {
+                blockers.push(
+                    blocker_code_value(BlockerCode::PendingSpecTaskClose)
+                        .expect("pending spec task close should stay registry-backed"),
+                );
+            }
             (
                 Some("work-pool-pack".to_string()),
                 json_string(
@@ -4166,10 +4180,14 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                         .get("ensure_command"),
                 ),
                 Some(
-                    "after the design document is finalized and the spec task is closed, ensure or reuse the tracked work-pool packet"
+                    if ready {
+                        "design document is finalized and the spec task is closed; ensure or reuse the tracked work-pool packet"
+                    } else {
+                        "after the design document is finalized and the spec task is closed, ensure or reuse the tracked work-pool packet"
+                    }
                         .to_string(),
                 ),
-                false,
+                ready,
                 blockers,
             )
         }
@@ -10153,6 +10171,71 @@ mod tests {
         assert_eq!(command.as_deref(), Some("vida agent-init"));
         assert!(ready);
         assert!(blockers.is_empty());
+    }
+
+    #[test]
+    fn spec_pack_downstream_ready_when_tracked_design_and_spec_task_are_closed() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let design_doc_path = harness.path().join("feature-x-design.md");
+        write_approved_design_doc(&design_doc_path);
+        let role_selection = specification_test_role_selection(
+            "feature-x-spec-task",
+            &design_doc_path.display().to_string(),
+        );
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-spec-pack-closed".to_string(),
+            dispatch_target: "spec-pack".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida taskflow bootstrap-spec".to_string()),
+            dispatch_command: Some("vida taskflow bootstrap-spec".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: Some("/tmp/spec-pack-result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("taskflow_state_store".to_string()),
+            recorded_at: "2026-05-12T00:00:00Z".to_string(),
+        };
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(crate::StateStore::open(harness_state_root(&harness)))
+            .expect("state store should initialize");
+        runtime.block_on(create_and_close_task(&store, "feature-x-spec-task"));
+
+        let (target, command, note, ready, blockers) = runtime.block_on(
+            derive_downstream_dispatch_preview(&store, &role_selection, &receipt),
+        );
+
+        assert_eq!(target.as_deref(), Some("work-pool-pack"));
+        assert_eq!(
+            command.as_deref(),
+            Some(
+                "vida task ensure feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+            )
+        );
+        assert!(ready);
+        assert!(blockers.is_empty());
+        assert!(note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("design document is finalized"));
     }
 
     #[test]

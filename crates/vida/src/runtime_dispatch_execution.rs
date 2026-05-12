@@ -660,14 +660,13 @@ fn internal_codex_output_confirms_execution(
     stderr: &str,
     exit_success: bool,
 ) -> bool {
+    let _ = stderr;
     exit_success
         && parsed_output
             .result_text
             .as_deref()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
-        && stderr.trim().is_empty()
-        && parsed_output.error_messages.is_empty()
 }
 
 fn should_render_store_backed_activation_view_for_internal_failure(
@@ -2112,19 +2111,19 @@ mod tests {
     }
 
     #[test]
-    fn internal_codex_output_requires_clean_completion_for_execution_evidence() {
+    fn internal_codex_output_allows_warning_streams_with_agent_message_result() {
         let parsed_with_error = parse_internal_codex_exec_output(
             r#"{"type":"item.completed","item":{"id":"1","type":"error","message":"warning"}}
 {"type":"item.completed","item":{"id":"2","type":"agent_message","text":"final"}}"#,
         );
-        assert!(!internal_codex_output_confirms_execution(
+        assert!(internal_codex_output_confirms_execution(
             &parsed_with_error,
             "",
             true
         ));
-        assert!(!internal_codex_output_confirms_execution(
+        assert!(internal_codex_output_confirms_execution(
             &parsed_with_error,
-            "sandbox denied write",
+            "2026-05-12T20:35:57Z WARN codex_core::features: unknown feature key in config: hooks",
             true
         ));
 
@@ -2135,6 +2134,11 @@ mod tests {
             &parsed_clean,
             "",
             true
+        ));
+        assert!(!internal_codex_output_confirms_execution(
+            &parsed_clean,
+            "",
+            false
         ));
     }
 
