@@ -98,6 +98,10 @@ pub(crate) enum Command {
     Status(StatusArgs),
     #[command(about = "run bounded runtime integrity checks")]
     Doctor(DoctorArgs),
+    #[command(about = "run canonical runtime diagnostics for completed slices")]
+    Diagnostics(DiagnosticsArgs),
+    #[command(about = "inspect or reclaim VIDA orchestrator session ownership evidence")]
+    OrchestratorSession(OrchestratorSessionArgs),
     #[command(about = "thin root alias to the TaskFlow consume family")]
     Consume(ProxyArgs),
     #[command(about = "inspect or mutate canonical lane/takeover operator state")]
@@ -1108,6 +1112,81 @@ pub(crate) struct DoctorArgs {
 
     #[arg(long = "summary")]
     pub(crate) summary: bool,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct DiagnosticsArgs {
+    #[command(subcommand)]
+    pub(crate) command: DiagnosticsCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum DiagnosticsCommand {
+    #[command(
+        about = "reconcile git, TaskFlow, DocFlow, run-graph, dispatch, owner, and issue workflow evidence after commit"
+    )]
+    PostCommit(DiagnosticsPostCommitArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct DiagnosticsPostCommitArgs {
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct OrchestratorSessionArgs {
+    #[command(subcommand)]
+    pub(crate) command: OrchestratorSessionCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum OrchestratorSessionCommand {
+    #[command(about = "show current, live, stale, and legacy owner evidence")]
+    Show(OrchestratorSessionShowArgs),
+    #[command(about = "mark a stale orchestrator session as reclaimed by the current session")]
+    Reclaim(OrchestratorSessionReclaimArgs),
+    #[command(about = "transfer a stale orchestrator session to the current session")]
+    Transfer(OrchestratorSessionTransferArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct OrchestratorSessionShowArgs {
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct OrchestratorSessionReclaimArgs {
+    pub(crate) session_id: String,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct OrchestratorSessionTransferArgs {
+    pub(crate) session_id: String,
+
+    #[arg(long = "to-current")]
+    pub(crate) to_current: bool,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
 
     #[arg(long = "json")]
     pub(crate) json: bool,

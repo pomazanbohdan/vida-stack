@@ -866,6 +866,9 @@ pub(crate) enum BlockerCode {
     RunGraphLatestDispatchReceiptSummaryInconsistent,
     RunGraphLatestDispatchReceiptCheckpointLeakage,
     TerminalContinueSnapshotWithoutNextBoundedUnit,
+    GitStatusBlocked,
+    LiveOtherOrchestratorOwner,
+    NextActionTargetMissing,
     ProjectActivationUnknown,
     DependencyGraphIssues,
     DispatchPacketContractInvalid,
@@ -1018,6 +1021,9 @@ impl BlockerCode {
             Self::TerminalContinueSnapshotWithoutNextBoundedUnit => {
                 "terminal_continue_snapshot_without_next_bounded_unit"
             }
+            Self::GitStatusBlocked => "git_status_blocked",
+            Self::LiveOtherOrchestratorOwner => "live_other_orchestrator_owner",
+            Self::NextActionTargetMissing => "next_action_target_missing",
             Self::ProjectActivationUnknown => "project_activation_unknown",
             Self::DependencyGraphIssues => "dependency_graph_issues",
             Self::DispatchPacketContractInvalid => "dispatch_packet_contract_invalid",
@@ -1202,6 +1208,9 @@ impl BlockerCode {
             "terminal_continue_snapshot_without_next_bounded_unit" => {
                 Some(Self::TerminalContinueSnapshotWithoutNextBoundedUnit)
             }
+            "git_status_blocked" => Some(Self::GitStatusBlocked),
+            "live_other_orchestrator_owner" => Some(Self::LiveOtherOrchestratorOwner),
+            "next_action_target_missing" => Some(Self::NextActionTargetMissing),
             "project_activation_unknown" => Some(Self::ProjectActivationUnknown),
             "dependency_graph_issues" => Some(Self::DependencyGraphIssues),
             "dispatch_packet_contract_invalid" => Some(Self::DispatchPacketContractInvalid),

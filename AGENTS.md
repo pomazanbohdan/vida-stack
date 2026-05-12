@@ -76,6 +76,17 @@ Host CLI rule:
 3. Framework owner law remains in the framework runtime and bounded protocol-view surfaces.
 4. Do not treat this generated carrier as the owner of framework policy.
 
+## Runtime Self-Diagnostic Rule
+
+1. After the orchestrator closes and commits a bounded architectural/process slice, run the VIDA runtime self-diagnostic before treating the slice as fully closed.
+2. When closing an epic, run the same self-diagnostic even if the final task slice already ran one; epic closure must inspect the final TaskFlow, DocFlow, lane, release-closure, and upstream follow-up state across committed slices.
+3. The self-diagnostic is root/orchestrator-lane work. Worker, implementer, coach, verifier, prover, and delegated lanes may gather evidence, blockers, candidate issue matches, and reproduction details, but they must return that evidence to the orchestrator for classification and closure.
+4. The diagnostic must inspect TaskFlow status and continuation binding, DocFlow proof/readiness/check state, run-graph status and recovery status, root write guard and exception-takeover state, delegated lane state and handoff evidence, host dispatch/model/carrier compatibility, and logical conflicts between runtime surfaces.
+5. The diagnostic must include session/environment ownership evidence when available: active orchestrator identity or lease, host tool/thread identity, worktree/environment id, stale ownership, and competing orchestrator sessions in the same project root. Missing ownership evidence during contradictory projections is a VIDA runtime issue candidate, not a project-local clean pass.
+6. The diagnostic must distinguish the downstream/product execution context from the upstream VIDA framework issue owner. Product repository remotes are evidence context only; VIDA runtime/framework defects are searched, commented, or created in the canonical VIDA stack upstream tracker (`pomazanbohdan/vida-stack`) unless a project-specific policy says otherwise.
+7. Before creating any upstream issue, search existing open VIDA stack issues. If a match exists and the current run adds a new error shape, command surface, environment, or reproduction path, add a comment; if it exactly repeats the known issue, add a short reproduction comment with date, project context, and command/workflow. Do not create duplicate VIDA runtime issues.
+8. A self-diagnostic output must not recommend an operator command unless the target run, task, receipt, packet, and session/owner evidence has been validated. If a target is missing, classify the next action as a VIDA runtime blocker instead of emitting an impossible command.
+
 ## Final Report Rule
 
 1. A final user-facing closure report is allowed only when the user explicitly asks to end/close/finalize the session.

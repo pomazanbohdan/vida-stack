@@ -1,11 +1,11 @@
 use std::process::ExitCode;
 
 use super::{
-    agent_dispatch_surface, agent_feedback_surface, approval_surface, docflow_proxy,
-    doctor_surface, init_surfaces, lane_surface, memory_surface, print_root_help,
-    project_activator_surface, protocol_surface, release_surface, resolve_runtime_project_root,
-    run_taskflow_proxy, state_store, status_surface, task_surface, AgentArgs, AgentCommand, Cli,
-    Command, ReleaseCommand, TaskArgs, TaskCommand,
+    agent_dispatch_surface, agent_feedback_surface, approval_surface, diagnostics_surface,
+    docflow_proxy, doctor_surface, init_surfaces, lane_surface, memory_surface,
+    orchestrator_session_surface, print_root_help, project_activator_surface, protocol_surface,
+    release_surface, resolve_runtime_project_root, run_taskflow_proxy, state_store, status_surface,
+    task_surface, AgentArgs, AgentCommand, Cli, Command, ReleaseCommand, TaskArgs, TaskCommand,
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
@@ -38,6 +38,10 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         Some(Command::Memory(args)) => memory_surface::run_memory(args).await,
         Some(Command::Status(args)) => status_surface::run_status(args).await,
         Some(Command::Doctor(args)) => doctor_surface::run_doctor(args).await,
+        Some(Command::Diagnostics(args)) => diagnostics_surface::run_diagnostics(args).await,
+        Some(Command::OrchestratorSession(args)) => {
+            orchestrator_session_surface::run_orchestrator_session(args).await
+        }
         Some(Command::Consume(args)) => {
             let mut prefixed = vec!["consume".to_string()];
             prefixed.extend(args.args);
@@ -133,7 +137,9 @@ fn command_needs_project_root_state_dir(command: &Option<Command>) -> bool {
             | Command::AgentFeedback(_)
             | Command::Memory(_)
             | Command::Status(_)
-            | Command::Doctor(_),
+            | Command::Doctor(_)
+            | Command::Diagnostics(_)
+            | Command::OrchestratorSession(_),
         ) => true,
         _ => false,
     }
