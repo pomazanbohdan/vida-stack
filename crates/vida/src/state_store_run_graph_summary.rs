@@ -1061,6 +1061,67 @@ impl RunGraphGateSummary {
 }
 
 impl StateStore {
+    fn run_graph_owner_evidence_record_id(run_id: &str, artifact_kind: &str) -> String {
+        sanitize_record_id(&format!("{run_id}::{artifact_kind}"))
+    }
+
+    fn current_runtime_owner_evidence(&self) -> Result<serde_json::Value, StateStoreError> {
+        crate::orchestrator_session_surface::build_runtime_owner_evidence(self.root(), true)
+            .map_err(|reason| StateStoreError::InvalidTaskRecord {
+                reason: format!("runtime owner evidence unavailable: {reason}"),
+            })
+    }
+
+    fn ensure_runtime_owner_mutation_allowed(
+        evidence: &serde_json::Value,
+    ) -> Result<(), StateStoreError> {
+        if evidence["mutation_gate"] == "blocked_live_other_orchestrator" {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "runtime owner evidence blocks run-graph mutation: live_other_orchestrator_owner"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn record_run_graph_owner_evidence(
+        &self,
+        run_id: &str,
+        artifact_kind: &str,
+    ) -> Result<(), StateStoreError> {
+        let evidence = self.current_runtime_owner_evidence()?;
+        Self::ensure_runtime_owner_mutation_allowed(&evidence)?;
+        let artifact_id = Self::run_graph_owner_evidence_record_id(run_id, artifact_kind);
+        let record = RunGraphOwnerEvidenceRecord {
+            run_id: run_id.to_string(),
+            artifact_kind: artifact_kind.to_string(),
+            artifact_id: artifact_id.clone(),
+            runtime_owner_evidence: evidence,
+            recorded_at: unix_timestamp().to_string(),
+        };
+        let _: Option<RunGraphOwnerEvidenceRecord> = self
+            .db
+            .upsert(("run_graph_owner_evidence", artifact_id.as_str()))
+            .content(record)
+            .await?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn run_graph_owner_evidence_record(
+        &self,
+        run_id: &str,
+        artifact_kind: &str,
+    ) -> Result<Option<RunGraphOwnerEvidenceRecord>, StateStoreError> {
+        self.db
+            .select((
+                "run_graph_owner_evidence",
+                Self::run_graph_owner_evidence_record_id(run_id, artifact_kind).as_str(),
+            ))
+            .await
+            .map_err(StateStoreError::from)
+    }
+
     pub async fn run_graph_summary(&self) -> Result<RunGraphSummary, StateStoreError> {
         Ok(RunGraphSummary {
             execution_plan_count: self.count_table_rows("execution_plan_state").await?,
@@ -1155,6 +1216,8 @@ impl StateStore {
         &self,
         receipt: &RunGraphDispatchReceipt,
     ) -> Result<(), StateStoreError> {
+        self.record_run_graph_owner_evidence(&receipt.run_id, "dispatch_receipt")
+            .await?;
         let receipt: RunGraphDispatchReceiptStored = receipt.clone().into();
         Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
         let _: Option<RunGraphDispatchReceiptStored> = self
@@ -1181,6 +1244,8 @@ impl StateStore {
         binding: &RunGraphContinuationBinding,
     ) -> Result<(), StateStoreError> {
         binding.validate()?;
+        self.record_run_graph_owner_evidence(&binding.run_id, "continuation_binding")
+            .await?;
         let _: Option<RunGraphContinuationBinding> = self
             .db
             .upsert(("run_graph_continuation_binding", binding.run_id.as_str()))
@@ -1496,6 +1561,8 @@ impl StateStore {
         context: &RunGraphDispatchContext,
     ) -> Result<(), StateStoreError> {
         context.validate()?;
+        self.record_run_graph_owner_evidence(&context.run_id, "dispatch_context")
+            .await?;
         let _: Option<RunGraphDispatchContext> = self
             .db
             .upsert(("run_graph_dispatch_context", context.run_id.as_str()))
@@ -1523,6 +1590,8 @@ impl StateStore {
 
     #[allow(dead_code)]
     pub async fn run_graph_status(&self, run_id: &str) -> Result<RunGraphStatus, StateStoreError> {
+        self.record_run_graph_owner_evidence(run_id, "run_graph_status")
+            .await?;
         let execution: Option<ExecutionPlanStateRow> =
             self.db.select(("execution_plan_state", run_id)).await?;
         let execution = execution.ok_or_else(|| StateStoreError::MissingTask {
@@ -2285,6 +2354,39 @@ mod tests {
             .record_run_graph_dispatch_context(&context)
             .await
             .expect("record context");
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-1".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_completed".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "implementation".to_string(),
+                dispatch_surface: Some("test".to_string()),
+                dispatch_command: Some("test command".to_string()),
+                dispatch_packet_path: Some("/tmp/run-1.json".to_string()),
+                dispatch_result_path: Some("/tmp/run-1-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: Some("coach".to_string()),
+                downstream_dispatch_command: Some("vida taskflow consume continue".to_string()),
+                downstream_dispatch_note: Some("test note".to_string()),
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: Some("/tmp/run-1-coach.json".to_string()),
+                downstream_dispatch_status: Some("ready".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("coach".to_string()),
+                downstream_dispatch_last_target: Some("implementer".to_string()),
+                activation_agent_type: Some("internal_subagents".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-04-10T10:00:01Z".to_string(),
+            })
+            .await
+            .expect("record receipt");
 
         let stored_binding = store
             .run_graph_continuation_binding("run-1")
@@ -2307,6 +2409,28 @@ mod tests {
                 .selected_role,
             "worker"
         );
+        for artifact_kind in [
+            "continuation_binding",
+            "dispatch_context",
+            "dispatch_receipt",
+        ] {
+            let owner_record = store
+                .run_graph_owner_evidence_record("run-1", artifact_kind)
+                .await
+                .expect("read owner evidence")
+                .unwrap_or_else(|| panic!("missing owner evidence for {artifact_kind}"));
+            assert_eq!(owner_record.run_id, "run-1");
+            assert_eq!(owner_record.artifact_kind, artifact_kind);
+            assert_eq!(
+                owner_record.runtime_owner_evidence["mutation_gate"],
+                "current_session_allowed"
+            );
+            assert!(
+                owner_record.runtime_owner_evidence["current_session"]["session_id"]
+                    .as_str()
+                    .is_some_and(|value| !value.trim().is_empty())
+            );
+        }
 
         let _ = fs::remove_dir_all(&root);
     }
