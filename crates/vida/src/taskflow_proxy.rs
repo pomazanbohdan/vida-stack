@@ -209,6 +209,27 @@ fn latest_run_graph_status_blocks_normal_continuation(
 fn authoritative_dispatch_blocker_codes(
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
 ) -> Vec<String> {
+    let blocker_codes = raw_authoritative_dispatch_blocker_codes(dispatch);
+    let mut canonical_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    if canonical_codes.is_empty() && !blocker_codes.is_empty() {
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::ToolExecutionFailed,
+        ) {
+            canonical_codes.push(code);
+        }
+    }
+    canonical_codes
+}
+
+fn has_unresolved_dispatch_blocker_evidence(
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> bool {
+    !raw_authoritative_dispatch_blocker_codes(dispatch).is_empty()
+}
+
+fn raw_authoritative_dispatch_blocker_codes(
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> Vec<String> {
     let Some(dispatch) = dispatch else {
         return Vec::new();
     };
@@ -220,10 +241,12 @@ fn authoritative_dispatch_blocker_codes(
     {
         blocker_codes.push(blocker_code.to_string());
     }
-    if matches!(dispatch.dispatch_status.as_str(), "blocked" | "failed")
+    let dispatch_status = dispatch.dispatch_status.trim().to_ascii_lowercase();
+    let lane_status = dispatch.lane_status.trim().to_ascii_lowercase();
+    if matches!(dispatch_status.as_str(), "blocked" | "failed")
         || matches!(
-            dispatch.lane_status.as_str(),
-            "lane_blocked" | "lane_failed"
+            lane_status.as_str(),
+            "lane_blocked" | "lane_failed" | "lane_exception_takeover"
         )
     {
         blocker_codes.extend(
@@ -234,7 +257,7 @@ fn authoritative_dispatch_blocker_codes(
                 .cloned(),
         );
     }
-    crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes)
+    blocker_codes
 }
 
 fn extend_graph_summary_next_actions(
@@ -1846,9 +1869,41 @@ fn build_taskflow_next_decision(
             ) {
                 blocker_codes.push(code);
             }
-            blocker_codes.extend(authoritative_dispatch_blocker_codes(dispatch));
+            let dispatch_blocker_codes = authoritative_dispatch_blocker_codes(dispatch);
+            let has_authoritative_dispatch_blocker =
+                has_unresolved_dispatch_blocker_evidence(dispatch);
+            blocker_codes.extend(dispatch_blocker_codes);
 
-            if latest_runtime_consumption_kind == Some("final") {
+            if has_authoritative_dispatch_blocker
+                && latest_runtime_consumption_kind == Some("final")
+            {
+                let run_id = dispatch
+                    .map(|receipt| receipt.run_id.as_str())
+                    .or_else(|| latest_run_graph_status.map(|status| status.run_id.as_str()))
+                    .unwrap_or("<run-id>");
+                let command = format!("vida lane show {} --json", shell_quote_arg(run_id));
+                let next_action = TaskflowNextAction {
+                    command,
+                    surface: "vida lane show".to_string(),
+                    reason: "the delegated cycle is still open and the active dispatch receipt has unresolved blocker evidence; inspect the lane envelope before retrying continuation".to_string(),
+                };
+                next_actions.push(format!(
+                    "Inspect the active delegated lane with `{}` before attempting consume continuation.",
+                    next_action.command
+                ));
+                (
+                    Some(next_action.command.clone()),
+                    Some(next_action.surface.clone()),
+                    None,
+                    Some(TaskflowNextWhyNotNow {
+                        category: "delegated_cycle_runtime_gate".to_string(),
+                        summary: "A delegated execution cycle is still open and the active dispatch receipt has unresolved blocker evidence, so consume continuation is not yet admissible.".to_string(),
+                        blocker_codes: blocker_codes.clone(),
+                        blocking_surface: Some("vida lane show".to_string()),
+                    }),
+                    Some(next_action),
+                )
+            } else if latest_runtime_consumption_kind == Some("final") {
                 let next_action = TaskflowNextAction {
                     command: "vida taskflow consume continue --json".to_string(),
                     surface: "vida taskflow consume continue".to_string(),
@@ -6797,6 +6852,84 @@ mod tests {
                 .map(|value| value.command.as_str()),
             Some("vida taskflow recovery latest --json")
         );
+    }
+
+    #[test]
+    fn taskflow_next_decision_uses_lane_show_when_open_cycle_has_dispatch_blocker_even_after_final() {
+        let dispatch = crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: "run-1".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            blocker_code: Some("internal_dispatch_timeout_without_receipt".to_string()),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            selected_backend: Some("middle".to_string()),
+            exception_path_receipt_id: Some("exception-1".to_string()),
+            supersedes_receipt_id: Some("exception-0".to_string()),
+            recorded_at: "2026-05-13T00:00:00Z".to_string(),
+            activation_runtime_role: Some("coach".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_evidence: serde_json::Value::Null,
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_last_target: None,
+            downstream_dispatch_note: Some("after coach, verify".to_string()),
+            downstream_dispatch_blockers: vec![
+                "internal_dispatch_timeout_without_receipt".to_string(),
+            ],
+        };
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("ready-head")),
+            true,
+            true,
+            Some("final"),
+            None,
+            Some(&dispatch),
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(decision.status, "blocked");
+        assert_eq!(
+            decision
+                .next_action
+                .as_ref()
+                .map(|value| value.command.as_str()),
+            Some("vida lane show run-1 --json")
+        );
+        assert_eq!(
+            decision.recommended_surface.as_deref(),
+            Some("vida lane show")
+        );
+        assert!(
+            !decision
+                .next_actions
+                .iter()
+                .any(|action| action.contains("vida taskflow consume continue --json"))
+        );
+        assert!(decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "open_delegated_cycle"));
+        assert!(decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "tool_execution_failed"));
     }
 
     #[test]
