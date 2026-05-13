@@ -31,11 +31,36 @@ fn sanitized_env(name: &str) -> Option<String> {
     })
 }
 
-fn current_session_id() -> String {
+fn stable_hash_hex(value: &str) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn canonicalized_path_string(path: &Path) -> String {
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+fn stable_local_session_id(state_dir: &Path) -> String {
+    let worktree = canonicalized_current_dir();
+    let state_dir = canonicalized_path_string(state_dir);
+    format!(
+        "local-worktree-{}",
+        stable_hash_hex(&format!("{worktree}\n{state_dir}"))
+    )
+}
+
+fn current_session_id(state_dir: &Path) -> String {
     sanitized_env("VIDA_ORCHESTRATOR_SESSION_ID")
         .or_else(|| sanitized_env("CODEX_SESSION_ID"))
         .or_else(|| sanitized_env("CODEX_THREAD_ID"))
-        .unwrap_or_else(|| format!("local-pid-{}", std::process::id()))
+        .unwrap_or_else(|| stable_local_session_id(state_dir))
 }
 
 fn host_tool_identity() -> String {
@@ -86,7 +111,7 @@ fn write_sessions(path: &Path, sessions: &[serde_json::Value]) -> Result<(), Str
 fn current_session_record(state_dir: &Path) -> serde_json::Value {
     let now = now_epoch_seconds();
     serde_json::json!({
-        "session_id": current_session_id(),
+        "session_id": current_session_id(state_dir),
         "owner_kind": "orchestrator",
         "state": "live",
         "host_tool": host_tool_identity(),
@@ -127,9 +152,73 @@ fn merge_current_session(
     sessions
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessLiveness {
+    Alive,
+    Dead,
+    Unknown,
+}
+
+#[cfg(target_os = "windows")]
+fn local_process_liveness(process_id: u32) -> ProcessLiveness {
+    if process_id == std::process::id() {
+        return ProcessLiveness::Alive;
+    }
+    let Ok(output) = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {process_id}"), "/FO", "CSV", "/NH"])
+        .output()
+    else {
+        return ProcessLiveness::Unknown;
+    };
+    if !output.status.success() {
+        return ProcessLiveness::Unknown;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let needle = format!(",\"{process_id}\",");
+    if stdout.contains(&needle) {
+        ProcessLiveness::Alive
+    } else if !stdout
+        .lines()
+        .any(|line| line.trim_start().starts_with('"'))
+    {
+        ProcessLiveness::Dead
+    } else {
+        ProcessLiveness::Unknown
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn local_process_liveness(process_id: u32) -> ProcessLiveness {
+    if process_id == std::process::id() {
+        return ProcessLiveness::Alive;
+    }
+    if std::path::PathBuf::from(format!("/proc/{process_id}")).exists() {
+        ProcessLiveness::Alive
+    } else {
+        ProcessLiveness::Dead
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn local_process_liveness(process_id: u32) -> ProcessLiveness {
+    if process_id == std::process::id() {
+        ProcessLiveness::Alive
+    } else {
+        ProcessLiveness::Unknown
+    }
+}
+
 fn classify_sessions(
     sessions: &[serde_json::Value],
     current_id: &str,
+) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    classify_sessions_with_liveness(sessions, current_id, local_process_liveness)
+}
+
+fn classify_sessions_with_liveness(
+    sessions: &[serde_json::Value],
+    current_id: &str,
+    process_liveness: impl Fn(u32) -> ProcessLiveness,
 ) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
     let now = now_epoch_seconds();
     let mut live_other = Vec::new();
@@ -145,7 +234,14 @@ fn classify_sessions(
         let state = session["state"]
             .as_str()
             .unwrap_or("legacy_global_owner_unknown");
-        if state == "live" && now.saturating_sub(heartbeat) <= SESSION_TTL_SECONDS {
+        let process_is_dead = session["process_id"]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .is_some_and(|process_id| process_liveness(process_id) == ProcessLiveness::Dead);
+        if state == "live"
+            && now.saturating_sub(heartbeat) <= SESSION_TTL_SECONDS
+            && !process_is_dead
+        {
             live_other.push(session.clone());
         } else {
             let mut cloned = session.clone();
@@ -280,7 +376,8 @@ fn mutate_session(
     for session in &mut sessions {
         if session["session_id"].as_str() == Some(session_id) {
             session["state"] = serde_json::Value::String(mutation.to_string());
-            session["reclaimed_by_session_id"] = serde_json::Value::String(current_session_id());
+            session["reclaimed_by_session_id"] =
+                serde_json::Value::String(current_session_id(&state_dir));
             session["reclaimed_at_epoch_seconds"] =
                 serde_json::Value::Number(now_epoch_seconds().into());
             found = true;
@@ -370,8 +467,52 @@ pub(crate) fn context_summary_map(state_dir: &Path) -> BTreeMap<String, String> 
 
 #[cfg(test)]
 mod tests {
-    use super::{build_runtime_owner_evidence, context_summary_map};
+    use super::{
+        ProcessLiveness, build_runtime_owner_evidence, classify_sessions_with_liveness,
+        context_summary_map, current_session_id, now_epoch_seconds,
+    };
     use crate::temp_state::TempStateHarness;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn saved_session_env() -> Vec<(&'static str, Option<String>)> {
+        [
+            "VIDA_ORCHESTRATOR_SESSION_ID",
+            "CODEX_SESSION_ID",
+            "CODEX_THREAD_ID",
+        ]
+        .into_iter()
+        .map(|name| (name, std::env::var(name).ok()))
+        .collect()
+    }
+
+    fn restore_session_env(saved: Vec<(&'static str, Option<String>)>) {
+        for (name, value) in saved {
+            unsafe {
+                if let Some(value) = value {
+                    std::env::set_var(name, value);
+                } else {
+                    std::env::remove_var(name);
+                }
+            }
+        }
+    }
+
+    fn clear_session_env() {
+        for name in [
+            "VIDA_ORCHESTRATOR_SESSION_ID",
+            "CODEX_SESSION_ID",
+            "CODEX_THREAD_ID",
+        ] {
+            unsafe {
+                std::env::remove_var(name);
+            }
+        }
+    }
 
     #[test]
     fn orchestrator_session_evidence_distinguishes_upstream_issue_owner() {
@@ -392,5 +533,98 @@ mod tests {
                 .map(String::as_str),
             Some("pomazanbohdan/vida-stack")
         );
+    }
+
+    #[test]
+    fn fallback_orchestrator_session_identity_is_stable_for_state_dir() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved = saved_session_env();
+        clear_session_env();
+
+        let harness = TempStateHarness::new().expect("temp state should initialize");
+        let first = build_runtime_owner_evidence(harness.path(), true)
+            .expect("first owner evidence should build");
+        let second = build_runtime_owner_evidence(harness.path(), true)
+            .expect("second owner evidence should build");
+
+        let first_id = first["current_session"]["session_id"]
+            .as_str()
+            .expect("first session id should be present");
+        let second_id = second["current_session"]["session_id"]
+            .as_str()
+            .expect("second session id should be present");
+        assert_eq!(first_id, second_id);
+        assert!(first_id.starts_with("local-worktree-"));
+        assert!(second["live_other_sessions"].as_array().unwrap().is_empty());
+        assert!(
+            !second["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|code| code == "live_other_orchestrator_owner")
+        );
+
+        restore_session_env(saved);
+    }
+
+    #[test]
+    fn explicit_orchestrator_session_env_wins_over_stable_fallback() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved = saved_session_env();
+        clear_session_env();
+        unsafe {
+            std::env::set_var("VIDA_ORCHESTRATOR_SESSION_ID", "explicit-session");
+        }
+
+        let harness = TempStateHarness::new().expect("temp state should initialize");
+        assert_eq!(current_session_id(harness.path()), "explicit-session");
+        let evidence = build_runtime_owner_evidence(harness.path(), false)
+            .expect("owner evidence should build");
+        assert_eq!(
+            evidence["current_session"]["session_id"],
+            "explicit-session"
+        );
+
+        restore_session_env(saved);
+    }
+
+    #[test]
+    fn live_session_with_dead_local_process_is_stale_not_live_other() {
+        let now = now_epoch_seconds();
+        let sessions = vec![serde_json::json!({
+            "session_id": "local-pid-12345",
+            "state": "live",
+            "process_id": 12345,
+            "last_heartbeat_epoch_seconds": now,
+        })];
+
+        let (live_other, stale) =
+            classify_sessions_with_liveness(&sessions, "current-session", |process_id| {
+                assert_eq!(process_id, 12345);
+                ProcessLiveness::Dead
+            });
+
+        assert!(live_other.is_empty());
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0]["state"], "stale");
+    }
+
+    #[test]
+    fn live_session_with_unknown_process_liveness_remains_live_other() {
+        let now = now_epoch_seconds();
+        let sessions = vec![serde_json::json!({
+            "session_id": "local-pid-12345",
+            "state": "live",
+            "process_id": 12345,
+            "last_heartbeat_epoch_seconds": now,
+        })];
+
+        let (live_other, stale) =
+            classify_sessions_with_liveness(&sessions, "current-session", |_| {
+                ProcessLiveness::Unknown
+            });
+
+        assert_eq!(live_other.len(), 1);
+        assert!(stale.is_empty());
     }
 }
