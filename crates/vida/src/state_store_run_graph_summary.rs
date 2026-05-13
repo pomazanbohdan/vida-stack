@@ -33,6 +33,8 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         status.recovery_ready = false;
         return Ok(status);
     }
+    let stale_downstream_blockers_are_superseded_by_ready_handoff =
+        ready_dispatch_handoff_matches_downstream_receipt(&status, &receipt);
     let blocked_receipt = matches!(receipt.dispatch_status.as_str(), "blocked" | "failed")
         || matches!(
             receipt.lane_status.as_deref(),
@@ -45,7 +47,8 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             .blocker_code
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
-        || !receipt.downstream_dispatch_blockers.is_empty();
+        || (!stale_downstream_blockers_are_superseded_by_ready_handoff
+            && !receipt.downstream_dispatch_blockers.is_empty());
     let spec_post_design_gate_blocked = receipt.dispatch_status == "executed"
         && receipt.downstream_dispatch_target.as_deref() == Some("work-pool-pack")
         && receipt.downstream_dispatch_blockers.iter().any(|blocker| {
@@ -164,6 +167,45 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         }
     }
     Ok(status)
+}
+
+fn ready_dispatch_handoff_matches_downstream_receipt(
+    status: &RunGraphStatus,
+    receipt: &RunGraphDispatchReceiptStored,
+) -> bool {
+    if status.status != "ready"
+        || !status.recovery_ready
+        || !is_dispatch_resume_handoff_complete(status)
+        || receipt.dispatch_status != "executed"
+        || receipt
+            .blocker_code
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || matches!(
+            receipt.lane_status.as_deref(),
+            Some("lane_blocked")
+                | Some("lane_failed")
+                | Some("lane_exception_recorded")
+                | Some("lane_exception_takeover")
+        )
+    {
+        return false;
+    }
+    let Some(downstream_target) = receipt
+        .downstream_dispatch_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    if status.active_node != receipt.dispatch_target {
+        return false;
+    }
+    let downstream_node = downstream_target.replace('-', "_");
+    status.next_node.as_deref() == Some(downstream_node.as_str())
+        && status.handoff_state == format!("awaiting_{downstream_node}")
+        && status.resume_target == format!("dispatch.{downstream_node}_lane")
 }
 
 fn has_receipt_evidence_id(value: Option<&str>) -> bool {
@@ -560,7 +602,10 @@ pub struct RunGraphDispatchReceiptSummary {
 #[allow(dead_code)]
 impl RunGraphDispatchReceiptSummary {
     pub(crate) fn from_receipt(receipt: RunGraphDispatchReceipt) -> Self {
-        let lane_status = if receipt.lane_status.trim().is_empty() {
+        let raw_lane_status = receipt.lane_status.trim();
+        let canonical_lane_status =
+            canonical_lane_status_str(raw_lane_status).unwrap_or(raw_lane_status);
+        let lane_status = if raw_lane_status.is_empty() {
             derive_lane_status(
                 &receipt.dispatch_status,
                 receipt.supersedes_receipt_id.as_deref(),
@@ -568,9 +613,14 @@ impl RunGraphDispatchReceiptSummary {
             )
             .as_str()
             .to_string()
+        } else if downstream_dispatch_allows_completed_lane_status(
+            receipt.downstream_dispatch_status.as_deref(),
+            canonical_lane_status,
+        ) {
+            canonical_lane_status.to_string()
         } else {
             normalize_run_graph_lane_status(
-                Some(receipt.lane_status.as_str()),
+                Some(raw_lane_status),
                 &receipt.dispatch_status,
                 receipt.supersedes_receipt_id.as_deref(),
                 receipt.exception_path_receipt_id.as_deref(),
@@ -943,6 +993,16 @@ pub(crate) fn normalize_run_graph_lane_status(
     }
 }
 
+pub(crate) fn downstream_dispatch_allows_completed_lane_status(
+    downstream_dispatch_status: Option<&str>,
+    canonical_lane_status: &str,
+) -> bool {
+    matches!(
+        downstream_dispatch_status,
+        Some("executed" | "packet_ready" | "retired_closed_task_run")
+    ) && canonical_lane_status == "lane_completed"
+}
+
 pub(crate) fn deserialize_run_graph_lane_status<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -1001,6 +1061,67 @@ impl RunGraphGateSummary {
 }
 
 impl StateStore {
+    fn run_graph_owner_evidence_record_id(run_id: &str, artifact_kind: &str) -> String {
+        sanitize_record_id(&format!("{run_id}::{artifact_kind}"))
+    }
+
+    fn current_runtime_owner_evidence(&self) -> Result<serde_json::Value, StateStoreError> {
+        crate::orchestrator_session_surface::build_runtime_owner_evidence(self.root(), true)
+            .map_err(|reason| StateStoreError::InvalidTaskRecord {
+                reason: format!("runtime owner evidence unavailable: {reason}"),
+            })
+    }
+
+    fn ensure_runtime_owner_mutation_allowed(
+        evidence: &serde_json::Value,
+    ) -> Result<(), StateStoreError> {
+        if evidence["mutation_gate"] == "blocked_live_other_orchestrator" {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "runtime owner evidence blocks run-graph mutation: live_other_orchestrator_owner"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn record_run_graph_owner_evidence(
+        &self,
+        run_id: &str,
+        artifact_kind: &str,
+    ) -> Result<(), StateStoreError> {
+        let evidence = self.current_runtime_owner_evidence()?;
+        Self::ensure_runtime_owner_mutation_allowed(&evidence)?;
+        let artifact_id = Self::run_graph_owner_evidence_record_id(run_id, artifact_kind);
+        let record = RunGraphOwnerEvidenceRecord {
+            run_id: run_id.to_string(),
+            artifact_kind: artifact_kind.to_string(),
+            artifact_id: artifact_id.clone(),
+            runtime_owner_evidence: evidence,
+            recorded_at: unix_timestamp().to_string(),
+        };
+        let _: Option<RunGraphOwnerEvidenceRecord> = self
+            .db
+            .upsert(("run_graph_owner_evidence", artifact_id.as_str()))
+            .content(record)
+            .await?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn run_graph_owner_evidence_record(
+        &self,
+        run_id: &str,
+        artifact_kind: &str,
+    ) -> Result<Option<RunGraphOwnerEvidenceRecord>, StateStoreError> {
+        self.db
+            .select((
+                "run_graph_owner_evidence",
+                Self::run_graph_owner_evidence_record_id(run_id, artifact_kind).as_str(),
+            ))
+            .await
+            .map_err(StateStoreError::from)
+    }
+
     pub async fn run_graph_summary(&self) -> Result<RunGraphSummary, StateStoreError> {
         Ok(RunGraphSummary {
             execution_plan_count: self.count_table_rows("execution_plan_state").await?,
@@ -1095,6 +1216,8 @@ impl StateStore {
         &self,
         receipt: &RunGraphDispatchReceipt,
     ) -> Result<(), StateStoreError> {
+        self.record_run_graph_owner_evidence(&receipt.run_id, "dispatch_receipt")
+            .await?;
         let receipt: RunGraphDispatchReceiptStored = receipt.clone().into();
         Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
         let _: Option<RunGraphDispatchReceiptStored> = self
@@ -1121,6 +1244,8 @@ impl StateStore {
         binding: &RunGraphContinuationBinding,
     ) -> Result<(), StateStoreError> {
         binding.validate()?;
+        self.record_run_graph_owner_evidence(&binding.run_id, "continuation_binding")
+            .await?;
         let _: Option<RunGraphContinuationBinding> = self
             .db
             .upsert(("run_graph_continuation_binding", binding.run_id.as_str()))
@@ -1436,6 +1561,8 @@ impl StateStore {
         context: &RunGraphDispatchContext,
     ) -> Result<(), StateStoreError> {
         context.validate()?;
+        self.record_run_graph_owner_evidence(&context.run_id, "dispatch_context")
+            .await?;
         let _: Option<RunGraphDispatchContext> = self
             .db
             .upsert(("run_graph_dispatch_context", context.run_id.as_str()))
@@ -1463,6 +1590,8 @@ impl StateStore {
 
     #[allow(dead_code)]
     pub async fn run_graph_status(&self, run_id: &str) -> Result<RunGraphStatus, StateStoreError> {
+        self.record_run_graph_owner_evidence(run_id, "run_graph_status")
+            .await?;
         let execution: Option<ExecutionPlanStateRow> =
             self.db.select(("execution_plan_state", run_id)).await?;
         let execution = execution.ok_or_else(|| StateStoreError::MissingTask {
@@ -1981,10 +2110,10 @@ impl StateStore {
         let raw_lane_status = raw_lane_status.trim();
         let canonical_lane_status =
             canonical_lane_status_str(raw_lane_status).unwrap_or(raw_lane_status);
-        let downstream_closure_completed = receipt.downstream_dispatch_status.as_deref()
-            == Some("executed")
-            && canonical_lane_status == "lane_completed";
-        let effective_derived_lane_status = if downstream_closure_completed {
+        let effective_derived_lane_status = if downstream_dispatch_allows_completed_lane_status(
+            receipt.downstream_dispatch_status.as_deref(),
+            canonical_lane_status,
+        ) {
             "lane_completed".to_string()
         } else {
             normalize_run_graph_lane_status(
@@ -2225,6 +2354,39 @@ mod tests {
             .record_run_graph_dispatch_context(&context)
             .await
             .expect("record context");
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-1".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_completed".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "implementation".to_string(),
+                dispatch_surface: Some("test".to_string()),
+                dispatch_command: Some("test command".to_string()),
+                dispatch_packet_path: Some("/tmp/run-1.json".to_string()),
+                dispatch_result_path: Some("/tmp/run-1-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: Some("coach".to_string()),
+                downstream_dispatch_command: Some("vida taskflow consume continue".to_string()),
+                downstream_dispatch_note: Some("test note".to_string()),
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: Some("/tmp/run-1-coach.json".to_string()),
+                downstream_dispatch_status: Some("ready".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("coach".to_string()),
+                downstream_dispatch_last_target: Some("implementer".to_string()),
+                activation_agent_type: Some("internal_subagents".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-04-10T10:00:01Z".to_string(),
+            })
+            .await
+            .expect("record receipt");
 
         let stored_binding = store
             .run_graph_continuation_binding("run-1")
@@ -2247,6 +2409,28 @@ mod tests {
                 .selected_role,
             "worker"
         );
+        for artifact_kind in [
+            "continuation_binding",
+            "dispatch_context",
+            "dispatch_receipt",
+        ] {
+            let owner_record = store
+                .run_graph_owner_evidence_record("run-1", artifact_kind)
+                .await
+                .expect("read owner evidence")
+                .unwrap_or_else(|| panic!("missing owner evidence for {artifact_kind}"));
+            assert_eq!(owner_record.run_id, "run-1");
+            assert_eq!(owner_record.artifact_kind, artifact_kind);
+            assert_eq!(
+                owner_record.runtime_owner_evidence["mutation_gate"],
+                "current_session_allowed"
+            );
+            assert!(
+                owner_record.runtime_owner_evidence["current_session"]["session_id"]
+                    .as_str()
+                    .is_some_and(|value| !value.trim().is_empty())
+            );
+        }
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -3034,6 +3218,91 @@ mod tests {
             Some("internal_activation_view_only")
         );
         assert_eq!(persisted.lane_status, "lane_exception_recorded");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_status_preserves_ready_handoff_against_stale_downstream_blockers() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-ready-handoff-stale-downstream-blocker-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-ready-handoff",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "task-ready-handoff".to_string();
+        status.active_node = "analysis".to_string();
+        status.next_node = Some("writer".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "analysis_active".to_string();
+        status.policy_gate = "targeted_verification".to_string();
+        status.handoff_state = "awaiting_writer".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.writer_lane".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist ready writer handoff");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-ready-handoff".to_string(),
+                dispatch_target: "analysis".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/analysis-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/analysis-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: Some("writer".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some(
+                    "stale preview before planner metadata repair".to_string(),
+                ),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["missing_owned_write_scope".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: Some("/tmp/analysis-result.json".to_string()),
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("internal_subagents".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-05-12T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist stale downstream receipt");
+
+        let reconciled = store
+            .run_graph_status("run-ready-handoff")
+            .await
+            .expect("load reconciled status");
+        assert_eq!(reconciled.status, "ready");
+        assert_eq!(reconciled.active_node, "analysis");
+        assert_eq!(reconciled.next_node.as_deref(), Some("writer"));
+        assert_eq!(reconciled.lifecycle_stage, "analysis_active");
+        assert_eq!(reconciled.handoff_state, "awaiting_writer");
+        assert_eq!(reconciled.resume_target, "dispatch.writer_lane");
+        assert!(reconciled.recovery_ready);
 
         let _ = fs::remove_dir_all(&root);
     }

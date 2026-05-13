@@ -429,39 +429,96 @@ fn validate_receipt_packet_pair(
 }
 
 fn dispatch_packet_paths_equivalent(left: &str, right: &str) -> bool {
-    left == right
-        || dispatch_packet_path_compare_key(left) == dispatch_packet_path_compare_key(right)
+    match (
+        canonical_runtime_packet_identity(left),
+        canonical_runtime_packet_identity(right),
+    ) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
-fn dispatch_packet_path_compare_key(path: &str) -> String {
-    let path = path.trim().replace('\\', "/");
-    let path = path.strip_prefix("//?/").unwrap_or(path.as_str());
-    let absolute = path.starts_with('/');
-    let mut parts = Vec::new();
-    for part in path.split('/') {
-        if part.is_empty() || part == "." {
-            continue;
-        }
-        if part == ".." {
-            if parts
-                .last()
-                .map(|last: &&str| *last != ".." && !last.ends_with(':'))
-                .unwrap_or(false)
-            {
-                parts.pop();
-            } else {
-                parts.push(part);
-            }
-            continue;
-        }
-        parts.push(part);
-    }
-    let normalized = parts.join("/");
-    if absolute {
-        format!("/{normalized}")
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PacketPathPlatform {
+    Windows,
+    Posix,
+}
+
+fn current_packet_path_platform() -> PacketPathPlatform {
+    if cfg!(windows) {
+        PacketPathPlatform::Windows
     } else {
-        normalized
+        PacketPathPlatform::Posix
     }
+}
+
+fn packet_path_components_for_platform(path: &str, platform: PacketPathPlatform) -> Vec<&str> {
+    let trimmed = path.trim();
+    let stripped = match platform {
+        PacketPathPlatform::Windows => trimmed
+            .strip_prefix(r"\\?\")
+            .or_else(|| trimmed.strip_prefix("//?/"))
+            .unwrap_or(trimmed),
+        PacketPathPlatform::Posix => trimmed,
+    };
+    match platform {
+        PacketPathPlatform::Windows => stripped
+            .split(['/', '\\'])
+            .filter(|part| !part.is_empty())
+            .collect(),
+        PacketPathPlatform::Posix => stripped
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect(),
+    }
+}
+
+fn packet_path_has_dot_segment(path: &str, platform: PacketPathPlatform) -> bool {
+    packet_path_components_for_platform(path, platform)
+        .iter()
+        .any(|part| *part == "." || *part == "..")
+}
+
+fn canonical_runtime_packet_identity(path: &str) -> Result<std::path::PathBuf, String> {
+    if packet_path_has_dot_segment(path, current_packet_path_platform()) {
+        return Err(format!(
+            "Runtime packet path `{}` contains dot-segment traversal and is not admissible.",
+            path.trim()
+        ));
+    }
+    let normalized = crate::runtime_dispatch_state::normalize_persisted_runtime_path(path);
+    let canonical = std::fs::canonicalize(&normalized).map_err(|error| {
+        format!(
+            "Failed to canonicalize runtime packet path `{}`: {error}",
+            normalized.display()
+        )
+    })?;
+    let parent = canonical.parent().ok_or_else(|| {
+        format!(
+            "Runtime packet path `{}` has no canonical parent.",
+            canonical.display()
+        )
+    })?;
+    let parent_name = parent
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let grandparent_name = parent
+        .parent()
+        .and_then(|value| value.file_name())
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let packet_dir_allowed = matches!(
+        parent_name,
+        "dispatch-packets" | "downstream-dispatch-packets"
+    ) && grandparent_name == "runtime-consumption";
+    if !packet_dir_allowed {
+        return Err(format!(
+            "Runtime packet path `{}` is outside VIDA runtime packet directories.",
+            canonical.display()
+        ));
+    }
+    Ok(canonical)
 }
 
 async fn validate_run_graph_resume_state(
@@ -546,16 +603,7 @@ fn active_exception_takeover_resume_blocker_error(
     receipt: Option<&crate::state_store::RunGraphDispatchReceipt>,
 ) -> Option<String> {
     let receipt = receipt?;
-    let exception_takeover_active = receipt.run_id == status.run_id
-        && receipt.lane_status == "lane_exception_takeover"
-        && receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        && receipt
-            .supersedes_receipt_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty());
+    let exception_takeover_active = receipt_has_active_exception_takeover(receipt, &status.run_id);
     if !exception_takeover_active || status.recovery_ready || status.resume_target != "none" {
         return None;
     }
@@ -568,6 +616,22 @@ fn active_exception_takeover_resume_blocker_error(
             .unwrap_or("unknown"),
         status.run_id
     ))
+}
+
+fn receipt_has_active_exception_takeover(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    run_id: &str,
+) -> bool {
+    receipt.run_id == run_id
+        && receipt.lane_status == "lane_exception_takeover"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn persisted_dispatch_packet_lineage_task_id(packet: &serde_json::Value) -> Option<&str> {
@@ -587,6 +651,96 @@ fn persisted_dispatch_packet_lineage_task_id(packet: &serde_json::Value) -> Opti
                 .and_then(serde_json::Value::as_str)
                 .filter(|value| !value.trim().is_empty())
         })
+}
+
+async fn explicit_bound_task_graph_resume_run_id(
+    store: &super::StateStore,
+    run_id: &str,
+) -> Result<Option<String>, String> {
+    let binding = store
+        .run_graph_continuation_binding(run_id)
+        .await
+        .map_err(|error| {
+            format!("Failed to read explicit continuation binding for `{run_id}`: {error}")
+        })?;
+    let Some(binding) = binding else {
+        return Ok(None);
+    };
+    if binding.status != "bound"
+        || binding.active_bounded_unit["kind"].as_str() != Some("task_graph_task")
+    {
+        return Ok(None);
+    }
+    let bound_task_id = binding.active_bounded_unit["task_id"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(binding.task_id.as_str());
+    let unit_run_id = binding.active_bounded_unit["run_id"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(run_id);
+    let requested_status = store.run_graph_status(run_id).await.map_err(|error| {
+        format!(
+            "Failed to read persisted run-graph state for `{run_id}` while reconciling explicit continuation binding: {error}"
+        )
+    })?;
+    let requested_run_is_terminal_self_task = requested_status.run_id == run_id
+        && requested_status.task_id == run_id
+        && requested_status.status == "completed"
+        && requested_status.lifecycle_stage == "closure_complete";
+    let bound_run_id = if unit_run_id == run_id
+        && bound_task_id != run_id
+        && requested_run_is_terminal_self_task
+    {
+        bound_task_id
+    } else {
+        unit_run_id
+    };
+    if bound_run_id == run_id {
+        return Ok(None);
+    }
+
+    let bound_status = store.run_graph_status(bound_run_id).await.map_err(|error| {
+        format!(
+            "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but fresh bound-task run-graph status is missing: {error}. Resume must fail closed until fresh run-graph truth is recorded for the bound task."
+        )
+    })?;
+    if bound_status.run_id != bound_run_id || bound_status.task_id != bound_task_id {
+        return Err(format!(
+            "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but fresh bound-task run-graph status resolved to run `{}` and task `{}`. Resume must fail closed until fresh run-graph truth is recorded for the bound task.",
+            bound_status.run_id, bound_status.task_id
+        ));
+    }
+    let bound_receipt = store
+        .run_graph_dispatch_receipt(bound_run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but fresh bound-task dispatch receipt could not be read: {error}. Resume must fail closed until fresh dispatch receipt evidence is recorded for the bound task."
+            )
+        })?
+        .ok_or_else(|| {
+            format!(
+                "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but fresh bound-task dispatch receipt is missing. Resume must fail closed until fresh dispatch receipt evidence is recorded for the bound task."
+            )
+        })?;
+    if bound_receipt.run_id != bound_run_id {
+        return Err(format!(
+            "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but fresh bound-task dispatch receipt resolved to run `{}`. Resume must fail closed until matching dispatch receipt evidence is recorded for the bound task.",
+            bound_receipt.run_id
+        ));
+    }
+    if let Some(packet_path) = bound_receipt.dispatch_packet_path.as_deref() {
+        let packet = read_dispatch_packet(packet_path)?;
+        if let Some(lineage_task_id) = persisted_dispatch_packet_lineage_task_id(&packet) {
+            if lineage_task_id != bound_task_id {
+                return Err(format!(
+                    "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but fresh bound-task dispatch packet lineage at `{packet_path}` points to task `{lineage_task_id}`. Resume must fail closed until matching dispatch packet evidence is recorded for the bound task."
+                ));
+            }
+        }
+    }
+    Ok(Some(bound_run_id.to_string()))
 }
 
 async fn validate_explicit_task_graph_binding_lineage_for_resume(
@@ -2005,7 +2159,11 @@ fn dispatch_receipt_retry_eligible(
         && dispatch_receipt.dispatch_status == "blocked"
         && matches!(
             dispatch_receipt.blocker_code.as_deref(),
-            Some("configured_backend_dispatch_failed" | "timeout_without_takeover_authority")
+            Some(
+                "configured_backend_dispatch_failed"
+                    | "timeout_without_takeover_authority"
+                    | "tool_execution_failed"
+            )
         )
         && dispatch_receipt
             .dispatch_packet_path
@@ -2252,8 +2410,45 @@ fn dispatch_receipt_internal_retry_eligible(
         carriers
             .iter()
             .any(|row| row["role_id"].as_str() == Some(*backend_id))
-            || (*backend_id == "internal_subagents" && has_internal_carriers)
+            || (has_internal_carriers
+                && backend_id_is_configured_internal_bridge(&overlay, role_selection, backend_id))
     })
+}
+
+fn backend_id_is_configured_internal_bridge(
+    overlay: &serde_yaml::Value,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    backend_id: &str,
+) -> bool {
+    fn internal_class(value: &str) -> bool {
+        matches!(value.trim(), "internal" | "internal_cli")
+    }
+
+    let execution_plan_class = role_selection.execution_plan["backend_admissibility_matrix"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["backend_id"].as_str() == Some(backend_id))
+        .and_then(|entry| entry["backend_class"].as_str());
+    if execution_plan_class.is_some_and(internal_class) {
+        return true;
+    }
+
+    super::yaml_lookup(overlay, &["agent_system", "subagents"])
+        .and_then(serde_yaml::Value::as_mapping)
+        .and_then(|entries| {
+            entries.iter().find_map(|(key, value)| {
+                let id = key.as_str()?.trim();
+                (id == backend_id
+                    && super::yaml_bool(super::yaml_lookup(value, &["enabled"]), false))
+                .then_some(value)
+            })
+        })
+        .and_then(|entry| {
+            super::yaml_string(super::yaml_lookup(entry, &["subagent_backend_class"]))
+        })
+        .as_deref()
+        .is_some_and(internal_class)
 }
 
 fn primary_backend_for_dispatch_receipt(
@@ -2378,8 +2573,16 @@ async fn resume_inputs_from_downstream_packet(
         "downstream dispatch packet",
     )
     .await?;
-    let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
+    let (dispatch_kind, dispatch_surface, mut activation_agent_type, mut activation_runtime_role) =
         super::downstream_activation_fields(&role_selection, dispatch_target);
+    if activation_agent_type.is_none() {
+        activation_agent_type =
+            downstream_packet_activation_field(&packet, &role_selection, "activation_agent_type");
+    }
+    if activation_runtime_role.is_none() {
+        activation_runtime_role =
+            downstream_packet_activation_field(&packet, &role_selection, "activation_runtime_role");
+    }
     let selected_backend = super::downstream_selected_backend(
         &role_selection,
         dispatch_target,
@@ -2552,6 +2755,22 @@ async fn resume_inputs_from_downstream_packet(
         packet,
         role_selection,
     ))
+}
+
+fn downstream_packet_activation_field(
+    packet: &serde_json::Value,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    field: &str,
+) -> Option<String> {
+    crate::json_string(packet.get(field))
+        .or_else(|| {
+            crate::json_string(role_selection.execution_plan["runtime_assignment"].get(field))
+        })
+        .or_else(|| {
+            crate::json_string(
+                role_selection.execution_plan["runtime_assignment"]["role_selection"].get(field),
+            )
+        })
 }
 
 async fn maybe_resume_inputs_from_ready_downstream_packet(
@@ -3227,24 +3446,6 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
         .latest_explicit_run_graph_continuation_binding()
         .await
         .map_err(|error| format!("Failed to read explicit continuation binding: {error}"))?;
-    if let Some(binding) = explicit_continuation_binding.as_ref() {
-        let bound_run_id = binding
-            .active_bounded_unit
-            .get("run_id")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if binding.status == "bound"
-            && binding.binding_source == "explicit_continuation_bind_task"
-            && bound_run_id.is_some_and(|binding_run_id| binding_run_id != status.run_id)
-        {
-            let binding_run_id = bound_run_id.unwrap_or("unknown");
-            return Err(format!(
-                "Latest explicit continuation binding points to run `{binding_run_id}` while the latest run-graph status is `{}`. Default `vida taskflow consume continue --json` must not silently reselect the stale latest run; pass `--run-id {binding_run_id}` or refresh/bind the intended bounded unit explicitly.",
-                status.run_id
-            ));
-        }
-    }
     let latest_run_graph_recovery = store
         .latest_run_graph_recovery_summary()
         .await
@@ -3333,6 +3534,16 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
     run_id: &str,
     strict_blocked_receipts: bool,
 ) -> Result<ResumeInputs, String> {
+    if let Some(bound_run_id) = explicit_bound_task_graph_resume_run_id(store, run_id).await? {
+        return Box::pin(
+            resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
+                store,
+                &bound_run_id,
+                strict_blocked_receipts,
+            ),
+        )
+        .await;
+    }
     let mut receipt = match store.run_graph_dispatch_receipt(run_id).await {
         Ok(Some(receipt)) => receipt,
         Ok(None) => match recover_missing_first_dispatch_receipt(store, run_id).await? {
@@ -3365,6 +3576,29 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         .as_deref()
         .and_then(|path| read_dispatch_packet(path).ok())
         .and_then(|packet| decode_role_selection_from_packet(&packet, "dispatch packet").ok());
+    if strict_blocked_receipts && receipt_has_active_exception_takeover(&receipt, run_id) {
+        if let Some(packet_path) = receipt.dispatch_packet_path.as_deref() {
+            if read_dispatch_packet(packet_path)
+                .ok()
+                .and_then(|packet| {
+                    (packet["packet_kind"].as_str() == Some("runtime_downstream_dispatch_packet"))
+                        .then_some(())
+                })
+                .is_some()
+            {
+                let resume =
+                    resume_inputs_from_downstream_packet(store, Some(run_id), packet_path).await?;
+                record_run_graph_replay_lineage_receipt_for_resume(
+                    store,
+                    &receipt,
+                    &resume,
+                    "exception_takeover_downstream_packet",
+                )
+                .await?;
+                return Ok(resume);
+            }
+        }
+    }
     if !strict_blocked_receipts {
         if let Some(resume) =
             maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt).await?
@@ -4623,12 +4857,14 @@ mod tests {
         dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
         enforce_consume_continue_execution_preparation_gate,
         fail_fast_state_store_open_read_only_with_timeout, normalize_runtime_dispatch_packet,
-        normalize_stale_in_flight_dispatch_receipt, persisted_dispatch_packet_lineage_task_id,
+        normalize_stale_in_flight_dispatch_receipt, packet_path_components_for_platform,
+        persisted_dispatch_packet_lineage_task_id,
         prefer_ready_downstream_packet_over_active_result, prepare_explicit_resume_retry_artifact,
         primary_backend_for_dispatch_receipt, read_dispatch_packet,
         reconcile_blocked_implementer_timeout_with_tracked_close_evidence,
         reconcile_blocked_verification_timeout_with_receipt_evidence,
-        recover_missing_first_dispatch_receipt, resolve_runtime_consumption_resume_inputs,
+        recover_missing_first_dispatch_receipt, resolve_default_resume_run_id,
+        resolve_runtime_consumption_resume_inputs,
         resolve_runtime_consumption_resume_inputs_for_run_id, resume_from_persisted_final_snapshot,
         resume_packet_ready_blocker_parity_error, retry_backend_for_dispatch_receipt,
         runtime_consumption_resume_blocker_code, runtime_consumption_resume_receipt_blocker_codes,
@@ -4636,7 +4872,7 @@ mod tests {
         runtime_consumption_snapshot_has_failure_control_evidence,
         should_refresh_resumed_downstream_preview, sync_run_graph_after_retry_artifact,
         validate_receipt_packet_pair, validate_run_graph_resume_state,
-        validate_run_graph_resume_state_for_downstream_packet,
+        validate_run_graph_resume_state_for_downstream_packet, PacketPathPlatform,
         DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
@@ -4648,6 +4884,21 @@ mod tests {
 
     #[test]
     fn validate_receipt_packet_pair_accepts_mixed_windows_separator_dispatch_path() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-mixed-separator-packet-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path = packet_dir.join("packet.json");
+        fs::write(&packet_path, "{}").expect("write packet file");
+        let expected_path = packet_path.display().to_string().replace('/', r"\");
+        let resolved_path = packet_path.display().to_string().replace('\\', "/");
         let receipt = crate::state_store::RunGraphDispatchReceipt {
             run_id: "mixed-separator-run".to_string(),
             dispatch_target: "specification".to_string(),
@@ -4658,10 +4909,7 @@ mod tests {
             dispatch_kind: "agent_lane".to_string(),
             dispatch_surface: Some("vida agent-init".to_string()),
             dispatch_command: None,
-            dispatch_packet_path: Some(
-                r"C:\project\vida-stack\.vida/data/state\runtime-consumption\dispatch-packets\packet.json"
-                    .to_string(),
-            ),
+            dispatch_packet_path: Some(expected_path),
             dispatch_result_path: None,
             blocker_code: None,
             downstream_dispatch_target: None,
@@ -4688,10 +4936,80 @@ mod tests {
             "supersedes_receipt_id": "takeover-receipt",
             "exception_path_receipt_id": "takeover-receipt"
         });
-        let resolved_path = r"C:\project\vida-stack\.vida\data\state\runtime-consumption\dispatch-packets\packet.json";
 
-        validate_receipt_packet_pair(&receipt, &packet, resolved_path, "dispatch packet")
+        validate_receipt_packet_pair(&receipt, &packet, &resolved_path, "dispatch packet")
             .expect("mixed separators should not invalidate the same dispatch packet path");
+    }
+
+    #[test]
+    fn posix_backslash_path_collision_is_not_separator_equivalent() {
+        let left =
+            packet_path_components_for_platform("packets/a\\b.json", PacketPathPlatform::Posix);
+        let right =
+            packet_path_components_for_platform("packets/a/b.json", PacketPathPlatform::Posix);
+        assert_ne!(left, right);
+    }
+
+    #[test]
+    fn validate_receipt_packet_pair_rejects_dot_segment_packet_path_escape() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dot-segment-packet-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path = packet_dir.join("packet.json");
+        fs::write(&packet_path, "{}").expect("write packet file");
+        let dot_segment_path = packet_dir.join("../dispatch-packets/packet.json");
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "dot-segment-run".to_string(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-06T00:00:00Z".to_string(),
+        };
+        let packet = serde_json::json!({
+            "run_id": "dot-segment-run",
+            "lane_status": "lane_blocked",
+            "dispatch_status": "routed"
+        });
+
+        let error = validate_receipt_packet_pair(
+            &receipt,
+            &packet,
+            &dot_segment_path.display().to_string(),
+            "dispatch packet",
+        )
+        .expect_err("dot-segment packet path should fail closed");
+        assert!(error.contains("expects dispatch_packet_path"));
     }
 
     #[test]
@@ -4842,6 +5160,42 @@ mod tests {
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
+        };
+
+        assert!(dispatch_receipt_retry_eligible(&receipt));
+    }
+
+    #[test]
+    fn tool_execution_failed_with_packet_is_retry_eligible() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-tool-execution-retry".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:hermes_cli".to_string()),
+            dispatch_command: Some("hermes ...".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
+            blocker_code: Some("tool_execution_failed".to_string()),
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("after review".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["tool_execution_failed".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-05-12T00:00:00Z".to_string(),
         };
 
         assert!(dispatch_receipt_retry_eligible(&receipt));
@@ -8214,6 +8568,56 @@ agent_system:
             consume_continue_resume_error_payload(&error, "vida taskflow consume continue");
         assert_eq!(payload["run_id"], "run-exception-takeover");
         assert_eq!(payload["artifact_refs"]["run_id"], "run-exception-takeover");
+    }
+
+    #[test]
+    fn consume_continue_downstream_packet_activation_field_uses_runtime_assignment_fallback() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue writer".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "runtime_assignment": {
+                    "activation_agent_type": "configured_writer_backend",
+                    "activation_runtime_role": "worker"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let packet = serde_json::json!({
+            "packet_kind": "runtime_downstream_dispatch_packet",
+            "activation_agent_type": null,
+            "activation_runtime_role": null
+        });
+
+        assert_eq!(
+            crate::taskflow_consume_resume::downstream_packet_activation_field(
+                &packet,
+                &role_selection,
+                "activation_agent_type"
+            )
+            .as_deref(),
+            Some("configured_writer_backend")
+        );
+        assert_eq!(
+            crate::taskflow_consume_resume::downstream_packet_activation_field(
+                &packet,
+                &role_selection,
+                "activation_runtime_role"
+            )
+            .as_deref(),
+            Some("worker")
+        );
     }
 
     #[tokio::test]
@@ -12445,6 +12849,120 @@ agent_system:
     }
 
     #[tokio::test]
+    async fn resolve_default_resume_run_id_prefers_active_exception_takeover_over_stale_explicit_task_binding(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-active-exception-over-stale-binding-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut stale_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-stale-explicit",
+            "implementation",
+            "implementation",
+        );
+        stale_status.task_id = "task-stale-explicit".to_string();
+        stale_status.active_node = "implementation".to_string();
+        stale_status.status = "in_progress".to_string();
+        stale_status.lifecycle_stage = "implementation_active".to_string();
+        store
+            .record_run_graph_status(&stale_status)
+            .await
+            .expect("persist stale status");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: "run-stale-explicit".to_string(),
+                    task_id: "task-stale-explicit".to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": "task-stale-explicit",
+                        "run_id": "run-stale-explicit",
+                        "task_status": "in_progress",
+                        "issue_type": "task"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "operator previously rebound a different task".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
+                    request_text: Some("continue stale task".to_string()),
+                    recorded_at: "2026-05-13T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist stale explicit binding");
+
+        let active_run_id = "run-active-exception";
+        let mut active_status =
+            crate::taskflow_run_graph::default_run_graph_status(active_run_id, "coach", "delivery");
+        active_status.task_id = "task-active-exception".to_string();
+        active_status.active_node = "coach".to_string();
+        active_status.next_node = None;
+        active_status.status = "blocked".to_string();
+        active_status.lifecycle_stage = "coach_blocked".to_string();
+        active_status.policy_gate = "single_task_scope_required".to_string();
+        active_status.handoff_state = "blocked_on_coach".to_string();
+        active_status.context_state = "sealed".to_string();
+        active_status.checkpoint_kind = "conversation_cursor".to_string();
+        active_status.resume_target = "dispatch.coach".to_string();
+        active_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&active_status)
+            .await
+            .expect("persist active exception status");
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: active_run_id.to_string(),
+                dispatch_target: "coach".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_exception_takeover".to_string(),
+                supersedes_receipt_id: Some("receipt-superseded-by-exception".to_string()),
+                exception_path_receipt_id: Some("exception-receipt-active".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some(format!(
+                    "vida taskflow consume continue --run-id {active_run_id} --json"
+                )),
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: Some("internal_dispatch_timeout_without_receipt".to_string()),
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("coach".to_string()),
+                downstream_dispatch_last_target: Some("coach".to_string()),
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("coach".to_string()),
+                selected_backend: Some("middle".to_string()),
+                recorded_at: "2026-05-13T00:01:00Z".to_string(),
+            })
+            .await
+            .expect("persist active exception receipt");
+
+        let resolved = resolve_default_resume_run_id(&store)
+            .await
+            .expect("active exception takeover should select the latest run");
+        assert_eq!(resolved, active_run_id);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn resolve_runtime_consumption_resume_inputs_for_run_id_allows_matching_explicit_task_graph_binding_lineage(
     ) {
         let nanos = SystemTime::now()
@@ -12650,6 +13168,201 @@ agent_system:
         assert!(replay_lineage
             .origin_checkpoint_ref
             .starts_with(&format!("{run_id}:execution_cursor:none")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_runtime_consumption_resume_inputs_for_run_id_switches_to_fresh_bound_task_run()
+    {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-explicit-binding-fresh-bound-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let old_run_id = "github-116-orchestrator-session-identity";
+        let bound_task_id = "github-116-spec-pack-close-recognition-drift";
+        let mut old_status =
+            crate::taskflow_run_graph::default_run_graph_status(old_run_id, "closure", "delivery");
+        old_status.task_id = old_run_id.to_string();
+        old_status.active_node = "closure".to_string();
+        old_status.next_node = None;
+        old_status.status = "completed".to_string();
+        old_status.lifecycle_stage = "closure_complete".to_string();
+        old_status.resume_target = "none".to_string();
+        old_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&old_status)
+            .await
+            .expect("persist old completed run graph status");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: old_run_id.to_string(),
+                    task_id: bound_task_id.to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": bound_task_id,
+                        "run_id": old_run_id,
+                        "task_status": "in_progress",
+                        "issue_type": "task"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "operator rebound work to the fresh task run".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
+                    request_text: Some("continue development".to_string()),
+                    recorded_at: "2026-05-13T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist explicit continuation binding");
+
+        let mut bound_status = crate::taskflow_run_graph::default_run_graph_status(
+            bound_task_id,
+            "implementer",
+            "delivery",
+        );
+        bound_status.task_id = bound_task_id.to_string();
+        bound_status.active_node = "implementer".to_string();
+        bound_status.status = "ready".to_string();
+        bound_status.lifecycle_stage = "implementer_ready".to_string();
+        bound_status.resume_target = "dispatch.implementer".to_string();
+        bound_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&bound_status)
+            .await
+            .expect("persist fresh bound-task run graph status");
+
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create dispatch packet dir");
+        let packet_path = packet_dir.join("github-116-spec-pack-close-recognition-drift.json");
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "run_id": bound_task_id,
+                "dispatch_target": "implementer",
+                "dispatch_status": "packet_ready",
+                "lane_status": "packet_ready",
+                "dispatch_kind": "taskflow_pack",
+                "dispatch_surface": "vida taskflow consume",
+                "dispatch_command": format!("vida taskflow consume continue --run-id {bound_task_id} --json"),
+                "activation_agent_type": "junior",
+                "activation_runtime_role": "worker",
+                "selected_backend": "taskflow_state_store",
+                "recorded_at": "2026-05-13T00:00:00Z",
+                "request_text": "continue development",
+                "role_selection": {
+                    "selected_role": "pm",
+                    "conversational_mode": "development",
+                    "tracked_flow_entry": "dev-pack",
+                    "confidence": "high"
+                },
+                "role_selection_full": {
+                    "ok": true,
+                    "activation_source": "test",
+                    "selection_mode": "auto",
+                    "fallback_role": "orchestrator",
+                    "request": "continue development",
+                    "selected_role": "pm",
+                    "conversational_mode": "development",
+                    "single_task_only": true,
+                    "tracked_flow_entry": "dev-pack",
+                    "allow_freeform_chat": false,
+                    "confidence": "high",
+                    "matched_terms": ["continue"],
+                    "compiled_bundle": null,
+                    "execution_plan": {
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "execution_lane_sequence": ["implementer", "coach", "verification"]
+                            }
+                        }
+                    },
+                    "reason": "test"
+                },
+                "delivery_task_packet": {
+                    "packet_id": format!("{bound_task_id}::implementer::delivery"),
+                    "goal": "Execute bounded implementer handoff",
+                    "scope_in": ["dispatch_target:implementer", "runtime_role:worker"],
+                    "scope_out": ["mutation outside bounded packet scope"],
+                    "owned_paths": ["crates/vida/src/taskflow_consume_resume.rs"],
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
+                    "definition_of_done": ["bounded runtime result artifact"],
+                    "verification_command": format!("vida taskflow consume continue --run-id {bound_task_id} --json"),
+                    "proof_target": "runtime dispatch result artifact plus updated dispatch receipt",
+                    "stop_rules": ["stop after writing bounded dispatch result or explicit blocker"],
+                    "blocking_question": "What is the next bounded action required for implementer?"
+                },
+                "taskflow_handoff_plan": null,
+                "run_graph_bootstrap": {
+                    "run_id": bound_task_id,
+                    "latest_status": {
+                        "run_id": bound_task_id,
+                        "task_id": bound_task_id
+                    }
+                },
+                "orchestration_contract": null
+            })
+            .to_string(),
+        )
+        .expect("write fresh bound-task dispatch packet");
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: bound_task_id.to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "packet_ready".to_string(),
+                lane_status: "packet_ready".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "taskflow_pack".to_string(),
+                dispatch_surface: Some("vida taskflow consume".to_string()),
+                dispatch_command: Some(format!(
+                    "vida taskflow consume continue --run-id {bound_task_id} --json"
+                )),
+                dispatch_packet_path: Some(packet_path.display().to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("taskflow_state_store".to_string()),
+                recorded_at: "2026-05-13T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist fresh bound-task dispatch receipt");
+
+        let resolved =
+            resolve_runtime_consumption_resume_inputs(&store, Some(old_run_id), None, None)
+                .await
+                .expect("explicit binding should switch resume to fresh bound-task run");
+        assert_eq!(resolved.dispatch_receipt.run_id, bound_task_id);
+        assert_eq!(resolved.dispatch_receipt.dispatch_target, "implementer");
+        assert_eq!(
+            resolved.dispatch_packet_path,
+            packet_path.display().to_string()
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

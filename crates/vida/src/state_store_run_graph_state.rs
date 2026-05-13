@@ -184,6 +184,16 @@ pub struct RunGraphDispatchContext {
     pub recorded_at: String,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub(crate) struct RunGraphOwnerEvidenceRecord {
+    pub(crate) run_id: String,
+    pub(crate) artifact_kind: String,
+    pub(crate) artifact_id: String,
+    pub(crate) runtime_owner_evidence: serde_json::Value,
+    pub(crate) recorded_at: String,
+}
+
 impl RunGraphDispatchContext {
     pub(crate) fn validate(&self) -> Result<(), StateStoreError> {
         if self.run_id.trim().is_empty() {
@@ -396,12 +406,26 @@ pub(crate) struct RunGraphDispatchReceiptStored {
 
 impl From<RunGraphDispatchReceiptStored> for RunGraphDispatchReceipt {
     fn from(stored: RunGraphDispatchReceiptStored) -> Self {
-        let normalized_lane_status = normalize_run_graph_lane_status(
-            stored.lane_status.as_deref(),
-            &stored.dispatch_status,
-            stored.supersedes_receipt_id.as_deref(),
-            stored.exception_path_receipt_id.as_deref(),
-        );
+        let raw_lane_status = stored
+            .lane_status
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default();
+        let canonical_lane_status =
+            canonical_lane_status_str(raw_lane_status).unwrap_or(raw_lane_status);
+        let normalized_lane_status = if downstream_dispatch_allows_completed_lane_status(
+            stored.downstream_dispatch_status.as_deref(),
+            canonical_lane_status,
+        ) {
+            canonical_lane_status.to_string()
+        } else {
+            normalize_run_graph_lane_status(
+                stored.lane_status.as_deref(),
+                &stored.dispatch_status,
+                stored.supersedes_receipt_id.as_deref(),
+                stored.exception_path_receipt_id.as_deref(),
+            )
+        };
         Self {
             run_id: stored.run_id,
             dispatch_target: stored.dispatch_target,

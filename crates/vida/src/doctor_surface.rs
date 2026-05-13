@@ -1293,6 +1293,12 @@ mod tests {
                         "admitted": false,
                         "blockers": ["closure_admission_block"],
                         "proof_surfaces": ["vida taskflow consume final"],
+                        "evidence_table": [{
+                            "requirement": "docflow_readiness",
+                            "status": "blocked",
+                            "evidence_refs": ["vida taskflow consume final"],
+                            "blockers": ["closure_admission_block"]
+                        }],
                     }
                 },
                 "operator_contracts": operator_contracts,

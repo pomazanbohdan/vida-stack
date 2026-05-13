@@ -55,7 +55,7 @@ pub(crate) const RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE: &str =
 pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER: &str =
     "run_graph_latest_dispatch_receipt_summary_inconsistent";
 pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_NEXT_ACTION:
-    &str = "Refresh the latest run-graph dispatch receipt summary before rerunning consume-final.";
+    &str = "Run `vida status --json` to refresh the latest run-graph dispatch receipt summary, then inspect `vida taskflow recovery latest --json`; rerun consume-final only after latest status and dispatch receipt share the same concrete run_id.";
 pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER: &str =
     "run_graph_latest_dispatch_receipt_checkpoint_leakage";
 pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION: &str = "Refresh the latest checkpoint evidence before rerunning consume-final so the latest status and checkpoint rows share the same run_id.";
@@ -322,7 +322,14 @@ pub(crate) fn runtime_consumption_snapshot_has_release_admission_evidence(
                 .and_then(serde_json::Value::as_object)
         });
 
-    status_ok && operator_status_ok && release_admission.is_some()
+    let release_admission_has_evidence_table = release_admission.is_some_and(|admission| {
+        admission
+            .get("evidence_table")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|rows| !rows.is_empty())
+    });
+
+    status_ok && operator_status_ok && release_admission_has_evidence_table
 }
 
 fn runtime_consumption_snapshot_release_admission(
@@ -757,7 +764,13 @@ mod tests {
                         "status": "pass",
                         "admitted": true,
                         "blockers": [],
-                        "proof_surfaces": ["vida taskflow consume final"]
+                        "proof_surfaces": ["vida taskflow consume final"],
+                        "evidence_table": [{
+                            "requirement": "closure_admission",
+                            "status": "pass",
+                            "evidence_refs": ["vida taskflow consume final"],
+                            "blockers": []
+                        }]
                     }
                 }
             })
@@ -832,7 +845,13 @@ mod tests {
                         "status": "admit",
                         "admitted": true,
                         "blockers": [],
-                        "proof_surfaces": ["vida taskflow consume final"]
+                        "proof_surfaces": ["vida taskflow consume final"],
+                        "evidence_table": [{
+                            "requirement": "closure_admission",
+                            "status": "pass",
+                            "evidence_refs": ["vida taskflow consume final"],
+                            "blockers": []
+                        }]
                     }
                 }
             })
@@ -859,7 +878,13 @@ mod tests {
                         "status": "block",
                         "admitted": false,
                         "blockers": ["missing_retrieval_trust_evidence"],
-                        "proof_surfaces": ["vida taskflow consume final"]
+                        "proof_surfaces": ["vida taskflow consume final"],
+                        "evidence_table": [{
+                            "requirement": "closure_admission",
+                            "status": "blocked",
+                            "evidence_refs": ["vida taskflow consume final"],
+                            "blockers": ["missing_retrieval_trust_evidence"]
+                        }]
                     }
                 }
             })
@@ -959,7 +984,13 @@ mod tests {
                     "status": "pass",
                     "admitted": true,
                     "blockers": [],
-                    "proof_surfaces": ["vida taskflow consume final"]
+                    "proof_surfaces": ["vida taskflow consume final"],
+                    "evidence_table": [{
+                        "requirement": "closure_admission",
+                        "status": "pass",
+                        "evidence_refs": ["vida taskflow consume final"],
+                        "blockers": []
+                    }]
                 }
             }
         });

@@ -106,7 +106,7 @@ fn normalize_run_graph_blocker_codes(
         crate::release_contract_adapters::canonical_blocker_codes,
         None,
     );
-    if normalized.is_empty() && blocked_evidence_present {
+    if normalized.is_empty() && (blocked_evidence_present || !blocker_codes.is_empty()) {
         vec![fallback_dispatch_blocker_code()]
     } else {
         normalized
@@ -365,6 +365,61 @@ fn next_lawful_operator_action_for_status(status: &RunGraphStatus) -> Option<Str
     ))
 }
 
+fn fail_closed_terminal_continue_followup(status: &RunGraphStatus) -> String {
+    format!("vida taskflow run-graph status {} --json", status.run_id)
+}
+
+fn sanitized_placeholder_continuation_bind_command(
+    run_id: Option<&str>,
+    command: Option<String>,
+) -> Option<String> {
+    let has_placeholder_bind = command.as_deref().is_some_and(|command| {
+        command.starts_with("vida taskflow continuation bind")
+            && (command.contains("<task-id>") || command.contains("<run-id>"))
+    });
+    if !has_placeholder_bind {
+        return command;
+    }
+    run_id
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("vida taskflow run-graph status {value} --json"))
+        .or_else(|| Some("vida status --json".to_string()))
+}
+
+pub(crate) fn sanitize_placeholder_continuation_bind_recommendation(
+    run_id: Option<&str>,
+    recommended_command: Option<String>,
+    recommended_surface: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let recommended_command =
+        sanitized_placeholder_continuation_bind_command(run_id, recommended_command);
+    let recommended_surface = recommended_command
+        .as_deref()
+        .map(recommended_surface_for_command)
+        .or(recommended_surface);
+    (recommended_command, recommended_surface)
+}
+
+fn sanitize_placeholder_continuation_bind_next_action(
+    run_id: Option<&str>,
+    next_action: Option<RecoveryNextAction>,
+) -> Option<RecoveryNextAction> {
+    next_action.map(|mut next_action| {
+        next_action.command = sanitized_placeholder_continuation_bind_command(
+            run_id,
+            Some(next_action.command),
+        )
+        .expect("sanitized continuation command should remain present");
+        next_action.surface = recommended_surface_for_command(&next_action.command);
+        if next_action.command.starts_with("vida taskflow run-graph status")
+            || next_action.command == "vida status --json"
+        {
+            next_action.reason = crate::status_surface_signals::terminal_next_action_requires_authoritative_run_state(run_id);
+        }
+        next_action
+    })
+}
+
 fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -> Option<&str> {
     if receipt.lane_status == "lane_exception_takeover"
         && receipt
@@ -378,11 +433,24 @@ fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -
     {
         return Some("active_exception_takeover");
     }
-    if receipt.dispatch_status != "blocked" && receipt.lane_status != "lane_blocked" {
+    let has_downstream_dispatch_blockers = receipt
+        .downstream_dispatch_blockers
+        .iter()
+        .any(|value| !value.trim().is_empty());
+    if receipt.dispatch_status != "blocked"
+        && receipt.lane_status != "lane_blocked"
+        && !has_downstream_dispatch_blockers
+    {
         return None;
     }
     if receipt.blocker_code.as_deref() == Some("configured_backend_dispatch_failed") {
         return Some("configured_backend_dispatch_failed");
+    }
+    if receipt.blocker_code.as_deref() == Some("internal_activation_view_only") {
+        return Some("internal_activation_view_only");
+    }
+    if receipt.blocker_code.as_deref() == Some("internal_dispatch_timeout_without_receipt") {
+        return Some("internal_dispatch_timeout_without_receipt");
     }
     if receipt
         .downstream_dispatch_blockers
@@ -390,6 +458,20 @@ fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -
         .any(|value| value == "pending_terminal_write_evidence")
     {
         return Some("pending_terminal_write_evidence");
+    }
+    if receipt
+        .downstream_dispatch_blockers
+        .iter()
+        .any(|value| value == "missing_owned_write_scope")
+    {
+        return Some("missing_owned_write_scope");
+    }
+    if receipt
+        .downstream_dispatch_blockers
+        .iter()
+        .any(|value| value == "internal_dispatch_timeout_without_receipt")
+    {
+        return Some("internal_dispatch_timeout_without_receipt");
     }
     None
 }
@@ -418,10 +500,7 @@ fn next_lawful_operator_action_for_dispatch_resolution(
             return Some(format!("vida lane show {} --json", status.run_id));
         }
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
-            return Some(format!(
-                "vida taskflow continuation bind {} --task-id <task-id> --json",
-                status.run_id
-            ));
+            return Some(fail_closed_terminal_continue_followup(status));
         }
         return (status.status != "completed").then(|| {
             format!(
@@ -499,10 +578,7 @@ fn next_lawful_operator_action_for_projection(
     }
     if receipt.is_some_and(blocked_external_dispatch_artifact_mismatched_as_internal_activation) {
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
-            return Some(format!(
-                "vida taskflow continuation bind {} --task-id <task-id> --json",
-                status.run_id
-            ));
+            return Some(fail_closed_terminal_continue_followup(status));
         }
         return Some(format!(
             "vida taskflow consume continue --run-id {} --json",
@@ -513,6 +589,9 @@ fn next_lawful_operator_action_for_projection(
 }
 
 fn recommended_surface_for_command(command: &str) -> String {
+    if command.starts_with("vida status") {
+        return "vida status".to_string();
+    }
     if command.starts_with("vida taskflow consume continue") {
         return "vida taskflow consume continue".to_string();
     }
@@ -553,7 +632,7 @@ fn recovery_next_action_reason(
         return "activate the recorded exception-path receipt before treating local recovery as lawful".to_string();
     }
     if command.starts_with("vida taskflow continuation bind") {
-        return "the latest consume-continue snapshot already completed without a next action, so bind the next bounded unit explicitly instead of repeating continuation".to_string();
+        return "the latest consume-continue snapshot already completed without a next action, so confirm the authoritative run state and bind the next bounded unit with the concrete run/task ids instead of repeating continuation".to_string();
     }
     if command.starts_with("vida lane show") {
         return "inspect the lane envelope for the dispatch blocker, then record structured exception-takeover evidence and supersession before any local recovery work".to_string();
@@ -664,6 +743,14 @@ async fn build_run_graph_diagnosis(
     let projection_truth = run_graph_projection_truth(store, &status).await?;
     let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
         recovery_surface_contract(&summary, &projection_truth);
+    let next_action =
+        sanitize_placeholder_continuation_bind_next_action(Some(&summary.run_id), next_action);
+    let (recommended_command, recommended_surface) =
+        sanitize_placeholder_continuation_bind_recommendation(
+            Some(&summary.run_id),
+            recommended_command,
+            recommended_surface,
+        );
     Ok(RunGraphDiagnosis {
         run_id: summary.run_id.clone(),
         blocker_codes,
@@ -1215,6 +1302,12 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
                 .map(recommended_surface_for_command),
         )
     };
+    let (recommended_command, recommended_surface) =
+        sanitize_placeholder_continuation_bind_recommendation(
+            Some(&status.run_id),
+            recommended_command,
+            recommended_surface,
+        );
     Some(RunGraphDispatchCompactSummary {
         route_truth: route_truth_from_projection_truth(&projection_truth, evidence),
         downstream_dispatch_preview: downstream_dispatch_preview_from_status_snapshot(
@@ -2719,6 +2812,60 @@ fn canonicalize_resume_meta(status: &mut RunGraphStatus) {
     }
 }
 
+fn dispatch_replay_node_from_receipt(receipt: &RunGraphDispatchReceipt) -> Option<String> {
+    receipt
+        .downstream_dispatch_active_target
+        .as_deref()
+        .or(receipt.downstream_dispatch_last_target.as_deref())
+        .or(Some(receipt.dispatch_target.as_str()))
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "none" && *value != "unknown")
+        .map(|value| value.strip_suffix("_lane").unwrap_or(value).to_string())
+}
+
+fn status_with_active_exception_dispatch_replay(
+    status: &RunGraphStatus,
+    receipt: &RunGraphDispatchReceipt,
+) -> Option<RunGraphStatus> {
+    if !active_exception_takeover_receipt_matches_status(status, Some(receipt)) {
+        return None;
+    }
+    let node = dispatch_replay_node_from_receipt(receipt)?;
+    let (handoff_state, resume_target) =
+        governance_handoff(Some(&node), DispatchTargetFormat::Lane);
+    let mut replay = status.clone();
+    replay.next_node = Some(node);
+    replay.handoff_state = handoff_state;
+    replay.resume_target = resume_target;
+    replay.recovery_ready = true;
+    if replay.policy_gate.trim().is_empty() || replay.policy_gate == "none" {
+        replay.policy_gate = "exception_takeover_dispatch_replay".to_string();
+    }
+    Some(replay)
+}
+
+async fn reconcile_dispatch_init_status_for_active_exception(
+    store: &StateStore,
+    status: RunGraphStatus,
+) -> Result<RunGraphStatus, String> {
+    if status.recovery_ready && status.resume_target.starts_with("dispatch.") {
+        return Ok(status);
+    }
+    let receipt = store
+        .run_graph_dispatch_receipt(&status.run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read run-graph dispatch receipt for `{}` while reconciling dispatch-init recovery: {error}",
+                status.run_id
+            )
+        })?;
+    Ok(receipt
+        .as_ref()
+        .and_then(|receipt| status_with_active_exception_dispatch_replay(&status, receipt))
+        .unwrap_or(status))
+}
+
 fn meta_string_field(meta: &serde_json::Value, key: &str) -> Option<Option<String>> {
     meta.get(key)?;
     Some(
@@ -3090,6 +3237,46 @@ fn inject_tracked_design_doc_path(execution_plan: &mut serde_json::Value, design
     );
 }
 
+fn inject_task_planner_metadata(
+    execution_plan: &mut serde_json::Value,
+    planner_metadata: &crate::state_store::TaskPlannerMetadata,
+) {
+    if planner_metadata.owned_paths.is_empty()
+        && planner_metadata.acceptance_targets.is_empty()
+        && planner_metadata.proof_targets.is_empty()
+        && planner_metadata.risk.is_none()
+        && planner_metadata.estimate.is_none()
+        && planner_metadata.lane_hint.is_none()
+    {
+        return;
+    }
+    let Some(plan) = execution_plan.as_object_mut() else {
+        return;
+    };
+    let tracked_flow_bootstrap = plan
+        .entry("tracked_flow_bootstrap".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if tracked_flow_bootstrap.is_null() {
+        *tracked_flow_bootstrap = serde_json::json!({});
+    }
+    let Some(tracked_flow_bootstrap) = tracked_flow_bootstrap.as_object_mut() else {
+        return;
+    };
+    let dev_task = tracked_flow_bootstrap
+        .entry("dev_task".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if dev_task.is_null() {
+        *dev_task = serde_json::json!({});
+    }
+    let Some(dev_task) = dev_task.as_object_mut() else {
+        return;
+    };
+    dev_task.insert(
+        "planner_metadata".to_string(),
+        serde_json::to_value(planner_metadata).unwrap_or_else(|_| serde_json::json!({})),
+    );
+}
+
 async fn try_existing_design_backed_implementation_override(
     store: &StateStore,
     task_id: &str,
@@ -3410,15 +3597,98 @@ pub(crate) fn implementation_lane_is_diagnostic(active_node: &str) -> bool {
     !implementation_lane_allows_terminal_completion(active_node)
 }
 
+fn is_task_id_boundary_char(value: char) -> bool {
+    !(value.is_ascii_alphanumeric() || matches!(value, '-' | '_'))
+}
+
+fn request_text_mentions_task_id(request_text: &str, task_id: &str) -> bool {
+    let task_id = task_id.trim();
+    if task_id.is_empty() {
+        return false;
+    }
+
+    let mut search_from = 0;
+    while let Some(offset) = request_text[search_from..].find(task_id) {
+        let start = search_from + offset;
+        let end = start + task_id.len();
+        let before_boundary = start == 0
+            || request_text[..start]
+                .chars()
+                .next_back()
+                .is_some_and(is_task_id_boundary_char);
+        let after_boundary = end >= request_text.len()
+            || request_text[end..]
+                .chars()
+                .next()
+                .is_some_and(is_task_id_boundary_char);
+        if before_boundary && after_boundary {
+            return true;
+        }
+        search_from = end;
+    }
+
+    false
+}
+
+async fn resolve_seed_task_id_for_runtime_run(
+    store: &StateStore,
+    requested_run_id: &str,
+    request_text: &str,
+) -> Result<String, String> {
+    if store.show_task(requested_run_id).await.is_ok() {
+        return Ok(requested_run_id.to_string());
+    }
+
+    let mut matches = store
+        .list_tasks(None, true)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to resolve TaskFlow task id for runtime run `{requested_run_id}`: {error}"
+            )
+        })?
+        .into_iter()
+        .filter(|task| task.status != "closed")
+        .filter(|task| request_text_mentions_task_id(request_text, &task.id))
+        .collect::<Vec<_>>();
+
+    if matches.is_empty() {
+        return Ok(requested_run_id.to_string());
+    }
+    if matches.len() == 1 {
+        return Ok(matches.remove(0).id);
+    }
+
+    let active_matches = matches
+        .iter()
+        .filter(|task| task.status == "in_progress")
+        .collect::<Vec<_>>();
+    if active_matches.len() == 1 {
+        return Ok(active_matches[0].id.clone());
+    }
+
+    matches.sort_by(|left, right| left.id.cmp(&right.id));
+    let ids = matches
+        .iter()
+        .map(|task| task.id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "Runtime run `{requested_run_id}` request text references multiple open TaskFlow task ids ({ids}); cite a single bounded task before dispatch."
+    ))
+}
+
 pub(crate) async fn derive_seeded_run_graph_status(
     store: &StateStore,
-    task_id: &str,
+    requested_run_id: &str,
     request_text: &str,
 ) -> Result<TaskflowRunGraphSeedPayload, String> {
+    let bounded_task_id =
+        resolve_seed_task_id_for_runtime_run(store, requested_run_id, request_text).await?;
     let mut selection = build_runtime_lane_selection_with_store(store, request_text).await?;
     try_existing_design_backed_implementation_override(
         store,
-        task_id,
+        &bounded_task_id,
         request_text,
         &mut selection,
     )
@@ -3504,8 +3774,8 @@ pub(crate) async fn derive_seeded_run_graph_status(
         || json_bool_field(route, "coach_required").unwrap_or(false)
         || json_bool_field(route, "independent_verification_required").unwrap_or(false);
     let seed_base = RunGraphStatus {
-        run_id: task_id.to_string(),
-        task_id: task_id.to_string(),
+        run_id: requested_run_id.to_string(),
+        task_id: bounded_task_id,
         task_class,
         active_node: "planning".to_string(),
         route_task_class: if is_conversation {
@@ -3518,7 +3788,7 @@ pub(crate) async fn derive_seeded_run_graph_status(
             "implementation".to_string()
         },
         selected_backend,
-        ..default_run_graph_status(task_id, "planning", "implementation")
+        ..default_run_graph_status(requested_run_id, "planning", "implementation")
     };
     let mut status = run_graph_transition(
         &seed_base,
@@ -3729,22 +3999,81 @@ async fn reseed_explicit_task_graph_binding_for_dispatch_init(
     Ok(Some(bound_task_id.to_string()))
 }
 
+fn task_record_dispatch_seed_request_text(task: &crate::state_store::TaskRecord) -> String {
+    let mut parts = Vec::new();
+    let title = task.title.trim();
+    if !title.is_empty() {
+        parts.push(title.to_string());
+    }
+    let description = task.description.trim();
+    if !description.is_empty() && description != title {
+        parts.push(description.to_string());
+    }
+    if !task.planner_metadata.owned_paths.is_empty() {
+        parts.push(format!(
+            "Owned paths: {}.",
+            task.planner_metadata.owned_paths.join(", ")
+        ));
+    }
+    if !task.planner_metadata.proof_targets.is_empty() {
+        parts.push(format!(
+            "Proof targets: {}.",
+            task.planner_metadata.proof_targets.join(", ")
+        ));
+    }
+    if parts.is_empty() {
+        task.id.clone()
+    } else {
+        parts.join("\n\n")
+    }
+}
+
+async fn seed_existing_task_for_dispatch_init(
+    store: &StateStore,
+    task_id: &str,
+) -> Result<Option<String>, String> {
+    let task = match store.show_task(task_id).await {
+        Ok(task) => task,
+        Err(_) => return Ok(None),
+    };
+    let request_text = task_record_dispatch_seed_request_text(&task);
+    let payload = derive_seeded_run_graph_status(store, task_id, &request_text).await?;
+    persist_seed_artifacts(store, &payload).await?;
+    Ok(Some(task_id.to_string()))
+}
+
 pub(crate) async fn prepare_run_graph_dispatch_init_artifacts(
     store: &StateStore,
     run_id: &str,
 ) -> Result<RunGraphDispatchInitArtifacts, String> {
-    let effective_run_id = reseed_explicit_task_graph_binding_for_dispatch_init(store, run_id)
+    let mut effective_run_id = reseed_explicit_task_graph_binding_for_dispatch_init(store, run_id)
         .await?
         .unwrap_or_else(|| run_id.to_string());
-    let status = store
-        .run_graph_status(&effective_run_id)
-        .await
-        .map_err(|error| {
-            format!(
+    let status = match store.run_graph_status(&effective_run_id).await {
+        Ok(status) => status,
+        Err(error) => {
+            let original_error = format!(
                 "Failed to read run-graph state for `{}`: {error}",
                 effective_run_id
-            )
-        })?;
+            );
+            match seed_existing_task_for_dispatch_init(store, &effective_run_id).await? {
+                Some(seeded_run_id) => {
+                    effective_run_id = seeded_run_id;
+                    store
+                        .run_graph_status(&effective_run_id)
+                        .await
+                        .map_err(|error| {
+                            format!(
+                                "Failed to read seeded run-graph state for `{}`: {error}",
+                                effective_run_id
+                            )
+                        })?
+                }
+                None => return Err(original_error),
+            }
+        }
+    };
+    let status = reconcile_dispatch_init_status_for_active_exception(store, status).await?;
     let context = store
         .run_graph_dispatch_context(&effective_run_id)
         .await
@@ -3755,14 +4084,21 @@ pub(crate) async fn prepare_run_graph_dispatch_init_artifacts(
                 effective_run_id
             )
         })?;
-    let role_selection = context
+    let mut role_selection = context
         .role_selection()
         .map_err(|error| format!("Failed to decode persisted seeded dispatch context: {error}"))?;
+    if let Ok(task) = store.show_task(&effective_run_id).await {
+        inject_task_planner_metadata(&mut role_selection.execution_plan, &task.planner_metadata);
+    }
     let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
     let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
     let mut dispatch_receipt = crate::taskflow_consume::build_runtime_consumption_dispatch_receipt(
         &role_selection,
         &run_graph_bootstrap,
+    );
+    crate::runtime_dispatch_state::sync_receipt_configured_activation_assignment(
+        &role_selection,
+        &mut dispatch_receipt,
     );
     dispatch_receipt.dispatch_command = crate::runtime_dispatch_command_for_target(
         &role_selection,
@@ -5203,6 +5539,212 @@ mod tests {
     }
 
     #[test]
+    fn recovery_status_action_for_internal_activation_view_only_points_to_lane_show() {
+        let status = RunGraphStatus {
+            run_id: "run-internal-activation-view-only".to_string(),
+            task_id: "task-internal-activation-view-only".to_string(),
+            task_class: "verification".to_string(),
+            active_node: "verification".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "verification".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "verification_lane".to_string(),
+            lifecycle_stage: "verification_blocked".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "verification".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("verification".to_string()),
+            downstream_dispatch_last_target: Some("verification".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-13T00:00:00Z".to_string(),
+        };
+
+        let command = next_lawful_operator_action_for_projection(&status, Some(&receipt), None);
+
+        assert_eq!(
+            command.as_deref(),
+            Some("vida lane show run-internal-activation-view-only --json")
+        );
+    }
+
+    #[test]
+    fn recovery_status_action_for_downstream_missing_owned_scope_points_to_lane_show() {
+        let status = RunGraphStatus {
+            run_id: "run-missing-owned-scope".to_string(),
+            task_id: "task-missing-owned-scope".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: Some("writer".to_string()),
+            status: "blocked".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "analysis_lane".to_string(),
+            lifecycle_stage: "analysis_blocked".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "awaiting_writer".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("writer".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["missing_owned_write_scope".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: Some("/tmp/result.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-13T00:00:00Z".to_string(),
+        };
+
+        let command = next_lawful_operator_action_for_projection(&status, Some(&receipt), None);
+
+        assert_eq!(
+            command.as_deref(),
+            Some("vida lane show run-missing-owned-scope --json")
+        );
+    }
+
+    #[test]
+    fn run_graph_status_payload_blocks_downstream_noncanonical_blocker() {
+        let status = RunGraphStatus {
+            run_id: "run-status-missing-owned-scope".to_string(),
+            task_id: "task-status-missing-owned-scope".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: Some("writer".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "analysis_lane".to_string(),
+            lifecycle_stage: "analysis_active".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "awaiting_writer".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.writer_lane".to_string(),
+            recovery_ready: true,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("writer".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["missing_owned_write_scope".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: Some("/tmp/result.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-13T00:00:00Z".to_string(),
+        };
+        let next_lawful_operator_action =
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None);
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason: "run-graph status reflects persisted dispatch blocker evidence"
+                .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: false,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action,
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let payload = build_run_graph_status_json_payload(
+            "vida taskflow run-graph status",
+            &status,
+            &projection_truth,
+        )
+        .expect("status payload should render");
+
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should be an array")
+            .iter()
+            .any(|value| value == "tool_execution_failed"));
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array")
+            .iter()
+            .any(|value| value
+                .as_str()
+                .is_some_and(|action| action
+                    .contains("vida lane show run-status-missing-owned-scope --json"))));
+    }
+
+    #[test]
     fn exception_takeover_projection_replaces_stale_dispatch_init_binding() {
         let status = RunGraphStatus {
             run_id: "run-stale-binding".to_string(),
@@ -5605,7 +6147,29 @@ mod tests {
                 Some("run-active-exception")
             )
             .as_deref(),
-            Some("vida taskflow continuation bind run-active-exception --task-id <task-id> --json")
+            Some("vida taskflow run-graph status run-active-exception --json")
+        );
+    }
+
+    #[test]
+    fn recovery_status_action_for_internal_timeout_points_to_lane_show() {
+        let mut status = default_run_graph_status("run-timeout", "implementation", "coach");
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "implementer_blocked".to_string();
+        status.active_node = "implementer".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        let mut receipt = packet_gate_receipt("run-timeout");
+        receipt.dispatch_status = "executed".to_string();
+        receipt.lane_status = "lane_running".to_string();
+        receipt.blocker_code = Some("internal_dispatch_timeout_without_receipt".to_string());
+        receipt
+            .downstream_dispatch_blockers
+            .push("internal_dispatch_timeout_without_receipt".to_string());
+
+        assert_eq!(
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None).as_deref(),
+            Some("vida lane show run-timeout --json")
         );
     }
 
@@ -6298,6 +6862,79 @@ mod tests {
         assert_ne!(payload.status.next_node.as_deref(), Some("spec-pack"));
     }
 
+    #[test]
+    fn request_text_task_id_match_requires_token_boundaries() {
+        assert!(request_text_mentions_task_id(
+            "Fix bounded task `taskflow-runtime-run-binding-task-missing-actionability` now.",
+            "taskflow-runtime-run-binding-task-missing-actionability"
+        ));
+        assert!(request_text_mentions_task_id(
+            "Fix taskflow-runtime-run-binding-task-missing-actionability.",
+            "taskflow-runtime-run-binding-task-missing-actionability"
+        ));
+        assert!(!request_text_mentions_task_id(
+            "Fix taskflow-runtime-run-binding-task-missing-actionability now.",
+            "taskflow-runtime-run-binding-task-missing"
+        ));
+    }
+
+    #[tokio::test]
+    async fn derive_seeded_run_graph_binds_generated_runtime_run_to_open_task_mentioned_in_request()
+    {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open state store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "taskflow-runtime-run-binding-task-missing-actionability",
+                title: "Runtime run binding task missing actionability",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create active task");
+
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            "runtime-fix-runtime-run-binding-task-missing",
+            "Fix runtime run binding task-missing actionability for taskflow-runtime-run-binding-task-missing-actionability.",
+        )
+        .await
+        .expect("seed should be generated");
+
+        assert_eq!(
+            payload.status.run_id,
+            "runtime-fix-runtime-run-binding-task-missing"
+        );
+        assert_eq!(
+            payload.status.task_id,
+            "taskflow-runtime-run-binding-task-missing-actionability"
+        );
+        let dispatch_context = run_graph_dispatch_context_from_seed_payload(&payload);
+        assert_eq!(
+            dispatch_context.run_id,
+            "runtime-fix-runtime-run-binding-task-missing"
+        );
+        assert_eq!(
+            dispatch_context.task_id,
+            "taskflow-runtime-run-binding-task-missing-actionability"
+        );
+    }
+
     #[tokio::test]
     async fn derive_seeded_run_graph_keeps_design_spec_request_in_scope_discussion() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -6804,6 +7441,151 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_init_uses_task_planner_metadata_owned_paths_for_writer_packet() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        let owned_paths = vec![
+            "crates/vida/src/runtime_dispatch_state.rs".to_string(),
+            "crates/vida/src/runtime_dispatch_downstream_packets.rs".to_string(),
+        ];
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "task-writer-planner-scope",
+                title: "Writer planner scope",
+                display_id: None,
+                description: "dev packet with planner-owned paths",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &["dev-pack".to_string()],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: owned_paths.clone(),
+                    acceptance_targets: vec![
+                        "writer dispatch packet has owned scope".to_string(),
+                    ],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_uses_task_planner_metadata_owned_paths_for_writer_packet -- --nocapture".to_string(),
+                    ],
+                    risk: None,
+                    estimate: None,
+                    lane_hint: None,
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create scoped task");
+        let status = RunGraphStatus {
+            run_id: "task-writer-planner-scope".to_string(),
+            task_id: "task-writer-planner-scope".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: Some("writer".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "analysis_lane".to_string(),
+            lifecycle_stage: "analysis_active".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "awaiting_writer".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.writer_lane".to_string(),
+            recovery_ready: true,
+        };
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "worker".to_string(),
+            request: "tracked dev packet created from runtime consumption".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "fallback".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: json!({
+                "orchestration_contract": {},
+                "runtime_assignment": {
+                    "selected_agent_id": "junior",
+                    "activation_agent_type": "junior",
+                    "activation_runtime_role": "worker"
+                },
+                "development_flow": {
+                    "implementation": {
+                        "analysis_route_task_class": "analysis",
+                        "writer_route_task_class": "writer"
+                    },
+                    "lane_sequence": ["analysis", "writer", "coach", "verification"],
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "analysis": {
+                                "activation": {
+                                    "activation_agent_type": "senior",
+                                    "activation_runtime_role": "verifier"
+                                },
+                                "closure_class": "analysis"
+                            },
+                            "writer": {
+                                "activation": {
+                                    "activation_agent_type": "junior",
+                                    "activation_runtime_role": "worker"
+                                },
+                                "closure_class": "implementation"
+                            }
+                        }
+                    }
+                },
+                "tracked_flow_bootstrap": null
+            }),
+            reason: "test".to_string(),
+        };
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("record run status");
+        store
+            .record_run_graph_dispatch_context(&crate::state_store::RunGraphDispatchContext {
+                run_id: "task-writer-planner-scope".to_string(),
+                task_id: "task-writer-planner-scope".to_string(),
+                request_text: role_selection.request.clone(),
+                role_selection: serde_json::to_value(&role_selection)
+                    .expect("role selection should encode"),
+                recorded_at: "2026-04-10T10:00:00Z".to_string(),
+            })
+            .await
+            .expect("record dispatch context");
+
+        let artifacts =
+            prepare_run_graph_dispatch_init_artifacts(&store, "task-writer-planner-scope")
+                .await
+                .expect("dispatch init artifacts should be prepared from planner metadata");
+        assert_eq!(artifacts.dispatch_receipt.dispatch_target, "writer");
+        assert!(artifacts
+            .dispatch_receipt
+            .downstream_dispatch_blockers
+            .is_empty());
+
+        let packet =
+            crate::read_json_file_if_present(std::path::Path::new(&artifacts.dispatch_packet_path))
+                .expect("dispatch packet should load");
+        assert_eq!(
+            packet["delivery_task_packet"]["owned_paths"],
+            serde_json::json!([
+                "crates/vida/src/runtime_dispatch_downstream_packets.rs",
+                "crates/vida/src/runtime_dispatch_state.rs"
+            ])
+        );
+    }
+
+    #[tokio::test]
     async fn reseed_clears_stale_blocked_dispatch_receipt_before_dispatch_init() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let store = StateStore::open(harness.path().to_path_buf())
@@ -6914,6 +7696,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_init_reconciles_active_exception_takeover_status_for_replay() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        let run_id = "task-exception-replay";
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            run_id,
+            "Fix run-graph dispatch-init replay after active exception takeover. Owned paths: crates/vida/src/taskflow_run_graph.rs.",
+        )
+        .await
+        .expect("seed should be generated");
+        persist_seed_artifacts(&store, &payload)
+            .await
+            .expect("persist seeded artifacts should succeed");
+
+        let mut blocked_status = payload.status.clone();
+        blocked_status.active_node = "implementer".to_string();
+        blocked_status.next_node = None;
+        blocked_status.handoff_state = "none".to_string();
+        blocked_status.resume_target = "none".to_string();
+        blocked_status.recovery_ready = false;
+        store
+            .record_run_graph_status(&blocked_status)
+            .await
+            .expect("persist blocked exception status");
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: run_id.to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_exception_takeover".to_string(),
+                supersedes_receipt_id: Some("sup-exception-replay".to_string()),
+                exception_path_receipt_id: Some("exc-exception-replay".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/stale-exception-replay-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/stale-exception-replay-result.json".to_string()),
+                blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+                downstream_dispatch_target: Some("implementer".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["pending_terminal_write_evidence".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("blocked".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("implementer".to_string()),
+                downstream_dispatch_last_target: Some("implementer".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some(blocked_status.selected_backend.clone()),
+                recorded_at: "2026-05-13T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist active exception receipt");
+
+        let dispatch_init = run_graph_dispatch_init(&store, run_id)
+            .await
+            .expect("dispatch init should reconcile active exception takeover");
+        assert_eq!(
+            dispatch_init["run_graph_bootstrap"]["latest_status"]["recovery_ready"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            dispatch_init["run_graph_bootstrap"]["latest_status"]["resume_target"],
+            serde_json::json!("dispatch.implementer_lane")
+        );
+        assert_eq!(
+            dispatch_init["dispatch_receipt"]["dispatch_target"].as_str(),
+            Some("implementer")
+        );
+    }
+
+    #[tokio::test]
     async fn dispatch_init_reseeds_explicit_task_graph_binding_into_bound_task_run() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let store = StateStore::open(harness.path().to_path_buf())
@@ -6989,6 +7854,76 @@ mod tests {
             .expect("reseeded receipt should exist");
         assert_eq!(reseeded_receipt.run_id, "task-new");
         assert!(reseeded_receipt.dispatch_packet_path.is_some());
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_seeds_existing_task_without_prior_run_graph_state() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "taskflow-graph-summary-open-cycle-gate",
+                title: "Graph summary must respect open delegated cycle gate",
+                display_id: None,
+                description: "Fix graph-summary so operator status and next actions account for active run/recovery gates before backlog ready-head guidance.",
+                issue_type: "task",
+                status: "open",
+                priority: 2,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_proxy.rs".to_string()],
+                    proof_targets: vec![
+                        "vida taskflow graph-summary --json reports open_delegated_cycle when an active delegated cycle is open."
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create taskflow task");
+
+        let payload = run_graph_dispatch_init(&store, "taskflow-graph-summary-open-cycle-gate")
+            .await
+            .expect("dispatch-init should seed the existing task and succeed");
+
+        assert_eq!(
+            payload["requested_run_id"],
+            "taskflow-graph-summary-open-cycle-gate"
+        );
+        assert_eq!(payload["run_id"], "taskflow-graph-summary-open-cycle-gate");
+        assert_eq!(
+            payload["dispatch_receipt"]["run_id"],
+            "taskflow-graph-summary-open-cycle-gate"
+        );
+        assert!(payload["dispatch_packet_path"].as_str().is_some());
+
+        let status = store
+            .run_graph_status("taskflow-graph-summary-open-cycle-gate")
+            .await
+            .expect("seeded run-graph status should exist");
+        assert_eq!(status.task_id, "taskflow-graph-summary-open-cycle-gate");
+
+        let context = store
+            .run_graph_dispatch_context("taskflow-graph-summary-open-cycle-gate")
+            .await
+            .expect("seeded dispatch context lookup should succeed")
+            .expect("seeded dispatch context should exist");
+        assert!(context
+            .request_text
+            .contains("Graph summary must respect open delegated cycle gate"));
+        assert!(context
+            .request_text
+            .contains("crates/vida/src/taskflow_proxy.rs"));
     }
 
     #[tokio::test]
@@ -7882,7 +8817,7 @@ mod tests {
                 None,
             )
             .as_deref(),
-            Some("vida taskflow consume continue --run-id run-projection-blocked-mismatch --json")
+            Some("vida lane show run-projection-blocked-mismatch --json")
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -8184,5 +9119,50 @@ mod tests {
             serde_json::json!("vida taskflow run-graph diagnose")
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn sanitize_placeholder_terminal_bind_next_action_fails_closed_to_run_graph_status() {
+        let next_action = RecoveryNextAction {
+            command: "vida taskflow continuation bind <task-id> --run-id <run-id> --json"
+                .to_string(),
+            surface: "vida taskflow continuation bind".to_string(),
+            reason: "placeholder bind".to_string(),
+        };
+
+        let next_action = sanitize_placeholder_continuation_bind_next_action(
+            Some("run-terminal-bind"),
+            Some(next_action),
+        )
+        .expect("next action should remain present");
+
+        assert_eq!(
+            next_action.command,
+            "vida taskflow run-graph status run-terminal-bind --json"
+        );
+        assert_eq!(next_action.surface, "vida taskflow run-graph status");
+        assert!(next_action
+            .reason
+            .contains("inspect the authoritative run state"));
+    }
+
+    #[test]
+    fn sanitize_placeholder_terminal_bind_next_action_without_run_id_fails_closed_to_status() {
+        let next_action = RecoveryNextAction {
+            command: "vida taskflow continuation bind <task-id> --run-id <run-id> --json"
+                .to_string(),
+            surface: "vida taskflow continuation bind".to_string(),
+            reason: "placeholder bind".to_string(),
+        };
+
+        let next_action =
+            sanitize_placeholder_continuation_bind_next_action(None, Some(next_action))
+                .expect("next action should remain present");
+
+        assert_eq!(next_action.command, "vida status --json");
+        assert_eq!(next_action.surface, "vida status");
+        assert!(next_action
+            .reason
+            .contains("inspect the authoritative run state"));
     }
 }

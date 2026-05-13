@@ -11,11 +11,86 @@ pub(crate) fn run_graph_latest_dispatch_receipt_signal_ambiguous_next_action() -
 }
 
 pub(crate) fn continuation_binding_ambiguous_next_action() -> &'static str {
-    "Do not continue by heuristic. Either bind the bounded unit explicitly from user intent with `vida taskflow continuation bind <run-id> --task-id <task-id> --json` or refresh runtime evidence with `vida taskflow consume continue --json` and recheck `vida status --json` before further implementation."
+    "Do not continue by heuristic. Inspect `vida status --json`, then inspect the authoritative run with `vida taskflow run-graph status` using that concrete `run_id`; if user intent already names the next bounded unit, bind it explicitly with `vida taskflow continuation bind` using the cited `task_id` and `run_id` before further implementation."
+}
+
+pub(crate) fn blocked_run_graph_status_next_actions(
+    run_id: Option<&str>,
+    task_id: Option<&str>,
+    task_closed: bool,
+) -> Vec<String> {
+    let run_id = run_id.map(str::trim).filter(|value| !value.is_empty());
+    let task_id = task_id.map(str::trim).filter(|value| !value.is_empty());
+    match (run_id, task_id, task_closed) {
+        (Some(run_id), Some(task_id), true) => vec![
+            format!(
+                "Inspect the blocked run-graph status with `vida taskflow recovery status {run_id} --json` before writing."
+            ),
+            format!(
+                "Run `{task_id}` is already closed for blocked run `{run_id}`; retire that stale blocked run with `vida lane retire {run_id} --receipt-id <concrete-receipt-id> --reason <reason> --json`, then refresh continuation evidence with `vida taskflow consume continue --json` before selecting the next bounded step."
+            ),
+        ],
+        (Some(run_id), _, false) => vec![
+            format!(
+                "Inspect the blocked run-graph status with `vida taskflow recovery status {run_id} --json` and resolve the blocker before writing."
+            ),
+            "After the blocker is resolved, refresh continuation evidence with `vida taskflow consume continue --json` or bind the next bounded unit explicitly.".to_string(),
+        ],
+        _ => vec![
+            "Do not continue normal delivery while the latest run-graph status is blocked."
+                .to_string(),
+            continuation_binding_ambiguous_next_action().to_string(),
+        ],
+    }
+}
+
+pub(crate) fn runtime_binding_task_missing_next_action(
+    run_id: Option<&str>,
+    task_id: &str,
+) -> String {
+    let task_id = task_id.trim();
+    match run_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .zip((!task_id.is_empty()).then_some(task_id))
+    {
+        Some((run_id, task_id)) => format!(
+            "Runtime binding points to missing task `{task_id}` for run `{run_id}`. Inspect the concrete recovery state with `vida taskflow recovery status {run_id} --json`; if user intent still names a live bounded task, rebind it explicitly with `vida taskflow continuation bind {run_id} --task-id <task-id> --json`, otherwise reconcile or retire the stale run before continuing."
+        ),
+        None => continuation_binding_ambiguous_next_action().to_string(),
+    }
+}
+
+pub(crate) fn recovery_resume_target_missing_next_action(
+    run_id: Option<&str>,
+    task_id: Option<&str>,
+) -> String {
+    let run_id = run_id.map(str::trim).filter(|value| !value.is_empty());
+    let task_id = task_id.map(str::trim).filter(|value| !value.is_empty());
+    match (run_id, task_id) {
+        (Some(run_id), Some(task_id)) => format!(
+            "Recovery for run `{run_id}` has no dispatch resume_target for task `{task_id}`. Inspect `vida taskflow recovery status {run_id} --json`; if that bounded task is still the live continuation target, rebind it explicitly with `vida taskflow continuation bind {run_id} --task-id <task-id> --json`, otherwise reconcile or retire the stale run before continuing."
+        ),
+        (Some(run_id), None) => format!(
+            "Recovery for run `{run_id}` has no dispatch resume_target. Inspect `vida taskflow recovery status {run_id} --json`; if user intent still names the live bounded unit, bind it explicitly with `vida taskflow continuation bind {run_id} --task-id <task-id> --json`, otherwise reconcile or retire the stale run before continuing."
+        ),
+        _ => continuation_binding_ambiguous_next_action().to_string(),
+    }
+}
+
+pub(crate) fn terminal_next_action_requires_authoritative_run_state(
+    run_id: Option<&str>,
+) -> String {
+    match run_id.filter(|value| !value.trim().is_empty()) {
+        Some(run_id) => format!(
+            "Do not continue by heuristic. First inspect the authoritative run state with `vida taskflow run-graph status {run_id} --json`, then either cite the explicit next bounded unit from the user and bind it with `vida taskflow continuation bind` using that concrete `run_id` and `task_id`, or stop and reconcile why the authoritative run state still lacks the next bounded unit before further implementation."
+        ),
+        None => "Do not continue by heuristic. First inspect the authoritative run state with `vida status --json`, then inspect the authoritative run with `vida taskflow run-graph status` using that concrete `run_id`; if user intent already names the next bounded unit, bind it explicitly with `vida taskflow continuation bind` using the cited `task_id` and `run_id` before further implementation.".to_string(),
+    }
 }
 
 pub(crate) fn run_graph_latest_dispatch_receipt_summary_inconsistent_next_action() -> &'static str {
-    "Refresh the latest run-graph dispatch receipt summary before rerunning `vida status --json` so the latest status and dispatch receipt share the same run_id."
+    "Run `vida status --json` to refresh the latest run-graph dispatch receipt summary, then inspect `vida taskflow recovery latest --json`; rerun the blocked TaskFlow command only after latest status and dispatch receipt share the same concrete run_id."
 }
 
 pub(crate) fn run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action() -> &'static str {

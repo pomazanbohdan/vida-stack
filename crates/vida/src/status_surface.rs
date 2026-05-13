@@ -296,6 +296,21 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+                let latest_run_graph_task_closed = match latest_run_graph_status.as_ref() {
+                    Some(status) => match store.list_tasks(None, true).await {
+                        Ok(tasks) => tasks
+                            .iter()
+                            .find(|task| task.id == status.task_id)
+                            .is_some_and(|task| task.status == "closed"),
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to read tasks for latest run-graph task state: {error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    },
+                    None => false,
+                };
                 let continuation_binding =
                     crate::continuation_binding_summary::build_continuation_binding_summary_with_idle_policy(
                         explicit_continuation_binding.as_ref(),
@@ -311,6 +326,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             || latest_run_graph_dispatch_receipt_summary_inconsistent
                             || latest_run_graph_dispatch_receipt_checkpoint_leakage,
                         no_active_taskflow_work,
+                        latest_run_graph_task_closed,
                     );
                 let continuation_binding_ambiguous =
                     continuation_binding["status"].as_str() == Some("ambiguous");

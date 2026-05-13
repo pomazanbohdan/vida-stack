@@ -434,6 +434,35 @@ fn parse_optional_label_value(value: Option<&str>) -> Option<Vec<String>> {
     })
 }
 
+fn task_update_planner_metadata_requested(command: &crate::TaskUpdateArgs) -> bool {
+    !command.owned_paths.is_empty()
+        || !command.acceptance_targets.is_empty()
+        || !command.proof_targets.is_empty()
+}
+
+fn task_update_planner_metadata_arg(
+    existing: &state_store::TaskPlannerMetadata,
+    command: &crate::TaskUpdateArgs,
+) -> Option<state_store::TaskPlannerMetadata> {
+    if !task_update_planner_metadata_requested(command) {
+        return None;
+    }
+    let mut metadata = existing.clone();
+    let owned_paths = parse_label_values(&command.owned_paths);
+    if !owned_paths.is_empty() {
+        metadata.owned_paths = owned_paths;
+    }
+    let acceptance_targets = parse_label_values(&command.acceptance_targets);
+    if !acceptance_targets.is_empty() {
+        metadata.acceptance_targets = acceptance_targets;
+    }
+    let proof_targets = parse_label_values(&command.proof_targets);
+    if !proof_targets.is_empty() {
+        metadata.proof_targets = proof_targets;
+    }
+    Some(metadata)
+}
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 struct TaskMutationPlannedTask {
     task_id: String,
@@ -2825,7 +2854,7 @@ fn task_continuation_source_surfaces() -> Vec<String> {
         "StateStore::scheduling_projection_scoped".to_string(),
         "vida task ready --json".to_string(),
         "vida status --json continuation_binding".to_string(),
-        "vida taskflow consume continue --json projection_truth.continuation_binding".to_string(),
+        "vida taskflow run-graph status --json projection_truth.continuation_binding".to_string(),
     ]
 }
 
@@ -2897,7 +2926,7 @@ fn select_task_next_lawful_binding<'a>(
                 Vec::new(),
                 "continuation_source_drift",
                 &format!(
-                    "Continuation sources disagree: explicit binding `{}`/`{}` points to `{}`, while current latest-run binding `{}`/`{}` from `{}` points to `{}`. Reconcile with `vida status --json` and `vida taskflow consume continue --json` before continuing.",
+                    "Continuation sources disagree: explicit binding `{}`/`{}` points to `{}`, while current latest-run binding `{}`/`{}` from `{}` points to `{}`. Reconcile with `vida status --json` and the authoritative `vida taskflow run-graph status` for that concrete run before continuing.",
                     explicit.run_id,
                     explicit.binding_source,
                     explicit.task_id,
@@ -2955,6 +2984,49 @@ fn pass_task_next_lawful_receipt(
     }
 }
 
+fn runtime_binding_task_closed_next_action(
+    binding: &state_store::RunGraphContinuationBinding,
+) -> String {
+    let run_id = binding.run_id.trim();
+    if run_id.is_empty() {
+        return crate::status_surface_signals::continuation_binding_ambiguous_next_action()
+            .to_string();
+    }
+    format!(
+        "Runtime binding points to closed task `{}` for run `{run_id}`. Inspect the concrete recovery state with `vida taskflow recovery status {run_id} --json`; resolve or retire the blocked run, then refresh continuation evidence with `vida taskflow consume continue --json` before selecting the next bounded step.",
+        binding.task_id
+    )
+}
+
+fn runtime_binding_task_missing_next_action(
+    binding: &state_store::RunGraphContinuationBinding,
+) -> String {
+    crate::status_surface_signals::runtime_binding_task_missing_next_action(
+        Some(binding.run_id.as_str()),
+        &binding.task_id,
+    )
+}
+
+fn runtime_binding_open_delegated_cycle_next_action(
+    binding: &state_store::RunGraphContinuationBinding,
+) -> String {
+    format!(
+        "Runtime binding for task `{}` is still inside an open delegated cycle for run `{}`. Inspect `vida lane show {} --json` and `vida taskflow recovery status {} --json`; wait for a receipt-backed delegated completion or record structured exception takeover before selecting another TaskFlow step.",
+        binding.task_id, binding.run_id, binding.run_id, binding.run_id
+    )
+}
+
+fn runtime_recovery_blocks_task_next_lawful(
+    recovery: Option<&state_store::RunGraphRecoverySummary>,
+) -> bool {
+    recovery.is_some_and(|recovery| {
+        recovery.delegation_gate.delegated_cycle_open
+            || recovery.delegation_gate.local_exception_takeover_gate
+                == "blocked_open_delegated_cycle"
+            || recovery.resume_status == "running"
+    })
+}
+
 fn task_next_lawful_receipt(
     tasks: &[state_store::TaskRecord],
     ready_task_candidates: Vec<TaskContinuationCandidate>,
@@ -2988,7 +3060,7 @@ fn task_next_lawful_receipt(
                     binding.active_bounded_unit.clone(),
                     ready_task_candidates,
                     "runtime_binding_task_missing",
-                    "Refresh runtime evidence or bind the intended TaskFlow task explicitly before continuing.",
+                    &runtime_binding_task_missing_next_action(binding),
                 );
             };
             if task.status == "closed" {
@@ -2996,7 +3068,7 @@ fn task_next_lawful_receipt(
                     binding.active_bounded_unit.clone(),
                     ready_task_candidates,
                     "runtime_binding_task_closed",
-                    "Refresh continuation evidence after close/release automation before continuing.",
+                    &runtime_binding_task_closed_next_action(binding),
                 );
             }
         }
@@ -3012,7 +3084,7 @@ fn task_next_lawful_receipt(
                 binding.active_bounded_unit.clone(),
                 ready_task_candidates,
                 "runtime_ready_candidate_conflict",
-                "Runtime binding and TaskFlow ready candidates differ; inspect `vida status --json` and bind/close the intended task explicitly.",
+                crate::status_surface_signals::continuation_binding_ambiguous_next_action(),
             );
         }
         return pass_task_next_lawful_receipt(
@@ -3167,6 +3239,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
         TaskCommand::ImportJsonl(command) => {
             let state_dir = command
                 .state_dir
+                .clone()
                 .unwrap_or_else(state_store::default_state_dir);
             match StateStore::open(state_dir).await {
                 Ok(store) => match store.import_tasks_from_jsonl(&command.path).await {
@@ -3668,11 +3741,31 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             )
                         })
                         .collect::<Vec<_>>();
-                    let receipt = task_next_lawful_receipt(
-                        &tasks,
-                        ready_task_candidates,
-                        scoped_runtime_binding,
-                    );
+                    let runtime_recovery = match scoped_runtime_binding {
+                        Some(binding) => {
+                            store.run_graph_recovery_summary(&binding.run_id).await.ok()
+                        }
+                        None => None,
+                    };
+                    let receipt = match scoped_runtime_binding {
+                        Some(binding)
+                            if runtime_recovery_blocks_task_next_lawful(
+                                runtime_recovery.as_ref(),
+                            ) =>
+                        {
+                            blocked_task_next_lawful_receipt(
+                                binding.active_bounded_unit.clone(),
+                                ready_task_candidates,
+                                "open_delegated_cycle",
+                                &runtime_binding_open_delegated_cycle_next_action(binding),
+                            )
+                        }
+                        _ => task_next_lawful_receipt(
+                            &tasks,
+                            ready_task_candidates,
+                            scoped_runtime_binding,
+                        ),
+                    };
                     if command.json {
                         crate::print_json_pretty(
                             &serde_json::to_value(&receipt)
@@ -3756,6 +3849,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
         TaskCommand::Update(command) => {
             let state_dir = command
                 .state_dir
+                .clone()
                 .unwrap_or_else(state_store::default_state_dir);
             let notes = match resolve_optional_text_arg(
                 "notes",
@@ -3821,43 +3915,62 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     }
                 };
             match StateStore::open_existing(state_dir).await {
-                Ok(store) => match store
-                    .update_task(state_store::UpdateTaskRequest {
-                        task_id: &command.task_id,
-                        status: command.status.as_deref(),
-                        notes: notes.as_deref(),
-                        description: command.description.as_deref(),
-                        parent_id,
-                        add_labels: &add_labels,
-                        remove_labels: &remove_labels,
-                        set_labels: set_labels.as_deref(),
-                        execution_mode,
-                        order_bucket,
-                        parallel_group,
-                        conflict_domain,
-                        planner_metadata: None,
-                    })
-                    .await
-                {
-                    Ok(task) => {
-                        if let Err(code) =
-                            refresh_task_snapshot_after_mutation(&store, "vida task update").await
-                        {
-                            return code;
+                Ok(store) => {
+                    let planner_metadata = if task_update_planner_metadata_requested(&command) {
+                        match store.show_task(&command.task_id).await {
+                            Ok(existing) => task_update_planner_metadata_arg(
+                                &existing.planner_metadata,
+                                &command,
+                            ),
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to read task before planner metadata update: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
                         }
-                        print_task_mutation(
-                            command.render,
-                            "vida task update",
-                            &task,
-                            command.json,
-                        );
-                        ExitCode::SUCCESS
+                    } else {
+                        None
+                    };
+                    match store
+                        .update_task(state_store::UpdateTaskRequest {
+                            task_id: &command.task_id,
+                            status: command.status.as_deref(),
+                            notes: notes.as_deref(),
+                            description: command.description.as_deref(),
+                            parent_id,
+                            add_labels: &add_labels,
+                            remove_labels: &remove_labels,
+                            set_labels: set_labels.as_deref(),
+                            execution_mode,
+                            order_bucket,
+                            parallel_group,
+                            conflict_domain,
+                            planner_metadata,
+                        })
+                        .await
+                    {
+                        Ok(task) => {
+                            if let Err(code) =
+                                refresh_task_snapshot_after_mutation(&store, "vida task update")
+                                    .await
+                            {
+                                return code;
+                            }
+                            print_task_mutation(
+                                command.render,
+                                "vida task update",
+                                &task,
+                                command.json,
+                            );
+                            ExitCode::SUCCESS
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to update task: {error}");
+                            ExitCode::from(1)
+                        }
                     }
-                    Err(error) => {
-                        eprintln!("Failed to update task: {error}");
-                        ExitCode::from(1)
-                    }
-                },
+                }
                 Err(error) => {
                     eprintln!("Failed to open authoritative state store: {error}");
                     ExitCode::from(1)
@@ -3884,6 +3997,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             refresh_task_snapshot_after_mutation(&store, "vida task close").await
                         {
                             return code;
+                        }
+                        if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_specification_task_into_latest_receipt(&store, &command.task_id).await {
+                            eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
+                            return ExitCode::from(1);
                         }
                         if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_implementer_task_into_latest_receipt(&store, &command.task_id).await {
                             eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
@@ -4381,20 +4498,23 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_adaptive_replan_finding_preview, build_spawn_blocker_preview,
-        build_split_mutation_preview, canonical_json_string_array_entries,
-        classify_task_close_git_stage_failure, ensure_existing_task_mismatch_reason,
-        load_adaptive_preview_finding_json, normalize_task_json_contract_arrays,
-        parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
-        parse_split_child_specs, persist_task_handoff_accept_receipt,
-        select_task_next_lawful_binding, task_close_automation_receipt,
-        task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
-        task_close_feedback_blocker_summary, task_close_host_agent_telemetry,
-        task_close_uses_isolated_state_dir, task_create_title, task_handoff_accept_receipt,
-        task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
-        task_json_success_status, task_next_lawful_receipt, task_owned_status_receipt,
-        task_parent_id, validate_task_handoff_accept_receipt, ADAPTIVE_REPLAN_FINDING_KINDS,
+        blocked_task_next_lawful_receipt, build_adaptive_replan_finding_preview,
+        build_spawn_blocker_preview, build_split_mutation_preview,
+        canonical_json_string_array_entries, classify_task_close_git_stage_failure,
+        ensure_existing_task_mismatch_reason, load_adaptive_preview_finding_json,
+        normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
+        parse_label_values, parse_optional_label_value, parse_split_child_specs,
+        persist_task_handoff_accept_receipt, runtime_binding_open_delegated_cycle_next_action,
+        runtime_recovery_blocks_task_next_lawful, select_task_next_lawful_binding,
+        task_close_automation_receipt, task_close_commit_allowlist_next_actions,
+        task_close_commit_file_strings, task_close_feedback_blocker_summary,
+        task_close_host_agent_telemetry, task_close_uses_isolated_state_dir, task_create_title,
+        task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
+        task_handoff_receipt_root, task_json_success_status, task_next_lawful_receipt,
+        task_owned_status_receipt, task_parent_id, task_update_planner_metadata_arg,
+        validate_task_handoff_accept_receipt, ADAPTIVE_REPLAN_FINDING_KINDS,
     };
+    use crate::state_store;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
     use crate::test_cli_support::guard_current_dir;
@@ -4488,6 +4608,46 @@ mod tests {
             },
             dependencies: Vec::new(),
         }
+    }
+
+    #[test]
+    fn task_update_planner_metadata_sets_requested_lists_and_preserves_existing_fields() {
+        let existing = crate::state_store::TaskPlannerMetadata {
+            owned_paths: vec!["old/path.rs".to_string()],
+            acceptance_targets: vec!["old acceptance".to_string()],
+            proof_targets: vec!["old proof".to_string()],
+            risk: Some("high".to_string()),
+            estimate: Some("small".to_string()),
+            lane_hint: Some("worker".to_string()),
+        };
+        let command = crate::TaskUpdateArgs {
+            task_id: "task-owned".to_string(),
+            owned_paths: vec![
+                "crates/vida/src/task_surface.rs".to_string(),
+                "crates/vida/src/cli.rs".to_string(),
+            ],
+            proof_targets: vec!["cargo test -p vida task_update_planner_metadata".to_string()],
+            ..Default::default()
+        };
+
+        let metadata = task_update_planner_metadata_arg(&existing, &command)
+            .expect("metadata update should be requested");
+
+        assert_eq!(
+            metadata.owned_paths,
+            vec![
+                "crates/vida/src/task_surface.rs".to_string(),
+                "crates/vida/src/cli.rs".to_string(),
+            ]
+        );
+        assert_eq!(metadata.acceptance_targets, existing.acceptance_targets);
+        assert_eq!(
+            metadata.proof_targets,
+            vec!["cargo test -p vida task_update_planner_metadata".to_string()]
+        );
+        assert_eq!(metadata.risk, existing.risk);
+        assert_eq!(metadata.estimate, existing.estimate);
+        assert_eq!(metadata.lane_hint, existing.lane_hint);
     }
 
     #[test]
@@ -5174,6 +5334,103 @@ mod tests {
         assert_eq!(
             receipt.binding_source.as_deref(),
             Some("consume_continue_after_downstream_chain")
+        );
+    }
+
+    #[test]
+    fn task_next_lawful_blocks_closed_run_graph_binding_with_concrete_recovery_action() {
+        let mut closed_task = owned_task_record("closed-feature-task", vec![]);
+        closed_task.status = "closed".to_string();
+        let binding = test_continuation_binding(
+            "current-run",
+            "closed-feature-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+
+        let receipt = task_next_lawful_receipt(&[closed_task], Vec::new(), Some(&binding));
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["runtime_binding_task_closed"]);
+        assert!(receipt.next_actions.iter().any(|action| {
+            action.contains("vida taskflow recovery status current-run --json")
+                && action.contains("closed-feature-task")
+        }));
+    }
+
+    #[test]
+    fn task_next_lawful_blocks_missing_run_graph_binding_with_concrete_recovery_action() {
+        let binding = test_continuation_binding(
+            "current-run",
+            "missing-feature-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+
+        let receipt = task_next_lawful_receipt(&[], Vec::new(), Some(&binding));
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["runtime_binding_task_missing"]);
+        assert!(receipt.next_actions.iter().any(|action| {
+            action.contains("vida taskflow recovery status current-run --json")
+                && action.contains(
+                    "vida taskflow continuation bind current-run --task-id <task-id> --json",
+                )
+                && action.contains("missing-feature-task")
+        }));
+    }
+
+    #[test]
+    fn task_next_lawful_blocks_open_delegated_cycle_binding() {
+        let runtime_task = owned_task_record("running-runtime-task", vec![]);
+        let binding = test_continuation_binding(
+            "running-run",
+            "running-runtime-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+        let recovery = state_store::RunGraphRecoverySummary {
+            run_id: "running-run".to_string(),
+            task_id: "running-runtime-task".to_string(),
+            active_node: "analysis".to_string(),
+            lifecycle_stage: "analysis_active".to_string(),
+            resume_node: None,
+            resume_status: "running".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: true,
+            delegation_gate: state_store::RunGraphDelegationGateSummary {
+                active_node: "analysis".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "open".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "delegated_cycle_open".to_string(),
+                continuation_signal: "continue_delegated_cycle".to_string(),
+                blocker_code: None,
+                lifecycle_stage: "analysis_active".to_string(),
+            },
+        };
+
+        assert!(runtime_recovery_blocks_task_next_lawful(Some(&recovery)));
+        let receipt = blocked_task_next_lawful_receipt(
+            binding.active_bounded_unit.clone(),
+            Vec::new(),
+            "open_delegated_cycle",
+            &runtime_binding_open_delegated_cycle_next_action(&binding),
+        );
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["open_delegated_cycle"]);
+        assert!(receipt.next_actions.iter().any(|action| {
+            action.contains("vida lane show running-run --json")
+                && action.contains("vida taskflow recovery status running-run --json")
+        }));
+        assert_eq!(
+            task_next_lawful_receipt(&[runtime_task], Vec::new(), Some(&binding)).status,
+            "pass",
+            "baseline receipt still represents the raw binding; command-level recovery gate blocks it"
         );
     }
 

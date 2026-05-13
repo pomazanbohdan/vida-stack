@@ -6,7 +6,8 @@ use clap::Parser;
 use docflow_cli::Cli as DocflowCli;
 use time::format_description::well_known::Rfc3339;
 
-use crate::state_store::{CreateTaskRequest, StateStore};
+use crate::runtime_contract_vocab::TASK_CLASS_IMPLEMENTATION;
+use crate::state_store::{CreateTaskRequest, StateStore, TaskPlannerMetadata, UpdateTaskRequest};
 use crate::taskflow_task_bridge::task_record_json;
 
 struct TaskCreationArgs<'a> {
@@ -19,6 +20,7 @@ struct TaskCreationArgs<'a> {
     parent_id: Option<&'a str>,
     labels: &'a [&'a str],
     description: Option<&'a str>,
+    planner_metadata: TaskPlannerMetadata,
 }
 
 fn create_task_if_missing_with_store(
@@ -34,9 +36,29 @@ fn create_task_if_missing_with_store(
         parent_id,
         labels,
         description,
+        planner_metadata,
     } = args;
 
     if let Ok(existing) = crate::block_on_state_store(store.show_task(task_id)) {
+        if should_backfill_planner_metadata(&existing.planner_metadata, &planner_metadata) {
+            let empty_labels = Vec::<String>::new();
+            let updated = crate::block_on_state_store(store.update_task(UpdateTaskRequest {
+                task_id,
+                status: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &empty_labels,
+                remove_labels: &empty_labels,
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: Some(planner_metadata),
+            }))?;
+            return Ok((task_record_json(&updated), false));
+        }
         return Ok((task_record_json(&existing), false));
     }
     let label_rows = labels
@@ -56,7 +78,7 @@ fn create_task_if_missing_with_store(
         parent_id,
         labels: &label_rows,
         execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
-        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+        planner_metadata,
         created_by: "vida taskflow",
         source_repo: &source_repo,
     })) {
@@ -66,6 +88,44 @@ fn create_task_if_missing_with_store(
             Ok((task_record_json(&existing), false))
         }
         Err(error) => Err(error),
+    }
+}
+
+fn should_backfill_planner_metadata(
+    existing: &TaskPlannerMetadata,
+    desired: &TaskPlannerMetadata,
+) -> bool {
+    existing.owned_paths.is_empty()
+        && existing.acceptance_targets.is_empty()
+        && existing.proof_targets.is_empty()
+        && (!desired.owned_paths.is_empty()
+            || !desired.acceptance_targets.is_empty()
+            || !desired.proof_targets.is_empty())
+}
+
+fn work_packet_planner_metadata(
+    request_text: &str,
+    tracked: &serde_json::Value,
+) -> TaskPlannerMetadata {
+    let design_doc_path = tracked["design_doc_path"].as_str();
+    let owned_paths = crate::runtime_dispatch_packets::delivery_packet_owned_paths(
+        TASK_CLASS_IMPLEMENTATION,
+        request_text,
+        design_doc_path,
+    );
+    if owned_paths.is_empty() {
+        return TaskPlannerMetadata::default();
+    }
+    TaskPlannerMetadata {
+        acceptance_targets: vec![format!(
+            "bounded implementation touches only {}",
+            owned_paths.join(", ")
+        )],
+        proof_targets: vec!["cargo test -p vida".to_string()],
+        risk: Some("medium".to_string()),
+        estimate: Some("bounded".to_string()),
+        lane_hint: Some("worker".to_string()),
+        owned_paths,
     }
 }
 
@@ -456,6 +516,7 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         parent_id: None,
         labels: &["feature-request", "spec-first"],
         description: Some(request_text),
+        planner_metadata: TaskPlannerMetadata::default(),
     })?;
     if epic_created {
         changed_files.push(format!("taskflow:{epic_task_id}"));
@@ -471,6 +532,7 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         parent_id: Some(epic_task_id),
         labels: &["spec-pack", "documentation"],
         description: Some("bounded design/spec packet for the feature request"),
+        planner_metadata: TaskPlannerMetadata::default(),
     })?;
     if spec_created {
         changed_files.push(format!("taskflow:{spec_task_id}"));
@@ -630,6 +692,7 @@ pub(crate) fn execute_work_packet_create_with_store(
         parent_id: None,
         labels: &["feature-request"],
         description: Some("tracked feature epic for runtime-consumption dispatch"),
+        planner_metadata: TaskPlannerMetadata::default(),
     })?;
     if epic_created {
         changed_files.push(format!("taskflow:{epic_task_id}"));
@@ -645,6 +708,7 @@ pub(crate) fn execute_work_packet_create_with_store(
         parent_id: Some(epic_task_id),
         labels: &[packet_label],
         description: Some(packet_description),
+        planner_metadata: work_packet_planner_metadata(request_text, &tracked),
     })?;
     if packet_created {
         changed_files.push(format!("taskflow:{task_id}"));
@@ -708,6 +772,73 @@ mod tests {
                 .exists(),
             ".vida receipt latest pointer should exist"
         );
+        fs::remove_dir_all(&unique_root).expect("cleanup should succeed");
+    }
+
+    #[test]
+    fn work_packet_create_backfills_dev_task_owned_paths_from_explicit_request() {
+        let unique_root = std::env::temp_dir().join(format!(
+            "vida-work-packet-metadata-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time should flow")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&unique_root).expect("temporary project root should be creatable");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(StateStore::open(
+                unique_root.join(crate::state_store::default_state_dir()),
+            ))
+            .expect("state store should initialize");
+        let tracked = serde_json::json!({
+            "epic": {
+                "task_id": "feature-x",
+                "title": "Feature X"
+            },
+            "dev_task": {
+                "task_id": "feature-x-dev",
+                "title": "Dev pack: Feature X"
+            }
+        });
+
+        execute_work_packet_create_with_store(
+            &unique_root,
+            &store,
+            "continue implementation",
+            &tracked,
+            "dev_task",
+        )
+        .expect("initial dev packet should be created");
+        let initial = runtime
+            .block_on(store.show_task("feature-x-dev"))
+            .expect("initial dev task should load");
+        assert!(initial.planner_metadata.owned_paths.is_empty());
+
+        execute_work_packet_create_with_store(
+            &unique_root,
+            &store,
+            "Continue implementation in crates/vida/src/taskflow_spec_bootstrap.rs and crates/vida/src/runtime_dispatch_state.rs",
+            &tracked,
+            "dev_task",
+        )
+        .expect("existing dev packet should be metadata-backfilled");
+
+        let updated = runtime
+            .block_on(store.show_task("feature-x-dev"))
+            .expect("updated dev task should load");
+        assert_eq!(updated.planner_metadata.owned_paths.len(), 2);
+        assert!(updated
+            .planner_metadata
+            .owned_paths
+            .contains(&"crates/vida/src/taskflow_spec_bootstrap.rs".to_string()));
+        assert!(updated
+            .planner_metadata
+            .owned_paths
+            .contains(&"crates/vida/src/runtime_dispatch_state.rs".to_string()));
+        assert!(!updated.planner_metadata.acceptance_targets.is_empty());
+        assert!(!updated.planner_metadata.proof_targets.is_empty());
+
         fs::remove_dir_all(&unique_root).expect("cleanup should succeed");
     }
 }

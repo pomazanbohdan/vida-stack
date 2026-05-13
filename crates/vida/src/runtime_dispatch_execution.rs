@@ -56,6 +56,43 @@ fn backend_is_admissible_for_dispatch_target(
         .unwrap_or(!strict_required)
 }
 
+fn execution_plan_backend_class(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    backend_id: &str,
+) -> Option<String> {
+    role_selection.execution_plan["backend_admissibility_matrix"]
+        .as_array()?
+        .iter()
+        .find(|entry| entry["backend_id"].as_str() == Some(backend_id))?
+        .get("backend_class")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn configured_backend_class(
+    overlay: Option<&serde_yaml::Value>,
+    backend_id: &str,
+) -> Option<String> {
+    let entry =
+        overlay.and_then(|overlay| configured_subagent_backend_entry(overlay, backend_id))?;
+    crate::yaml_string(yaml_lookup(entry, &["subagent_backend_class"]))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn backend_is_internal_host_bridge(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    overlay: Option<&serde_yaml::Value>,
+    backend_id: &str,
+) -> bool {
+    execution_plan_backend_class(role_selection, backend_id)
+        .or_else(|| configured_backend_class(overlay, backend_id))
+        .as_deref()
+        .is_some_and(|backend_class| matches!(backend_class, "internal" | "internal_cli"))
+}
+
 fn default_activation_view(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -124,6 +161,32 @@ fn dispatch_packet_path_should_render_as_downstream(dispatch_packet_path: &str) 
             .as_str()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
+}
+
+fn readiness_fallback_internal_backend(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    dispatch_target: &str,
+    blocked_backend_id: &str,
+) -> Option<String> {
+    let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
+        &role_selection.execution_plan,
+        dispatch_target,
+    )?;
+    let fallback_backend = crate::taskflow_routing::fallback_executor_backend_from_route(route)?
+        .trim()
+        .to_string();
+    if fallback_backend.is_empty()
+        || fallback_backend == blocked_backend_id
+        || !backend_is_internal_host_bridge(role_selection, None, &fallback_backend)
+    {
+        return None;
+    }
+    backend_is_admissible_for_dispatch_target(
+        &role_selection.execution_plan,
+        &fallback_backend,
+        dispatch_target,
+    )
+    .then_some(fallback_backend)
 }
 
 fn configured_external_dispatch_wall_timeout_seconds(
@@ -422,6 +485,24 @@ fn execute_wrapped_command(
     }
 }
 
+fn internal_host_activation_only_blocker_code(
+    project_root: &Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    timed_out: bool,
+) -> String {
+    if timed_out {
+        crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT.to_string()
+    } else {
+        crate::runtime_dispatch_state::internal_host_activation_view_only_blocker_code(
+            project_root,
+            role_selection,
+            receipt,
+        )
+        .to_string()
+    }
+}
+
 #[cfg(unix)]
 fn synthetic_timeout_exit_status() -> ExitStatus {
     ExitStatus::from_raw(libc::SIGKILL)
@@ -660,14 +741,13 @@ fn internal_codex_output_confirms_execution(
     stderr: &str,
     exit_success: bool,
 ) -> bool {
+    let _ = stderr;
     exit_success
         && parsed_output
             .result_text
             .as_deref()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
-        && stderr.trim().is_empty()
-        && parsed_output.error_messages.is_empty()
 }
 
 fn should_render_store_backed_activation_view_for_internal_failure(
@@ -792,6 +872,12 @@ fn apply_internal_subagent_profile_overlay(
         ("quality_tier", "quality_tier"),
         ("write_scope", "write_scope"),
     ] {
+        if profile[profile_key]
+            .as_str()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            continue;
+        }
         if !profile[profile_key].is_null() {
             object.insert(target_key.to_string(), profile[profile_key].clone());
         }
@@ -810,10 +896,23 @@ fn apply_internal_subagent_profile_overlay(
         .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .or_else(|| internal_profile_sandbox_from_write_scope(profile["write_scope"].as_str()))
     {
+        object.insert(
+            "selected_sandbox_mode".to_string(),
+            serde_json::json!(sandbox),
+        );
         object.insert("sandbox_mode".to_string(), serde_json::json!(sandbox));
     }
     patched
+}
+
+fn internal_profile_sandbox_from_write_scope(write_scope: Option<&str>) -> Option<&'static str> {
+    match write_scope?.trim() {
+        "orchestrator_native" | "workspace-write" | "scoped_write" => Some("workspace-write"),
+        "read-only" | "read_or_review" | "none" => Some("read-only"),
+        _ => None,
+    }
 }
 
 fn selected_internal_host_carrier(
@@ -854,11 +953,12 @@ fn selected_internal_host_carrier(
     let prefers_internal_backend = direct_ids
         .into_iter()
         .flatten()
-        .any(|backend_id| backend_id == "internal_subagents");
+        .any(|backend_id| backend_is_internal_host_bridge(role_selection, overlay, backend_id));
     if !prefers_internal_backend {
         return None;
     }
 
+    let internal_backend_id = effective_backend?;
     let internal_bridge_ids = [
         receipt.activation_agent_type.as_deref(),
         role_selection
@@ -873,9 +973,8 @@ fn selected_internal_host_carrier(
             .and_then(serde_json::Value::as_str),
         Some(role_selection.selected_role.as_str()),
     ];
-    let selected_backend_entry = effective_backend.and_then(|backend_id| {
-        overlay.and_then(|overlay| configured_subagent_backend_entry(overlay, backend_id))
-    });
+    let selected_backend_entry =
+        overlay.and_then(|overlay| configured_subagent_backend_entry(overlay, internal_backend_id));
     internal_bridge_ids
         .into_iter()
         .flatten()
@@ -888,7 +987,7 @@ fn selected_internal_host_carrier(
                 );
             apply_internal_subagent_profile_overlay(
                 &host_profile_carrier,
-                "internal_subagents",
+                internal_backend_id,
                 selected_backend_entry,
                 preferred_profile_id.as_deref(),
             )
@@ -1527,12 +1626,12 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
                 "internal host carrier for `{selected_cli_system}` completed without returning an agent_message result"
             )
         };
-        let blocker_code =
-            crate::runtime_dispatch_state::internal_host_activation_view_only_blocker_code(
-                project_root,
-                role_selection,
-                receipt,
-            );
+        let blocker_code = internal_host_activation_only_blocker_code(
+            project_root,
+            role_selection,
+            receipt,
+            timed_out,
+        );
         body.insert("blocker_code".to_string(), serde_json::json!(blocker_code));
         body.insert(
             "blocker_reason".to_string(),
@@ -1670,6 +1769,35 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             selected_model_profile_id.as_deref(),
         );
     if readiness_verdict["blocked"].as_bool().unwrap_or(false) {
+        if let Some(fallback_backend) = readiness_fallback_internal_backend(
+            role_selection,
+            &receipt.dispatch_target,
+            &backend_id,
+        ) {
+            if let Some(mut result) = execute_internal_agent_lane_dispatch(
+                state_root,
+                project_root,
+                dispatch_packet_path,
+                Some(&fallback_backend),
+                role_selection,
+                receipt,
+                host_runtime.clone(),
+            )
+            .await?
+            {
+                if let Some(body) = result.as_object_mut() {
+                    body.insert(
+                        "external_readiness_fallback".to_string(),
+                        serde_json::json!({
+                            "blocked_backend": backend_id,
+                            "fallback_backend": fallback_backend,
+                            "readiness": readiness_verdict,
+                        }),
+                    );
+                }
+                return Ok(result);
+            }
+        }
         let readiness_status = readiness_verdict["status"]
             .as_str()
             .unwrap_or("external_backend_blocked");
@@ -1979,8 +2107,8 @@ mod tests {
         configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
         dispatch_packet_prompt, execute_external_agent_lane_dispatch,
         external_provider_output_confirms_execution, internal_codex_output_confirms_execution,
-        mark_dispatch_result_execution_evidence, parse_external_provider_output,
-        parse_internal_codex_exec_output,
+        internal_host_activation_only_blocker_code, mark_dispatch_result_execution_evidence,
+        parse_external_provider_output, parse_internal_codex_exec_output,
         should_render_store_backed_activation_view_for_internal_failure,
         wrap_command_with_optional_timeout, CommandTimeoutWrapper,
     };
@@ -2112,19 +2240,19 @@ mod tests {
     }
 
     #[test]
-    fn internal_codex_output_requires_clean_completion_for_execution_evidence() {
+    fn internal_codex_output_allows_warning_streams_with_agent_message_result() {
         let parsed_with_error = parse_internal_codex_exec_output(
             r#"{"type":"item.completed","item":{"id":"1","type":"error","message":"warning"}}
 {"type":"item.completed","item":{"id":"2","type":"agent_message","text":"final"}}"#,
         );
-        assert!(!internal_codex_output_confirms_execution(
+        assert!(internal_codex_output_confirms_execution(
             &parsed_with_error,
             "",
             true
         ));
-        assert!(!internal_codex_output_confirms_execution(
+        assert!(internal_codex_output_confirms_execution(
             &parsed_with_error,
-            "sandbox denied write",
+            "2026-05-12T20:35:57Z WARN codex_core::features: unknown feature key in config: hooks",
             true
         ));
 
@@ -2135,6 +2263,11 @@ mod tests {
             &parsed_clean,
             "",
             true
+        ));
+        assert!(!internal_codex_output_confirms_execution(
+            &parsed_clean,
+            "",
+            false
         ));
     }
 
@@ -2324,6 +2457,76 @@ dispatch:
         assert_eq!(
             stdin_payload.as_deref(),
             Some(dispatch_packet_prompt("/tmp/project/.vida/dispatch.json").as_str())
+        );
+    }
+
+    #[test]
+    fn internal_host_activation_only_timeout_uses_timeout_blocker() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Continue development".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-internal-timeout-code".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-13T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            internal_host_activation_only_blocker_code(
+                Path::new("/tmp/project"),
+                &role_selection,
+                &receipt,
+                true,
+            ),
+            crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
+        );
+        assert_eq!(
+            internal_host_activation_only_blocker_code(
+                Path::new("/tmp/project"),
+                &role_selection,
+                &receipt,
+                false,
+            ),
+            "internal_activation_view_only"
         );
     }
 
@@ -2524,7 +2727,17 @@ carriers:
                 "runtime_assignment": {
                     "activation_agent_type": "middle",
                     "selected_tier": "middle"
-                }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "coach": true,
+                            "review": true
+                        }
+                    }
+                ]
             }),
             reason: "test".to_string(),
         };
@@ -2618,7 +2831,17 @@ carriers:
                     "activation_agent_type": "middle",
                     "selected_tier": "middle",
                     "selected_model_profile_id": "codex_spark_high_review"
-                }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "coach": true,
+                            "review": true
+                        }
+                    }
+                ]
             }),
             reason: "test".to_string(),
         };
@@ -2802,6 +3025,52 @@ agent_system:
             Some("internal_review")
         );
         assert_eq!(carrier["model_reasoning_effort"].as_str(), Some("medium"));
+    }
+
+    #[test]
+    fn selected_internal_host_carrier_applies_internal_subagent_write_scope_sandbox() {
+        let carrier = serde_json::json!({
+            "role_id": "senior",
+            "model": "gpt-5.4",
+            "model_reasoning_effort": "high",
+            "sandbox_mode": "read-only"
+        });
+        let overlay = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+      write_scope: orchestrator_native
+      model_profiles:
+        internal_fast:
+          provider: internal
+          model_ref: internal_fast
+          reasoning_effort: low
+          normalized_cost_units: 1
+          write_scope: orchestrator_native
+          runtime_roles: [worker]
+          task_classes: [implementation]
+"#,
+        )
+        .expect("overlay should parse");
+        let backend_entry =
+            super::configured_subagent_backend_entry(&overlay, "internal_subagents");
+
+        let patched = super::apply_internal_subagent_profile_overlay(
+            &carrier,
+            "internal_subagents",
+            backend_entry,
+            Some("internal_fast"),
+        );
+
+        assert_eq!(patched["sandbox_mode"].as_str(), Some("workspace-write"));
+        assert_eq!(
+            patched["selected_sandbox_mode"].as_str(),
+            Some("workspace-write")
+        );
+        assert_eq!(patched["write_scope"].as_str(), Some("orchestrator_native"));
     }
 
     #[test]
@@ -3330,5 +3599,100 @@ agent_system:
             .contains("SHOULD_NOT_LAUNCH"));
 
         let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn readiness_fallback_internal_backend_uses_admissible_internal_fallback() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Review the bounded implementation".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "hermes_cli",
+                        "fallback_executor_backend": "internal_subagents"
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "hermes_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "coach": true
+                        }
+                    },
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "coach": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+
+        assert_eq!(
+            super::readiness_fallback_internal_backend(&role_selection, "coach", "hermes_cli"),
+            Some("internal_subagents".to_string())
+        );
+    }
+
+    #[test]
+    fn readiness_fallback_internal_backend_rejects_inadmissible_internal_fallback() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Verify the bounded implementation".to_string(),
+            selected_role: "verifier".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "verification": {
+                        "executor_backend": "hermes_cli",
+                        "fallback_executor_backend": "internal_subagents"
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "verification": false
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+
+        assert_eq!(
+            super::readiness_fallback_internal_backend(
+                &role_selection,
+                "verification",
+                "hermes_cli"
+            ),
+            None
+        );
     }
 }

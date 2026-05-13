@@ -598,6 +598,8 @@ pub(crate) struct CanonicalClosureAdmissionRecord {
     pub open_risk_acceptance_ids: Vec<String>,
     #[serde(default)]
     pub blocked_by: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_table: Vec<serde_json::Value>,
 }
 
 // Keep the older artifact-oriented names as explicit wrappers while the rest of
@@ -866,6 +868,9 @@ pub(crate) enum BlockerCode {
     RunGraphLatestDispatchReceiptSummaryInconsistent,
     RunGraphLatestDispatchReceiptCheckpointLeakage,
     TerminalContinueSnapshotWithoutNextBoundedUnit,
+    GitStatusBlocked,
+    LiveOtherOrchestratorOwner,
+    NextActionTargetMissing,
     ProjectActivationUnknown,
     DependencyGraphIssues,
     DispatchPacketContractInvalid,
@@ -1018,6 +1023,9 @@ impl BlockerCode {
             Self::TerminalContinueSnapshotWithoutNextBoundedUnit => {
                 "terminal_continue_snapshot_without_next_bounded_unit"
             }
+            Self::GitStatusBlocked => "git_status_blocked",
+            Self::LiveOtherOrchestratorOwner => "live_other_orchestrator_owner",
+            Self::NextActionTargetMissing => "next_action_target_missing",
             Self::ProjectActivationUnknown => "project_activation_unknown",
             Self::DependencyGraphIssues => "dependency_graph_issues",
             Self::DispatchPacketContractInvalid => "dispatch_packet_contract_invalid",
@@ -1202,6 +1210,9 @@ impl BlockerCode {
             "terminal_continue_snapshot_without_next_bounded_unit" => {
                 Some(Self::TerminalContinueSnapshotWithoutNextBoundedUnit)
             }
+            "git_status_blocked" => Some(Self::GitStatusBlocked),
+            "live_other_orchestrator_owner" => Some(Self::LiveOtherOrchestratorOwner),
+            "next_action_target_missing" => Some(Self::NextActionTargetMissing),
             "project_activation_unknown" => Some(Self::ProjectActivationUnknown),
             "dependency_graph_issues" => Some(Self::DependencyGraphIssues),
             "dispatch_packet_contract_invalid" => Some(Self::DispatchPacketContractInvalid),
@@ -2277,6 +2288,12 @@ mod tests {
             decision_at: "2026-04-18T10:20:00Z".to_string(),
             decision_owner: "closure_surface".to_string(),
             evidence_bundle_refs: vec!["bundle-check-1".to_string(), "proof-1".to_string()],
+            evidence_table: vec![serde_json::json!({
+                "requirement": "docflow_readiness",
+                "status": "pass",
+                "evidence_refs": ["proof-1"],
+                "blockers": [],
+            })],
             open_risk_acceptance_ids: vec!["risk-acceptance-1".to_string()],
             blocked_by: Vec::new(),
         };
@@ -2527,6 +2544,12 @@ mod tests {
             decision_at: "2026-04-18T10:20:00Z".to_string(),
             decision_owner: "closure_surface".to_string(),
             evidence_bundle_refs: vec!["bundle-check-1".to_string(), "proof-1".to_string()],
+            evidence_table: vec![serde_json::json!({
+                "requirement": "docflow_readiness",
+                "status": "pass",
+                "evidence_refs": ["proof-1"],
+                "blockers": [],
+            })],
             open_risk_acceptance_ids: vec!["risk-acceptance-1".to_string()],
             blocked_by: Vec::new(),
         };
@@ -2598,6 +2621,10 @@ mod tests {
         assert_eq!(closure_value["closure_decision"], "admit");
         assert_eq!(closure_value["decision_owner"], "closure_surface");
         assert_eq!(closure_value["evidence_bundle_refs"][0], "bundle-check-1");
+        assert_eq!(
+            closure_value["evidence_table"][0]["requirement"],
+            "docflow_readiness"
+        );
         assert_eq!(
             closure_value["supported_workflow_classes"][0],
             WorkflowClass::DelegatedDevelopmentPacket.as_str()

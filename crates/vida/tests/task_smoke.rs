@@ -112,7 +112,7 @@ fn seed_model_profile_readiness_dispatch_context(state_dir: &str) {
             "selected_backend_id": "internal_subagents",
             "selected_carrier_id": "internal_subagents",
             "selected_model_profile_id": "codex_gpt55_low_write",
-            "selected_model_ref": "gpt-5.5",
+            "selected_model_ref": "gpt-5.4",
             "selected_model_provider": "openai",
             "selected_reasoning_effort": "low",
             "selected_reasoning_control_mode": "fixed",
