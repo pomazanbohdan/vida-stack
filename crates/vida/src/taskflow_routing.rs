@@ -1,8 +1,8 @@
 use crate::runtime_contract_vocab::{
-    DISPATCH_TARGET_COACH, DISPATCH_TARGET_EXECUTION_PREPARATION, DISPATCH_TARGET_IMPLEMENTER,
-    DISPATCH_TARGET_SPECIFICATION, DISPATCH_TARGET_VERIFICATION, RUNTIME_ROLE_BUSINESS_ANALYST,
-    RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM, RUNTIME_ROLE_PROVER, RUNTIME_ROLE_SOLUTION_ARCHITECT,
-    RUNTIME_ROLE_VERIFIER, RUNTIME_ROLE_WORKER,
+    canonical_dispatch_target_name, DISPATCH_TARGET_COACH, DISPATCH_TARGET_EXECUTION_PREPARATION,
+    DISPATCH_TARGET_IMPLEMENTER, DISPATCH_TARGET_SPECIFICATION, DISPATCH_TARGET_VERIFICATION,
+    RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM, RUNTIME_ROLE_PROVER,
+    RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER, RUNTIME_ROLE_WORKER,
 };
 use crate::{json_string, json_string_list};
 
@@ -56,23 +56,26 @@ fn legacy_dispatch_target_for_runtime_role(runtime_role: &str) -> Option<&'stati
     }
 }
 
-fn canonical_dispatch_target_name(dispatch_target: &str) -> String {
-    legacy_dispatch_target_for_runtime_role(dispatch_target)
-        .unwrap_or(dispatch_target)
-        .to_string()
-}
-
 pub(crate) fn dispatch_contract_lane<'a>(
     execution_plan: &'a serde_json::Value,
     dispatch_target: &str,
 ) -> Option<&'a serde_json::Value> {
-    if let Some(lane) =
-        execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"].get(dispatch_target)
+    let canonical_target = canonical_dispatch_target_name(dispatch_target);
+    if let Some(lane) = execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]
+        .get(canonical_target.as_str())
     {
         return Some(lane);
     }
+    if canonical_target != dispatch_target {
+        if let Some(lane) = execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]
+            .get(dispatch_target)
+        {
+            return Some(lane);
+        }
+    }
     let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
-    legacy_dispatch_contract_lane(dispatch_contract, dispatch_target)
+    legacy_dispatch_contract_lane(dispatch_contract, canonical_target.as_str())
+        .or_else(|| legacy_dispatch_contract_lane(dispatch_contract, dispatch_target))
 }
 
 pub(crate) fn dispatch_contract_lane_activation(lane: &serde_json::Value) -> &serde_json::Value {
@@ -119,7 +122,7 @@ pub(crate) fn dispatch_contract_execution_lane_sequence(
         .into_iter()
         .flatten()
         .filter_map(serde_json::Value::as_str)
-        .map(str::to_string)
+        .map(canonical_dispatch_target_name)
         .collect::<Vec<_>>();
     if !explicit.is_empty() {
         return explicit;
@@ -609,6 +612,8 @@ pub(crate) fn route_explain_blocker_codes(
 #[cfg(test)]
 mod tests {
     use super::{
+        dispatch_contract_execution_lane_sequence, dispatch_contract_lane,
+        dispatch_contract_lane_activation, dispatch_contract_lane_sequence,
         explicit_executor_backend_from_route, fallback_executor_backend_from_route,
         fanout_executor_backends_from_route, route_explain_blocker_codes, route_explain_payload,
         route_explain_status, selected_backend_from_execution_plan_route,
@@ -1096,5 +1101,95 @@ mod tests {
         assert!(blockers
             .iter()
             .any(|code| code == "route_fields_not_behavioral"));
+    }
+
+    #[test]
+    fn dispatch_contract_lane_sequence_canonicalizes_target_aliases() {
+        let dispatch_contract = serde_json::json!({
+            "lane_sequence": [
+                "writer",
+                "business_analyst",
+                "coach",
+                "prover",
+                "escalation",
+                "release/closure"
+            ],
+            "execution_lane_sequence": [
+                "writer",
+                "business_analyst",
+                "verifier",
+                "escalation"
+            ]
+        });
+
+        assert_eq!(
+            dispatch_contract_lane_sequence(&dispatch_contract),
+            vec![
+                "implementer",
+                "specification",
+                "coach",
+                "verification",
+                "execution_preparation",
+                "closure"
+            ]
+        );
+        assert_eq!(
+            dispatch_contract_execution_lane_sequence(&dispatch_contract),
+            vec![
+                "implementer",
+                "specification",
+                "verification",
+                "execution_preparation"
+            ]
+        );
+    }
+
+    #[test]
+    fn dispatch_contract_lane_resolves_aliases_to_canonical_catalog_entries() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "implementer": {
+                            "activation": {
+                                "activation_runtime_role": "worker",
+                                "selected_tier": "junior"
+                            }
+                        },
+                        "specification": {
+                            "activation": {
+                                "activation_runtime_role": "business_analyst",
+                                "selected_tier": "middle"
+                            }
+                        },
+                        "verification": {
+                            "activation": {
+                                "activation_runtime_role": "verifier",
+                                "selected_tier": "senior"
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        assert_eq!(
+            dispatch_contract_lane(&execution_plan, "writer").and_then(|lane| {
+                dispatch_contract_lane_activation(lane)["activation_runtime_role"].as_str()
+            }),
+            Some("worker")
+        );
+        assert_eq!(
+            dispatch_contract_lane(&execution_plan, "business_analyst").and_then(|lane| {
+                dispatch_contract_lane_activation(lane)["activation_runtime_role"].as_str()
+            }),
+            Some("business_analyst")
+        );
+        assert_eq!(
+            dispatch_contract_lane(&execution_plan, "prover").and_then(|lane| {
+                dispatch_contract_lane_activation(lane)["activation_runtime_role"].as_str()
+            }),
+            Some("verifier")
+        );
     }
 }
