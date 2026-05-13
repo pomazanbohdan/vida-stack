@@ -283,16 +283,19 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                             proof_surfaces: vec![
                                                 "vida taskflow consume bundle check".to_string(),
                                             ],
-                        evidence_table: vec![RuntimeConsumptionClosureAdmissionEvidence {
-                                                requirement: "lane_selection".to_string(),
-                                                status: "blocked".to_string(),
-                                                evidence_refs: vec![
-                                                    "vida taskflow consume bundle check".to_string(),
-                                                ],
-                                                blockers: vec![
-                                                    "unresolved_lane_selection".to_string(),
-                                                ],
-                                            }],
+                                            evidence_table: vec![
+                                                RuntimeConsumptionClosureAdmissionEvidence {
+                                                    requirement: "lane_selection".to_string(),
+                                                    status: "blocked".to_string(),
+                                                    evidence_refs: vec![
+                                                        "vida taskflow consume bundle check"
+                                                            .to_string(),
+                                                    ],
+                                                    blockers: vec![
+                                                        "unresolved_lane_selection".to_string()
+                                                    ],
+                                                },
+                                            ],
                                         };
                                     normalize_runtime_consumption_statuses(
                                         &mut docflow_verdict,
@@ -622,6 +625,13 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             )
                             .await
                             {
+                                if as_json {
+                                    super::taskflow_consume_resume::emit_consume_continue_resume_error_json(
+                                        &error,
+                                        "vida taskflow consume final",
+                                    );
+                                    return ExitCode::from(1);
+                                }
                                 eprintln!("Failed to execute runtime dispatch handoff: {error}");
                                 return ExitCode::from(1);
                             }

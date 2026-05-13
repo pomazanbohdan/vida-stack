@@ -171,6 +171,8 @@ fn consume_continue_resume_error_blocker_code(error: &str) -> &'static str {
         "continuation_binding_mismatch"
     } else if error.contains("not resumeable through default") {
         "continuation_binding_not_resumeable"
+    } else if error.contains("Timed out executing runtime dispatch handoff") {
+        "runtime_dispatch_handoff_timeout"
     } else {
         "consume_continue_resume_blocked"
     }
@@ -240,7 +242,7 @@ fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> ser
     })
 }
 
-fn emit_consume_continue_resume_error_json(error: &str, surface_name: &str) {
+pub(crate) fn emit_consume_continue_resume_error_json(error: &str, surface_name: &str) {
     crate::print_json_pretty(&consume_continue_resume_error_payload(error, surface_name));
 }
 
@@ -4516,6 +4518,10 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     )
                     .await
                     {
+                        if as_json && emit_output {
+                            emit_consume_continue_resume_error_json(&error, surface_name);
+                            return ExitCode::from(1);
+                        }
                         eprintln!("Failed to execute resumed runtime dispatch handoff: {error}");
                         return ExitCode::from(1);
                     }
