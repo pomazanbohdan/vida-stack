@@ -783,8 +783,10 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
         ],
         &state_dir,
     );
-    assert_eq!(root["status"], "open");
-    assert_eq!(root["issue_type"], "epic");
+    assert_eq!(root["surface"], "vida task create");
+    assert_eq!(root["status"], "pass");
+    assert_eq!(root["task"]["status"], "open");
+    assert_eq!(root["task"]["issue_type"], "epic");
 
     let task_a = run_command_json(
         &[
@@ -806,8 +808,10 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
         ],
         &state_dir,
     );
-    assert_eq!(task_a["status"], "open");
-    assert_eq!(task_a["title"], "Task A");
+    assert_eq!(task_a["surface"], "vida task create");
+    assert_eq!(task_a["status"], "pass");
+    assert_eq!(task_a["task"]["status"], "open");
+    assert_eq!(task_a["task"]["title"], "Task A");
 
     let task_b = run_command_json(
         &[
@@ -829,8 +833,10 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
         ],
         &state_dir,
     );
-    assert_eq!(task_b["status"], "open");
-    assert_eq!(task_b["title"], "Task B");
+    assert_eq!(task_b["surface"], "vida task create");
+    assert_eq!(task_b["status"], "pass");
+    assert_eq!(task_b["task"]["status"], "open");
+    assert_eq!(task_b["task"]["title"], "Task B");
 
     let dep = run_command_json(
         &["task", "dep", "add", "vida-b", "vida-a", "blocks", "--json"],
@@ -853,8 +859,10 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
         ],
         &state_dir,
     );
-    assert_eq!(updated["status"], "in_progress");
-    assert_eq!(updated["notes"], "planning round trip proof");
+    assert_eq!(updated["surface"], "vida task update");
+    assert_eq!(updated["status"], "pass");
+    assert_eq!(updated["task"]["status"], "in_progress");
+    assert_eq!(updated["task"]["notes"], "planning round trip proof");
 
     let deps = run_command_json(&["task", "deps", "vida-b", "--json"], &state_dir);
     assert_eq!(deps["task_id"], "vida-b");
@@ -889,8 +897,11 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
     assert_eq!(critical_path["root_task_id"], "vida-a");
     assert_eq!(critical_path["terminal_task_id"], "vida-b");
 
-    let validate = run_and_assert_success(&["task", "validate-graph", "--json"], &state_dir);
-    assert_eq!(validate.trim(), "[]");
+    let validate = run_command_json(&["task", "validate-graph", "--json"], &state_dir);
+    assert_eq!(validate["surface"], "vida task validate-graph");
+    assert_eq!(validate["status"], "pass");
+    assert_eq!(validate["valid"], true);
+    assert_eq!(validate["issue_count"], 0);
 
     let closed = run_command_json(
         &[
@@ -2633,9 +2644,11 @@ fn task_update_accepts_notes_file_for_shell_safe_progress_recording() {
         &state_dir,
     );
 
-    assert_eq!(parsed["status"], "in_progress");
+    assert_eq!(parsed["surface"], "vida task update");
+    assert_eq!(parsed["status"], "pass");
+    assert_eq!(parsed["task"]["status"], "in_progress");
     assert_eq!(
-        parsed["notes"],
+        parsed["task"]["notes"],
         "line 1\nline 2 with `backticks` and $(shell-like text)\n"
     );
 

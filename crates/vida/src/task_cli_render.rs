@@ -295,7 +295,14 @@ pub(crate) fn print_task_mutation(
     task: &TaskRecord,
     as_json: bool,
 ) {
-    if crate::surface_render::print_surface_json(task, as_json, "task should render as json") {
+    let payload = build_pass_operator_surface_payload(
+        title,
+        serde_json::json!({
+            "task_id": task.id,
+            "task": task,
+        }),
+    );
+    if crate::surface_render::print_surface_json(&payload, as_json, "task should render as json") {
         return;
     }
 

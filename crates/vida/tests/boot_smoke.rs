@@ -10717,11 +10717,16 @@ fn taskflow_task_create_routes_through_local_db_bridge_with_display_id_allocatio
     let stderr = String::from_utf8_lossy(&output.stderr);
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("taskflow task create json should parse");
-    assert_eq!(parsed["id"], "vida-child");
-    assert_eq!(parsed["status"], "open");
-    assert_eq!(parsed["display_id"], child_display_id);
-    assert_eq!(parsed["description"], "bridge-task");
-    assert_eq!(parsed["dependencies"][0]["depends_on_id"], "vida-root");
+    assert_eq!(parsed["surface"], "vida task create");
+    assert_eq!(parsed["status"], "pass");
+    assert_eq!(parsed["task"]["id"], "vida-child");
+    assert_eq!(parsed["task"]["status"], "open");
+    assert_eq!(parsed["task"]["display_id"], child_display_id);
+    assert_eq!(parsed["task"]["description"], "bridge-task");
+    assert_eq!(
+        parsed["task"]["dependencies"][0]["depends_on_id"],
+        "vida-root"
+    );
     assert!(!stderr.contains("delegated-taskflow-binary-ran"));
 }
 
@@ -10822,9 +10827,11 @@ fn task_root_mutation_commands_use_authoritative_db_store_without_taskflow_binar
     let create_child_stdout = String::from_utf8_lossy(&create_child.stdout);
     let create_child_json: serde_json::Value =
         serde_json::from_str(&create_child_stdout).expect("task create json should parse");
-    assert_eq!(create_child_json["id"], "vida-child");
-    assert_eq!(create_child_json["status"], "open");
-    assert_eq!(create_child_json["description"], "root-task");
+    assert_eq!(create_child_json["surface"], "vida task create");
+    assert_eq!(create_child_json["status"], "pass");
+    assert_eq!(create_child_json["task"]["id"], "vida-child");
+    assert_eq!(create_child_json["task"]["status"], "open");
+    assert_eq!(create_child_json["task"]["description"], "root-task");
     assert!(
         !String::from_utf8_lossy(&create_child.stderr).contains("delegated-taskflow-binary-ran")
     );
@@ -10855,9 +10862,11 @@ fn task_root_mutation_commands_use_authoritative_db_store_without_taskflow_binar
     let ensure_child_stdout = String::from_utf8_lossy(&ensure_child.stdout);
     let ensure_child_json: serde_json::Value =
         serde_json::from_str(&ensure_child_stdout).expect("task ensure json should parse");
-    assert_eq!(ensure_child_json["id"], "vida-child");
-    assert_eq!(ensure_child_json["status"], "open");
-    assert_eq!(ensure_child_json["description"], "root-task");
+    assert_eq!(ensure_child_json["surface"], "vida task ensure");
+    assert_eq!(ensure_child_json["status"], "pass");
+    assert_eq!(ensure_child_json["task"]["id"], "vida-child");
+    assert_eq!(ensure_child_json["task"]["status"], "open");
+    assert_eq!(ensure_child_json["task"]["description"], "root-task");
     assert!(
         !String::from_utf8_lossy(&ensure_child.stderr).contains("delegated-taskflow-binary-ran")
     );
@@ -10885,8 +10894,10 @@ fn task_root_mutation_commands_use_authoritative_db_store_without_taskflow_binar
     let update_stdout = String::from_utf8_lossy(&update.stdout);
     let update_json: serde_json::Value =
         serde_json::from_str(&update_stdout).expect("task update json should parse");
-    assert_eq!(update_json["status"], "in_progress");
-    assert_eq!(update_json["notes"], "root-surface-update");
+    assert_eq!(update_json["surface"], "vida task update");
+    assert_eq!(update_json["status"], "pass");
+    assert_eq!(update_json["task"]["status"], "in_progress");
+    assert_eq!(update_json["task"]["notes"], "root-surface-update");
     assert!(!String::from_utf8_lossy(&update.stderr).contains("delegated-taskflow-binary-ran"));
 
     let show = vida()
