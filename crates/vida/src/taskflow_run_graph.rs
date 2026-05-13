@@ -2719,6 +2719,60 @@ fn canonicalize_resume_meta(status: &mut RunGraphStatus) {
     }
 }
 
+fn dispatch_replay_node_from_receipt(receipt: &RunGraphDispatchReceipt) -> Option<String> {
+    receipt
+        .downstream_dispatch_active_target
+        .as_deref()
+        .or(receipt.downstream_dispatch_last_target.as_deref())
+        .or(Some(receipt.dispatch_target.as_str()))
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "none" && *value != "unknown")
+        .map(|value| value.strip_suffix("_lane").unwrap_or(value).to_string())
+}
+
+fn status_with_active_exception_dispatch_replay(
+    status: &RunGraphStatus,
+    receipt: &RunGraphDispatchReceipt,
+) -> Option<RunGraphStatus> {
+    if !active_exception_takeover_receipt_matches_status(status, Some(receipt)) {
+        return None;
+    }
+    let node = dispatch_replay_node_from_receipt(receipt)?;
+    let (handoff_state, resume_target) =
+        governance_handoff(Some(&node), DispatchTargetFormat::Lane);
+    let mut replay = status.clone();
+    replay.next_node = Some(node);
+    replay.handoff_state = handoff_state;
+    replay.resume_target = resume_target;
+    replay.recovery_ready = true;
+    if replay.policy_gate.trim().is_empty() || replay.policy_gate == "none" {
+        replay.policy_gate = "exception_takeover_dispatch_replay".to_string();
+    }
+    Some(replay)
+}
+
+async fn reconcile_dispatch_init_status_for_active_exception(
+    store: &StateStore,
+    status: RunGraphStatus,
+) -> Result<RunGraphStatus, String> {
+    if status.recovery_ready && status.resume_target.starts_with("dispatch.") {
+        return Ok(status);
+    }
+    let receipt = store
+        .run_graph_dispatch_receipt(&status.run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read run-graph dispatch receipt for `{}` while reconciling dispatch-init recovery: {error}",
+                status.run_id
+            )
+        })?;
+    Ok(receipt
+        .as_ref()
+        .and_then(|receipt| status_with_active_exception_dispatch_replay(&status, receipt))
+        .unwrap_or(status))
+}
+
 fn meta_string_field(meta: &serde_json::Value, key: &str) -> Option<Option<String>> {
     meta.get(key)?;
     Some(
@@ -3769,22 +3823,81 @@ async fn reseed_explicit_task_graph_binding_for_dispatch_init(
     Ok(Some(bound_task_id.to_string()))
 }
 
+fn task_record_dispatch_seed_request_text(task: &crate::state_store::TaskRecord) -> String {
+    let mut parts = Vec::new();
+    let title = task.title.trim();
+    if !title.is_empty() {
+        parts.push(title.to_string());
+    }
+    let description = task.description.trim();
+    if !description.is_empty() && description != title {
+        parts.push(description.to_string());
+    }
+    if !task.planner_metadata.owned_paths.is_empty() {
+        parts.push(format!(
+            "Owned paths: {}.",
+            task.planner_metadata.owned_paths.join(", ")
+        ));
+    }
+    if !task.planner_metadata.proof_targets.is_empty() {
+        parts.push(format!(
+            "Proof targets: {}.",
+            task.planner_metadata.proof_targets.join(", ")
+        ));
+    }
+    if parts.is_empty() {
+        task.id.clone()
+    } else {
+        parts.join("\n\n")
+    }
+}
+
+async fn seed_existing_task_for_dispatch_init(
+    store: &StateStore,
+    task_id: &str,
+) -> Result<Option<String>, String> {
+    let task = match store.show_task(task_id).await {
+        Ok(task) => task,
+        Err(_) => return Ok(None),
+    };
+    let request_text = task_record_dispatch_seed_request_text(&task);
+    let payload = derive_seeded_run_graph_status(store, task_id, &request_text).await?;
+    persist_seed_artifacts(store, &payload).await?;
+    Ok(Some(task_id.to_string()))
+}
+
 pub(crate) async fn prepare_run_graph_dispatch_init_artifacts(
     store: &StateStore,
     run_id: &str,
 ) -> Result<RunGraphDispatchInitArtifacts, String> {
-    let effective_run_id = reseed_explicit_task_graph_binding_for_dispatch_init(store, run_id)
+    let mut effective_run_id = reseed_explicit_task_graph_binding_for_dispatch_init(store, run_id)
         .await?
         .unwrap_or_else(|| run_id.to_string());
-    let status = store
-        .run_graph_status(&effective_run_id)
-        .await
-        .map_err(|error| {
-            format!(
+    let status = match store.run_graph_status(&effective_run_id).await {
+        Ok(status) => status,
+        Err(error) => {
+            let original_error = format!(
                 "Failed to read run-graph state for `{}`: {error}",
                 effective_run_id
-            )
-        })?;
+            );
+            match seed_existing_task_for_dispatch_init(store, &effective_run_id).await? {
+                Some(seeded_run_id) => {
+                    effective_run_id = seeded_run_id;
+                    store
+                        .run_graph_status(&effective_run_id)
+                        .await
+                        .map_err(|error| {
+                            format!(
+                                "Failed to read seeded run-graph state for `{}`: {error}",
+                                effective_run_id
+                            )
+                        })?
+                }
+                None => return Err(original_error),
+            }
+        }
+    };
+    let status = reconcile_dispatch_init_status_for_active_exception(store, status).await?;
     let context = store
         .run_graph_dispatch_context(&effective_run_id)
         .await
@@ -7106,6 +7219,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_init_reconciles_active_exception_takeover_status_for_replay() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        let run_id = "task-exception-replay";
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            run_id,
+            "Fix run-graph dispatch-init replay after active exception takeover. Owned paths: crates/vida/src/taskflow_run_graph.rs.",
+        )
+        .await
+        .expect("seed should be generated");
+        persist_seed_artifacts(&store, &payload)
+            .await
+            .expect("persist seeded artifacts should succeed");
+
+        let mut blocked_status = payload.status.clone();
+        blocked_status.active_node = "implementer".to_string();
+        blocked_status.next_node = None;
+        blocked_status.handoff_state = "none".to_string();
+        blocked_status.resume_target = "none".to_string();
+        blocked_status.recovery_ready = false;
+        store
+            .record_run_graph_status(&blocked_status)
+            .await
+            .expect("persist blocked exception status");
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: run_id.to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_exception_takeover".to_string(),
+                supersedes_receipt_id: Some("sup-exception-replay".to_string()),
+                exception_path_receipt_id: Some("exc-exception-replay".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/stale-exception-replay-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/stale-exception-replay-result.json".to_string()),
+                blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+                downstream_dispatch_target: Some("implementer".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["pending_terminal_write_evidence".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("blocked".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("implementer".to_string()),
+                downstream_dispatch_last_target: Some("implementer".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some(blocked_status.selected_backend.clone()),
+                recorded_at: "2026-05-13T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist active exception receipt");
+
+        let dispatch_init = run_graph_dispatch_init(&store, run_id)
+            .await
+            .expect("dispatch init should reconcile active exception takeover");
+        assert_eq!(
+            dispatch_init["run_graph_bootstrap"]["latest_status"]["recovery_ready"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            dispatch_init["run_graph_bootstrap"]["latest_status"]["resume_target"],
+            serde_json::json!("dispatch.implementer_lane")
+        );
+        assert_eq!(
+            dispatch_init["dispatch_receipt"]["dispatch_target"].as_str(),
+            Some("implementer")
+        );
+    }
+
+    #[tokio::test]
     async fn dispatch_init_reseeds_explicit_task_graph_binding_into_bound_task_run() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let store = StateStore::open(harness.path().to_path_buf())
@@ -7181,6 +7377,76 @@ mod tests {
             .expect("reseeded receipt should exist");
         assert_eq!(reseeded_receipt.run_id, "task-new");
         assert!(reseeded_receipt.dispatch_packet_path.is_some());
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_seeds_existing_task_without_prior_run_graph_state() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "taskflow-graph-summary-open-cycle-gate",
+                title: "Graph summary must respect open delegated cycle gate",
+                display_id: None,
+                description: "Fix graph-summary so operator status and next actions account for active run/recovery gates before backlog ready-head guidance.",
+                issue_type: "task",
+                status: "open",
+                priority: 2,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_proxy.rs".to_string()],
+                    proof_targets: vec![
+                        "vida taskflow graph-summary --json reports open_delegated_cycle when an active delegated cycle is open."
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create taskflow task");
+
+        let payload = run_graph_dispatch_init(&store, "taskflow-graph-summary-open-cycle-gate")
+            .await
+            .expect("dispatch-init should seed the existing task and succeed");
+
+        assert_eq!(
+            payload["requested_run_id"],
+            "taskflow-graph-summary-open-cycle-gate"
+        );
+        assert_eq!(payload["run_id"], "taskflow-graph-summary-open-cycle-gate");
+        assert_eq!(
+            payload["dispatch_receipt"]["run_id"],
+            "taskflow-graph-summary-open-cycle-gate"
+        );
+        assert!(payload["dispatch_packet_path"].as_str().is_some());
+
+        let status = store
+            .run_graph_status("taskflow-graph-summary-open-cycle-gate")
+            .await
+            .expect("seeded run-graph status should exist");
+        assert_eq!(status.task_id, "taskflow-graph-summary-open-cycle-gate");
+
+        let context = store
+            .run_graph_dispatch_context("taskflow-graph-summary-open-cycle-gate")
+            .await
+            .expect("seeded dispatch context lookup should succeed")
+            .expect("seeded dispatch context should exist");
+        assert!(context
+            .request_text
+            .contains("Graph summary must respect open delegated cycle gate"));
+        assert!(context
+            .request_text
+            .contains("crates/vida/src/taskflow_proxy.rs"));
     }
 
     #[tokio::test]

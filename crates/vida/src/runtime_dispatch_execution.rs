@@ -10,7 +10,7 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::os::windows::process::ExitStatusExt;
 
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
-use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
+use crate::{RuntimeConsumptionLaneSelection, StateStore, yaml_lookup};
 
 fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> &str {
     match dispatch_target {
@@ -482,6 +482,24 @@ fn execute_wrapped_command(
         }
 
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn internal_host_activation_only_blocker_code(
+    project_root: &Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    timed_out: bool,
+) -> String {
+    if timed_out {
+        crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT.to_string()
+    } else {
+        crate::runtime_dispatch_state::internal_host_activation_view_only_blocker_code(
+            project_root,
+            role_selection,
+            receipt,
+        )
+        .to_string()
     }
 }
 
@@ -1608,12 +1626,12 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
                 "internal host carrier for `{selected_cli_system}` completed without returning an agent_message result"
             )
         };
-        let blocker_code =
-            crate::runtime_dispatch_state::internal_host_activation_view_only_blocker_code(
-                project_root,
-                role_selection,
-                receipt,
-            );
+        let blocker_code = internal_host_activation_only_blocker_code(
+            project_root,
+            role_selection,
+            receipt,
+            timed_out,
+        );
         body.insert("blocker_code".to_string(), serde_json::json!(blocker_code));
         body.insert(
             "blocker_reason".to_string(),
@@ -2085,14 +2103,15 @@ mod tests {
     #[cfg(unix)]
     use super::execute_wrapped_command;
     use super::{
-        agent_lane_dispatch_result, configured_internal_host_activation_parts,
-        configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
-        dispatch_packet_prompt, execute_external_agent_lane_dispatch,
-        external_provider_output_confirms_execution, internal_codex_output_confirms_execution,
+        CommandTimeoutWrapper, agent_lane_dispatch_result,
+        configured_internal_host_activation_parts, configured_internal_host_runtime_env,
+        dispatch_packet_path_should_render_as_downstream, dispatch_packet_prompt,
+        execute_external_agent_lane_dispatch, external_provider_output_confirms_execution,
+        internal_codex_output_confirms_execution, internal_host_activation_only_blocker_code,
         mark_dispatch_result_execution_evidence, parse_external_provider_output,
         parse_internal_codex_exec_output,
         should_render_store_backed_activation_view_for_internal_failure,
-        wrap_command_with_optional_timeout, CommandTimeoutWrapper,
+        wrap_command_with_optional_timeout,
     };
     use crate::RuntimeConsumptionLaneSelection;
     use std::path::{Path, PathBuf};
@@ -2439,6 +2458,76 @@ dispatch:
         assert_eq!(
             stdin_payload.as_deref(),
             Some(dispatch_packet_prompt("/tmp/project/.vida/dispatch.json").as_str())
+        );
+    }
+
+    #[test]
+    fn internal_host_activation_only_timeout_uses_timeout_blocker() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Continue development".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-internal-timeout-code".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-13T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            internal_host_activation_only_blocker_code(
+                Path::new("/tmp/project"),
+                &role_selection,
+                &receipt,
+                true,
+            ),
+            crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
+        );
+        assert_eq!(
+            internal_host_activation_only_blocker_code(
+                Path::new("/tmp/project"),
+                &role_selection,
+                &receipt,
+                false,
+            ),
+            "internal_activation_view_only"
         );
     }
 
@@ -3178,8 +3267,8 @@ agent_system:
     }
 
     #[test]
-    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing(
-    ) {
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing()
+     {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -3202,8 +3291,8 @@ agent_system:
     }
 
     #[test]
-    fn backend_is_admissible_for_dispatch_target_fails_closed_for_execution_preparation_when_canonical_lane_key_missing(
-    ) {
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_execution_preparation_when_canonical_lane_key_missing()
+     {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -3505,10 +3594,12 @@ agent_system:
             result["backend_dispatch"]["provider_error"],
             serde_json::Value::Null
         );
-        assert!(!result["blocker_reason"]
-            .as_str()
-            .expect("blocker reason should render")
-            .contains("SHOULD_NOT_LAUNCH"));
+        assert!(
+            !result["blocker_reason"]
+                .as_str()
+                .expect("blocker reason should render")
+                .contains("SHOULD_NOT_LAUNCH")
+        );
 
         let _ = std::fs::remove_dir_all(&project_root);
     }

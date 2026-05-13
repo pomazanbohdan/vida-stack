@@ -921,14 +921,16 @@ fn route_has_backend_hints(execution_plan: &serde_json::Value, route: &serde_jso
 
 fn admissible_backend_candidates_for_dispatch_target(
     execution_plan: &serde_json::Value,
-    _dispatch_target: &str,
+    dispatch_target: &str,
     route: &serde_json::Value,
     inherited_selected_backend: Option<&str>,
     activation_agent_type: Option<&str>,
 ) -> Vec<String> {
     let route_is_backend_agnostic = !route_has_backend_hints(execution_plan, route);
+    let strict_required = dispatch_target_requires_strict_backend_admissibility(dispatch_target);
     let mut candidates = Vec::new();
     let inherited = inherited_selected_backend.map(str::to_string);
+    let activation = activation_agent_type.map(str::to_string);
     let runtime_assignment_backend = runtime_assignment_backend_for_route(execution_plan, route);
     let route_primary = route_primary_backend_hint_from_route(route);
     let route_fallback = fallback_executor_backend_from_route(route);
@@ -939,8 +941,10 @@ fn admissible_backend_candidates_for_dispatch_target(
         .chain(route_fanout.iter())
         .any(|backend_id| backend_policy_from_execution_plan(execution_plan, backend_id).is_some());
     let prefer_route_backends_first = !route_is_backend_agnostic && route_backends_have_policy;
-    if let Some(runtime_assignment_backend) = runtime_assignment_backend.as_ref() {
-        candidates.push(runtime_assignment_backend.clone());
+    if !strict_required {
+        if let Some(runtime_assignment_backend) = runtime_assignment_backend.as_ref() {
+            candidates.push(runtime_assignment_backend.clone());
+        }
     }
     if prefer_route_backends_first {
         if let Some(primary) = route_primary.as_ref() {
@@ -950,6 +954,16 @@ fn admissible_backend_candidates_for_dispatch_target(
             candidates.push(fallback.clone());
         }
         candidates.extend(route_fanout.iter().cloned());
+    }
+    if strict_required {
+        if let Some(activation) = activation.as_ref() {
+            candidates.push(activation.clone());
+        }
+    }
+    if strict_required {
+        if let Some(runtime_assignment_backend) = runtime_assignment_backend.as_ref() {
+            candidates.push(runtime_assignment_backend.clone());
+        }
     }
     if let Some(inherited) = inherited {
         candidates.push(inherited);
@@ -963,10 +977,7 @@ fn admissible_backend_candidates_for_dispatch_target(
         }
         candidates.extend(route_fanout.iter().cloned());
     }
-    if let Some(activation) = activation_agent_type
-        .filter(|_| route_is_backend_agnostic)
-        .map(str::to_string)
-    {
+    if let Some(activation) = activation.filter(|_| route_is_backend_agnostic && !strict_required) {
         candidates.push(activation);
     }
     let mut unique = std::collections::BTreeSet::new();
@@ -15217,6 +15228,12 @@ agent_system:
     #[test]
     fn admissible_selected_backend_prefers_explicit_route_over_inherited_backend_for_coach_lane() {
         let execution_plan = serde_json::json!({
+            "runtime_assignment": {
+                "enabled": true,
+                "selected_carrier_id": "senior",
+                "selected_model_profile_id": "codex_gpt55_high_readonly",
+                "selected_model_provider": "openai"
+            },
             "backend_admissibility_matrix": [
                 {
                     "backend_id": "hermes_cli",
@@ -15249,6 +15266,42 @@ agent_system:
         );
 
         assert_eq!(selected.as_deref(), Some("hermes_cli"));
+    }
+
+    #[test]
+    fn admissible_selected_backend_prefers_activation_over_inadmissible_inherited_for_implementer()
+    {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "senior",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "verification": true,
+                        "implementation": false
+                    }
+                },
+                {
+                    "backend_id": "junior",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "implementation": {}
+            }
+        });
+
+        let selected = admissible_selected_backend_for_dispatch_target(
+            &execution_plan,
+            "implementer",
+            Some("junior"),
+            Some("senior"),
+        );
+
+        assert_eq!(selected.as_deref(), Some("junior"));
     }
 
     #[test]
