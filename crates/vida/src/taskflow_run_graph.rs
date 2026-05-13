@@ -668,24 +668,34 @@ fn recovery_surface_contract(
     Option<String>,
     Option<String>,
 ) {
-    let mut blocker_codes = summary
-        .delegation_gate
-        .blocker_code
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| vec![value.to_string()])
-        .unwrap_or_default();
+    let projection_resolves_open_cycle =
+        recovery_projection_resolves_persisted_open_cycle(summary, projection_truth);
+    let mut blocker_codes = if projection_resolves_open_cycle {
+        Vec::new()
+    } else {
+        summary
+            .delegation_gate
+            .blocker_code
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| vec![value.to_string()])
+            .unwrap_or_default()
+    };
     blocker_codes.extend(projection_truth_blocker_codes(projection_truth));
     let blocker_codes = normalize_run_graph_blocker_codes(&blocker_codes, false);
 
-    let next_action = projection_truth
-        .next_lawful_operator_action
-        .as_deref()
-        .map(|command| RecoveryNextAction {
-            command: command.to_string(),
-            surface: recommended_surface_for_command(command),
-            reason: recovery_next_action_reason(command, summary, projection_truth),
-        });
+    let next_action = if projection_resolves_open_cycle {
+        None
+    } else {
+        projection_truth
+            .next_lawful_operator_action
+            .as_deref()
+            .map(|command| RecoveryNextAction {
+                command: command.to_string(),
+                surface: recommended_surface_for_command(command),
+                reason: recovery_next_action_reason(command, summary, projection_truth),
+            })
+    };
     let why_not_now = (!blocker_codes.is_empty()).then(|| {
         let delegated_cycle_open = summary.delegation_gate.delegated_cycle_open;
         let stale_state_suspected = projection_truth.stale_state_suspected;
@@ -732,6 +742,32 @@ fn recovery_surface_contract(
         recommended_command,
         recommended_surface,
     )
+}
+
+fn recovery_projection_resolves_persisted_open_cycle(
+    summary: &crate::state_store::RunGraphRecoverySummary,
+    projection_truth: &RunGraphProjectionTruth,
+) -> bool {
+    if !summary.delegation_gate.delegated_cycle_open {
+        return false;
+    }
+    if summary.delegation_gate.blocker_code.as_deref() != Some("open_delegated_cycle") {
+        return false;
+    }
+    if projection_truth.projection_vs_receipt_parity != "reconciled_from_receipt" {
+        return false;
+    }
+    if !projection_truth_blocker_codes(projection_truth).is_empty() {
+        return false;
+    }
+    projection_truth
+        .dispatch_receipt
+        .as_ref()
+        .is_some_and(|receipt| {
+            receipt.dispatch_status == "executed"
+                && receipt.blocker_code.is_none()
+                && receipt.downstream_dispatch_blockers.is_empty()
+        })
 }
 
 async fn build_run_graph_diagnosis(
@@ -5339,6 +5375,62 @@ mod tests {
             recommended_surface.as_deref(),
             Some("vida taskflow consume continue")
         );
+    }
+
+    #[test]
+    fn recovery_surface_contract_suppresses_stale_open_cycle_after_lane_completion_receipt() {
+        let summary = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-lane-complete".to_string(),
+            task_id: "run-lane-complete".to_string(),
+            active_node: "pm".to_string(),
+            lifecycle_stage: "pm_active".to_string(),
+            resume_node: None,
+            resume_status: "ready".to_string(),
+            checkpoint_kind: "conversation_cursor".to_string(),
+            resume_target: "none".to_string(),
+            policy_gate: "single_task_scope_required".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: true,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "pm".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "delegated_lane_active".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                lifecycle_stage: "pm_active".to_string(),
+            },
+        };
+        let mut receipt = packet_gate_receipt("run-lane-complete");
+        receipt.dispatch_target = "pm".to_string();
+        receipt.dispatch_status = "executed".to_string();
+        receipt.lane_status = "lane_running".to_string();
+        receipt.dispatch_result_path = Some("/tmp/run-lane-complete-result.json".to_string());
+        receipt.downstream_dispatch_result_path =
+            Some("/tmp/run-lane-complete-result.json".to_string());
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason: "receipt-backed lane completion reconciled status".to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: true,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(
+                "vida taskflow run-graph status run-lane-complete --json".to_string(),
+            ),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
+            recovery_surface_contract(&summary, &projection_truth);
+
+        assert!(blocker_codes.is_empty());
+        assert!(why_not_now.is_none());
+        assert!(next_action.is_none());
+        assert!(recommended_command.is_none());
+        assert!(recommended_surface.is_none());
     }
 
     #[test]
