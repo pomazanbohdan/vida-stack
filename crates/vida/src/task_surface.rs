@@ -2985,6 +2985,20 @@ fn pass_task_next_lawful_receipt(
     }
 }
 
+fn runtime_binding_task_closed_next_action(
+    binding: &state_store::RunGraphContinuationBinding,
+) -> String {
+    let run_id = binding.run_id.trim();
+    if run_id.is_empty() {
+        return crate::status_surface_signals::continuation_binding_ambiguous_next_action()
+            .to_string();
+    }
+    format!(
+        "Runtime binding points to closed task `{}` for run `{run_id}`. Inspect the concrete recovery state with `vida taskflow recovery status {run_id} --json`; resolve or retire the blocked run, then refresh continuation evidence with `vida taskflow consume continue --json` before selecting the next bounded step.",
+        binding.task_id
+    )
+}
+
 fn task_next_lawful_receipt(
     tasks: &[state_store::TaskRecord],
     ready_task_candidates: Vec<TaskContinuationCandidate>,
@@ -3026,7 +3040,7 @@ fn task_next_lawful_receipt(
                     binding.active_bounded_unit.clone(),
                     ready_task_candidates,
                     "runtime_binding_task_closed",
-                    "Refresh continuation evidence after close/release automation before continuing.",
+                    &runtime_binding_task_closed_next_action(binding),
                 );
             }
         }
@@ -3038,13 +3052,13 @@ fn task_next_lawful_receipt(
                 .iter()
                 .any(|candidate| candidate.task_id == binding.task_id)
         {
-            return blocked_task_next_lawful_receipt(
-                binding.active_bounded_unit.clone(),
-                ready_task_candidates,
-                "runtime_ready_candidate_conflict",
-                "Runtime binding and TaskFlow ready candidates differ; inspect `vida status --json` and bind/close the intended task explicitly.",
-            );
-        }
+                return blocked_task_next_lawful_receipt(
+                    binding.active_bounded_unit.clone(),
+                    ready_task_candidates,
+                    "runtime_ready_candidate_conflict",
+                    crate::status_surface_signals::continuation_binding_ambiguous_next_action(),
+                );
+            }
         return pass_task_next_lawful_receipt(
             binding.active_bounded_unit.clone(),
             Some(binding.binding_source.clone()),
@@ -5271,6 +5285,27 @@ mod tests {
             receipt.binding_source.as_deref(),
             Some("consume_continue_after_downstream_chain")
         );
+    }
+
+    #[test]
+    fn task_next_lawful_blocks_closed_run_graph_binding_with_concrete_recovery_action() {
+        let mut closed_task = owned_task_record("closed-feature-task", vec![]);
+        closed_task.status = "closed".to_string();
+        let binding = test_continuation_binding(
+            "current-run",
+            "closed-feature-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+
+        let receipt = task_next_lawful_receipt(&[closed_task], Vec::new(), Some(&binding));
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["runtime_binding_task_closed"]);
+        assert!(receipt.next_actions.iter().any(|action| {
+            action.contains("vida taskflow recovery status current-run --json")
+                && action.contains("closed-feature-task")
+        }));
     }
 
     #[test]

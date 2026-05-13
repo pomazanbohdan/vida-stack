@@ -587,6 +587,34 @@ fn canonical_lane_show_blocker_codes(blocker_codes: &[String]) -> Vec<String> {
     canonical_codes
 }
 
+fn blocked_lane_show_next_action(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+) -> String {
+    let dispatch_target = summary.dispatch_target.trim();
+    let lane = if dispatch_target.is_empty() {
+        "the blocked delegated lane".to_string()
+    } else {
+        format!("the blocked `{dispatch_target}` lane")
+    };
+    let mut action = format!(
+        "Inspect {lane} for run `{}` with `vida taskflow recovery status {} --json` and keep the blocked dispatch result from `vida lane show {} --json` as evidence.",
+        summary.run_id, summary.run_id, summary.run_id
+    );
+    if recovery_delegated_cycle_open(recovery) {
+        action.push_str(&format!(
+            " If no receipt-backed delegated completion exists, record structured exception takeover for run `{}` with a concrete receipt id, active bounded unit, and owned write scope, then supersede the lane with the same receipt id before local recovery work.",
+            summary.run_id
+        ));
+    } else {
+        action.push_str(&format!(
+            " If the dispatch blocker has already been resolved, rerun `vida taskflow consume continue --run-id {} --json` to refresh continuation evidence.",
+            summary.run_id
+        ));
+    }
+    action
+}
+
 fn derive_lane_show_truth(
     summary: &crate::state_store::RunGraphDispatchReceiptSummary,
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
@@ -645,13 +673,25 @@ fn derive_lane_show_truth(
             );
         } else {
             blocker_codes.push("supersession_without_receipt".to_string());
-            next_actions.push(
+            let receipt_id = summary
+                .exception_path_receipt_id
+                .as_deref()
+                .unwrap_or_default();
+            next_actions.push(if receipt_id.trim().is_empty() {
                 format!(
-                    "Exception-path receipt recorded; record explicit supersession with `vida lane supersede {} --receipt-id <id>` before local write becomes active.",
-                    summary.run_id
-                ),
-            );
+                    "Exception-path receipt recorded for lane `{}` but no concrete receipt id is available; inspect `vida lane show {} --json` and recover the recorded receipt before supersession.",
+                    summary.run_id, summary.run_id
+                )
+            } else {
+                format!(
+                    "Exception-path receipt recorded; record explicit supersession with `vida lane supersede {} --receipt-id {} --json` before local write becomes active.",
+                    summary.run_id, receipt_id
+                )
+            });
         }
+    }
+    if blocked && next_actions.is_empty() {
+        next_actions.push(blocked_lane_show_next_action(summary, recovery));
     }
 
     LaneShowTruth {
@@ -978,9 +1018,10 @@ fn lane_mutation_status_guard(
         recovery.resume_status == "completed" && recovery.lifecycle_stage == "closure_complete"
     });
     if status.status == "completed" || terminal_completed_without_next_unit || recovery_terminal {
+        let next_action = crate::status_surface_signals::terminal_next_action_requires_authoritative_run_state(Some(run_id));
         return Err(format!(
-            "Lane `{run_id}` is no longer active for mutation because run-graph status is terminal (`{}` / `{}`).",
-            status.status, status.lifecycle_stage
+            "Lane `{run_id}` is no longer active for mutation because run-graph status is terminal (`{}` / `{}`). Inspect `vida lane show {run_id} --json` for the persisted lane envelope and continuation evidence. {next_action}",
+            status.status, status.lifecycle_stage,
         ));
     }
     Ok(())
@@ -1842,7 +1883,14 @@ mod tests {
         let truth = derive_lane_show_truth(&summary, None);
 
         assert!(truth.blocked);
-        assert!(truth.next_actions.is_empty());
+        assert!(truth
+            .next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow recovery status run-lane-test --json")));
+        assert!(truth
+            .next_actions
+            .iter()
+            .any(|action| action.contains("vida lane show run-lane-test --json")));
     }
 
     #[test]
@@ -2008,7 +2056,35 @@ mod tests {
         assert!(truth
             .next_actions
             .iter()
-            .any(|value| value.contains("vida lane supersede run-lane-test --receipt-id <id>")));
+            .any(|value| value
+                .contains("vida lane supersede run-lane-test --receipt-id exception-1 --json")));
+    }
+
+    #[test]
+    fn lane_mutation_status_guard_reports_actionable_guidance_for_terminal_closed_lane() {
+        let mut receipt = sample_receipt("executed");
+        receipt.lane_status = crate::LaneStatus::LaneRunning.as_str().to_string();
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-lane-test",
+            "implementation",
+            "closure",
+        );
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.next_node = None;
+        let recovery = crate::state_store::RunGraphRecoverySummary::from_status(status.clone());
+
+        let error = lane_mutation_status_guard(
+            "run-lane-test",
+            Some(&status),
+            Some(&recovery),
+            &receipt,
+        )
+        .expect_err("terminal lane should fail closed");
+
+        assert!(error.contains("vida lane show run-lane-test --json"));
+        assert!(error.contains("vida taskflow run-graph status run-lane-test --json"));
+        assert!(error.contains("vida taskflow continuation bind"));
     }
 
     #[tokio::test]

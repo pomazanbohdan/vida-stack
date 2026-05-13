@@ -14,8 +14,17 @@ pub(crate) fn continuation_binding_ambiguous_next_action() -> &'static str {
     "Do not continue by heuristic. Inspect `vida status --json`, then inspect the authoritative run with `vida taskflow run-graph status` using that concrete `run_id`; if user intent already names the next bounded unit, bind it explicitly with `vida taskflow continuation bind` using the cited `task_id` and `run_id` before further implementation."
 }
 
+pub(crate) fn terminal_next_action_requires_authoritative_run_state(run_id: Option<&str>) -> String {
+    match run_id.filter(|value| !value.trim().is_empty()) {
+        Some(run_id) => format!(
+            "Do not continue by heuristic. First inspect the authoritative run state with `vida taskflow run-graph status {run_id} --json`, then either cite the explicit next bounded unit from the user and bind it with `vida taskflow continuation bind` using that concrete `run_id` and `task_id`, or stop and reconcile why the authoritative run state still lacks the next bounded unit before further implementation."
+        ),
+        None => "Do not continue by heuristic. First inspect the authoritative run state with `vida status --json`, then inspect the authoritative run with `vida taskflow run-graph status` using that concrete `run_id`; if user intent already names the next bounded unit, bind it explicitly with `vida taskflow continuation bind` using the cited `task_id` and `run_id` before further implementation.".to_string(),
+    }
+}
+
 pub(crate) fn run_graph_latest_dispatch_receipt_summary_inconsistent_next_action() -> &'static str {
-    "Refresh the latest run-graph dispatch receipt summary before rerunning `vida status --json` so the latest status and dispatch receipt share the same run_id."
+    "Run `vida status --json` to refresh the latest run-graph dispatch receipt summary, then inspect `vida taskflow recovery latest --json`; rerun the blocked TaskFlow command only after latest status and dispatch receipt share the same concrete run_id."
 }
 
 pub(crate) fn run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action() -> &'static str {
