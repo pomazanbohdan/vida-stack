@@ -303,10 +303,7 @@ fn graph_summary_runtime_gate_blocker_codes(decision: &TaskflowNextDecision) -> 
         _ => None,
     };
 
-    blocker_code
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>()
+    blocker_code.into_iter().collect::<Vec<_>>()
 }
 
 fn normalize_scheduler_max_parallel_agents(activation_bundle: &serde_json::Value) -> u64 {

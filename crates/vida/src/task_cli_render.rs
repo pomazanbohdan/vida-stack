@@ -6,7 +6,7 @@ use crate::state_store::{
     TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode,
     TaskGraphIssue, TaskProgressSummary, TaskRecord,
 };
-use crate::{print_surface_header, print_surface_line, RenderMode};
+use crate::{RenderMode, print_surface_header, print_surface_line};
 
 fn task_read_metadata_value(
     metadata: Option<&crate::task_surface::TaskReadMetadata>,
@@ -41,13 +41,15 @@ fn print_task_read_metadata(
     }
 }
 
-fn build_pass_operator_surface_payload(
+fn build_operator_surface_payload(
     surface: &str,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
     extra_fields: serde_json::Value,
 ) -> serde_json::Value {
     let finalized = finalize_release1_operator_truth(
-        Vec::new(),
-        Vec::new(),
+        blocker_codes,
+        next_actions,
         serde_json::json!({
             "surface": surface,
         }),
@@ -76,6 +78,13 @@ fn build_pass_operator_surface_payload(
         "task operator surface payload should keep release-1 parity"
     );
     payload
+}
+
+fn build_pass_operator_surface_payload(
+    surface: &str,
+    extra_fields: serde_json::Value,
+) -> serde_json::Value {
+    build_operator_surface_payload(surface, Vec::new(), Vec::new(), extra_fields)
 }
 
 fn print_task_record(render: RenderMode, title: &str, task: &TaskRecord) {
@@ -643,10 +652,11 @@ pub(crate) fn print_task_graph_issues(
     issues: &[TaskGraphIssue],
     as_json: bool,
 ) {
+    let payload = build_task_graph_issues_payload(issues);
     if crate::surface_render::print_surface_json(
-        issues,
+        &payload,
         as_json,
-        "task graph issues should render as json",
+        "task graph issues payload should render as json",
     ) {
         return;
     }
@@ -667,6 +677,36 @@ pub(crate) fn print_task_graph_issues(
             issue.detail
         );
     }
+}
+
+fn build_task_graph_issues_payload(issues: &[TaskGraphIssue]) -> serde_json::Value {
+    let blocker_codes = if issues.is_empty() {
+        Vec::new()
+    } else {
+        crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::DependencyGraphIssues,
+        )
+        .into_iter()
+        .collect()
+    };
+    let next_actions = if issues.is_empty() {
+        Vec::new()
+    } else {
+        vec![
+            "Resolve task graph validation issues and rerun `vida task validate-graph --json`."
+                .to_string(),
+        ]
+    };
+    build_operator_surface_payload(
+        "vida task validate-graph",
+        blocker_codes,
+        next_actions,
+        serde_json::json!({
+            "valid": issues.is_empty(),
+            "issue_count": issues.len(),
+            "issues": issues,
+        }),
+    )
 }
 
 pub(crate) fn print_task_dependency_mutation(
@@ -764,9 +804,11 @@ pub(crate) fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPa
 
 #[cfg(test)]
 mod tests {
-    use super::build_pass_operator_surface_payload;
+    use super::{build_pass_operator_surface_payload, build_task_graph_issues_payload};
     use crate::operator_contracts::shared_operator_output_contract_parity_error;
-    use crate::state_store::{TaskCriticalPathNode, TaskExecutionSemantics, TaskRecord};
+    use crate::state_store::{
+        TaskCriticalPathNode, TaskExecutionSemantics, TaskGraphIssue, TaskRecord,
+    };
 
     fn sample_task(id: &str) -> TaskRecord {
         TaskRecord {
@@ -878,6 +920,48 @@ mod tests {
         assert_eq!(payload["operator_contracts"]["status"], "pass");
         assert_eq!(payload["artifact_refs"]["surface"], "vida task show");
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn print_task_graph_issues_json_uses_release1_operator_envelope() {
+        let pass_payload = build_task_graph_issues_payload(&[]);
+
+        assert_eq!(pass_payload["surface"], "vida task validate-graph");
+        assert_eq!(pass_payload["status"], "pass");
+        assert_eq!(pass_payload["valid"], true);
+        assert_eq!(pass_payload["issue_count"], 0);
+        assert_eq!(
+            pass_payload["artifact_refs"]["surface"],
+            "vida task validate-graph"
+        );
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&pass_payload),
+            None
+        );
+
+        let blocked_payload = build_task_graph_issues_payload(&[TaskGraphIssue {
+            issue_type: "missing_dependency".to_string(),
+            issue_id: "task-a".to_string(),
+            depends_on_id: Some("task-missing".to_string()),
+            edge_type: Some("blocks".to_string()),
+            detail: "dependency is not present".to_string(),
+        }]);
+
+        assert_eq!(blocked_payload["status"], "blocked");
+        assert_eq!(blocked_payload["valid"], false);
+        assert_eq!(blocked_payload["issue_count"], 1);
+        assert_eq!(
+            blocked_payload["blocker_codes"],
+            serde_json::json!(["dependency_graph_issues"])
+        );
+        assert_eq!(
+            blocked_payload["operator_contracts"]["status"],
+            blocked_payload["status"]
+        );
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&blocked_payload),
+            None
+        );
     }
 
     #[test]
