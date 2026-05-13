@@ -706,6 +706,14 @@ fn derive_lane_show_truth(
         };
     }
 
+    if summary.lane_status == crate::LaneStatus::LaneCompleted.as_str() {
+        return LaneShowTruth {
+            blocked: false,
+            blocker_codes: Vec::new(),
+            next_actions: Vec::new(),
+        };
+    }
+
     let recovery_open = recovery_delegated_cycle_open(recovery);
     let mut blocked = lane_summary_dispatch_is_blocked(summary) || recovery_open;
     let mut blocker_codes = lane_summary_raw_blocker_codes(summary, blocked);
@@ -1432,13 +1440,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             receipt.exception_path_receipt_id = None;
             receipt.supersedes_receipt_id = None;
             receipt.dispatch_result_path = Some(completion_result_path);
-            receipt.lane_status = if receipt.dispatch_target == "closure" {
-                crate::LaneStatus::LaneCompleted.as_str().to_string()
-            } else {
-                crate::derive_lane_status(&receipt.dispatch_status, None, None)
-                    .as_str()
-                    .to_string()
-            };
+            receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
             match decode_lane_completion_packet_context(&packet) {
                 Ok(Some((role_selection, run_graph_bootstrap))) => {
                     if let Err(error) =
