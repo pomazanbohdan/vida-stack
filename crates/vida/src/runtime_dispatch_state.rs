@@ -14028,6 +14028,208 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_packet_declares_activation_view_only_from_activation_semantics() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-activation-view-only-packet-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        let packet_path = root.join("packet.json");
+        std::fs::write(
+            &packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "activation_semantics": {
+                    "activation_kind": "activation_view",
+                    "view_only": true,
+                    "executes_packet": false,
+                    "records_completion_receipt": false
+                }
+            }))
+            .expect("packet json should encode"),
+        )
+        .expect("packet should write");
+
+        assert!(dispatch_packet_declares_activation_view_only(Some(
+            &packet_path.display().to_string()
+        )));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn execute_and_record_dispatch_receipt_blocks_internal_activation_view_only_packet_without_launch(
+    ) {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
+        std::fs::create_dir_all(harness.path().join(".vida/config")).expect("config dir");
+        std::fs::create_dir_all(harness.path().join(".vida/db")).expect("db dir");
+        std::fs::create_dir_all(harness.path().join(".vida/project")).expect("project dir");
+        std::fs::write(harness.path().join("AGENTS.md"), "test").expect("agents marker");
+        std::fs::write(
+            harness.path().join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      max_runtime_seconds: 240
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("config should write");
+        let state_root = harness_state_root(&harness);
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should open");
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-activation-view-only-fast-block",
+            "specification",
+            "specification",
+        );
+        status.task_id = "run-activation-view-only-fast-block".to_string();
+        runtime
+            .block_on(store.record_run_graph_status(&status))
+            .expect("run-graph status should record");
+        drop(store);
+        let dispatch_packet_path = harness.path().join("activation-view-only-spec-packet.json");
+        std::fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "dispatch_target": "specification",
+                "activation_semantics": {
+                    "activation_kind": "activation_view",
+                    "view_only": true,
+                    "executes_packet": false,
+                    "records_completion_receipt": false
+                },
+                "effective_execution_posture": {
+                    "selected_execution_class": "internal"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Create the bounded TaskFlow case catalog.".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["specification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "specification": true
+                        }
+                    }
+                ],
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "specification": {
+                                "backend_id": "internal_subagents",
+                                "backend_class": "internal"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-activation-view-only-fast-block"
+        });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-activation-view-only-fast-block".to_string(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("pm".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-13T00:00:00Z".to_string(),
+        };
+
+        let started = Instant::now();
+        runtime
+            .block_on(execute_and_record_dispatch_receipt(
+                &state_root,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            ))
+            .expect("activation-view-only internal dispatch should block without launching");
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "activation-view-only dispatch should not wait for the internal host window, got {:?}",
+            elapsed
+        );
+        assert_eq!(receipt.dispatch_status, "blocked");
+        assert_eq!(receipt.lane_status, "lane_blocked");
+        assert_eq!(
+            receipt.blocker_code.as_deref(),
+            Some("internal_activation_view_only")
+        );
+        let dispatch_result_path = receipt
+            .dispatch_result_path
+            .as_deref()
+            .expect("dispatch result path should record");
+        let parsed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dispatch_result_path)
+                .expect("dispatch result should read"),
+        )
+        .expect("dispatch result should parse");
+        assert_eq!(parsed["execution_state"], "blocked");
+        assert_eq!(parsed["blocker_code"], "internal_activation_view_only");
+        assert!(parsed["provider_error"]
+            .as_str()
+            .expect("provider_error should render")
+            .contains("activation-view-only"));
+    }
+
+    #[test]
     fn stale_in_flight_dispatch_timeout_seconds_uses_internal_host_window_for_legacy_artifact() {
         let root = std::env::temp_dir().join(format!(
             "vida-legacy-internal-stale-timeout-{}",
@@ -16913,6 +17115,52 @@ fn runtime_dispatch_internal_activation_timeout_result(
     })
 }
 
+fn runtime_dispatch_internal_activation_view_only_result(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    blocker_code: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "surface": receipt.dispatch_surface,
+        "activation_command": receipt.dispatch_command,
+        "status": "blocked",
+        "execution_state": "blocked",
+        "dispatch_target": receipt.dispatch_target,
+        "selected_backend": receipt.selected_backend,
+        "blocker_code": blocker_code,
+        "provider_error": "dispatch packet declares activation-view-only handoff without receipt-backed execution evidence",
+        "blocker_reason": "internal host dispatch is not launched for activation-view-only packets without execution authority",
+        "note": "internal host activation-view-only handoff blocked before launching nested carrier execution",
+    })
+}
+
+fn dispatch_packet_declares_activation_view_only(dispatch_packet_path: Option<&str>) -> bool {
+    let Some(dispatch_packet_path) = dispatch_packet_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let Some(packet) = crate::read_json_file_if_present(std::path::Path::new(dispatch_packet_path))
+    else {
+        return false;
+    };
+    let activation_semantics = packet
+        .get("activation_semantics")
+        .or_else(|| packet.pointer("/activation_evidence/activation_semantics"))
+        .or_else(|| packet.pointer("/activation_vs_execution_evidence/activation_semantics"));
+    let declares_view_only = activation_semantics.is_some_and(|semantics| {
+        semantics["view_only"].as_bool().unwrap_or(false)
+            && !semantics["executes_packet"].as_bool().unwrap_or(true)
+            && !semantics["records_completion_receipt"]
+                .as_bool()
+                .unwrap_or(true)
+    });
+    declares_view_only
+        || packet["activation_evidence"]["evidence_state"].as_str() == Some("activation_view_only")
+        || packet["activation_vs_execution_evidence"]["evidence_state"].as_str()
+            == Some("activation_view_only")
+}
+
 pub(crate) fn dispatch_result_stale_after_seconds(result: &serde_json::Value) -> i64 {
     result["stale_after_seconds"]
         .as_i64()
@@ -16980,6 +17228,36 @@ pub(crate) fn apply_internal_activation_timeout_to_receipt(
         runtime_dispatch_internal_activation_timeout_result(receipt, timeout_seconds, blocker_code);
     let dispatch_result_path =
         write_runtime_dispatch_result(state_root, receipt, &execution_result)?;
+    receipt.dispatch_result_path = Some(dispatch_result_path);
+    receipt.dispatch_status = "blocked".to_string();
+    receipt.lane_status = derive_lane_status(
+        &receipt.dispatch_status,
+        receipt.supersedes_receipt_id.as_deref(),
+        receipt.exception_path_receipt_id.as_deref(),
+    )
+    .as_str()
+    .to_string();
+    receipt.blocker_code = Some(blocker_code.to_string());
+    if let Some(dispatch_surface) = json_string(execution_result.get("surface")) {
+        receipt.dispatch_surface = Some(dispatch_surface);
+    }
+    if let Some(dispatch_command) = json_string(execution_result.get("activation_command")) {
+        receipt.dispatch_command = Some(dispatch_command);
+    }
+    Ok(())
+}
+
+fn apply_internal_activation_view_only_to_receipt(
+    state_root: &Path,
+    project_root: &Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) -> Result<(), String> {
+    let blocker_code =
+        internal_host_activation_view_only_blocker_code(project_root, role_selection, receipt);
+    let execution_result =
+        runtime_dispatch_internal_activation_view_only_result(receipt, blocker_code);
+    let dispatch_result_path = write_runtime_dispatch_result(state_root, receipt, &execution_result)?;
     receipt.dispatch_result_path = Some(dispatch_result_path);
     receipt.dispatch_status = "blocked".to_string();
     receipt.lane_status = derive_lane_status(
@@ -17387,6 +17665,23 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
             format!("Failed to persist in-flight dispatch receipt before execution: {error}")
         })?;
     drop(store);
+    if dispatch_handoff_uses_internal_host(project_root.as_ref(), role_selection, receipt)
+        && dispatch_packet_declares_activation_view_only(receipt.dispatch_packet_path.as_deref())
+    {
+        apply_internal_activation_view_only_to_receipt(
+            state_root,
+            project_root.as_ref(),
+            role_selection,
+            receipt,
+        )?;
+        if let Some(warning) =
+            coordinate_dispatch_timeout_state_best_effort(state_root, run_graph_bootstrap, receipt)
+                .await
+        {
+            return Err(warning);
+        }
+        return Ok(());
+    }
     let execution_result = if dispatch_handoff_requires_outer_timeout(
         project_root.as_ref(),
         role_selection,
