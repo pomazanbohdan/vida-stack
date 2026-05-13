@@ -653,6 +653,96 @@ fn persisted_dispatch_packet_lineage_task_id(packet: &serde_json::Value) -> Opti
         })
 }
 
+async fn explicit_bound_task_graph_resume_run_id(
+    store: &super::StateStore,
+    run_id: &str,
+) -> Result<Option<String>, String> {
+    let binding = store
+        .run_graph_continuation_binding(run_id)
+        .await
+        .map_err(|error| {
+            format!("Failed to read explicit continuation binding for `{run_id}`: {error}")
+        })?;
+    let Some(binding) = binding else {
+        return Ok(None);
+    };
+    if binding.status != "bound"
+        || binding.active_bounded_unit["kind"].as_str() != Some("task_graph_task")
+    {
+        return Ok(None);
+    }
+    let bound_task_id = binding.active_bounded_unit["task_id"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(binding.task_id.as_str());
+    let unit_run_id = binding.active_bounded_unit["run_id"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(run_id);
+    let requested_status = store.run_graph_status(run_id).await.map_err(|error| {
+        format!(
+            "Failed to read persisted run-graph state for `{run_id}` while reconciling explicit continuation binding: {error}"
+        )
+    })?;
+    let requested_run_is_terminal_self_task = requested_status.run_id == run_id
+        && requested_status.task_id == run_id
+        && requested_status.status == "completed"
+        && requested_status.lifecycle_stage == "closure_complete";
+    let bound_run_id = if unit_run_id == run_id
+        && bound_task_id != run_id
+        && requested_run_is_terminal_self_task
+    {
+        bound_task_id
+    } else {
+        unit_run_id
+    };
+    if bound_run_id == run_id {
+        return Ok(None);
+    }
+
+    let bound_status = store.run_graph_status(bound_run_id).await.map_err(|error| {
+        format!(
+            "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but fresh bound-task run-graph status is missing: {error}. Resume must fail closed until fresh run-graph truth is recorded for the bound task."
+        )
+    })?;
+    if bound_status.run_id != bound_run_id || bound_status.task_id != bound_task_id {
+        return Err(format!(
+            "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but fresh bound-task run-graph status resolved to run `{}` and task `{}`. Resume must fail closed until fresh run-graph truth is recorded for the bound task.",
+            bound_status.run_id, bound_status.task_id
+        ));
+    }
+    let bound_receipt = store
+        .run_graph_dispatch_receipt(bound_run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but fresh bound-task dispatch receipt could not be read: {error}. Resume must fail closed until fresh dispatch receipt evidence is recorded for the bound task."
+            )
+        })?
+        .ok_or_else(|| {
+            format!(
+                "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but fresh bound-task dispatch receipt is missing. Resume must fail closed until fresh dispatch receipt evidence is recorded for the bound task."
+            )
+        })?;
+    if bound_receipt.run_id != bound_run_id {
+        return Err(format!(
+            "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but fresh bound-task dispatch receipt resolved to run `{}`. Resume must fail closed until matching dispatch receipt evidence is recorded for the bound task.",
+            bound_receipt.run_id
+        ));
+    }
+    if let Some(packet_path) = bound_receipt.dispatch_packet_path.as_deref() {
+        let packet = read_dispatch_packet(packet_path)?;
+        if let Some(lineage_task_id) = persisted_dispatch_packet_lineage_task_id(&packet) {
+            if lineage_task_id != bound_task_id {
+                return Err(format!(
+                    "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but fresh bound-task dispatch packet lineage at `{packet_path}` points to task `{lineage_task_id}`. Resume must fail closed until matching dispatch packet evidence is recorded for the bound task."
+                ));
+            }
+        }
+    }
+    Ok(Some(bound_run_id.to_string()))
+}
+
 async fn validate_explicit_task_graph_binding_lineage_for_resume(
     store: &super::StateStore,
     run_id: &str,
@@ -3444,6 +3534,16 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
     run_id: &str,
     strict_blocked_receipts: bool,
 ) -> Result<ResumeInputs, String> {
+    if let Some(bound_run_id) = explicit_bound_task_graph_resume_run_id(store, run_id).await? {
+        return Box::pin(
+            resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
+                store,
+                &bound_run_id,
+                strict_blocked_receipts,
+            ),
+        )
+        .await;
+    }
     let mut receipt = match store.run_graph_dispatch_receipt(run_id).await {
         Ok(Some(receipt)) => receipt,
         Ok(None) => match recover_missing_first_dispatch_receipt(store, run_id).await? {
@@ -13068,6 +13168,201 @@ agent_system:
         assert!(replay_lineage
             .origin_checkpoint_ref
             .starts_with(&format!("{run_id}:execution_cursor:none")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_runtime_consumption_resume_inputs_for_run_id_switches_to_fresh_bound_task_run()
+    {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-explicit-binding-fresh-bound-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let old_run_id = "github-116-orchestrator-session-identity";
+        let bound_task_id = "github-116-spec-pack-close-recognition-drift";
+        let mut old_status =
+            crate::taskflow_run_graph::default_run_graph_status(old_run_id, "closure", "delivery");
+        old_status.task_id = old_run_id.to_string();
+        old_status.active_node = "closure".to_string();
+        old_status.next_node = None;
+        old_status.status = "completed".to_string();
+        old_status.lifecycle_stage = "closure_complete".to_string();
+        old_status.resume_target = "none".to_string();
+        old_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&old_status)
+            .await
+            .expect("persist old completed run graph status");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: old_run_id.to_string(),
+                    task_id: bound_task_id.to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": bound_task_id,
+                        "run_id": old_run_id,
+                        "task_status": "in_progress",
+                        "issue_type": "task"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "operator rebound work to the fresh task run".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
+                    request_text: Some("continue development".to_string()),
+                    recorded_at: "2026-05-13T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist explicit continuation binding");
+
+        let mut bound_status = crate::taskflow_run_graph::default_run_graph_status(
+            bound_task_id,
+            "implementer",
+            "delivery",
+        );
+        bound_status.task_id = bound_task_id.to_string();
+        bound_status.active_node = "implementer".to_string();
+        bound_status.status = "ready".to_string();
+        bound_status.lifecycle_stage = "implementer_ready".to_string();
+        bound_status.resume_target = "dispatch.implementer".to_string();
+        bound_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&bound_status)
+            .await
+            .expect("persist fresh bound-task run graph status");
+
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create dispatch packet dir");
+        let packet_path = packet_dir.join("github-116-spec-pack-close-recognition-drift.json");
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "run_id": bound_task_id,
+                "dispatch_target": "implementer",
+                "dispatch_status": "packet_ready",
+                "lane_status": "packet_ready",
+                "dispatch_kind": "taskflow_pack",
+                "dispatch_surface": "vida taskflow consume",
+                "dispatch_command": format!("vida taskflow consume continue --run-id {bound_task_id} --json"),
+                "activation_agent_type": "junior",
+                "activation_runtime_role": "worker",
+                "selected_backend": "taskflow_state_store",
+                "recorded_at": "2026-05-13T00:00:00Z",
+                "request_text": "continue development",
+                "role_selection": {
+                    "selected_role": "pm",
+                    "conversational_mode": "development",
+                    "tracked_flow_entry": "dev-pack",
+                    "confidence": "high"
+                },
+                "role_selection_full": {
+                    "ok": true,
+                    "activation_source": "test",
+                    "selection_mode": "auto",
+                    "fallback_role": "orchestrator",
+                    "request": "continue development",
+                    "selected_role": "pm",
+                    "conversational_mode": "development",
+                    "single_task_only": true,
+                    "tracked_flow_entry": "dev-pack",
+                    "allow_freeform_chat": false,
+                    "confidence": "high",
+                    "matched_terms": ["continue"],
+                    "compiled_bundle": null,
+                    "execution_plan": {
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "execution_lane_sequence": ["implementer", "coach", "verification"]
+                            }
+                        }
+                    },
+                    "reason": "test"
+                },
+                "delivery_task_packet": {
+                    "packet_id": format!("{bound_task_id}::implementer::delivery"),
+                    "goal": "Execute bounded implementer handoff",
+                    "scope_in": ["dispatch_target:implementer", "runtime_role:worker"],
+                    "scope_out": ["mutation outside bounded packet scope"],
+                    "owned_paths": ["crates/vida/src/taskflow_consume_resume.rs"],
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
+                    "definition_of_done": ["bounded runtime result artifact"],
+                    "verification_command": format!("vida taskflow consume continue --run-id {bound_task_id} --json"),
+                    "proof_target": "runtime dispatch result artifact plus updated dispatch receipt",
+                    "stop_rules": ["stop after writing bounded dispatch result or explicit blocker"],
+                    "blocking_question": "What is the next bounded action required for implementer?"
+                },
+                "taskflow_handoff_plan": null,
+                "run_graph_bootstrap": {
+                    "run_id": bound_task_id,
+                    "latest_status": {
+                        "run_id": bound_task_id,
+                        "task_id": bound_task_id
+                    }
+                },
+                "orchestration_contract": null
+            })
+            .to_string(),
+        )
+        .expect("write fresh bound-task dispatch packet");
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: bound_task_id.to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "packet_ready".to_string(),
+                lane_status: "packet_ready".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "taskflow_pack".to_string(),
+                dispatch_surface: Some("vida taskflow consume".to_string()),
+                dispatch_command: Some(format!(
+                    "vida taskflow consume continue --run-id {bound_task_id} --json"
+                )),
+                dispatch_packet_path: Some(packet_path.display().to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("taskflow_state_store".to_string()),
+                recorded_at: "2026-05-13T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist fresh bound-task dispatch receipt");
+
+        let resolved =
+            resolve_runtime_consumption_resume_inputs(&store, Some(old_run_id), None, None)
+                .await
+                .expect("explicit binding should switch resume to fresh bound-task run");
+        assert_eq!(resolved.dispatch_receipt.run_id, bound_task_id);
+        assert_eq!(resolved.dispatch_receipt.dispatch_target, "implementer");
+        assert_eq!(
+            resolved.dispatch_packet_path,
+            packet_path.display().to_string()
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
