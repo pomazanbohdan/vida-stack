@@ -8209,7 +8209,7 @@ fn taskflow_run_graph_seed_builds_scope_discussion_state_from_configured_agent_s
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["selected_backend"],
-        "unknown"
+        "middle"
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["lane_id"],
@@ -8295,7 +8295,7 @@ fn taskflow_run_graph_seed_builds_pbi_discussion_state_from_configured_agent_sys
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["selected_backend"],
-        "unknown"
+        "middle"
     );
     assert_eq!(seed_parsed["payload"]["status"]["lane_id"], "pm_lane");
     assert_eq!(
