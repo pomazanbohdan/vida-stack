@@ -6,7 +6,7 @@ use crate::state_store::{
     TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode,
     TaskGraphIssue, TaskProgressSummary, TaskRecord,
 };
-use crate::{RenderMode, print_surface_header, print_surface_line};
+use crate::{print_surface_header, print_surface_line, RenderMode};
 
 fn task_read_metadata_value(
     metadata: Option<&crate::task_surface::TaskReadMetadata>,
