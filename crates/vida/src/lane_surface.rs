@@ -495,6 +495,77 @@ fn recovery_takeover_gate(
     })
 }
 
+fn lane_summary_dispatch_is_blocked(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+) -> bool {
+    let dispatch_status = summary.dispatch_status.trim().to_ascii_lowercase();
+    let lane_status = summary.lane_status.trim().to_ascii_lowercase();
+    matches!(dispatch_status.as_str(), "blocked" | "failed")
+        || matches!(lane_status.as_str(), "lane_blocked" | "lane_failed")
+}
+
+fn recovery_delegated_cycle_open(
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+) -> bool {
+    recovery.is_some_and(|recovery| {
+        recovery.delegation_gate.local_exception_takeover_gate == "blocked_open_delegated_cycle"
+            || recovery.delegation_gate.delegated_cycle_open
+    })
+}
+
+fn lane_summary_raw_blocker_codes(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    include_downstream: bool,
+) -> Vec<String> {
+    let mut blocker_codes = Vec::new();
+    if let Some(blocker_code) = summary
+        .blocker_code
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        blocker_codes.push(blocker_code.to_string());
+    }
+    if include_downstream {
+        blocker_codes.extend(
+            summary
+                .downstream_dispatch_blockers
+                .iter()
+                .filter(|value| !value.trim().is_empty())
+                .cloned(),
+        );
+    }
+    if blocker_codes.is_empty() && lane_summary_dispatch_is_blocked(summary) {
+        blocker_codes.push(
+            crate::release1_contracts::blocker_code_str(
+                crate::release1_contracts::BlockerCode::ToolExecutionFailed,
+            )
+            .to_string(),
+        );
+    }
+    blocker_codes
+}
+
+fn canonical_lane_show_blocker_codes(blocker_codes: &[String]) -> Vec<String> {
+    let mut canonical_codes = crate::release1_contracts::canonical_blocker_code_list(blocker_codes);
+    let has_uncanonical_dispatch_blocker = blocker_codes.iter().any(|value| {
+        !value.trim().is_empty()
+            && crate::release1_contracts::canonical_blocker_code_list([value.as_str()]).is_empty()
+    });
+    if has_uncanonical_dispatch_blocker
+        && !canonical_codes.iter().any(|code| code == "tool_execution_failed")
+    {
+        canonical_codes.push(
+            crate::release1_contracts::blocker_code_str(
+                crate::release1_contracts::BlockerCode::ToolExecutionFailed,
+            )
+            .to_string(),
+        );
+        canonical_codes.sort();
+        canonical_codes.dedup();
+    }
+    canonical_codes
+}
+
 fn derive_lane_show_truth(
     summary: &crate::state_store::RunGraphDispatchReceiptSummary,
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
@@ -508,6 +579,22 @@ fn derive_lane_show_truth(
     if summary.lane_status == crate::LaneStatus::LaneExceptionTakeover.as_str()
         && takeover_state.is_active()
     {
+        let blocked = lane_summary_dispatch_is_blocked(summary);
+        let recovery_open = recovery_delegated_cycle_open(recovery);
+        let mut blocker_codes = lane_summary_raw_blocker_codes(summary, blocked);
+        if recovery_open {
+            blocker_codes.push("open_delegated_cycle".to_string());
+        }
+        if blocked || recovery_open || !blocker_codes.is_empty() {
+            return LaneShowTruth {
+                blocked: true,
+                blocker_codes: canonical_lane_show_blocker_codes(&blocker_codes),
+                next_actions: vec![format!(
+                    "Active exception takeover for lane `{}` still has unresolved dispatch evidence; finish the bounded exception unit before retrying continuation.",
+                    summary.run_id
+                )],
+            };
+        }
         return LaneShowTruth {
             blocked: false,
             blocker_codes: Vec::new(),
@@ -523,35 +610,13 @@ fn derive_lane_show_truth(
         };
     }
 
-    let mut blocked = matches!(summary.dispatch_status.as_str(), "blocked" | "failed")
-        || matches!(summary.lane_status.as_str(), "lane_blocked" | "lane_failed");
-    let mut blocker_codes = Vec::new();
+    let mut blocked = lane_summary_dispatch_is_blocked(summary);
+    let mut blocker_codes = lane_summary_raw_blocker_codes(summary, blocked);
     let mut next_actions = Vec::new();
-
-    if let Some(blocker_code) = summary
-        .blocker_code
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        blocker_codes.push(blocker_code.to_string());
-    }
-
-    if blocked {
-        blocker_codes.extend(
-            summary
-                .downstream_dispatch_blockers
-                .iter()
-                .filter(|value| !value.trim().is_empty())
-                .cloned(),
-        );
-    }
 
     if summary.lane_status == crate::LaneStatus::LaneExceptionRecorded.as_str() {
         blocked = true;
-        if recovery.is_some_and(|recovery| {
-            recovery.delegation_gate.local_exception_takeover_gate == "blocked_open_delegated_cycle"
-                || recovery.delegation_gate.delegated_cycle_open
-        }) {
+        if recovery_delegated_cycle_open(recovery) {
             blocker_codes.push("open_delegated_cycle".to_string());
             next_actions.push(
                 "Exception-path receipt recorded; delegated cycle is still open, so root-local write remains blocked."
@@ -570,7 +635,7 @@ fn derive_lane_show_truth(
 
     LaneShowTruth {
         blocked,
-        blocker_codes: crate::release1_contracts::canonical_blocker_code_list(&blocker_codes),
+        blocker_codes: canonical_lane_show_blocker_codes(&blocker_codes),
         next_actions,
     }
 }
@@ -1757,6 +1822,47 @@ mod tests {
 
         assert!(truth.blocked);
         assert!(truth.next_actions.is_empty());
+    }
+
+    #[test]
+    fn derive_lane_show_truth_blocks_active_exception_takeover_with_dispatch_evidence() {
+        let mut receipt = sample_receipt("blocked");
+        receipt.lane_status = crate::LaneStatus::LaneExceptionTakeover
+            .as_str()
+            .to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-0".to_string());
+        receipt.blocker_code = Some("internal_dispatch_timeout_without_receipt".to_string());
+        receipt
+            .downstream_dispatch_blockers
+            .push("internal_dispatch_timeout_without_receipt".to_string());
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-lane-test",
+            "implementation",
+            "coach",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "implementation_blocked".to_string();
+        status.active_node = "coach".to_string();
+        let mut recovery = crate::state_store::RunGraphRecoverySummary::from_status(status);
+        recovery.delegation_gate.local_exception_takeover_gate =
+            "blocked_open_delegated_cycle".to_string();
+        recovery.delegation_gate.delegated_cycle_open = true;
+
+        let truth = derive_lane_show_truth(&summary, Some(&recovery));
+
+        assert!(truth.blocked);
+        assert!(truth
+            .blocker_codes
+            .contains(&"open_delegated_cycle".to_string()));
+        assert!(truth
+            .blocker_codes
+            .contains(&"tool_execution_failed".to_string()));
+        assert!(truth
+            .next_actions
+            .iter()
+            .any(|value| value.contains("finish the bounded exception unit")));
     }
 
     #[test]
