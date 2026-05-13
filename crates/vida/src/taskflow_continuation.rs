@@ -13,6 +13,7 @@ pub(crate) const CONSUME_CONTINUE_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE: &str =
     "consume_continue_after_downstream_chain";
 pub(crate) const CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE: &str =
     "consume_after_downstream_chain";
+const CONTINUATION_BIND_SURFACE: &str = "vida taskflow continuation bind";
 
 pub(crate) fn is_downstream_chain_continuation_binding_source(binding_source: &str) -> bool {
     matches!(
@@ -31,6 +32,117 @@ fn terminal_completed_without_next_unit(status: &RunGraphStatus) -> bool {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .is_none()
+}
+
+fn args_request_json(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--json")
+}
+
+fn continuation_bind_blocked_payload(
+    run_id: Option<&str>,
+    task_id: Option<&str>,
+    error: &str,
+    blocker_code: &str,
+) -> serde_json::Value {
+    let next_actions = vec![
+        "Refresh run-graph and task evidence before recording an explicit continuation binding."
+            .to_string(),
+        "Preserve fail-closed binding semantics until the active bounded unit is unambiguous."
+            .to_string(),
+    ];
+    let artifact_refs = serde_json::json!({
+        "surface": CONTINUATION_BIND_SURFACE,
+        "run_id": run_id,
+        "task_id": task_id,
+    });
+    let blocker_codes = vec![blocker_code.to_string()];
+    serde_json::json!({
+        "surface": CONTINUATION_BIND_SURFACE,
+        "status": "blocked",
+        "error": error,
+        "run_id": run_id,
+        "task_id": task_id,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+        "shared_fields": {
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+        },
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+            "risk_tier": null,
+            "trace_id": null,
+            "workflow_class": null,
+        },
+    })
+}
+
+fn continuation_bind_success_payload(
+    run_id: &str,
+    binding: &RunGraphContinuationBinding,
+) -> serde_json::Value {
+    let next_actions: Vec<String> = Vec::new();
+    let blocker_codes: Vec<String> = Vec::new();
+    let artifact_refs = serde_json::json!({
+        "surface": CONTINUATION_BIND_SURFACE,
+        "run_id": run_id,
+        "task_id": binding.task_id,
+    });
+    serde_json::json!({
+        "surface": CONTINUATION_BIND_SURFACE,
+        "status": "ok",
+        "run_id": run_id,
+        "binding": binding,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+        "shared_fields": {
+            "status": "ok",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+        },
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "ok",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+            "risk_tier": null,
+            "trace_id": null,
+            "workflow_class": null,
+        },
+    })
+}
+
+fn emit_continuation_bind_error(
+    as_json: bool,
+    run_id: Option<&str>,
+    task_id: Option<&str>,
+    error: String,
+    blocker_code: &str,
+    exit_code: u8,
+) -> ExitCode {
+    if as_json {
+        crate::print_json_pretty(&continuation_bind_blocked_payload(
+            run_id,
+            task_id,
+            &error,
+            blocker_code,
+        ));
+    } else {
+        eprintln!("{error}");
+    }
+    ExitCode::from(exit_code)
 }
 
 fn run_graph_active_bounded_unit(status: &RunGraphStatus) -> Option<serde_json::Value> {
@@ -314,53 +426,95 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
     let (run_id, task_id, why, as_json) = match parse_bind_args(args) {
         Ok(parsed) => parsed,
         Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::from(2);
+            return emit_continuation_bind_error(
+                args_request_json(args),
+                None,
+                None,
+                error.to_string(),
+                "invalid_continuation_bind_args",
+                2,
+            );
         }
     };
 
     let store = match StateStore::open_existing(proxy_state_dir()).await {
         Ok(store) => store,
         Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            return ExitCode::from(1);
+            return emit_continuation_bind_error(
+                as_json,
+                Some(&run_id),
+                task_id.as_deref(),
+                format!("Failed to open authoritative state store: {error}"),
+                "taskflow_state_store_unavailable",
+                1,
+            );
         }
     };
     let status = match store.run_graph_status(&run_id).await {
         Ok(status) => status,
         Err(error) => {
-            eprintln!("Failed to read run-graph state for `{run_id}`: {error}");
-            return ExitCode::from(1);
+            return emit_continuation_bind_error(
+                as_json,
+                Some(&run_id),
+                task_id.as_deref(),
+                format!("Failed to read run-graph state for `{run_id}`: {error}"),
+                "continuation_binding_run_graph_missing",
+                1,
+            );
         }
     };
     let request_text = match store.run_graph_dispatch_context(&run_id).await {
         Ok(context) => context.map(|row| row.request_text),
         Err(error) => {
-            eprintln!("Failed to read run-graph dispatch context for `{run_id}`: {error}");
-            return ExitCode::from(1);
+            return emit_continuation_bind_error(
+                as_json,
+                Some(&run_id),
+                task_id.as_deref(),
+                format!("Failed to read run-graph dispatch context for `{run_id}`: {error}"),
+                "continuation_binding_dispatch_context_unavailable",
+                1,
+            );
         }
     };
     let binding = if let Some(task_id) = task_id.as_deref() {
         if !terminal_completed_without_next_unit(&status) {
-            eprintln!(
-                "Explicit --task-id continuation binding is only allowed after run `{run_id}` reaches closure_complete with no downstream target."
+            return emit_continuation_bind_error(
+                as_json,
+                Some(&run_id),
+                Some(task_id),
+                format!(
+                    "Explicit --task-id continuation binding is only allowed after run `{run_id}` reaches closure_complete with no downstream target."
+                ),
+                "continuation_binding_lifecycle_not_closed",
+                1,
             );
-            return ExitCode::from(1);
         }
         let task = match store.show_task(task_id).await {
             Ok(task) => task,
             Err(error) => {
-                eprintln!(
-                    "Failed to read task `{task_id}` for explicit continuation binding: {error}"
+                return emit_continuation_bind_error(
+                    as_json,
+                    Some(&run_id),
+                    Some(task_id),
+                    format!(
+                        "Failed to read task `{task_id}` for explicit continuation binding: {error}"
+                    ),
+                    "continuation_binding_task_missing",
+                    1,
                 );
-                return ExitCode::from(1);
             }
         };
         if task.status == "closed" {
-            eprintln!(
-                "Task `{task_id}` is closed and cannot be recorded as the next lawful bounded unit."
+            return emit_continuation_bind_error(
+                as_json,
+                Some(&run_id),
+                Some(task_id),
+                format!(
+                    "Task `{task_id}` is closed and cannot be recorded as the next lawful bounded unit."
+                ),
+                "continuation_binding_task_closed",
+                1,
             );
-            return ExitCode::from(1);
         }
         match build_task_graph_continuation_binding(
             &run_id,
@@ -370,10 +524,16 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
         ) {
             Some(binding) => binding,
             None => {
-                eprintln!(
-                    "Task `{task_id}` did not yield a valid explicit continuation binding payload."
+                return emit_continuation_bind_error(
+                    as_json,
+                    Some(&run_id),
+                    Some(task_id),
+                    format!(
+                        "Task `{task_id}` did not yield a valid explicit continuation binding payload."
+                    ),
+                    "continuation_binding_payload_invalid",
+                    1,
                 );
-                return ExitCode::from(1);
             }
         }
     } else {
@@ -383,26 +543,34 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
             "explicit_continuation_bind",
             why.as_deref(),
         ) else {
-            eprintln!(
-                "Run `{run_id}` does not expose a bindable active bounded unit; refresh run-graph evidence before binding."
+            return emit_continuation_bind_error(
+                as_json,
+                Some(&run_id),
+                None,
+                format!(
+                    "Run `{run_id}` does not expose a bindable active bounded unit; refresh run-graph evidence before binding."
+                ),
+                "continuation_binding_no_active_bounded_unit",
+                1,
             );
-            return ExitCode::from(1);
         };
         binding
     };
     if let Err(error) = store.record_run_graph_continuation_binding(&binding).await {
-        eprintln!("Failed to record continuation binding: {error}");
-        return ExitCode::from(1);
+        return emit_continuation_bind_error(
+            as_json,
+            Some(&run_id),
+            Some(&binding.task_id),
+            format!("Failed to record continuation binding: {error}"),
+            "continuation_binding_record_failed",
+            1,
+        );
     }
 
     if as_json {
-        crate::print_json_pretty(&serde_json::json!({
-            "surface": "vida taskflow continuation bind",
-            "run_id": run_id,
-            "binding": binding,
-        }));
+        crate::print_json_pretty(&continuation_bind_success_payload(&run_id, &binding));
     } else {
-        print_surface_header(RenderMode::Plain, "vida taskflow continuation bind");
+        print_surface_header(RenderMode::Plain, CONTINUATION_BIND_SURFACE);
         print_surface_line(RenderMode::Plain, "run", &run_id);
         print_surface_line(RenderMode::Plain, "binding_source", &binding.binding_source);
         print_surface_line(
@@ -420,7 +588,8 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         build_run_graph_continuation_binding, build_task_graph_continuation_binding,
-        parse_bind_args, sync_run_graph_continuation_binding, terminal_completed_without_next_unit,
+        continuation_bind_blocked_payload, continuation_bind_success_payload, parse_bind_args,
+        sync_run_graph_continuation_binding, terminal_completed_without_next_unit,
     };
     use std::{
         fs,
@@ -446,6 +615,54 @@ mod tests {
         assert_eq!(task_id.as_deref(), Some("task-42"));
         assert_eq!(why.as_deref(), Some("explicit"));
         assert!(as_json);
+    }
+
+    #[test]
+    fn blocked_json_payload_uses_release_one_operator_envelope() {
+        let payload = continuation_bind_blocked_payload(
+            Some("run-1"),
+            Some("task-42"),
+            "blocked",
+            "continuation_binding_lifecycle_not_closed",
+        );
+
+        assert_eq!(payload["surface"], "vida taskflow continuation bind");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"][0],
+            "continuation_binding_lifecycle_not_closed"
+        );
+        assert_eq!(payload["shared_fields"]["status"], "blocked");
+        assert_eq!(
+            payload["operator_contracts"]["contract_id"],
+            "release-1-operator-contracts"
+        );
+        assert_eq!(
+            payload["operator_contracts"]["schema_version"],
+            "release-1-v1"
+        );
+    }
+
+    #[test]
+    fn success_json_payload_uses_release_one_operator_envelope() {
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status("run-1", "implementation", "task");
+        status.task_id = "task-42".to_string();
+        status.active_node = "implementation".to_string();
+        let binding = build_run_graph_continuation_binding(&status, None, "test", None)
+            .expect("binding should build");
+
+        let payload = continuation_bind_success_payload("run-1", &binding);
+
+        assert_eq!(payload["surface"], "vida taskflow continuation bind");
+        assert_eq!(payload["status"], "ok");
+        assert_eq!(payload["binding"]["task_id"], "task-42");
+        assert_eq!(payload["shared_fields"]["status"], "ok");
+        assert_eq!(
+            payload["operator_contracts"]["contract_id"],
+            "release-1-operator-contracts"
+        );
+        assert_eq!(payload["operator_contracts"]["status"], "ok");
     }
 
     #[test]
