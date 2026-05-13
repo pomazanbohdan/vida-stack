@@ -345,12 +345,20 @@ fn reconcile_run_graph_status_with_closed_task(
     }
     if status.status == "blocked"
         && status.active_node == "closure"
-        && status.lifecycle_stage == "closure_blocked"
+        && matches!(
+            status.lifecycle_stage.as_str(),
+            "closure_blocked" | "closure_complete"
+        )
         && status.next_node.is_none()
         && status.handoff_state == "none"
         && status.resume_target == "none"
     {
+        status.status = "completed".to_string();
         status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.recovery_ready = false;
         return status;
     }
     if !StateStore::run_graph_status_allows_task_close_closure_binding(&status) {
@@ -2505,6 +2513,77 @@ mod tests {
         assert_eq!(reconciled.resume_target, "none");
         assert!(reconciled.recovery_ready);
         assert!(reconciled.delegation_gate().delegated_cycle_open);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_status_reconciles_closed_terminal_closure_blocker_into_completed() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-closed-terminal-closure-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "feature-terminal-closure",
+                title: "Closed terminal closure task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create closed task");
+
+        for lifecycle_stage in ["closure_blocked", "closure_complete"] {
+            let run_id = format!("run-{lifecycle_stage}");
+            let mut status =
+                crate::taskflow_run_graph::default_run_graph_status(&run_id, "delivery", "delivery");
+            status.task_id = "feature-terminal-closure".to_string();
+            status.active_node = "closure".to_string();
+            status.status = "blocked".to_string();
+            status.lifecycle_stage = lifecycle_stage.to_string();
+            status.next_node = None;
+            status.policy_gate = "single_task_scope_required".to_string();
+            status.handoff_state = "none".to_string();
+            status.context_state = "ready".to_string();
+            status.checkpoint_kind = "blocked".to_string();
+            status.resume_target = "none".to_string();
+            status.recovery_ready = false;
+            store
+                .record_run_graph_status(&status)
+                .await
+                .expect("persist terminal closure run-graph status");
+
+            let reconciled = store
+                .run_graph_status(&run_id)
+                .await
+                .expect("load reconciled terminal closure status");
+            assert_eq!(reconciled.status, "completed");
+            assert_eq!(reconciled.lifecycle_stage, "closure_complete");
+            assert_eq!(reconciled.next_node, None);
+            assert_eq!(reconciled.policy_gate, "not_required");
+            assert_eq!(reconciled.handoff_state, "none");
+            assert_eq!(reconciled.context_state, "sealed");
+            assert_eq!(reconciled.checkpoint_kind, "none");
+            assert_eq!(reconciled.resume_target, "none");
+            assert!(!reconciled.recovery_ready);
+        }
 
         let _ = fs::remove_dir_all(&root);
     }
