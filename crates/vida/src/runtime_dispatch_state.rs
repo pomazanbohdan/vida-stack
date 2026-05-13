@@ -9,6 +9,7 @@ use crate::runtime_contract_vocab::{
     RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER, TASK_CLASS_ARCHITECTURE,
     TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION, TASK_CLASS_VERIFICATION,
 };
+use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
 #[cfg(test)]
 use crate::runtime_dispatch_downstream_packets::downstream_dispatch_packet_body;
 use crate::runtime_dispatch_downstream_packets::{
@@ -369,6 +370,7 @@ pub(crate) fn build_runtime_closure_admission(
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> RuntimeConsumptionClosureAdmission {
     let mut blockers = Vec::new();
+    let mut evidence_table = Vec::new();
     if !bundle_check.ok {
         if let Some(code) = crate::release_contract_adapters::blocker_code(
             crate::release1_contracts::BlockerCode::MissingClosureProof,
@@ -399,6 +401,45 @@ pub(crate) fn build_runtime_closure_admission(
         .proof_surfaces
         .iter()
         .any(|surface| surface.contains("proofcheck"));
+    let mut bundle_blockers = Vec::new();
+    if !bundle_check.ok {
+        bundle_blockers.extend(bundle_check.blockers.iter().cloned());
+    }
+    evidence_table.push(RuntimeConsumptionClosureAdmissionEvidence {
+        requirement: "taskflow_bundle_check".to_string(),
+        status: if bundle_blockers.is_empty() {
+            "pass".to_string()
+        } else {
+            "blocked".to_string()
+        },
+        evidence_refs: vec![
+            "vida taskflow consume bundle check".to_string(),
+            format!("root_artifact_id={}", bundle_check.root_artifact_id),
+        ],
+        blockers: bundle_blockers,
+    });
+    let mut docflow_blockers = Vec::new();
+    if !docflow_verdict.ready {
+        docflow_blockers.extend(docflow_verdict.blockers.iter().cloned());
+    }
+    if !has_readiness_surface {
+        docflow_blockers.push("missing_docflow_readiness_check".to_string());
+    }
+    if !has_proof_surface {
+        docflow_blockers.push("missing_docflow_proofcheck".to_string());
+    }
+    docflow_blockers.sort();
+    docflow_blockers.dedup();
+    evidence_table.push(RuntimeConsumptionClosureAdmissionEvidence {
+        requirement: "docflow_readiness".to_string(),
+        status: if docflow_blockers.is_empty() {
+            "pass".to_string()
+        } else {
+            "blocked".to_string()
+        },
+        evidence_refs: docflow_verdict.proof_surfaces.clone(),
+        blockers: docflow_blockers,
+    });
     if !(has_readiness_surface && has_proof_surface) {
         if let Some(code) = crate::release_contract_adapters::blocker_code(
             crate::release1_contracts::BlockerCode::RestoreReconcileNotGreen,
@@ -406,6 +447,7 @@ pub(crate) fn build_runtime_closure_admission(
             blockers.push(code);
         }
     }
+    let design_first_pending = role_selection.execution_plan["status"] == "design_first";
     if role_selection.execution_plan["status"] == "design_first" {
         if let Some(code) = crate::release_contract_adapters::blocker_code(
             crate::release1_contracts::BlockerCode::PendingDesignPacket,
@@ -418,6 +460,56 @@ pub(crate) fn build_runtime_closure_admission(
             blockers.push(code);
         }
     }
+    let mut design_blockers = Vec::new();
+    let mut handoff_blockers = Vec::new();
+    if design_first_pending {
+        design_blockers.push(
+            crate::release_contract_adapters::blocker_code(
+                crate::release1_contracts::BlockerCode::PendingDesignPacket,
+            )
+            .unwrap_or_else(|| "pending_design_packet".to_string()),
+        );
+        handoff_blockers.push(
+            crate::release_contract_adapters::blocker_code(
+                crate::release1_contracts::BlockerCode::PendingDeveloperHandoffPacket,
+            )
+            .unwrap_or_else(|| "pending_developer_handoff_packet".to_string()),
+        );
+    }
+    evidence_table.push(RuntimeConsumptionClosureAdmissionEvidence {
+        requirement: "approved_design_packet".to_string(),
+        status: if design_blockers.is_empty() {
+            "pass".to_string()
+        } else {
+            "blocked".to_string()
+        },
+        evidence_refs: vec![role_selection.execution_plan["status"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string()],
+        blockers: design_blockers,
+    });
+    evidence_table.push(RuntimeConsumptionClosureAdmissionEvidence {
+        requirement: "spec_work_pool_dev_handoff".to_string(),
+        status: if handoff_blockers.is_empty() {
+            "pass".to_string()
+        } else {
+            "blocked".to_string()
+        },
+        evidence_refs: vec![
+            role_selection
+                .tracked_flow_entry
+                .clone()
+                .unwrap_or_else(|| "untracked_flow".to_string()),
+        ],
+        blockers: handoff_blockers,
+    });
+    evidence_table.push(RuntimeConsumptionClosureAdmissionEvidence {
+        requirement: "execution_preparation".to_string(),
+        status: "pass".to_string(),
+        evidence_refs: vec![role_selection.selected_role.clone()],
+        blockers: Vec::new(),
+    });
     blockers.sort();
     blockers.dedup();
 
@@ -433,6 +525,7 @@ pub(crate) fn build_runtime_closure_admission(
         admitted: blockers.is_empty(),
         blockers,
         proof_surfaces,
+        evidence_table,
     }
 }
 

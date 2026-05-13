@@ -322,7 +322,14 @@ pub(crate) fn runtime_consumption_snapshot_has_release_admission_evidence(
                 .and_then(serde_json::Value::as_object)
         });
 
-    status_ok && operator_status_ok && release_admission.is_some()
+    let release_admission_has_evidence_table = release_admission.is_some_and(|admission| {
+        admission
+            .get("evidence_table")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|rows| !rows.is_empty())
+    });
+
+    status_ok && operator_status_ok && release_admission_has_evidence_table
 }
 
 fn runtime_consumption_snapshot_release_admission(
@@ -757,7 +764,13 @@ mod tests {
                         "status": "pass",
                         "admitted": true,
                         "blockers": [],
-                        "proof_surfaces": ["vida taskflow consume final"]
+                        "proof_surfaces": ["vida taskflow consume final"],
+                        "evidence_table": [{
+                            "requirement": "closure_admission",
+                            "status": "pass",
+                            "evidence_refs": ["vida taskflow consume final"],
+                            "blockers": []
+                        }]
                     }
                 }
             })
@@ -832,7 +845,13 @@ mod tests {
                         "status": "admit",
                         "admitted": true,
                         "blockers": [],
-                        "proof_surfaces": ["vida taskflow consume final"]
+                        "proof_surfaces": ["vida taskflow consume final"],
+                        "evidence_table": [{
+                            "requirement": "closure_admission",
+                            "status": "pass",
+                            "evidence_refs": ["vida taskflow consume final"],
+                            "blockers": []
+                        }]
                     }
                 }
             })
@@ -859,7 +878,13 @@ mod tests {
                         "status": "block",
                         "admitted": false,
                         "blockers": ["missing_retrieval_trust_evidence"],
-                        "proof_surfaces": ["vida taskflow consume final"]
+                        "proof_surfaces": ["vida taskflow consume final"],
+                        "evidence_table": [{
+                            "requirement": "closure_admission",
+                            "status": "blocked",
+                            "evidence_refs": ["vida taskflow consume final"],
+                            "blockers": ["missing_retrieval_trust_evidence"]
+                        }]
                     }
                 }
             })
@@ -959,7 +984,13 @@ mod tests {
                     "status": "pass",
                     "admitted": true,
                     "blockers": [],
-                    "proof_surfaces": ["vida taskflow consume final"]
+                    "proof_surfaces": ["vida taskflow consume final"],
+                    "evidence_table": [{
+                        "requirement": "closure_admission",
+                        "status": "pass",
+                        "evidence_refs": ["vida taskflow consume final"],
+                        "blockers": []
+                    }]
                 }
             }
         });

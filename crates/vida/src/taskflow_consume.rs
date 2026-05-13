@@ -3,6 +3,7 @@ use std::time::Duration;
 use time::format_description::well_known::Rfc3339;
 
 use crate::display_lane_label;
+use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
 use crate::BlockerCode;
 
 const CONSUME_FINAL_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -282,6 +283,16 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                             proof_surfaces: vec![
                                                 "vida taskflow consume bundle check".to_string(),
                                             ],
+                        evidence_table: vec![RuntimeConsumptionClosureAdmissionEvidence {
+                                                requirement: "lane_selection".to_string(),
+                                                status: "blocked".to_string(),
+                                                evidence_refs: vec![
+                                                    "vida taskflow consume bundle check".to_string(),
+                                                ],
+                                                blockers: vec![
+                                                    "unresolved_lane_selection".to_string(),
+                                                ],
+                                            }],
                                         };
                                     normalize_runtime_consumption_statuses(
                                         &mut docflow_verdict,
@@ -2651,6 +2662,7 @@ mod tests {
             )
             .expect("missing closure proof blocker should be canonical")],
             proof_surfaces: vec![],
+            evidence_table: vec![],
         };
 
         normalize_runtime_consumption_statuses(&mut docflow_verdict, &mut closure_admission);

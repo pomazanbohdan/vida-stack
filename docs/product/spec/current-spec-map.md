@@ -312,6 +312,9 @@ Companion rule:
 51. [model-provider-price-catalog-lifecycle-design.md](model-provider-price-catalog-lifecycle-design.md)
    Config families: bounded model/provider price-catalog source-of-truth, provider/model availability inventory, freshness/source metadata, dry-run/apply receipt lifecycle, init/status readiness projection, and price-aware selected/rejected candidate diagnostics
    Registered path: `docs/product/spec/model-provider-price-catalog-lifecycle-design.md`
+52. [closure-admission-evidence-table-design.md](closure-admission-evidence-table-design.md)
+   Config families: bounded closure-admission evidence crosswalk, canonical evidence-family minimums, operator blocker parity, and closure-bundle fail-closed semantics
+   Registered path: `docs/product/spec/closure-admission-evidence-table-design.md`
 
 ### Support
 

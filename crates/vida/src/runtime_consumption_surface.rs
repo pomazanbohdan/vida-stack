@@ -356,11 +356,20 @@ pub(crate) struct RuntimeConsumptionDocflowVerdict {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct RuntimeConsumptionClosureAdmissionEvidence {
+    pub(crate) requirement: String,
+    pub(crate) status: String,
+    pub(crate) evidence_refs: Vec<String>,
+    pub(crate) blockers: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct RuntimeConsumptionClosureAdmission {
     pub(crate) status: String,
     pub(crate) admitted: bool,
     pub(crate) blockers: Vec<String>,
     pub(crate) proof_surfaces: Vec<String>,
+    pub(crate) evidence_table: Vec<RuntimeConsumptionClosureAdmissionEvidence>,
 }
 
 pub(crate) fn canonical_closure_admission_artifact_json(
@@ -402,6 +411,11 @@ pub(crate) fn canonical_closure_admission_artifact_json(
                 evidence_bundle_refs: closure_admission.proof_surfaces.clone(),
                 open_risk_acceptance_ids: Vec::new(),
                 blocked_by: closure_admission.blockers.clone(),
+                evidence_table: closure_admission
+                    .evidence_table
+                    .iter()
+                    .map(|row| serde_json::to_value(row).expect("evidence row should serialize"))
+                    .collect(),
             },
         },
     )
@@ -798,6 +812,13 @@ mod tests {
                 "vida docflow readiness-check --profile active-canon".to_string(),
                 "vida docflow proofcheck --profile active-canon".to_string(),
             ],
+            evidence_table: vec![super::RuntimeConsumptionClosureAdmissionEvidence {
+                requirement: "docflow_readiness".to_string(),
+                status: "pass".to_string(),
+                evidence_refs: vec!["vida docflow readiness-check --profile active-canon"
+                    .to_string()],
+                blockers: Vec::new(),
+            }],
         };
 
         let artifact = canonical_closure_admission_artifact_json(
@@ -817,6 +838,7 @@ mod tests {
             artifact["evidence_bundle_refs"][0],
             "vida docflow readiness-check --profile active-canon"
         );
+        assert_eq!(artifact["evidence_table"][0]["requirement"], "docflow_readiness");
         assert_eq!(
             artifact["evidence_bundle_refs"][1],
             "vida docflow proofcheck --profile active-canon"

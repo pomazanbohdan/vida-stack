@@ -598,6 +598,8 @@ pub(crate) struct CanonicalClosureAdmissionRecord {
     pub open_risk_acceptance_ids: Vec<String>,
     #[serde(default)]
     pub blocked_by: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_table: Vec<serde_json::Value>,
 }
 
 // Keep the older artifact-oriented names as explicit wrappers while the rest of
@@ -2286,6 +2288,12 @@ mod tests {
             decision_at: "2026-04-18T10:20:00Z".to_string(),
             decision_owner: "closure_surface".to_string(),
             evidence_bundle_refs: vec!["bundle-check-1".to_string(), "proof-1".to_string()],
+            evidence_table: vec![serde_json::json!({
+                "requirement": "docflow_readiness",
+                "status": "pass",
+                "evidence_refs": ["proof-1"],
+                "blockers": [],
+            })],
             open_risk_acceptance_ids: vec!["risk-acceptance-1".to_string()],
             blocked_by: Vec::new(),
         };
@@ -2536,6 +2544,12 @@ mod tests {
             decision_at: "2026-04-18T10:20:00Z".to_string(),
             decision_owner: "closure_surface".to_string(),
             evidence_bundle_refs: vec!["bundle-check-1".to_string(), "proof-1".to_string()],
+            evidence_table: vec![serde_json::json!({
+                "requirement": "docflow_readiness",
+                "status": "pass",
+                "evidence_refs": ["proof-1"],
+                "blockers": [],
+            })],
             open_risk_acceptance_ids: vec!["risk-acceptance-1".to_string()],
             blocked_by: Vec::new(),
         };
@@ -2607,6 +2621,10 @@ mod tests {
         assert_eq!(closure_value["closure_decision"], "admit");
         assert_eq!(closure_value["decision_owner"], "closure_surface");
         assert_eq!(closure_value["evidence_bundle_refs"][0], "bundle-check-1");
+        assert_eq!(
+            closure_value["evidence_table"][0]["requirement"],
+            "docflow_readiness"
+        );
         assert_eq!(
             closure_value["supported_workflow_classes"][0],
             WorkflowClass::DelegatedDevelopmentPacket.as_str()
