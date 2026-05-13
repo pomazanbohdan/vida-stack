@@ -1973,15 +1973,13 @@ fn build_taskflow_next_decision(
                 .map(|status| status.run_id.as_str())
                 .unwrap_or("<run-id>");
             let next_action = TaskflowNextAction {
-                command: format!(
-                    "vida taskflow continuation bind {run_id} --task-id <task-id> --json"
-                ),
-                surface: "vida taskflow continuation bind".to_string(),
-                reason: "the latest consume-continue snapshot already completed with no further actions, so the same run must not be continued again without an explicit next bounded unit".to_string(),
+                command: format!("vida taskflow run-graph status {run_id} --json"),
+                surface: "vida taskflow run-graph status".to_string(),
+                reason: "the latest consume-continue snapshot already completed with no further actions, so inspect the authoritative run state before binding an explicit next bounded unit".to_string(),
             };
             blocker_codes.push("terminal_continue_snapshot_without_next_bounded_unit".to_string());
             next_actions.push(format!(
-                "Do not repeat `vida taskflow consume continue --run-id {run_id} --json`; bind the next bounded unit explicitly with `{}` or reconcile the stale run-graph state.",
+                "Do not repeat `vida taskflow consume continue --run-id {run_id} --json`; inspect the authoritative run state with `{}` and then bind the next bounded unit explicitly from user intent or reconcile the stale run-graph state.",
                 next_action.command
             ));
             (
@@ -2001,11 +1999,9 @@ fn build_taskflow_next_decision(
                 .map(|status| status.run_id.as_str())
                 .unwrap_or("<run-id>");
             let next_action = TaskflowNextAction {
-                command: format!(
-                    "vida taskflow continuation bind {run_id} --task-id <task-id> --json"
-                ),
-                surface: "vida taskflow continuation bind".to_string(),
-                reason: "the latest run is already closure_complete and no explicit continuation binding is admissible yet".to_string(),
+                command: format!("vida taskflow run-graph status {run_id} --json"),
+                surface: "vida taskflow run-graph status".to_string(),
+                reason: "the latest run is already closure_complete, so inspect the authoritative run state before binding an explicit continuation target".to_string(),
             };
             if let Some(code) = crate::release1_contracts::blocker_code_value(
                 crate::release1_contracts::BlockerCode::NoReadyTasks,
@@ -2013,7 +2009,7 @@ fn build_taskflow_next_decision(
                 blocker_codes.push(code);
             }
             next_actions.push(format!(
-                "Do not continue by heuristic after closure; bind the next bounded unit explicitly with `{}`.",
+                "Do not continue by heuristic after closure; inspect the authoritative run state with `{}` and then bind the next bounded unit explicitly from user intent.",
                 next_action.command
             ));
             (
@@ -7174,13 +7170,28 @@ mod tests {
         );
         assert_eq!(
             decision.recommended_surface.as_deref(),
-            Some("vida taskflow continuation bind")
+            Some("vida taskflow run-graph status")
         );
         assert!(
             decision
                 .blocker_codes
                 .iter()
                 .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit")
+        );
+        assert_eq!(
+            decision
+                .next_action
+                .as_ref()
+                .map(|value| value.command.as_str()),
+            Some(
+                "vida taskflow run-graph status runtime-audit-state-store-init-lock-timeout --json"
+            )
+        );
+        assert!(
+            decision
+                .next_actions
+                .iter()
+                .all(|action| !action.contains("--task-id <task-id>"))
         );
     }
 
@@ -7424,7 +7435,17 @@ mod tests {
                 .next_action
                 .as_ref()
                 .map(|value| value.command.as_str()),
-            Some("vida taskflow continuation bind run-closure --task-id <task-id> --json")
+            Some("vida taskflow run-graph status run-closure --json")
+        );
+        assert_eq!(
+            decision.recommended_surface.as_deref(),
+            Some("vida taskflow run-graph status")
+        );
+        assert!(
+            decision
+                .next_actions
+                .iter()
+                .all(|action| !action.contains("--task-id <task-id>"))
         );
     }
 }
