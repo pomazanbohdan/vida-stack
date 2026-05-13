@@ -24,6 +24,12 @@ Fill in project-local rules that agents must follow in this repository.
    - `<release-or-verification-command>`
 4. Project constraints:
    - `<project-constraints>`
+5. Defect repair cadence:
+   - After a defect is found and selected for work, the path from selection to code fix is capped at three repair steps only: `Крок 1/3: дослідження`, `Крок 2/3: архітектурне рішення + bounded write scope`, and `Крок 3/3: code fix`.
+   - Every progress update, handoff, and status note for the selected defect before the code fix must name exactly one active cadence marker from that set.
+   - Keep all further reading inside `Крок 1/3: дослідження`; do not add extra repair-step labels or unnumbered pre-fix phases after defect selection.
+   - `Крок 3/3: code fix` must apply the bounded code fix or close the cycle as `no-code-fix-required` with current runtime evidence that the defect no longer reproduces.
+   - Test authoring, proof execution, release build/install, diagnostics, TaskFlow closure, commit, and push are mandatory post-fix gates, but they are not counted as repair steps.
 
 ## Project Canonical Maps
 
