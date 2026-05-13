@@ -968,7 +968,9 @@ mod tests {
             .is_some_and(
                 |rows| rows.iter().any(|row| row.as_str().is_some_and(|value| {
                     value.contains("closed-feature-task")
-                        && value.contains("reconcile or retire")
+                        && value.contains(
+                            "vida lane retire run-blocked --receipt-id <concrete-receipt-id> --reason <reason> --json",
+                        )
                         && value.contains("run-blocked")
                 }))
             ));

@@ -88,7 +88,8 @@ pub use state_store_run_graph_state::{
 };
 pub(crate) use state_store_run_graph_summary::{
     default_run_graph_lane_status, deserialize_run_graph_lane_status,
-    handoff_state_links_consent_ttl, latest_run_graph_dispatch_receipt_matches_status,
+    downstream_dispatch_allows_completed_lane_status, handoff_state_links_consent_ttl,
+    latest_run_graph_dispatch_receipt_matches_status,
     latest_run_graph_dispatch_receipt_signal_is_ambiguous,
     latest_run_graph_dispatch_receipt_summary_is_inconsistent,
     latest_run_graph_evidence_snapshot_is_consistent, normalize_run_graph_lane_status,

@@ -27,7 +27,7 @@ pub(crate) fn blocked_run_graph_status_next_actions(
                 "Inspect the blocked run-graph status with `vida taskflow recovery status {run_id} --json` before writing."
             ),
             format!(
-                "Run `{task_id}` is already closed for blocked run `{run_id}`; reconcile or retire that stale blocked run, then refresh continuation evidence with `vida taskflow consume continue --json` before selecting the next bounded step."
+                "Run `{task_id}` is already closed for blocked run `{run_id}`; retire that stale blocked run with `vida lane retire {run_id} --receipt-id <concrete-receipt-id> --reason <reason> --json`, then refresh continuation evidence with `vida taskflow consume continue --json` before selecting the next bounded step."
             ),
         ],
         (Some(run_id), _, false) => vec![

@@ -602,7 +602,10 @@ pub struct RunGraphDispatchReceiptSummary {
 #[allow(dead_code)]
 impl RunGraphDispatchReceiptSummary {
     pub(crate) fn from_receipt(receipt: RunGraphDispatchReceipt) -> Self {
-        let lane_status = if receipt.lane_status.trim().is_empty() {
+        let raw_lane_status = receipt.lane_status.trim();
+        let canonical_lane_status =
+            canonical_lane_status_str(raw_lane_status).unwrap_or(raw_lane_status);
+        let lane_status = if raw_lane_status.is_empty() {
             derive_lane_status(
                 &receipt.dispatch_status,
                 receipt.supersedes_receipt_id.as_deref(),
@@ -610,9 +613,14 @@ impl RunGraphDispatchReceiptSummary {
             )
             .as_str()
             .to_string()
+        } else if downstream_dispatch_allows_completed_lane_status(
+            receipt.downstream_dispatch_status.as_deref(),
+            canonical_lane_status,
+        ) {
+            canonical_lane_status.to_string()
         } else {
             normalize_run_graph_lane_status(
-                Some(receipt.lane_status.as_str()),
+                Some(raw_lane_status),
                 &receipt.dispatch_status,
                 receipt.supersedes_receipt_id.as_deref(),
                 receipt.exception_path_receipt_id.as_deref(),
@@ -983,6 +991,16 @@ pub(crate) fn normalize_run_graph_lane_status(
         }
         _ => derived_lane_status,
     }
+}
+
+pub(crate) fn downstream_dispatch_allows_completed_lane_status(
+    downstream_dispatch_status: Option<&str>,
+    canonical_lane_status: &str,
+) -> bool {
+    matches!(
+        downstream_dispatch_status,
+        Some("executed" | "retired_closed_task_run")
+    ) && canonical_lane_status == "lane_completed"
 }
 
 pub(crate) fn deserialize_run_graph_lane_status<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -2023,10 +2041,10 @@ impl StateStore {
         let raw_lane_status = raw_lane_status.trim();
         let canonical_lane_status =
             canonical_lane_status_str(raw_lane_status).unwrap_or(raw_lane_status);
-        let downstream_closure_completed = receipt.downstream_dispatch_status.as_deref()
-            == Some("executed")
-            && canonical_lane_status == "lane_completed";
-        let effective_derived_lane_status = if downstream_closure_completed {
+        let effective_derived_lane_status = if downstream_dispatch_allows_completed_lane_status(
+            receipt.downstream_dispatch_status.as_deref(),
+            canonical_lane_status,
+        ) {
             "lane_completed".to_string()
         } else {
             normalize_run_graph_lane_status(
