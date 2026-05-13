@@ -13683,6 +13683,77 @@ mod tests {
     }
 
     #[test]
+    fn write_runtime_dispatch_result_uses_effective_backend_for_lane_receipt_after_fallback() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-readiness-fallback-dispatch".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec".to_string()),
+            dispatch_packet_path: Some("/tmp/coach-fallback-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        let path = write_runtime_dispatch_result(
+            harness.path(),
+            &receipt,
+            &serde_json::json!({
+                "surface": "internal_cli:codex",
+                "status": "blocked",
+                "execution_state": "blocked",
+                "blocker_code": INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT,
+                "backend_dispatch": {
+                    "backend_class": "internal",
+                    "backend_id": "middle",
+                    "carrier_id": "middle"
+                },
+                "execution_truth": {
+                    "effective_selected_backend": "middle",
+                    "selected_backend_source": "dynamic_runtime_selection"
+                }
+            }),
+        )
+        .expect("dispatch result should write");
+
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&path).expect("dispatch result should be readable"),
+        )
+        .expect("dispatch result should decode");
+
+        assert_eq!(
+            artifact["lane_execution_receipt_artifact"]["carrier_id"],
+            "middle"
+        );
+        assert_ne!(
+            artifact["lane_execution_receipt_artifact"]["carrier_id"],
+            "hermes_cli"
+        );
+        assert_eq!(artifact["backend_dispatch"]["backend_id"], "middle");
+    }
+
+    #[test]
     fn write_runtime_dispatch_result_omits_lane_receipt_for_in_flight_execution() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let receipt = RunGraphDispatchReceipt {
@@ -16560,9 +16631,9 @@ fn normalized_dispatch_result_activation_evidence(
         evidence
             .entry("result_path".to_string())
             .or_insert_with(|| serde_json::json!(result_artifact_path));
-        evidence
-            .entry("backend_id".to_string())
-            .or_insert_with(|| serde_json::json!(canonical_lane_receipt_carrier_id(receipt)));
+        evidence.entry("backend_id".to_string()).or_insert_with(|| {
+            serde_json::json!(canonical_lane_receipt_carrier_id_for_result(receipt, body))
+        });
         serde_json::Value::Object(evidence)
     } else {
         serde_json::Value::Null
@@ -16591,6 +16662,32 @@ fn canonical_lane_receipt_carrier_id(
         .unwrap_or_else(|| "taskflow_state_store".to_string())
 }
 
+fn canonical_lane_receipt_carrier_id_for_result(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    body: &serde_json::Value,
+) -> String {
+    for candidate in [
+        body.get("execution_evidence")
+            .and_then(|value| value.get("backend_id")),
+        body.get("backend_dispatch")
+            .and_then(|value| value.get("carrier_id")),
+        body.get("backend_dispatch")
+            .and_then(|value| value.get("backend_id")),
+        body.get("execution_truth")
+            .and_then(|value| value.get("effective_selected_backend")),
+        body.get("effective_execution_posture")
+            .and_then(|value| value.get("selected_backend")),
+    ] {
+        if let Some(value) = json_string(candidate)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty() && value != "unknown")
+        {
+            return value;
+        }
+    }
+    canonical_lane_receipt_carrier_id(receipt)
+}
+
 fn is_terminal_dispatch_execution_state(body: &serde_json::Value) -> bool {
     matches!(
         json_string(body.get("execution_state")).as_deref(),
@@ -16616,7 +16713,7 @@ fn canonical_lane_execution_receipt_artifact_json(
         .activation_runtime_role
         .clone()
         .unwrap_or_else(|| receipt.dispatch_target.clone());
-    let carrier_id = canonical_lane_receipt_carrier_id(receipt);
+    let carrier_id = canonical_lane_receipt_carrier_id_for_result(receipt, body);
     let status = match json_string(body.get("status")).as_deref() {
         Some("pass") => "pass".to_string(),
         Some("blocked") => "blocked".to_string(),
