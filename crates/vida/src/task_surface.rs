@@ -2854,8 +2854,7 @@ fn task_continuation_source_surfaces() -> Vec<String> {
         "StateStore::scheduling_projection_scoped".to_string(),
         "vida task ready --json".to_string(),
         "vida status --json continuation_binding".to_string(),
-        "vida taskflow run-graph status --json projection_truth.continuation_binding"
-            .to_string(),
+        "vida taskflow run-graph status --json projection_truth.continuation_binding".to_string(),
     ]
 }
 
@@ -2999,6 +2998,35 @@ fn runtime_binding_task_closed_next_action(
     )
 }
 
+fn runtime_binding_task_missing_next_action(
+    binding: &state_store::RunGraphContinuationBinding,
+) -> String {
+    crate::status_surface_signals::runtime_binding_task_missing_next_action(
+        Some(binding.run_id.as_str()),
+        &binding.task_id,
+    )
+}
+
+fn runtime_binding_open_delegated_cycle_next_action(
+    binding: &state_store::RunGraphContinuationBinding,
+) -> String {
+    format!(
+        "Runtime binding for task `{}` is still inside an open delegated cycle for run `{}`. Inspect `vida lane show {} --json` and `vida taskflow recovery status {} --json`; wait for a receipt-backed delegated completion or record structured exception takeover before selecting another TaskFlow step.",
+        binding.task_id, binding.run_id, binding.run_id, binding.run_id
+    )
+}
+
+fn runtime_recovery_blocks_task_next_lawful(
+    recovery: Option<&state_store::RunGraphRecoverySummary>,
+) -> bool {
+    recovery.is_some_and(|recovery| {
+        recovery.delegation_gate.delegated_cycle_open
+            || recovery.delegation_gate.local_exception_takeover_gate
+                == "blocked_open_delegated_cycle"
+            || recovery.resume_status == "running"
+    })
+}
+
 fn task_next_lawful_receipt(
     tasks: &[state_store::TaskRecord],
     ready_task_candidates: Vec<TaskContinuationCandidate>,
@@ -3032,7 +3060,7 @@ fn task_next_lawful_receipt(
                     binding.active_bounded_unit.clone(),
                     ready_task_candidates,
                     "runtime_binding_task_missing",
-                    crate::status_surface_signals::continuation_binding_ambiguous_next_action(),
+                    &runtime_binding_task_missing_next_action(binding),
                 );
             };
             if task.status == "closed" {
@@ -3052,13 +3080,13 @@ fn task_next_lawful_receipt(
                 .iter()
                 .any(|candidate| candidate.task_id == binding.task_id)
         {
-                return blocked_task_next_lawful_receipt(
-                    binding.active_bounded_unit.clone(),
-                    ready_task_candidates,
-                    "runtime_ready_candidate_conflict",
-                    crate::status_surface_signals::continuation_binding_ambiguous_next_action(),
-                );
-            }
+            return blocked_task_next_lawful_receipt(
+                binding.active_bounded_unit.clone(),
+                ready_task_candidates,
+                "runtime_ready_candidate_conflict",
+                crate::status_surface_signals::continuation_binding_ambiguous_next_action(),
+            );
+        }
         return pass_task_next_lawful_receipt(
             binding.active_bounded_unit.clone(),
             Some(binding.binding_source.clone()),
@@ -3713,11 +3741,31 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             )
                         })
                         .collect::<Vec<_>>();
-                    let receipt = task_next_lawful_receipt(
-                        &tasks,
-                        ready_task_candidates,
-                        scoped_runtime_binding,
-                    );
+                    let runtime_recovery = match scoped_runtime_binding {
+                        Some(binding) => {
+                            store.run_graph_recovery_summary(&binding.run_id).await.ok()
+                        }
+                        None => None,
+                    };
+                    let receipt = match scoped_runtime_binding {
+                        Some(binding)
+                            if runtime_recovery_blocks_task_next_lawful(
+                                runtime_recovery.as_ref(),
+                            ) =>
+                        {
+                            blocked_task_next_lawful_receipt(
+                                binding.active_bounded_unit.clone(),
+                                ready_task_candidates,
+                                "open_delegated_cycle",
+                                &runtime_binding_open_delegated_cycle_next_action(binding),
+                            )
+                        }
+                        _ => task_next_lawful_receipt(
+                            &tasks,
+                            ready_task_candidates,
+                            scoped_runtime_binding,
+                        ),
+                    };
                     if command.json {
                         crate::print_json_pretty(
                             &serde_json::to_value(&receipt)
@@ -4450,21 +4498,23 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_adaptive_replan_finding_preview, build_spawn_blocker_preview,
-        build_split_mutation_preview, canonical_json_string_array_entries,
-        classify_task_close_git_stage_failure, ensure_existing_task_mismatch_reason,
-        load_adaptive_preview_finding_json, normalize_task_json_contract_arrays,
-        parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
-        parse_split_child_specs, persist_task_handoff_accept_receipt,
-        select_task_next_lawful_binding, task_close_automation_receipt,
-        task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
-        task_close_feedback_blocker_summary, task_close_host_agent_telemetry,
-        task_close_uses_isolated_state_dir, task_create_title, task_handoff_accept_receipt,
-        task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
-        task_json_success_status, task_next_lawful_receipt, task_owned_status_receipt,
-        task_parent_id, task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
-        ADAPTIVE_REPLAN_FINDING_KINDS,
+        blocked_task_next_lawful_receipt, build_adaptive_replan_finding_preview,
+        build_spawn_blocker_preview, build_split_mutation_preview,
+        canonical_json_string_array_entries, classify_task_close_git_stage_failure,
+        ensure_existing_task_mismatch_reason, load_adaptive_preview_finding_json,
+        normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
+        parse_label_values, parse_optional_label_value, parse_split_child_specs,
+        persist_task_handoff_accept_receipt, runtime_binding_open_delegated_cycle_next_action,
+        runtime_recovery_blocks_task_next_lawful, select_task_next_lawful_binding,
+        task_close_automation_receipt, task_close_commit_allowlist_next_actions,
+        task_close_commit_file_strings, task_close_feedback_blocker_summary,
+        task_close_host_agent_telemetry, task_close_uses_isolated_state_dir, task_create_title,
+        task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
+        task_handoff_receipt_root, task_json_success_status, task_next_lawful_receipt,
+        task_owned_status_receipt, task_parent_id, task_update_planner_metadata_arg,
+        validate_task_handoff_accept_receipt, ADAPTIVE_REPLAN_FINDING_KINDS,
     };
+    use crate::state_store;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::cli;
     use crate::test_cli_support::guard_current_dir;
@@ -5306,6 +5356,82 @@ mod tests {
             action.contains("vida taskflow recovery status current-run --json")
                 && action.contains("closed-feature-task")
         }));
+    }
+
+    #[test]
+    fn task_next_lawful_blocks_missing_run_graph_binding_with_concrete_recovery_action() {
+        let binding = test_continuation_binding(
+            "current-run",
+            "missing-feature-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+
+        let receipt = task_next_lawful_receipt(&[], Vec::new(), Some(&binding));
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["runtime_binding_task_missing"]);
+        assert!(receipt.next_actions.iter().any(|action| {
+            action.contains("vida taskflow recovery status current-run --json")
+                && action.contains(
+                    "vida taskflow continuation bind current-run --task-id <task-id> --json",
+                )
+                && action.contains("missing-feature-task")
+        }));
+    }
+
+    #[test]
+    fn task_next_lawful_blocks_open_delegated_cycle_binding() {
+        let runtime_task = owned_task_record("running-runtime-task", vec![]);
+        let binding = test_continuation_binding(
+            "running-run",
+            "running-runtime-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+        let recovery = state_store::RunGraphRecoverySummary {
+            run_id: "running-run".to_string(),
+            task_id: "running-runtime-task".to_string(),
+            active_node: "analysis".to_string(),
+            lifecycle_stage: "analysis_active".to_string(),
+            resume_node: None,
+            resume_status: "running".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: true,
+            delegation_gate: state_store::RunGraphDelegationGateSummary {
+                active_node: "analysis".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "open".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "delegated_cycle_open".to_string(),
+                continuation_signal: "continue_delegated_cycle".to_string(),
+                blocker_code: None,
+                lifecycle_stage: "analysis_active".to_string(),
+            },
+        };
+
+        assert!(runtime_recovery_blocks_task_next_lawful(Some(&recovery)));
+        let receipt = blocked_task_next_lawful_receipt(
+            binding.active_bounded_unit.clone(),
+            Vec::new(),
+            "open_delegated_cycle",
+            &runtime_binding_open_delegated_cycle_next_action(&binding),
+        );
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["open_delegated_cycle"]);
+        assert!(receipt.next_actions.iter().any(|action| {
+            action.contains("vida lane show running-run --json")
+                && action.contains("vida taskflow recovery status running-run --json")
+        }));
+        assert_eq!(
+            task_next_lawful_receipt(&[runtime_task], Vec::new(), Some(&binding)).status,
+            "pass",
+            "baseline receipt still represents the raw binding; command-level recovery gate blocks it"
+        );
     }
 
     #[test]

@@ -659,14 +659,17 @@ fn derive_lane_show_truth(
         };
     }
 
-    let mut blocked = lane_summary_dispatch_is_blocked(summary);
+    let recovery_open = recovery_delegated_cycle_open(recovery);
+    let mut blocked = lane_summary_dispatch_is_blocked(summary) || recovery_open;
     let mut blocker_codes = lane_summary_raw_blocker_codes(summary, blocked);
     let mut next_actions = Vec::new();
+    if recovery_open {
+        blocker_codes.push("open_delegated_cycle".to_string());
+    }
 
     if summary.lane_status == crate::LaneStatus::LaneExceptionRecorded.as_str() {
         blocked = true;
-        if recovery_delegated_cycle_open(recovery) {
-            blocker_codes.push("open_delegated_cycle".to_string());
+        if recovery_open {
             next_actions.push(
                 "Exception-path receipt recorded; delegated cycle is still open, so root-local write remains blocked."
                     .to_string(),
@@ -1018,7 +1021,10 @@ fn lane_mutation_status_guard(
         recovery.resume_status == "completed" && recovery.lifecycle_stage == "closure_complete"
     });
     if status.status == "completed" || terminal_completed_without_next_unit || recovery_terminal {
-        let next_action = crate::status_surface_signals::terminal_next_action_requires_authoritative_run_state(Some(run_id));
+        let next_action =
+            crate::status_surface_signals::terminal_next_action_requires_authoritative_run_state(
+                Some(run_id),
+            );
         return Err(format!(
             "Lane `{run_id}` is no longer active for mutation because run-graph status is terminal (`{}` / `{}`). Inspect `vida lane show {run_id} --json` for the persisted lane envelope and continuation evidence. {next_action}",
             status.status, status.lifecycle_stage,
@@ -1911,6 +1917,47 @@ mod tests {
     }
 
     #[test]
+    fn derive_lane_show_truth_blocks_running_open_delegated_cycle() {
+        let mut receipt = sample_receipt("executing");
+        receipt.lane_status = crate::LaneStatus::LaneRunning.as_str().to_string();
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-lane-test".to_string(),
+            task_id: "task-lane-test".to_string(),
+            active_node: "analysis".to_string(),
+            lifecycle_stage: "analysis_active".to_string(),
+            resume_node: None,
+            resume_status: "running".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: true,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "analysis".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "open".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "delegated_cycle_open".to_string(),
+                continuation_signal: "continue_delegated_cycle".to_string(),
+                blocker_code: None,
+                lifecycle_stage: "analysis_active".to_string(),
+            },
+        };
+
+        let truth = derive_lane_show_truth(&summary, Some(&recovery));
+
+        assert!(truth.blocked);
+        assert!(truth
+            .blocker_codes
+            .contains(&"open_delegated_cycle".to_string()));
+        assert!(truth
+            .next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow recovery status run-lane-test --json")));
+    }
+
+    #[test]
     fn build_lane_envelope_exposes_root_scope_only_for_active_takeover() {
         let metadata = ExceptionTakeoverMetadata {
             reason_class: "test".to_string(),
@@ -2053,11 +2100,8 @@ mod tests {
         assert!(truth
             .blocker_codes
             .contains(&"supersession_without_receipt".to_string()));
-        assert!(truth
-            .next_actions
-            .iter()
-            .any(|value| value
-                .contains("vida lane supersede run-lane-test --receipt-id exception-1 --json")));
+        assert!(truth.next_actions.iter().any(|value| value
+            .contains("vida lane supersede run-lane-test --receipt-id exception-1 --json")));
     }
 
     #[test]
@@ -2074,13 +2118,9 @@ mod tests {
         status.next_node = None;
         let recovery = crate::state_store::RunGraphRecoverySummary::from_status(status.clone());
 
-        let error = lane_mutation_status_guard(
-            "run-lane-test",
-            Some(&status),
-            Some(&recovery),
-            &receipt,
-        )
-        .expect_err("terminal lane should fail closed");
+        let error =
+            lane_mutation_status_guard("run-lane-test", Some(&status), Some(&recovery), &receipt)
+                .expect_err("terminal lane should fail closed");
 
         assert!(error.contains("vida lane show run-lane-test --json"));
         assert!(error.contains("vida taskflow run-graph status run-lane-test --json"));

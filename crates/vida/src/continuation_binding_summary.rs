@@ -88,7 +88,7 @@ fn active_exception_takeover_binding_summary_json(
     continuation_required_now: bool,
     pause_boundary_gate: &str,
 ) -> serde_json::Value {
-    let continuation_resumable = status.recovery_ready && status.resume_target != "none";
+    let continuation_resumable = exception_takeover_continuation_resumable(status);
     serde_json::json!({
         "status": binding.status,
         "continuation_allowed": binding.status == "bound",
@@ -96,7 +96,7 @@ fn active_exception_takeover_binding_summary_json(
         "resume_blocker": if continuation_resumable {
             serde_json::Value::Null
         } else {
-            serde_json::Value::String("recovery_ready_false".to_string())
+            serde_json::Value::String(exception_takeover_resume_blocker(status).to_string())
         },
         "continuation_required_now": continuation_required_now,
         "active_bounded_unit": binding.active_bounded_unit,
@@ -116,7 +116,7 @@ fn active_exception_takeover_status_summary_json(
     continuation_required_now: bool,
     pause_boundary_gate: &str,
 ) -> serde_json::Value {
-    let continuation_resumable = status.recovery_ready && status.resume_target != "none";
+    let continuation_resumable = exception_takeover_continuation_resumable(status);
     serde_json::json!({
         "status": "bound",
         "continuation_allowed": true,
@@ -124,7 +124,7 @@ fn active_exception_takeover_status_summary_json(
         "resume_blocker": if continuation_resumable {
             serde_json::Value::Null
         } else {
-            serde_json::Value::String("recovery_ready_false".to_string())
+            serde_json::Value::String(exception_takeover_resume_blocker(status).to_string())
         },
         "continuation_required_now": continuation_required_now,
         "active_bounded_unit": {
@@ -150,11 +150,23 @@ fn active_exception_takeover_status_summary_json(
 fn active_exception_takeover_next_actions(
     status: &crate::state_store::RunGraphStatus,
 ) -> Vec<String> {
-    if status.recovery_ready && status.resume_target != "none" {
+    if exception_takeover_continuation_resumable(status) {
         return vec![format!(
             "Continue the active exception-backed bounded unit with `vida taskflow consume continue --run-id {} --json`.",
             status.run_id
         )];
+    }
+    if status.resume_target == "none" || !status.resume_target.starts_with("dispatch.") {
+        return vec![
+            format!(
+                "Inspect the active recovery state with `vida taskflow recovery status {} --json` before attempting resume.",
+                status.run_id
+            ),
+            crate::status_surface_signals::recovery_resume_target_missing_next_action(
+                Some(status.run_id.as_str()),
+                Some(status.task_id.as_str()),
+            ),
+        ];
     }
     vec![
         format!(
@@ -166,6 +178,18 @@ fn active_exception_takeover_next_actions(
             status.run_id
         ),
     ]
+}
+
+fn exception_takeover_continuation_resumable(status: &crate::state_store::RunGraphStatus) -> bool {
+    status.recovery_ready && status.resume_target.starts_with("dispatch.")
+}
+
+fn exception_takeover_resume_blocker(status: &crate::state_store::RunGraphStatus) -> &'static str {
+    if status.resume_target == "none" || !status.resume_target.starts_with("dispatch.") {
+        "next_action_target_missing"
+    } else {
+        "recovery_ready_false"
+    }
 }
 
 fn binding_summary_json(
@@ -209,6 +233,7 @@ pub(crate) fn build_continuation_binding_summary(
         terminal_consume_continue_run_id,
         evidence_ambiguous,
         false,
+        false,
     )
 }
 
@@ -220,6 +245,7 @@ pub(crate) fn build_continuation_binding_summary_with_idle_policy(
     terminal_consume_continue_run_id: Option<&str>,
     evidence_ambiguous: bool,
     terminal_completed_without_next_unit_is_idle: bool,
+    latest_run_graph_task_closed: bool,
 ) -> serde_json::Value {
     let active_run_id = latest_run_graph_status.map(|status| status.run_id.as_str());
     let delegated_cycle_open = latest_run_graph_recovery
@@ -354,14 +380,18 @@ pub(crate) fn build_continuation_binding_summary_with_idle_policy(
                     "status": status.status,
                     "lifecycle_stage": status.lifecycle_stage,
                 },
-                "next_actions": [
-                    "Do not continue normal delivery while the latest run-graph status is blocked.",
-                    format!(
-                        "Inspect the blocked run-graph status with `vida taskflow recovery status {} --json` and resolve the blocker before writing.",
-                        status.run_id
-                    ),
-                    "After the blocker is resolved, refresh continuation evidence with `vida taskflow consume continue --json` or bind the next bounded unit explicitly."
-                ]
+                "next_actions": ({
+                    let mut next_actions = vec![
+                        "Do not continue normal delivery while the latest run-graph status is blocked."
+                            .to_string(),
+                    ];
+                    next_actions.extend(crate::status_surface_signals::blocked_run_graph_status_next_actions(
+                        Some(status.run_id.as_str()),
+                        Some(status.task_id.as_str()),
+                        latest_run_graph_task_closed,
+                    ));
+                    next_actions
+                })
             });
         }
 
@@ -470,13 +500,12 @@ pub(crate) fn build_continuation_binding_summary_with_idle_policy(
             "why_this_unit": serde_json::Value::Null,
             "primary_path": "diagnosis_path",
             "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
-            "pause_boundary_gate": "forbidden_without_explicit_next_unit",
-            "ambiguity_reason": "completed_without_explicit_next_bounded_unit",
+                "pause_boundary_gate": "forbidden_without_explicit_next_unit",
+                "ambiguity_reason": "completed_without_explicit_next_bounded_unit",
                 "next_actions": [
                     "Do not continue by selecting the next ready task heuristically after a completed bounded slice.",
-                    format!(
-                        "Inspect `vida taskflow run-graph status {} --json`, then either cite the explicit next bounded unit from the user and bind it with `vida taskflow continuation bind` using that concrete `run_id` and `task_id`, or stop and reconcile why the authoritative run state still lacks the next bounded unit before further implementation.",
-                        status.run_id
+                    crate::status_surface_signals::terminal_next_action_requires_authoritative_run_state(
+                        Some(status.run_id.as_str()),
                     )
                 ]
         });
@@ -624,7 +653,7 @@ pub(crate) fn add_taskflow_active_work_truth(
             "next_actions".to_string(),
             serde_json::json!([
                 "Do not assume the latest run-graph binding is the active bounded unit while TaskFlow has different in-progress task candidates.",
-                "Bind the intended TaskFlow active task explicitly with `vida taskflow continuation bind` using the concrete `task_id` and `run_id`, or close/reconcile stale in-progress tasks before writing."
+                crate::status_surface_signals::continuation_binding_ambiguous_next_action()
             ]),
         );
     }
@@ -846,6 +875,7 @@ mod tests {
             None,
             false,
             true,
+            false,
         );
 
         assert_eq!(summary["status"], "idle");
@@ -896,15 +926,59 @@ mod tests {
         );
         assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
         assert_eq!(summary["continuation_resumable"], false);
-        assert_eq!(summary["resume_blocker"], "recovery_ready_false");
+        assert_eq!(summary["resume_blocker"], "next_action_target_missing");
         assert!(summary["next_actions"].as_array().is_some_and(|actions| {
             actions.iter().any(|action| action
                 .as_str()
-                .is_some_and(|value| value.contains("vida lane show")))
+                .is_some_and(|value| value.contains("vida taskflow recovery status")))
+                && actions.iter().any(|action| action
+                    .as_str()
+                    .is_some_and(|value| value.contains("vida taskflow continuation bind")))
                 && actions.iter().all(|action| action
                     .as_str()
                     .is_some_and(|value| !value.starts_with("Continue the active exception-backed bounded unit with `vida taskflow consume continue")))
         }));
+    }
+
+    #[test]
+    fn blocked_latest_run_graph_status_for_closed_task_is_retire_actionable() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "closed-feature-task",
+            "closed-feature-task",
+            "analysis",
+        );
+        status.run_id = "run-blocked".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+
+        let summary = build_continuation_binding_summary_with_idle_policy(
+            None,
+            Some(&status),
+            None,
+            None,
+            None,
+            false,
+            false,
+            true,
+        );
+
+        assert_eq!(summary["status"], "ambiguous");
+        assert!(summary["next_actions"]
+            .as_array()
+            .is_some_and(
+                |rows| rows.iter().any(|row| row.as_str().is_some_and(|value| {
+                    value.contains("closed-feature-task")
+                        && value.contains("reconcile or retire")
+                        && value.contains("run-blocked")
+                }))
+            ));
+        assert!(summary["next_actions"]
+            .as_array()
+            .is_some_and(
+                |rows| rows.iter().any(|row| row.as_str().is_some_and(|value| {
+                    value.contains("vida taskflow recovery status run-blocked --json")
+                }))
+            ));
     }
 
     #[test]
@@ -994,6 +1068,39 @@ mod tests {
             "runtime-audit-state-store-init-lock-timeout"
         );
         assert_eq!(summary["active_exception_takeover"], true);
+        assert_eq!(summary["continuation_resumable"], false);
+        assert_eq!(summary["resume_blocker"], "next_action_target_missing");
+        assert!(summary["next_actions"].as_array().is_some_and(|actions| {
+            actions.iter().any(|action| {
+                action
+                    .as_str()
+                    .is_some_and(|value| value.contains("vida taskflow recovery status"))
+            })
+        }));
+    }
+
+    #[test]
+    fn exception_takeover_summary_keeps_recovery_ready_false_when_dispatch_target_exists() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-audit-state-store-init-lock-timeout",
+            "runtime-audit-state-store-init-lock-timeout",
+            "analysis",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+        status.resume_target = "dispatch.implementer_lane".to_string();
+        status.recovery_ready = false;
+
+        let dispatch = exception_takeover_dispatch("runtime-audit-state-store-init-lock-timeout");
+        let summary = build_continuation_binding_summary(
+            None,
+            Some(&status),
+            None,
+            Some(&dispatch),
+            None,
+            false,
+        );
+
         assert_eq!(summary["continuation_resumable"], false);
         assert_eq!(summary["resume_blocker"], "recovery_ready_false");
         assert!(summary["next_actions"].as_array().is_some_and(|actions| {

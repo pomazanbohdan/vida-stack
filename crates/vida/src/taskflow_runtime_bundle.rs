@@ -136,6 +136,21 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
                     Some(receipt.run_id.as_str()),
                 )
         });
+    let latest_run_graph_task_closed = match latest_run_graph_status.as_ref() {
+        Some(status) => store
+            .list_tasks(None, true)
+            .await
+            .map(|tasks| {
+                tasks
+                    .iter()
+                    .find(|task| task.id == status.task_id)
+                    .is_some_and(|task| task.status == "closed")
+            })
+            .map_err(|error| {
+                format!("Failed to read tasks for latest run-graph task state: {error}")
+            })?,
+        None => false,
+    };
     let continuation_binding =
         crate::continuation_binding_summary::build_continuation_binding_summary_with_idle_policy(
             explicit_continuation_binding.as_ref(),
@@ -150,6 +165,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             task_store.open_count == 0
                 && task_store.in_progress_count == 0
                 && task_store.ready_count == 0,
+            latest_run_graph_task_closed,
         );
     let taskflow_active_candidates = store
         .list_tasks(Some("in_progress"), true)

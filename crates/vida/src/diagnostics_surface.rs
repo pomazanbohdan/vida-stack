@@ -67,7 +67,10 @@ fn missing_task_actionability(
         "status": "blocked",
         "blocker_codes": ["next_action_target_missing"],
         "next_actions": [
-            format!("Do not emit `vida taskflow continuation bind <run> --task-id {task_id}` until TaskFlow can read task `{task_id}` or the target is explicitly marked cross-session/reclaim-required."),
+            crate::status_surface_signals::runtime_binding_task_missing_next_action(
+                recovery.map(|summary| summary.run_id.as_str()),
+                &task_id,
+            ),
             "Inspect `vida orchestrator-session show --json` and reconcile stale session ownership before binding continuation."
         ],
         "checked_task_id": task_id,
@@ -289,8 +292,11 @@ mod tests {
         let payload = missing_task_actionability(Some(&recovery), &["other-task".to_string()]);
         assert_eq!(payload["status"], "blocked");
         assert_eq!(payload["blocker_codes"][0], "next_action_target_missing");
-        assert!(payload["next_actions"][0]
-            .as_str()
-            .is_some_and(|action| action.contains("missing-task")));
+        assert!(payload["next_actions"][0].as_str().is_some_and(|action| {
+            action.contains("missing-task")
+                && action.contains("vida taskflow recovery status run-1 --json")
+                && action
+                    .contains("vida taskflow continuation bind run-1 --task-id <task-id> --json")
+        }));
     }
 }

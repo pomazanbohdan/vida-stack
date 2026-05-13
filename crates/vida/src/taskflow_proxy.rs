@@ -382,10 +382,7 @@ fn sanitize_graph_summary_recommendation(
     )
 }
 
-fn authoritative_run_state_action(
-    run_id: Option<&str>,
-    reason: &str,
-) -> TaskflowNextAction {
+fn authoritative_run_state_action(run_id: Option<&str>, reason: &str) -> TaskflowNextAction {
     match run_id.filter(|value| !value.trim().is_empty()) {
         Some(run_id) => TaskflowNextAction {
             command: format!("vida taskflow run-graph status {run_id} --json"),
@@ -1857,6 +1854,7 @@ fn build_taskflow_next_decision(
     scope_task_id: Option<&str>,
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+    latest_run_graph_task_closed: bool,
     explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     terminal_consume_continue_run_id: Option<&str>,
 ) -> TaskflowNextDecision {
@@ -2054,8 +2052,10 @@ fn build_taskflow_next_decision(
                 blocker_codes.push(code);
             }
             next_actions.push(format!(
-                "Do not continue by heuristic after closure; inspect the authoritative run state with `{}` and then bind the next bounded unit explicitly with the concrete `run_id` and `task_id` from user intent.",
-                next_action.command
+                "{}",
+                crate::status_surface_signals::terminal_next_action_requires_authoritative_run_state(
+                    latest_run_graph_status.map(|status| status.run_id.as_str()),
+                )
             ));
             (
                 Some(next_action.command.clone()),
@@ -2080,14 +2080,19 @@ fn build_taskflow_next_decision(
                 latest_run_graph_status.map(|status| status.run_id.as_str()),
                 "the latest run graph is blocked, so backlog ready-head work is not lawful until recovery truth is resolved",
             );
-            next_actions.push(format!(
-                "Inspect the blocked run-graph recovery state with `{}` before considering backlog ready-head work.",
-                next_action.command
-            ));
-            next_actions.push(
-                "After resolving the blocker, inspect the authoritative run state again and only then continue the lawful chain or bind the next bounded unit explicitly with the concrete `run_id` and `task_id`."
-                    .to_string(),
+            next_actions.extend(
+                crate::status_surface_signals::blocked_run_graph_status_next_actions(
+                    latest_run_graph_status.map(|status| status.run_id.as_str()),
+                    latest_run_graph_status.map(|status| status.task_id.as_str()),
+                    latest_run_graph_task_closed,
+                ),
             );
+            if !latest_run_graph_task_closed {
+                next_actions.push(
+                    "After resolving the blocker, inspect the authoritative run state again and only then continue the lawful chain or bind the next bounded unit explicitly with the concrete `run_id` and `task_id`."
+                        .to_string(),
+                );
+            }
             (
                 Some(next_action.command.clone()),
                 Some(next_action.surface.clone()),
@@ -2765,6 +2770,19 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     };
 
     let recovery_holds_active_bound_run = recovery_holds_active_bound_run(recovery.as_ref());
+    let latest_run_graph_task_closed = match (store.as_ref(), latest_run_graph.as_ref()) {
+        (Some(store), Some(status)) => match store.list_tasks(None, true).await {
+            Ok(tasks) => tasks
+                .iter()
+                .find(|task| task.id == status.task_id)
+                .is_some_and(|task| task.status == "closed"),
+            Err(error) => {
+                eprintln!("Failed to read tasks for latest run-graph task state: {error}");
+                return ExitCode::from(1);
+            }
+        },
+        _ => false,
+    };
     let decision = build_taskflow_next_decision(
         ready_tasks.first(),
         recovery_holds_active_bound_run,
@@ -2773,6 +2791,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         scope_task_id,
         dispatch.as_ref(),
         latest_run_graph.as_ref(),
+        latest_run_graph_task_closed,
         explicit_binding.as_ref(),
         crate::latest_terminal_consume_continue_snapshot_run_id(&state_dir)
             .ok()
@@ -2982,6 +3001,10 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let latest_run_graph_task_closed = latest_run_graph
+        .as_ref()
+        .and_then(|status| all_tasks.iter().find(|task| task.id == status.task_id))
+        .is_some_and(|task| task.status == "closed");
     let waves = build_graph_summary_waves(&all_tasks, &ready_tasks, &blocked_tasks);
     let continuation_decision = build_taskflow_next_decision(
         ready_tasks.first(),
@@ -2991,6 +3014,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         None,
         dispatch.as_ref(),
         latest_run_graph.as_ref(),
+        latest_run_graph_task_closed,
         explicit_binding.as_ref(),
         crate::latest_terminal_consume_continue_snapshot_run_id(&proxy_state_root)
             .ok()
@@ -6837,6 +6861,7 @@ mod tests {
             Some("epic-1"),
             Some(&dispatch),
             None,
+            false,
             None,
             None,
         );
@@ -6919,6 +6944,7 @@ mod tests {
             None,
             Some(&dispatch),
             None,
+            false,
             None,
             None,
         );
@@ -6967,6 +6993,7 @@ mod tests {
             None,
             None,
             Some(&latest_status),
+            false,
             None,
             None,
         );
@@ -7069,6 +7096,7 @@ mod tests {
             None,
             Some(&dispatch),
             Some(&latest_status),
+            false,
             Some(&stale_binding),
             None,
         );
@@ -7150,6 +7178,7 @@ mod tests {
             None,
             Some(&dispatch),
             Some(&latest_status),
+            false,
             None,
             Some("runtime-audit-state-store-init-lock-timeout"),
         );
@@ -7264,6 +7293,7 @@ mod tests {
             Some("epic-1"),
             None,
             None,
+            false,
             None,
             None,
         );
@@ -7338,6 +7368,7 @@ mod tests {
             None,
             Some(&dispatch),
             None,
+            false,
             None,
             None,
         );
@@ -7372,6 +7403,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
         );
@@ -7429,6 +7461,7 @@ mod tests {
             None,
             Some(&dispatch),
             Some(&latest_status),
+            false,
             Some(&stale_binding),
             None,
         );
@@ -7462,6 +7495,7 @@ mod tests {
             None,
             None,
             Some(&status),
+            false,
             None,
             None,
         );
