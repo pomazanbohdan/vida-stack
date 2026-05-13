@@ -500,8 +500,13 @@ fn lane_summary_dispatch_is_blocked(
 ) -> bool {
     let dispatch_status = summary.dispatch_status.trim().to_ascii_lowercase();
     let lane_status = summary.lane_status.trim().to_ascii_lowercase();
+    let has_downstream_blockers = summary
+        .downstream_dispatch_blockers
+        .iter()
+        .any(|value| !value.trim().is_empty());
     matches!(dispatch_status.as_str(), "blocked" | "failed")
         || matches!(lane_status.as_str(), "lane_blocked" | "lane_failed")
+        || has_downstream_blockers
 }
 
 fn recovery_delegated_cycle_open(
@@ -1822,6 +1827,23 @@ mod tests {
 
         assert!(truth.blocked);
         assert!(truth.next_actions.is_empty());
+    }
+
+    #[test]
+    fn derive_lane_show_truth_marks_downstream_blockers_as_blocked() {
+        let mut receipt = sample_receipt("executed");
+        receipt.blocker_code = None;
+        receipt
+            .downstream_dispatch_blockers
+            .push("missing_owned_write_scope".to_string());
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+
+        let truth = derive_lane_show_truth(&summary, None);
+
+        assert!(truth.blocked);
+        assert!(truth
+            .blocker_codes
+            .contains(&"tool_execution_failed".to_string()));
     }
 
     #[test]
