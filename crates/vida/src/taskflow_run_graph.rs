@@ -414,7 +414,7 @@ fn sanitize_placeholder_continuation_bind_next_action(
         if next_action.command.starts_with("vida taskflow run-graph status")
             || next_action.command == "vida status --json"
         {
-            next_action.reason = "the latest consume-continue snapshot already completed without a next bounded unit, so inspect the authoritative run state before binding continuation explicitly".to_string();
+            next_action.reason = crate::status_surface_signals::terminal_next_action_requires_authoritative_run_state(run_id);
         }
         next_action
     })
@@ -3597,15 +3597,98 @@ pub(crate) fn implementation_lane_is_diagnostic(active_node: &str) -> bool {
     !implementation_lane_allows_terminal_completion(active_node)
 }
 
+fn is_task_id_boundary_char(value: char) -> bool {
+    !(value.is_ascii_alphanumeric() || matches!(value, '-' | '_'))
+}
+
+fn request_text_mentions_task_id(request_text: &str, task_id: &str) -> bool {
+    let task_id = task_id.trim();
+    if task_id.is_empty() {
+        return false;
+    }
+
+    let mut search_from = 0;
+    while let Some(offset) = request_text[search_from..].find(task_id) {
+        let start = search_from + offset;
+        let end = start + task_id.len();
+        let before_boundary = start == 0
+            || request_text[..start]
+                .chars()
+                .next_back()
+                .is_some_and(is_task_id_boundary_char);
+        let after_boundary = end >= request_text.len()
+            || request_text[end..]
+                .chars()
+                .next()
+                .is_some_and(is_task_id_boundary_char);
+        if before_boundary && after_boundary {
+            return true;
+        }
+        search_from = end;
+    }
+
+    false
+}
+
+async fn resolve_seed_task_id_for_runtime_run(
+    store: &StateStore,
+    requested_run_id: &str,
+    request_text: &str,
+) -> Result<String, String> {
+    if store.show_task(requested_run_id).await.is_ok() {
+        return Ok(requested_run_id.to_string());
+    }
+
+    let mut matches = store
+        .list_tasks(None, true)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to resolve TaskFlow task id for runtime run `{requested_run_id}`: {error}"
+            )
+        })?
+        .into_iter()
+        .filter(|task| task.status != "closed")
+        .filter(|task| request_text_mentions_task_id(request_text, &task.id))
+        .collect::<Vec<_>>();
+
+    if matches.is_empty() {
+        return Ok(requested_run_id.to_string());
+    }
+    if matches.len() == 1 {
+        return Ok(matches.remove(0).id);
+    }
+
+    let active_matches = matches
+        .iter()
+        .filter(|task| task.status == "in_progress")
+        .collect::<Vec<_>>();
+    if active_matches.len() == 1 {
+        return Ok(active_matches[0].id.clone());
+    }
+
+    matches.sort_by(|left, right| left.id.cmp(&right.id));
+    let ids = matches
+        .iter()
+        .map(|task| task.id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "Runtime run `{requested_run_id}` request text references multiple open TaskFlow task ids ({ids}); cite a single bounded task before dispatch."
+    ))
+}
+
 pub(crate) async fn derive_seeded_run_graph_status(
     store: &StateStore,
-    task_id: &str,
+    requested_run_id: &str,
     request_text: &str,
 ) -> Result<TaskflowRunGraphSeedPayload, String> {
+    let bounded_task_id =
+        resolve_seed_task_id_for_runtime_run(store, requested_run_id, request_text).await?;
     let mut selection = build_runtime_lane_selection_with_store(store, request_text).await?;
     try_existing_design_backed_implementation_override(
         store,
-        task_id,
+        &bounded_task_id,
         request_text,
         &mut selection,
     )
@@ -3691,8 +3774,8 @@ pub(crate) async fn derive_seeded_run_graph_status(
         || json_bool_field(route, "coach_required").unwrap_or(false)
         || json_bool_field(route, "independent_verification_required").unwrap_or(false);
     let seed_base = RunGraphStatus {
-        run_id: task_id.to_string(),
-        task_id: task_id.to_string(),
+        run_id: requested_run_id.to_string(),
+        task_id: bounded_task_id,
         task_class,
         active_node: "planning".to_string(),
         route_task_class: if is_conversation {
@@ -3705,7 +3788,7 @@ pub(crate) async fn derive_seeded_run_graph_status(
             "implementation".to_string()
         },
         selected_backend,
-        ..default_run_graph_status(task_id, "planning", "implementation")
+        ..default_run_graph_status(requested_run_id, "planning", "implementation")
     };
     let mut status = run_graph_transition(
         &seed_base,
@@ -6691,6 +6774,79 @@ mod tests {
         assert_ne!(payload.status.next_node.as_deref(), Some("spec-pack"));
     }
 
+    #[test]
+    fn request_text_task_id_match_requires_token_boundaries() {
+        assert!(request_text_mentions_task_id(
+            "Fix bounded task `taskflow-runtime-run-binding-task-missing-actionability` now.",
+            "taskflow-runtime-run-binding-task-missing-actionability"
+        ));
+        assert!(request_text_mentions_task_id(
+            "Fix taskflow-runtime-run-binding-task-missing-actionability.",
+            "taskflow-runtime-run-binding-task-missing-actionability"
+        ));
+        assert!(!request_text_mentions_task_id(
+            "Fix taskflow-runtime-run-binding-task-missing-actionability now.",
+            "taskflow-runtime-run-binding-task-missing"
+        ));
+    }
+
+    #[tokio::test]
+    async fn derive_seeded_run_graph_binds_generated_runtime_run_to_open_task_mentioned_in_request()
+    {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open state store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "taskflow-runtime-run-binding-task-missing-actionability",
+                title: "Runtime run binding task missing actionability",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create active task");
+
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            "runtime-fix-runtime-run-binding-task-missing",
+            "Fix runtime run binding task-missing actionability for taskflow-runtime-run-binding-task-missing-actionability.",
+        )
+        .await
+        .expect("seed should be generated");
+
+        assert_eq!(
+            payload.status.run_id,
+            "runtime-fix-runtime-run-binding-task-missing"
+        );
+        assert_eq!(
+            payload.status.task_id,
+            "taskflow-runtime-run-binding-task-missing-actionability"
+        );
+        let dispatch_context = run_graph_dispatch_context_from_seed_payload(&payload);
+        assert_eq!(
+            dispatch_context.run_id,
+            "runtime-fix-runtime-run-binding-task-missing"
+        );
+        assert_eq!(
+            dispatch_context.task_id,
+            "taskflow-runtime-run-binding-task-missing-actionability"
+        );
+    }
+
     #[tokio::test]
     async fn derive_seeded_run_graph_keeps_design_spec_request_in_scope_discussion() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -8911,8 +9067,9 @@ mod tests {
             reason: "placeholder bind".to_string(),
         };
 
-        let next_action = sanitize_placeholder_continuation_bind_next_action(None, Some(next_action))
-            .expect("next action should remain present");
+        let next_action =
+            sanitize_placeholder_continuation_bind_next_action(None, Some(next_action))
+                .expect("next action should remain present");
 
         assert_eq!(next_action.command, "vida status --json");
         assert_eq!(next_action.surface, "vida status");
