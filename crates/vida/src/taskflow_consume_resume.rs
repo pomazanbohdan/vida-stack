@@ -246,6 +246,51 @@ pub(crate) fn emit_consume_continue_resume_error_json(error: &str, surface_name:
     crate::print_json_pretty(&consume_continue_resume_error_payload(error, surface_name));
 }
 
+fn consume_advance_success_payload(
+    source_dispatch_packet_path: &str,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
+    snapshot_path: &str,
+    rounds: usize,
+) -> serde_json::Value {
+    let blocker_codes: Vec<String> = Vec::new();
+    let next_actions: Vec<String> = Vec::new();
+    let artifact_refs = serde_json::json!({
+        "surface": "vida taskflow consume advance",
+        "run_id": dispatch_receipt.run_id,
+        "source_dispatch_packet_path": source_dispatch_packet_path,
+        "snapshot_path": snapshot_path,
+    });
+    serde_json::json!({
+        "surface": "vida taskflow consume advance",
+        "status": "ok",
+        "source_run_id": dispatch_receipt.run_id,
+        "source_dispatch_packet_path": source_dispatch_packet_path,
+        "dispatch_receipt": dispatch_receipt,
+        "snapshot_path": snapshot_path,
+        "rounds_executed": rounds,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+        "shared_fields": {
+            "status": "ok",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+        },
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "ok",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+            "risk_tier": null,
+            "trace_id": null,
+            "workflow_class": null,
+        },
+    })
+}
+
 fn missing_dispatch_packet_path_error(latest: bool) -> String {
     let _ = super::blocker_code_str(super::BlockerCode::MissingPacket);
     if latest {
@@ -4522,7 +4567,9 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                             emit_consume_continue_resume_error_json(&error, surface_name);
                             return ExitCode::from(1);
                         }
-                        eprintln!("Failed to execute resumed runtime dispatch handoff: {error}");
+                        if emit_output {
+                            eprintln!("Failed to execute resumed runtime dispatch handoff: {error}");
+                        }
                         return ExitCode::from(1);
                     }
                     let store = match fail_fast_state_store_open_read_only(
@@ -4741,6 +4788,12 @@ pub(crate) async fn run_taskflow_consume_advance_command(
         )
         .await;
         if exit != ExitCode::SUCCESS {
+            if as_json {
+                emit_consume_continue_resume_error_json(
+                    "TaskFlow consume advance failed while executing the next resumed dispatch step.",
+                    "vida taskflow consume advance",
+                );
+            }
             return exit;
         }
 
@@ -4817,18 +4870,12 @@ pub(crate) async fn run_taskflow_consume_advance_command(
     };
 
     if as_json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "surface": "vida taskflow consume advance",
-                "source_run_id": dispatch_receipt.run_id,
-                "source_dispatch_packet_path": source_dispatch_packet_path,
-                "dispatch_receipt": dispatch_receipt,
-                "snapshot_path": snapshot_path,
-                "rounds_executed": rounds,
-            }))
-            .expect("advance should render as json")
-        );
+        crate::print_json_pretty(&consume_advance_success_payload(
+            &source_dispatch_packet_path,
+            &dispatch_receipt,
+            &snapshot_path,
+            rounds,
+        ));
     } else {
         super::print_surface_header(super::RenderMode::Plain, "vida taskflow consume advance");
         super::print_surface_line(
@@ -4859,8 +4906,9 @@ mod tests {
         build_failure_control_evidence, canonical_resume_dispatch_status,
         canonical_resume_lane_status, canonical_resume_string_array_entries,
         consume_continue_resume_error_payload, consume_continue_state_access_blocker_payload,
-        dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
-        dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
+        consume_advance_success_payload, dispatch_receipt_internal_retry_eligible,
+        dispatch_receipt_primary_rebind_eligible, dispatch_receipt_retry_eligible,
+        emit_runtime_consumption_resume_json,
         enforce_consume_continue_execution_preparation_gate,
         fail_fast_state_store_open_read_only_with_timeout, normalize_runtime_dispatch_packet,
         normalize_stale_in_flight_dispatch_receipt, packet_path_components_for_platform,
@@ -4887,6 +4935,52 @@ mod tests {
     use std::fs;
     use std::process::ExitCode;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn consume_advance_success_payload_uses_release_one_operator_envelope() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-1".to_string(),
+            dispatch_target: "implementation".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some("packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: Some("implementation".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-13T00:00:00Z".to_string(),
+        };
+
+        let payload = consume_advance_success_payload("packet.json", &receipt, "snapshot.json", 1);
+
+        assert_eq!(payload["surface"], "vida taskflow consume advance");
+        assert_eq!(payload["status"], "ok");
+        assert_eq!(payload["source_run_id"], "run-1");
+        assert_eq!(payload["shared_fields"]["status"], "ok");
+        assert_eq!(
+            payload["operator_contracts"]["contract_id"],
+            "release-1-operator-contracts"
+        );
+        assert_eq!(payload["operator_contracts"]["schema_version"], "release-1-v1");
+    }
 
     #[test]
     fn validate_receipt_packet_pair_accepts_mixed_windows_separator_dispatch_path() {
