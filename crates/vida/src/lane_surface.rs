@@ -415,6 +415,8 @@ fn build_lane_envelope(
     let supersedes_receipt_id = summary.supersedes_receipt_id.clone();
     let lane_status = summary.lane_status.clone();
     let dispatch_status = summary.dispatch_status.clone();
+    let root_local_write_allowed_for_only_these_paths =
+        active_exception_write_scope(&summary, exception_path_metadata.as_ref());
     let selected_backend = status
         .as_ref()
         .map(|status| status.selected_backend.clone())
@@ -425,7 +427,7 @@ fn build_lane_envelope(
         "exception_path_metadata_path": exception_path_metadata_path.clone(),
         "root_local_write_allowed_for_only_these_paths": exception_path_metadata
             .as_ref()
-            .map(|metadata| metadata.owned_write_scope.clone())
+            .map(|_| root_local_write_allowed_for_only_these_paths.clone())
             .unwrap_or_default(),
         "dispatch_packet_path": dispatch_packet_path.clone(),
         "dispatch_result_path": dispatch_result_path.clone(),
@@ -470,12 +472,24 @@ fn build_lane_envelope(
         supersedes_receipt_id,
         exception_path_receipt_id,
         exception_path_metadata_path,
-        root_local_write_allowed_for_only_these_paths: exception_path_metadata
-            .as_ref()
-            .map(|metadata| metadata.owned_write_scope.clone())
-            .unwrap_or_default(),
+        root_local_write_allowed_for_only_these_paths,
         exception_path_metadata,
     }
+}
+
+fn active_exception_write_scope(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    exception_path_metadata: Option<&ExceptionTakeoverMetadata>,
+) -> Vec<String> {
+    if summary.lane_status != crate::LaneStatus::LaneExceptionTakeover.as_str()
+        || !crate::release1_contracts::has_evidence_id(summary.exception_path_receipt_id.as_deref())
+        || !crate::release1_contracts::has_evidence_id(summary.supersedes_receipt_id.as_deref())
+    {
+        return Vec::new();
+    }
+    exception_path_metadata
+        .map(|metadata| metadata.owned_write_scope.clone())
+        .unwrap_or_default()
 }
 
 struct LaneShowTruth {
@@ -557,7 +571,9 @@ fn canonical_lane_show_blocker_codes(blocker_codes: &[String]) -> Vec<String> {
             && crate::release1_contracts::canonical_blocker_code_list([value.as_str()]).is_empty()
     });
     if has_uncanonical_dispatch_blocker
-        && !canonical_codes.iter().any(|code| code == "tool_execution_failed")
+        && !canonical_codes
+            .iter()
+            .any(|code| code == "tool_execution_failed")
     {
         canonical_codes.push(
             crate::release1_contracts::blocker_code_str(
@@ -1844,6 +1860,62 @@ mod tests {
         assert!(truth
             .blocker_codes
             .contains(&"tool_execution_failed".to_string()));
+    }
+
+    #[test]
+    fn build_lane_envelope_exposes_root_scope_only_for_active_takeover() {
+        let metadata = ExceptionTakeoverMetadata {
+            reason_class: "test".to_string(),
+            active_bounded_unit: "taskflow-timeout-actionability".to_string(),
+            owned_write_scope: vec!["crates/vida/src/lane_surface.rs".to_string()],
+            why_delegated_or_rerouted_path_is_not_currently_lawful: "blocked".to_string(),
+            why_local_write_is_the_smallest_safe_bounded_workaround: "bounded".to_string(),
+            return_to_normal_posture_condition: "verified".to_string(),
+            verification_plan: vec!["test".to_string()],
+            recorded_at: "2026-05-13T00:00:00Z".to_string(),
+        };
+        let mut stale_receipt = sample_receipt("executed");
+        stale_receipt.blocker_code = None;
+        stale_receipt.lane_status = crate::LaneStatus::LaneRunning.as_str().to_string();
+        let stale_envelope = build_lane_envelope(
+            crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(stale_receipt),
+            None,
+            Some("/tmp/exception.json".to_string()),
+            Some(metadata.clone()),
+            false,
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(stale_envelope
+            .root_local_write_allowed_for_only_these_paths
+            .is_empty());
+        assert_eq!(
+            stale_envelope.artifact_refs["root_local_write_allowed_for_only_these_paths"]
+                .as_array()
+                .map(Vec::len),
+            Some(0)
+        );
+
+        let mut active_receipt = sample_receipt("executed");
+        active_receipt.blocker_code = None;
+        active_receipt.lane_status = crate::LaneStatus::LaneExceptionTakeover
+            .as_str()
+            .to_string();
+        active_receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        active_receipt.supersedes_receipt_id = Some("exception-1".to_string());
+        let active_envelope = build_lane_envelope(
+            crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(active_receipt),
+            None,
+            Some("/tmp/exception.json".to_string()),
+            Some(metadata),
+            false,
+            Vec::new(),
+            Vec::new(),
+        );
+        assert_eq!(
+            active_envelope.root_local_write_allowed_for_only_these_paths,
+            vec!["crates/vida/src/lane_surface.rs".to_string()]
+        );
     }
 
     #[test]

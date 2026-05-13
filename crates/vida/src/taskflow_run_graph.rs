@@ -365,6 +365,28 @@ fn next_lawful_operator_action_for_status(status: &RunGraphStatus) -> Option<Str
     ))
 }
 
+fn fail_closed_terminal_continue_followup(status: &RunGraphStatus) -> String {
+    format!("vida taskflow run-graph status {} --json", status.run_id)
+}
+
+fn sanitize_placeholder_continuation_bind_recommendation(
+    run_id: &str,
+    recommended_command: Option<String>,
+    recommended_surface: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let has_placeholder_bind = recommended_command.as_deref().is_some_and(|command| {
+        command.starts_with("vida taskflow continuation bind")
+            && (command.contains("<task-id>") || command.contains("<run-id>"))
+    });
+    if !has_placeholder_bind {
+        return (recommended_command, recommended_surface);
+    }
+    (
+        Some(format!("vida taskflow run-graph status {run_id} --json")),
+        Some("vida taskflow run-graph status".to_string()),
+    )
+}
+
 fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -> Option<&str> {
     if receipt.lane_status == "lane_exception_takeover"
         && receipt
@@ -394,6 +416,9 @@ fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -
     if receipt.blocker_code.as_deref() == Some("internal_activation_view_only") {
         return Some("internal_activation_view_only");
     }
+    if receipt.blocker_code.as_deref() == Some("internal_dispatch_timeout_without_receipt") {
+        return Some("internal_dispatch_timeout_without_receipt");
+    }
     if receipt
         .downstream_dispatch_blockers
         .iter()
@@ -407,6 +432,13 @@ fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -
         .any(|value| value == "missing_owned_write_scope")
     {
         return Some("missing_owned_write_scope");
+    }
+    if receipt
+        .downstream_dispatch_blockers
+        .iter()
+        .any(|value| value == "internal_dispatch_timeout_without_receipt")
+    {
+        return Some("internal_dispatch_timeout_without_receipt");
     }
     None
 }
@@ -435,10 +467,7 @@ fn next_lawful_operator_action_for_dispatch_resolution(
             return Some(format!("vida lane show {} --json", status.run_id));
         }
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
-            return Some(format!(
-                "vida taskflow continuation bind {} --task-id <task-id> --json",
-                status.run_id
-            ));
+            return Some(fail_closed_terminal_continue_followup(status));
         }
         return (status.status != "completed").then(|| {
             format!(
@@ -516,10 +545,7 @@ fn next_lawful_operator_action_for_projection(
     }
     if receipt.is_some_and(blocked_external_dispatch_artifact_mismatched_as_internal_activation) {
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
-            return Some(format!(
-                "vida taskflow continuation bind {} --task-id <task-id> --json",
-                status.run_id
-            ));
+            return Some(fail_closed_terminal_continue_followup(status));
         }
         return Some(format!(
             "vida taskflow consume continue --run-id {} --json",
@@ -681,6 +707,12 @@ async fn build_run_graph_diagnosis(
     let projection_truth = run_graph_projection_truth(store, &status).await?;
     let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
         recovery_surface_contract(&summary, &projection_truth);
+    let (recommended_command, recommended_surface) =
+        sanitize_placeholder_continuation_bind_recommendation(
+            &summary.run_id,
+            recommended_command,
+            recommended_surface,
+        );
     Ok(RunGraphDiagnosis {
         run_id: summary.run_id.clone(),
         blocker_codes,
@@ -1232,6 +1264,12 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
                 .map(recommended_surface_for_command),
         )
     };
+    let (recommended_command, recommended_surface) =
+        sanitize_placeholder_continuation_bind_recommendation(
+            &status.run_id,
+            recommended_command,
+            recommended_surface,
+        );
     Some(RunGraphDispatchCompactSummary {
         route_truth: route_truth_from_projection_truth(&projection_truth, evidence),
         downstream_dispatch_preview: downstream_dispatch_preview_from_status_snapshot(
@@ -5900,7 +5938,29 @@ mod tests {
                 Some("run-active-exception")
             )
             .as_deref(),
-            Some("vida taskflow continuation bind run-active-exception --task-id <task-id> --json")
+            Some("vida taskflow run-graph status run-active-exception --json")
+        );
+    }
+
+    #[test]
+    fn recovery_status_action_for_internal_timeout_points_to_lane_show() {
+        let mut status = default_run_graph_status("run-timeout", "implementation", "coach");
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "implementer_blocked".to_string();
+        status.active_node = "implementer".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        let mut receipt = packet_gate_receipt("run-timeout");
+        receipt.dispatch_status = "executed".to_string();
+        receipt.lane_status = "lane_running".to_string();
+        receipt.blocker_code = Some("internal_dispatch_timeout_without_receipt".to_string());
+        receipt
+            .downstream_dispatch_blockers
+            .push("internal_dispatch_timeout_without_receipt".to_string());
+
+        assert_eq!(
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None).as_deref(),
+            Some("vida lane show run-timeout --json")
         );
     }
 

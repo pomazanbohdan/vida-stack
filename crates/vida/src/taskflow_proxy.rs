@@ -9,8 +9,8 @@ use crate::taskflow_run_graph::{
 use crate::taskflow_spec_bootstrap::run_taskflow_bootstrap_spec;
 use crate::taskflow_task_bridge::proxy_state_dir;
 use crate::{
-    Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs, print_surface_header,
-    print_surface_line, surface_render, taskflow_consume, taskflow_protocol_binding,
+    print_surface_header, print_surface_line, surface_render, taskflow_consume,
+    taskflow_protocol_binding, Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs,
 };
 use clap::{CommandFactory, Parser};
 use serde::Serialize;
@@ -210,7 +210,8 @@ fn authoritative_dispatch_blocker_codes(
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
 ) -> Vec<String> {
     let blocker_codes = raw_authoritative_dispatch_blocker_codes(dispatch);
-    let mut canonical_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    let mut canonical_codes =
+        crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
     if canonical_codes.is_empty() && !blocker_codes.is_empty() {
         if let Some(code) = crate::release1_contracts::blocker_code_value(
             crate::release1_contracts::BlockerCode::ToolExecutionFailed,
@@ -1990,7 +1991,7 @@ fn build_taskflow_next_decision(
                     category: "terminal_continue_snapshot_without_next_bounded_unit".to_string(),
                     summary: "The latest consume-continue snapshot completed with no next actions while the run graph still references the same blocked run, so `vida taskflow next` must fail closed instead of self-looping or admitting backlog ready-head work.".to_string(),
                     blocker_codes: blocker_codes.clone(),
-                    blocking_surface: Some("vida taskflow continuation bind".to_string()),
+                    blocking_surface: Some(next_action.surface.clone()),
                 }),
                 Some(next_action),
             )
@@ -2020,7 +2021,7 @@ fn build_taskflow_next_decision(
                     category: "completed_without_explicit_next_bounded_unit".to_string(),
                     summary: "The latest run is closure_complete with no explicit admissible continuation binding, so `vida taskflow next` must fail closed.".to_string(),
                     blocker_codes: blocker_codes.clone(),
-                    blocking_surface: Some("vida taskflow continuation bind".to_string()),
+                    blocking_surface: Some(next_action.surface.clone()),
                 }),
                 Some(next_action),
             )
@@ -4762,8 +4763,8 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        GraphSummaryWaveBucket, build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
-        taskflow_task_subcommand_supported,
+        build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
+        taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
     };
     use crate::state_store::{
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
@@ -5133,22 +5134,18 @@ mod tests {
             plan.dispatch_receipt.packet_backed_execution_status,
             "blocked_lineage_preconditions_not_verified"
         );
-        assert!(
-            plan.reservations[0]
-                .preview_only_reason
-                .as_deref()
-                .is_none()
-        );
+        assert!(plan.reservations[0]
+            .preview_only_reason
+            .as_deref()
+            .is_none());
         assert_eq!(
             plan.reservations[0].execute_status,
             "execute_projection_not_executed"
         );
-        assert!(
-            !plan
-                .next_actions
-                .iter()
-                .any(|action| { action.contains("execution is not attempted") })
-        );
+        assert!(!plan
+            .next_actions
+            .iter()
+            .any(|action| { action.contains("execution is not attempted") }));
     }
 
     #[test]
@@ -5764,11 +5761,9 @@ mod tests {
             super::build_taskflow_graph_explain_payload(&projection, None, Some("blocked"));
         assert_eq!(blocked_payload["status"], "blocked");
         assert_eq!(blocked_payload["ready_now"], false);
-        assert!(
-            blocked_payload["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| codes.contains(&serde_json::json!("graph_blocked")))
-        );
+        assert!(blocked_payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.contains(&serde_json::json!("graph_blocked"))));
         assert_eq!(blocked_payload["blocked_by"][0]["depends_on_id"], "current");
         assert_eq!(
             blocked_payload["next_lawful_action"]["surface"],
@@ -5779,23 +5774,19 @@ mod tests {
             super::build_taskflow_graph_explain_payload(&projection, None, Some("missing"));
         assert_eq!(missing_payload["status"], "blocked");
         assert_eq!(missing_payload["ready_now"], false);
-        assert!(
-            missing_payload["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| {
-                    codes.contains(&serde_json::json!("task_not_in_graph_projection"))
-                })
-        );
+        assert!(missing_payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| {
+                codes.contains(&serde_json::json!("task_not_in_graph_projection"))
+            }));
 
         let parallel_blocked_payload =
             super::build_taskflow_graph_explain_payload(&projection, None, Some("current"));
         assert_eq!(parallel_blocked_payload["status"], "blocked");
         assert_eq!(parallel_blocked_payload["ready_now"], true);
-        assert!(
-            parallel_blocked_payload["blocker_codes"]
-                .as_array()
-                .is_some_and(|codes| !codes.is_empty())
-        );
+        assert!(parallel_blocked_payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| !codes.is_empty()));
     }
 
     #[test]
@@ -6127,11 +6118,9 @@ mod tests {
             payload["routes"][0]["model_profile_readiness_audit"]["surface"],
             "vida taskflow model-profile readiness audit"
         );
-        assert!(
-            payload["row_count"]
-                .as_u64()
-                .is_some_and(|count| count >= 10)
-        );
+        assert!(payload["row_count"]
+            .as_u64()
+            .is_some_and(|count| count >= 10));
         let rows = payload["routes"][0]["rows"]
             .as_array()
             .expect("config actuation rows should render");
@@ -6358,11 +6347,9 @@ mod tests {
             unready["selected_profile"]["readiness"]["blocker_code"],
             "external_cli_missing_api_key"
         );
-        assert!(
-            unready["next_actions"]
-                .as_array()
-                .is_some_and(|actions| !actions.is_empty())
-        );
+        assert!(unready["next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty()));
         assert_eq!(missing["status"], "blocked");
         assert_eq!(
             missing["blocker_codes"],
@@ -6488,16 +6475,12 @@ mod tests {
 
         let blocker_codes = super::authoritative_dispatch_blocker_codes(Some(&dispatch));
         assert_eq!(blocker_codes.len(), 2);
-        assert!(
-            blocker_codes
-                .iter()
-                .any(|code| code == "timeout_without_takeover_authority")
-        );
-        assert!(
-            blocker_codes
-                .iter()
-                .any(|code| code == "pending_review_clean_evidence")
-        );
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code == "timeout_without_takeover_authority"));
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code == "pending_review_clean_evidence"));
     }
 
     #[test]
@@ -6562,18 +6545,14 @@ mod tests {
             super::scheduler_execute_runtime_gate_blocker_codes(Some(&recovery), Some(&dispatch));
 
         assert_eq!(blocker_codes.blocker_codes.len(), 2);
-        assert!(
-            blocker_codes
-                .blocker_codes
-                .iter()
-                .any(|code| code == "open_delegated_cycle")
-        );
-        assert!(
-            blocker_codes
-                .blocker_codes
-                .iter()
-                .any(|code| code == "execution_preparation_gate_blocked")
-        );
+        assert!(blocker_codes
+            .blocker_codes
+            .iter()
+            .any(|code| code == "open_delegated_cycle"));
+        assert!(blocker_codes
+            .blocker_codes
+            .iter()
+            .any(|code| code == "execution_preparation_gate_blocked"));
     }
 
     #[test]
@@ -6616,18 +6595,14 @@ mod tests {
             super::scheduler_execute_runtime_gate_blocker_codes(None, Some(&dispatch));
 
         assert_eq!(blocker_codes.blocker_codes.len(), 2);
-        assert!(
-            blocker_codes
-                .blocker_codes
-                .iter()
-                .any(|code| code == "timeout_without_takeover_authority")
-        );
-        assert!(
-            blocker_codes
-                .blocker_codes
-                .iter()
-                .any(|code| code == "pending_lane_evidence")
-        );
+        assert!(blocker_codes
+            .blocker_codes
+            .iter()
+            .any(|code| code == "timeout_without_takeover_authority"));
+        assert!(blocker_codes
+            .blocker_codes
+            .iter()
+            .any(|code| code == "pending_lane_evidence"));
     }
 
     #[test]
@@ -6851,7 +6826,8 @@ mod tests {
     }
 
     #[test]
-    fn taskflow_next_decision_uses_lane_show_when_open_cycle_has_dispatch_blocker_even_after_final() {
+    fn taskflow_next_decision_uses_lane_show_when_open_cycle_has_dispatch_blocker_even_after_final()
+    {
         let dispatch = crate::state_store::RunGraphDispatchReceiptSummary {
             run_id: "run-1".to_string(),
             dispatch_target: "coach".to_string(),
@@ -6884,7 +6860,7 @@ mod tests {
             downstream_dispatch_last_target: None,
             downstream_dispatch_note: Some("after coach, verify".to_string()),
             downstream_dispatch_blockers: vec![
-                "internal_dispatch_timeout_without_receipt".to_string(),
+                "internal_dispatch_timeout_without_receipt".to_string()
             ],
         };
 
@@ -6912,12 +6888,10 @@ mod tests {
             decision.recommended_surface.as_deref(),
             Some("vida lane show")
         );
-        assert!(
-            !decision
-                .next_actions
-                .iter()
-                .any(|action| action.contains("vida taskflow consume continue --json"))
-        );
+        assert!(!decision
+            .next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow consume continue --json")));
         assert!(decision
             .blocker_codes
             .iter()
@@ -6972,12 +6946,10 @@ mod tests {
                 .map(|value| value.category.as_str()),
             Some("latest_run_graph_status_blocked")
         );
-        assert!(
-            decision
-                .blocker_codes
-                .iter()
-                .any(|code| code == "latest_run_graph_status_blocked")
-        );
+        assert!(decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "latest_run_graph_status_blocked"));
         assert_eq!(
             decision
                 .next_action
@@ -7083,12 +7055,10 @@ mod tests {
             decision.recommended_surface.as_deref(),
             Some("vida taskflow consume continue")
         );
-        assert!(
-            !decision
-                .blocker_codes
-                .iter()
-                .any(|code| code == "latest_run_graph_status_blocked")
-        );
+        assert!(!decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "latest_run_graph_status_blocked"));
     }
 
     #[test]
@@ -7172,12 +7142,10 @@ mod tests {
             decision.recommended_surface.as_deref(),
             Some("vida taskflow run-graph status")
         );
-        assert!(
-            decision
-                .blocker_codes
-                .iter()
-                .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit")
-        );
+        assert!(decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit"));
         assert_eq!(
             decision
                 .next_action
@@ -7187,12 +7155,10 @@ mod tests {
                 "vida taskflow run-graph status runtime-audit-state-store-init-lock-timeout --json"
             )
         );
-        assert!(
-            decision
-                .next_actions
-                .iter()
-                .all(|action| !action.contains("--task-id <task-id>"))
-        );
+        assert!(decision
+            .next_actions
+            .iter()
+            .all(|action| !action.contains("--task-id <task-id>")));
     }
 
     #[test]
@@ -7230,12 +7196,10 @@ mod tests {
                 .map(|value| value.command.as_str()),
             Some("vida task ready --scope epic-1 --json")
         );
-        assert!(
-            decision
-                .blocker_codes
-                .iter()
-                .any(|code| code == "no_ready_tasks")
-        );
+        assert!(decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "no_ready_tasks"));
     }
 
     #[test]
@@ -7294,21 +7258,15 @@ mod tests {
             0,
         );
 
-        assert!(
-            !next_actions.iter().any(
-                |action| action.contains("Inspect the primary ready task with `vida task show")
-            )
-        );
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("diagnostic only"))
-        );
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("vida taskflow recovery latest --json"))
-        );
+        assert!(!next_actions
+            .iter()
+            .any(|action| action.contains("Inspect the primary ready task with `vida task show")));
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("diagnostic only")));
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow recovery latest --json")));
     }
 
     #[test]
@@ -7337,11 +7295,9 @@ mod tests {
         assert!(next_actions.iter().any(|action| {
             action.contains("Inspect the primary ready task with `vida task show task-1 --json`")
         }));
-        assert!(
-            !next_actions
-                .iter()
-                .any(|action| action.contains("diagnostic only"))
-        );
+        assert!(!next_actions
+            .iter()
+            .any(|action| action.contains("diagnostic only")));
     }
 
     #[test]
@@ -7441,12 +7397,10 @@ mod tests {
             decision.recommended_surface.as_deref(),
             Some("vida taskflow run-graph status")
         );
-        assert!(
-            decision
-                .next_actions
-                .iter()
-                .all(|action| !action.contains("--task-id <task-id>"))
-        );
+        assert!(decision
+            .next_actions
+            .iter()
+            .all(|action| !action.contains("--task-id <task-id>")));
     }
 }
 
