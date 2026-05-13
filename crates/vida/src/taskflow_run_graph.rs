@@ -384,6 +384,9 @@ fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -
     if receipt.blocker_code.as_deref() == Some("configured_backend_dispatch_failed") {
         return Some("configured_backend_dispatch_failed");
     }
+    if receipt.blocker_code.as_deref() == Some("internal_activation_view_only") {
+        return Some("internal_activation_view_only");
+    }
     if receipt
         .downstream_dispatch_blockers
         .iter()
@@ -5360,6 +5363,65 @@ mod tests {
         assert!(command
             .as_deref()
             .is_some_and(|value| value == "vida lane show run-configured-backend-blocked --json"));
+    }
+
+    #[test]
+    fn recovery_status_action_for_internal_activation_view_only_points_to_lane_show() {
+        let status = RunGraphStatus {
+            run_id: "run-internal-activation-view-only".to_string(),
+            task_id: "task-internal-activation-view-only".to_string(),
+            task_class: "verification".to_string(),
+            active_node: "verification".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "verification".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "verification_lane".to_string(),
+            lifecycle_stage: "verification_blocked".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "verification".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("verification".to_string()),
+            downstream_dispatch_last_target: Some("verification".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-13T00:00:00Z".to_string(),
+        };
+
+        let command = next_lawful_operator_action_for_projection(&status, Some(&receipt), None);
+
+        assert_eq!(
+            command.as_deref(),
+            Some("vida lane show run-internal-activation-view-only --json")
+        );
     }
 
     #[test]
