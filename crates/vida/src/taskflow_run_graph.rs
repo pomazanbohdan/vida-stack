@@ -106,7 +106,7 @@ fn normalize_run_graph_blocker_codes(
         crate::release_contract_adapters::canonical_blocker_codes,
         None,
     );
-    if normalized.is_empty() && blocked_evidence_present {
+    if normalized.is_empty() && (blocked_evidence_present || !blocker_codes.is_empty()) {
         vec![fallback_dispatch_blocker_code()]
     } else {
         normalized
@@ -5654,6 +5654,94 @@ mod tests {
             command.as_deref(),
             Some("vida lane show run-missing-owned-scope --json")
         );
+    }
+
+    #[test]
+    fn run_graph_status_payload_blocks_downstream_noncanonical_blocker() {
+        let status = RunGraphStatus {
+            run_id: "run-status-missing-owned-scope".to_string(),
+            task_id: "task-status-missing-owned-scope".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: Some("writer".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "analysis_lane".to_string(),
+            lifecycle_stage: "analysis_active".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "awaiting_writer".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.writer_lane".to_string(),
+            recovery_ready: true,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("writer".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["missing_owned_write_scope".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: Some("/tmp/result.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-13T00:00:00Z".to_string(),
+        };
+        let next_lawful_operator_action =
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None);
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason: "run-graph status reflects persisted dispatch blocker evidence"
+                .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: false,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action,
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let payload = build_run_graph_status_json_payload(
+            "vida taskflow run-graph status",
+            &status,
+            &projection_truth,
+        )
+        .expect("status payload should render");
+
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should be an array")
+            .iter()
+            .any(|value| value == "tool_execution_failed"));
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array")
+            .iter()
+            .any(|value| value
+                .as_str()
+                .is_some_and(|action| action
+                    .contains("vida lane show run-status-missing-owned-scope --json"))));
     }
 
     #[test]
