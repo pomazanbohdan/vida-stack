@@ -675,13 +675,10 @@ fn derive_lane_show_truth(
     if summary.lane_status == crate::LaneStatus::LaneExceptionTakeover.as_str()
         && takeover_state.is_active()
     {
-        let blocked = lane_summary_dispatch_is_blocked(summary);
         let recovery_open = recovery_delegated_cycle_open(recovery);
-        let mut blocker_codes = lane_summary_raw_blocker_codes(summary, blocked);
         if recovery_open {
+            let mut blocker_codes = lane_summary_raw_blocker_codes(summary, true);
             blocker_codes.push("open_delegated_cycle".to_string());
-        }
-        if blocked || recovery_open || !blocker_codes.is_empty() {
             return LaneShowTruth {
                 blocked: true,
                 blocker_codes: canonical_lane_show_blocker_codes(&blocker_codes),
