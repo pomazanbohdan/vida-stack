@@ -43,16 +43,55 @@ fn recovery_projected_task_id(
         .and_then(|summary| (!summary.task_id.trim().is_empty()).then(|| summary.task_id.clone()))
 }
 
+fn binding_projected_task_id(
+    binding: Option<&crate::state_store::RunGraphContinuationBinding>,
+) -> Option<String> {
+    let binding = binding?;
+    if binding.status != "bound" {
+        return None;
+    }
+    binding
+        .active_bounded_unit
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            let task_id = binding.task_id.trim();
+            (!task_id.is_empty()).then(|| task_id.to_string())
+        })
+}
+
 fn missing_task_actionability(
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     task_ids: &[String],
 ) -> serde_json::Value {
-    let Some(task_id) = recovery_projected_task_id(recovery) else {
+    let projected = binding_projected_task_id(binding)
+        .map(|task_id| {
+            (
+                task_id,
+                binding.map(|binding| binding.run_id.as_str()),
+                "explicit_continuation_binding",
+            )
+        })
+        .or_else(|| {
+            recovery_projected_task_id(recovery).map(|task_id| {
+                (
+                    task_id,
+                    recovery.map(|summary| summary.run_id.as_str()),
+                    "run_graph_recovery",
+                )
+            })
+        });
+    let Some((task_id, run_id, source)) = projected else {
         return serde_json::json!({
             "status": "pass",
             "blocker_codes": [],
             "next_actions": [],
             "checked_task_id": null,
+            "checked_source": null,
         });
     };
     if task_ids.iter().any(|id| id == &task_id) {
@@ -61,6 +100,7 @@ fn missing_task_actionability(
             "blocker_codes": [],
             "next_actions": [],
             "checked_task_id": task_id,
+            "checked_source": source,
         });
     }
     serde_json::json!({
@@ -68,12 +108,13 @@ fn missing_task_actionability(
         "blocker_codes": ["next_action_target_missing"],
         "next_actions": [
             crate::status_surface_signals::runtime_binding_task_missing_next_action(
-                recovery.map(|summary| summary.run_id.as_str()),
+                run_id,
                 &task_id,
             ),
             "Inspect `vida orchestrator-session show --json` and reconcile stale session ownership before binding continuation."
         ],
         "checked_task_id": task_id,
+        "checked_source": source,
     })
 }
 
@@ -117,8 +158,15 @@ async fn build_post_commit_diagnostics(
         .into_iter()
         .map(|task| task.id)
         .collect::<Vec<_>>();
-    let target_actionability =
-        missing_task_actionability(latest_run_graph_recovery.as_ref(), &task_ids);
+    let latest_explicit_binding = store
+        .latest_explicit_run_graph_continuation_binding()
+        .await
+        .map_err(|error| format!("read latest explicit continuation binding: {error}"))?;
+    let target_actionability = missing_task_actionability(
+        latest_run_graph_recovery.as_ref(),
+        latest_explicit_binding.as_ref(),
+        &task_ids,
+    );
 
     let runtime_consumption = crate::runtime_consumption_summary(store.root())
         .map_err(|error| format!("read runtime-consumption summary: {error}"))?;
@@ -187,6 +235,7 @@ async fn build_post_commit_diagnostics(
             "latest_run_graph_status": latest_run_graph_status,
             "latest_run_graph_recovery": latest_run_graph_recovery,
             "latest_dispatch_receipt": latest_dispatch_receipt,
+            "latest_explicit_continuation_binding": latest_explicit_binding,
             "continuation_target_actionability": target_actionability,
         },
         "docflow_status": {
@@ -289,7 +338,8 @@ mod tests {
                 continuation_signal: "continue_routing_non_blocking".to_string(),
             },
         };
-        let payload = missing_task_actionability(Some(&recovery), &["other-task".to_string()]);
+        let payload =
+            missing_task_actionability(Some(&recovery), None, &["other-task".to_string()]);
         assert_eq!(payload["status"], "blocked");
         assert_eq!(payload["blocker_codes"][0], "next_action_target_missing");
         assert!(payload["next_actions"][0].as_str().is_some_and(|action| {
@@ -298,5 +348,59 @@ mod tests {
                 && action
                     .contains("vida taskflow continuation bind run-1 --task-id <task-id> --json")
         }));
+    }
+
+    #[test]
+    fn diagnostics_actionability_prefers_explicit_bound_task_over_terminal_recovery_task() {
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "closed-run".to_string(),
+            task_id: "closed-run".to_string(),
+            active_node: "closure".to_string(),
+            lifecycle_stage: "closure_complete".to_string(),
+            handoff_state: "none".to_string(),
+            checkpoint_kind: "none".to_string(),
+            policy_gate: "not_required".to_string(),
+            resume_status: "completed".to_string(),
+            resume_target: "none".to_string(),
+            resume_node: None,
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "closure".to_string(),
+                lifecycle_stage: "closure_complete".to_string(),
+                delegated_cycle_open: false,
+                delegated_cycle_state: "clear".to_string(),
+                local_exception_takeover_gate: "delegated_cycle_clear".to_string(),
+                blocker_code: None,
+                reporting_pause_gate: "closure_candidate".to_string(),
+                continuation_signal: "continue_after_reports".to_string(),
+            },
+        };
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "closed-run".to_string(),
+            task_id: "bound-task".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "run_id": "closed-run",
+                "task_id": "bound-task",
+                "task_status": "open"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "test explicit binding".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: Some("Fix bounded task".to_string()),
+            recorded_at: "2026-05-13T09:04:25Z".to_string(),
+        };
+
+        let payload = missing_task_actionability(
+            Some(&recovery),
+            Some(&binding),
+            &["closed-run".to_string(), "bound-task".to_string()],
+        );
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["checked_task_id"], "bound-task");
+        assert_eq!(payload["checked_source"], "explicit_continuation_binding");
     }
 }
