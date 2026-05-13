@@ -2854,7 +2854,8 @@ fn task_continuation_source_surfaces() -> Vec<String> {
         "StateStore::scheduling_projection_scoped".to_string(),
         "vida task ready --json".to_string(),
         "vida status --json continuation_binding".to_string(),
-        "vida taskflow consume continue --json projection_truth.continuation_binding".to_string(),
+        "vida taskflow run-graph status --json projection_truth.continuation_binding"
+            .to_string(),
     ]
 }
 
@@ -2926,7 +2927,7 @@ fn select_task_next_lawful_binding<'a>(
                 Vec::new(),
                 "continuation_source_drift",
                 &format!(
-                    "Continuation sources disagree: explicit binding `{}`/`{}` points to `{}`, while current latest-run binding `{}`/`{}` from `{}` points to `{}`. Reconcile with `vida status --json` and `vida taskflow consume continue --json` before continuing.",
+                    "Continuation sources disagree: explicit binding `{}`/`{}` points to `{}`, while current latest-run binding `{}`/`{}` from `{}` points to `{}`. Reconcile with `vida status --json` and the authoritative `vida taskflow run-graph status` for that concrete run before continuing.",
                     explicit.run_id,
                     explicit.binding_source,
                     explicit.task_id,
@@ -3017,7 +3018,7 @@ fn task_next_lawful_receipt(
                     binding.active_bounded_unit.clone(),
                     ready_task_candidates,
                     "runtime_binding_task_missing",
-                    "Refresh runtime evidence or bind the intended TaskFlow task explicitly before continuing.",
+                    crate::status_surface_signals::continuation_binding_ambiguous_next_action(),
                 );
             };
             if task.status == "closed" {

@@ -369,22 +369,55 @@ fn fail_closed_terminal_continue_followup(status: &RunGraphStatus) -> String {
     format!("vida taskflow run-graph status {} --json", status.run_id)
 }
 
-fn sanitize_placeholder_continuation_bind_recommendation(
-    run_id: &str,
-    recommended_command: Option<String>,
-    recommended_surface: Option<String>,
-) -> (Option<String>, Option<String>) {
-    let has_placeholder_bind = recommended_command.as_deref().is_some_and(|command| {
+fn sanitized_placeholder_continuation_bind_command(
+    run_id: Option<&str>,
+    command: Option<String>,
+) -> Option<String> {
+    let has_placeholder_bind = command.as_deref().is_some_and(|command| {
         command.starts_with("vida taskflow continuation bind")
             && (command.contains("<task-id>") || command.contains("<run-id>"))
     });
     if !has_placeholder_bind {
-        return (recommended_command, recommended_surface);
+        return command;
     }
-    (
-        Some(format!("vida taskflow run-graph status {run_id} --json")),
-        Some("vida taskflow run-graph status".to_string()),
-    )
+    run_id
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("vida taskflow run-graph status {value} --json"))
+        .or_else(|| Some("vida status --json".to_string()))
+}
+
+pub(crate) fn sanitize_placeholder_continuation_bind_recommendation(
+    run_id: Option<&str>,
+    recommended_command: Option<String>,
+    recommended_surface: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let recommended_command =
+        sanitized_placeholder_continuation_bind_command(run_id, recommended_command);
+    let recommended_surface = recommended_command
+        .as_deref()
+        .map(recommended_surface_for_command)
+        .or(recommended_surface);
+    (recommended_command, recommended_surface)
+}
+
+fn sanitize_placeholder_continuation_bind_next_action(
+    run_id: Option<&str>,
+    next_action: Option<RecoveryNextAction>,
+) -> Option<RecoveryNextAction> {
+    next_action.map(|mut next_action| {
+        next_action.command = sanitized_placeholder_continuation_bind_command(
+            run_id,
+            Some(next_action.command),
+        )
+        .expect("sanitized continuation command should remain present");
+        next_action.surface = recommended_surface_for_command(&next_action.command);
+        if next_action.command.starts_with("vida taskflow run-graph status")
+            || next_action.command == "vida status --json"
+        {
+            next_action.reason = "the latest consume-continue snapshot already completed without a next bounded unit, so inspect the authoritative run state before binding continuation explicitly".to_string();
+        }
+        next_action
+    })
 }
 
 fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -> Option<&str> {
@@ -556,6 +589,9 @@ fn next_lawful_operator_action_for_projection(
 }
 
 fn recommended_surface_for_command(command: &str) -> String {
+    if command.starts_with("vida status") {
+        return "vida status".to_string();
+    }
     if command.starts_with("vida taskflow consume continue") {
         return "vida taskflow consume continue".to_string();
     }
@@ -596,7 +632,7 @@ fn recovery_next_action_reason(
         return "activate the recorded exception-path receipt before treating local recovery as lawful".to_string();
     }
     if command.starts_with("vida taskflow continuation bind") {
-        return "the latest consume-continue snapshot already completed without a next action, so bind the next bounded unit explicitly instead of repeating continuation".to_string();
+        return "the latest consume-continue snapshot already completed without a next action, so confirm the authoritative run state and bind the next bounded unit with the concrete run/task ids instead of repeating continuation".to_string();
     }
     if command.starts_with("vida lane show") {
         return "inspect the lane envelope for the dispatch blocker, then record structured exception-takeover evidence and supersession before any local recovery work".to_string();
@@ -707,9 +743,11 @@ async fn build_run_graph_diagnosis(
     let projection_truth = run_graph_projection_truth(store, &status).await?;
     let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
         recovery_surface_contract(&summary, &projection_truth);
+    let next_action =
+        sanitize_placeholder_continuation_bind_next_action(Some(&summary.run_id), next_action);
     let (recommended_command, recommended_surface) =
         sanitize_placeholder_continuation_bind_recommendation(
-            &summary.run_id,
+            Some(&summary.run_id),
             recommended_command,
             recommended_surface,
         );
@@ -1266,7 +1304,7 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
     };
     let (recommended_command, recommended_surface) =
         sanitize_placeholder_continuation_bind_recommendation(
-            &status.run_id,
+            Some(&status.run_id),
             recommended_command,
             recommended_surface,
         );
@@ -8535,7 +8573,7 @@ mod tests {
                 None,
             )
             .as_deref(),
-            Some("vida taskflow consume continue --run-id run-projection-blocked-mismatch --json")
+            Some("vida lane show run-projection-blocked-mismatch --json")
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -8837,5 +8875,49 @@ mod tests {
             serde_json::json!("vida taskflow run-graph diagnose")
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn sanitize_placeholder_terminal_bind_next_action_fails_closed_to_run_graph_status() {
+        let next_action = RecoveryNextAction {
+            command: "vida taskflow continuation bind <task-id> --run-id <run-id> --json"
+                .to_string(),
+            surface: "vida taskflow continuation bind".to_string(),
+            reason: "placeholder bind".to_string(),
+        };
+
+        let next_action = sanitize_placeholder_continuation_bind_next_action(
+            Some("run-terminal-bind"),
+            Some(next_action),
+        )
+        .expect("next action should remain present");
+
+        assert_eq!(
+            next_action.command,
+            "vida taskflow run-graph status run-terminal-bind --json"
+        );
+        assert_eq!(next_action.surface, "vida taskflow run-graph status");
+        assert!(next_action
+            .reason
+            .contains("inspect the authoritative run state"));
+    }
+
+    #[test]
+    fn sanitize_placeholder_terminal_bind_next_action_without_run_id_fails_closed_to_status() {
+        let next_action = RecoveryNextAction {
+            command: "vida taskflow continuation bind <task-id> --run-id <run-id> --json"
+                .to_string(),
+            surface: "vida taskflow continuation bind".to_string(),
+            reason: "placeholder bind".to_string(),
+        };
+
+        let next_action = sanitize_placeholder_continuation_bind_next_action(None, Some(next_action))
+            .expect("next action should remain present");
+
+        assert_eq!(next_action.command, "vida status --json");
+        assert_eq!(next_action.surface, "vida status");
+        assert!(next_action
+            .reason
+            .contains("inspect the authoritative run state"));
     }
 }

@@ -366,6 +366,55 @@ fn shell_quote_arg(value: &str) -> String {
     format!("'{escaped}'")
 }
 
+fn sanitize_graph_summary_recommendation(
+    latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    recommended_command: Option<String>,
+    recommended_surface: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let run_id = latest_run_graph_status
+        .map(|status| status.run_id.as_str())
+        .or_else(|| dispatch.map(|receipt| receipt.run_id.as_str()));
+    crate::taskflow_run_graph::sanitize_placeholder_continuation_bind_recommendation(
+        run_id,
+        recommended_command,
+        recommended_surface,
+    )
+}
+
+fn authoritative_run_state_action(
+    run_id: Option<&str>,
+    reason: &str,
+) -> TaskflowNextAction {
+    match run_id.filter(|value| !value.trim().is_empty()) {
+        Some(run_id) => TaskflowNextAction {
+            command: format!("vida taskflow run-graph status {run_id} --json"),
+            surface: "vida taskflow run-graph status".to_string(),
+            reason: reason.to_string(),
+        },
+        None => TaskflowNextAction {
+            command: "vida status --json".to_string(),
+            surface: "vida status".to_string(),
+            reason: reason.to_string(),
+        },
+    }
+}
+
+fn blocked_recovery_action(run_id: Option<&str>, reason: &str) -> TaskflowNextAction {
+    match run_id.filter(|value| !value.trim().is_empty()) {
+        Some(run_id) => TaskflowNextAction {
+            command: format!("vida taskflow recovery status {run_id} --json"),
+            surface: "vida taskflow recovery status".to_string(),
+            reason: reason.to_string(),
+        },
+        None => TaskflowNextAction {
+            command: "vida taskflow recovery latest --json".to_string(),
+            surface: "vida taskflow recovery latest".to_string(),
+            reason: reason.to_string(),
+        },
+    }
+}
+
 fn scheduler_rejection_reasons_from_blocked_by(
     blocked_by: &[crate::state_store::TaskDependencyStatus],
 ) -> Vec<String> {
@@ -1878,16 +1927,20 @@ fn build_taskflow_next_decision(
             if has_authoritative_dispatch_blocker
                 && latest_runtime_consumption_kind == Some("final")
             {
-                let run_id = dispatch
+                let next_action = dispatch
                     .map(|receipt| receipt.run_id.as_str())
                     .or_else(|| latest_run_graph_status.map(|status| status.run_id.as_str()))
-                    .unwrap_or("<run-id>");
-                let command = format!("vida lane show {} --json", shell_quote_arg(run_id));
-                let next_action = TaskflowNextAction {
-                    command,
-                    surface: "vida lane show".to_string(),
-                    reason: "the delegated cycle is still open and the active dispatch receipt has unresolved blocker evidence; inspect the lane envelope before retrying continuation".to_string(),
-                };
+                    .filter(|run_id| !run_id.trim().is_empty())
+                    .map(|run_id| TaskflowNextAction {
+                        command: format!("vida lane show {} --json", shell_quote_arg(run_id)),
+                        surface: "vida lane show".to_string(),
+                        reason: "the delegated cycle is still open and the active dispatch receipt has unresolved blocker evidence; inspect the lane envelope before retrying continuation".to_string(),
+                    })
+                    .unwrap_or_else(|| TaskflowNextAction {
+                        command: "vida taskflow recovery latest --json".to_string(),
+                        surface: "vida taskflow recovery latest".to_string(),
+                        reason: "the delegated cycle is still open and the active dispatch receipt has unresolved blocker evidence, but no concrete run id is available yet; inspect the latest recovery truth before retrying continuation".to_string(),
+                    });
                 next_actions.push(format!(
                     "Inspect the active delegated lane with `{}` before attempting consume continuation.",
                     next_action.command
@@ -1950,11 +2003,10 @@ fn build_taskflow_next_decision(
                 )
             }
         } else if active_exception_takeover_continuation {
-            let run_id = latest_run_graph_status
-                .map(|status| status.run_id.as_str())
-                .unwrap_or("<run-id>");
             let next_action = TaskflowNextAction {
-                command: format!("vida taskflow consume continue --run-id {run_id} --json"),
+                command: latest_run_graph_status
+                    .map(|status| format!("vida taskflow consume continue --run-id {} --json", status.run_id))
+                    .unwrap_or_else(|| "vida taskflow consume continue --json".to_string()),
                 surface: "vida taskflow consume continue".to_string(),
                 reason: "active exception-takeover evidence has resolved the dispatch blocker; continue the bound run before considering backlog ready-head work".to_string(),
             };
@@ -1970,17 +2022,13 @@ fn build_taskflow_next_decision(
                 Some(next_action),
             )
         } else if terminal_consume_continue_without_next_unit {
-            let run_id = latest_run_graph_status
-                .map(|status| status.run_id.as_str())
-                .unwrap_or("<run-id>");
-            let next_action = TaskflowNextAction {
-                command: format!("vida taskflow run-graph status {run_id} --json"),
-                surface: "vida taskflow run-graph status".to_string(),
-                reason: "the latest consume-continue snapshot already completed with no further actions, so inspect the authoritative run state before binding an explicit next bounded unit".to_string(),
-            };
+            let next_action = authoritative_run_state_action(
+                latest_run_graph_status.map(|status| status.run_id.as_str()),
+                "the latest consume-continue snapshot already completed with no further actions, so inspect the authoritative run state before binding an explicit next bounded unit",
+            );
             blocker_codes.push("terminal_continue_snapshot_without_next_bounded_unit".to_string());
             next_actions.push(format!(
-                "Do not repeat `vida taskflow consume continue --run-id {run_id} --json`; inspect the authoritative run state with `{}` and then bind the next bounded unit explicitly from user intent or reconcile the stale run-graph state.",
+                "Do not repeat terminal consume continuation heuristically; inspect the authoritative run state with `{}` and then either bind the next bounded unit explicitly with the concrete `run_id` and `task_id` from user intent or reconcile the stale run-graph state.",
                 next_action.command
             ));
             (
@@ -1996,21 +2044,17 @@ fn build_taskflow_next_decision(
                 Some(next_action),
             )
         } else if completed_without_explicit_next_unit {
-            let run_id = latest_run_graph_status
-                .map(|status| status.run_id.as_str())
-                .unwrap_or("<run-id>");
-            let next_action = TaskflowNextAction {
-                command: format!("vida taskflow run-graph status {run_id} --json"),
-                surface: "vida taskflow run-graph status".to_string(),
-                reason: "the latest run is already closure_complete, so inspect the authoritative run state before binding an explicit continuation target".to_string(),
-            };
+            let next_action = authoritative_run_state_action(
+                latest_run_graph_status.map(|status| status.run_id.as_str()),
+                "the latest run is already closure_complete, so inspect the authoritative run state before binding an explicit continuation target",
+            );
             if let Some(code) = crate::release1_contracts::blocker_code_value(
                 crate::release1_contracts::BlockerCode::NoReadyTasks,
             ) {
                 blocker_codes.push(code);
             }
             next_actions.push(format!(
-                "Do not continue by heuristic after closure; inspect the authoritative run state with `{}` and then bind the next bounded unit explicitly from user intent.",
+                "Do not continue by heuristic after closure; inspect the authoritative run state with `{}` and then bind the next bounded unit explicitly with the concrete `run_id` and `task_id` from user intent.",
                 next_action.command
             ));
             (
@@ -2032,20 +2076,16 @@ fn build_taskflow_next_decision(
                 blocker_codes.push(code);
             }
             blocker_codes.extend(authoritative_dispatch_blocker_codes(dispatch));
-            let run_id = latest_run_graph_status
-                .map(|status| status.run_id.as_str())
-                .unwrap_or("<run-id>");
-            let next_action = TaskflowNextAction {
-                command: format!("vida taskflow recovery status {run_id} --json"),
-                surface: "vida taskflow recovery status".to_string(),
-                reason: "the latest run graph is blocked, so backlog ready-head work is not lawful until recovery truth is resolved".to_string(),
-            };
+            let next_action = blocked_recovery_action(
+                latest_run_graph_status.map(|status| status.run_id.as_str()),
+                "the latest run graph is blocked, so backlog ready-head work is not lawful until recovery truth is resolved",
+            );
             next_actions.push(format!(
                 "Inspect the blocked run-graph recovery state with `{}` before considering backlog ready-head work.",
                 next_action.command
             ));
             next_actions.push(
-                "After resolving the blocker, refresh continuation evidence with `vida taskflow consume continue --json` or bind the next bounded unit explicitly."
+                "After resolving the blocker, inspect the authoritative run state again and only then continue the lawful chain or bind the next bounded unit explicitly with the concrete `run_id` and `task_id`."
                     .to_string(),
             );
             (
@@ -2157,6 +2197,13 @@ fn build_taskflow_next_decision(
     } else {
         "blocked".to_string()
     };
+
+    let (recommended_command, recommended_surface) = sanitize_graph_summary_recommendation(
+        latest_run_graph_status,
+        dispatch,
+        recommended_command,
+        recommended_surface,
+    );
 
     TaskflowNextDecision {
         status,
@@ -7159,6 +7206,52 @@ mod tests {
             .next_actions
             .iter()
             .all(|action| !action.contains("--task-id <task-id>")));
+    }
+
+    #[test]
+    fn graph_summary_sanitizes_placeholder_terminal_bind_recommendation() {
+        let status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-terminal-bind",
+            "task-terminal-bind",
+            "analysis",
+        );
+
+        let (recommended_command, recommended_surface) =
+            super::sanitize_graph_summary_recommendation(
+                Some(&status),
+                None,
+                Some(
+                    "vida taskflow continuation bind <task-id> --run-id <run-id> --json"
+                        .to_string(),
+                ),
+                Some("vida taskflow continuation bind".to_string()),
+            );
+
+        assert_eq!(
+            recommended_command.as_deref(),
+            Some("vida taskflow run-graph status run-terminal-bind --json")
+        );
+        assert_eq!(
+            recommended_surface.as_deref(),
+            Some("vida taskflow run-graph status")
+        );
+    }
+
+    #[test]
+    fn graph_summary_sanitizes_placeholder_terminal_bind_recommendation_without_run_id() {
+        let (recommended_command, recommended_surface) =
+            super::sanitize_graph_summary_recommendation(
+                None,
+                None,
+                Some(
+                    "vida taskflow continuation bind <task-id> --run-id <run-id> --json"
+                        .to_string(),
+                ),
+                Some("vida taskflow continuation bind".to_string()),
+            );
+
+        assert_eq!(recommended_command.as_deref(), Some("vida status --json"));
+        assert_eq!(recommended_surface.as_deref(), Some("vida status"));
     }
 
     #[test]

@@ -356,7 +356,10 @@ pub(crate) fn build_continuation_binding_summary_with_idle_policy(
                 },
                 "next_actions": [
                     "Do not continue normal delivery while the latest run-graph status is blocked.",
-                    "Inspect the blocked run-graph status with `vida taskflow recovery status <run-id> --json` and resolve the blocker before writing.",
+                    format!(
+                        "Inspect the blocked run-graph status with `vida taskflow recovery status {} --json` and resolve the blocker before writing.",
+                        status.run_id
+                    ),
                     "After the blocker is resolved, refresh continuation evidence with `vida taskflow consume continue --json` or bind the next bounded unit explicitly."
                 ]
             });
@@ -469,10 +472,13 @@ pub(crate) fn build_continuation_binding_summary_with_idle_policy(
             "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
             "pause_boundary_gate": "forbidden_without_explicit_next_unit",
             "ambiguity_reason": "completed_without_explicit_next_bounded_unit",
-            "next_actions": [
-                "Do not continue by selecting the next ready task heuristically after a completed bounded slice.",
-                "Either cite the explicit next bounded unit from the user, bind it with `vida taskflow continuation bind <run-id> --task-id <task-id> --json`, or refresh runtime evidence with `vida taskflow consume continue --json` before further implementation."
-            ]
+                "next_actions": [
+                    "Do not continue by selecting the next ready task heuristically after a completed bounded slice.",
+                    format!(
+                        "Inspect `vida taskflow run-graph status {} --json`, then either cite the explicit next bounded unit from the user and bind it with `vida taskflow continuation bind` using that concrete `run_id` and `task_id`, or stop and reconcile why the authoritative run state still lacks the next bounded unit before further implementation.",
+                        status.run_id
+                    )
+                ]
         });
     }
 
@@ -489,7 +495,7 @@ pub(crate) fn build_continuation_binding_summary_with_idle_policy(
         "ambiguity_reason": "missing_active_bounded_unit_runtime_evidence",
         "next_actions": [
             "Do not continue by plausibility when runtime state does not expose an explicit active bounded unit.",
-            "Bind the bounded unit explicitly from user intent with `vida taskflow continuation bind <run-id> --task-id <task-id> --json` or refresh runtime evidence before implementation continues."
+            crate::status_surface_signals::continuation_binding_ambiguous_next_action()
         ]
     })
 }
@@ -618,7 +624,7 @@ pub(crate) fn add_taskflow_active_work_truth(
             "next_actions".to_string(),
             serde_json::json!([
                 "Do not assume the latest run-graph binding is the active bounded unit while TaskFlow has different in-progress task candidates.",
-                "Bind the intended TaskFlow active task explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id> --json` or close/reconcile stale in-progress tasks before writing."
+                "Bind the intended TaskFlow active task explicitly with `vida taskflow continuation bind` using the concrete `task_id` and `run_id`, or close/reconcile stale in-progress tasks before writing."
             ]),
         );
     }
