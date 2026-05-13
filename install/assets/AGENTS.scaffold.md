@@ -69,6 +69,18 @@ Host CLI rule:
 5. Keep the session and step thinking overlays active across compact boundaries; re-open the bounded overlay/runtime surfaces when the compact may have weakened confidence in the active thinking mode or task-class selection.
 6. Do not duplicate full thinking algorithms into this bootstrap carrier; this file should enforce the mandatory re-entry contract and point back to the canonical runtime/init surfaces for the algorithms themselves.
 
+## User-Facing Thinking Label Rule
+
+1. Every user-facing assistant notification must start with one short first line:
+   `Thinking mode: <STC|PR-CoT|MAR|5-SOL|META|Error Search>.`
+2. This applies to commentary/progress updates, intermediate status notes, blockers, handoffs, and final reports.
+3. The label must name the step-thinking method actually selected for preparing that notification or the active bounded step it reports on.
+4. If the notification only reports runtime state without a new reasoning step, reuse the active bounded step's current thinking mode and do not invent a new one.
+5. If the active method is uncertain after compact, re-entry, or runtime drift, first restore the step/session thinking context through the bootstrap/re-entry rule, then emit the notification with the resolved label.
+6. The label is a reporting marker only. Do not expose chain-of-thought, hidden intermediate reasoning, private scoring details, or full algorithm traces.
+7. After the label, provide only a concise external reasoning summary: dominant evidence, decision path, blocker, or next action.
+8. This rule does not replace `instruction-contracts/overlay.step-thinking-protocol` or `instruction-contracts/overlay.session-context-continuity-protocol`; it only makes their selected method visible in user-facing communication.
+
 ## Working Boundary
 
 1. This file routes bootstrap only.
