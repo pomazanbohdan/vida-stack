@@ -16,6 +16,60 @@ const DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS: u64 = 10;
 const COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS: u64 = 30;
 const LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS: u64 = 30;
 
+fn orchestrator_init_bundle_timeout_payload(state_dir: &Path) -> serde_json::Value {
+    let blocker_codes = vec!["taskflow_consume_bundle_timeout"];
+    let next_actions = vec![
+        "Retry `vida orchestrator-init --json` after concurrent VIDA state readers finish.",
+        "Run `vida status --json` and `vida taskflow recovery latest --json` to inspect current runtime state if the timeout repeats.",
+    ];
+    let artifact_refs = serde_json::json!({
+        "state_dir": state_dir.display().to_string(),
+        "timeout_seconds": DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS,
+        "timed_out_surface": "build_taskflow_consume_bundle_payload",
+    });
+    serde_json::json!({
+        "surface": "vida orchestrator-init",
+        "status": "blocked",
+        "degraded": true,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+        "state_read": {
+            "mode": "authoritative_open",
+            "lock_resilient": true,
+            "fallback": "degraded_timeout_surface",
+        },
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+            "risk_tier": null,
+            "trace_id": null,
+            "workflow_class": null,
+        },
+        "shared_fields": {
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+        },
+    })
+}
+
+fn emit_orchestrator_init_bundle_timeout(state_dir: &Path, as_json: bool) -> ExitCode {
+    if as_json {
+        crate::print_json_pretty(&orchestrator_init_bundle_timeout_payload(state_dir));
+    } else {
+        eprintln!(
+            "Timed out building taskflow consume bundle for `vida orchestrator-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+        );
+    }
+    ExitCode::from(1)
+}
+
 fn build_orchestrator_runtime_contract(
     init_view: &serde_json::Value,
     dev_team_readiness: &serde_json::Value,
@@ -1517,11 +1571,11 @@ Initial activation decisions:\n\n\
 - project id: `{}`\n\
 - host CLI system: selected through `vida project-activator`\n\
 - language policy:\n  - user communication: `{}`\n  - reasoning: `{}`\n  - documentation: `{}`\n  - todo protocol: `{}`\n",
-        answers.project_id,
-        answers.user_communication_language,
-        answers.reasoning_language,
-        answers.documentation_language,
-        answers.todo_protocol_language
+            answers.project_id,
+            answers.user_communication_language,
+            answers.reasoning_language,
+            answers.documentation_language,
+            answers.todo_protocol_language
         ),
         "process/decisions",
         "process_doc",
@@ -2316,8 +2370,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                         print_surface_line(
                             RenderMode::Plain,
                             "next lawful dispatch",
-                            orchestrator_runtime_contract["next_lawful_dispatch_action"]
-                                ["command"]
+                            orchestrator_runtime_contract["next_lawful_dispatch_action"]["command"]
                                 .as_str()
                                 .unwrap_or("vida agent dispatch-next --dev-team --json"),
                         );
@@ -2453,12 +2506,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                     eprintln!("{error}");
                     ExitCode::from(1)
                 }
-                Err(_) => {
-                    eprintln!(
-                        "Timed out building taskflow consume bundle for `vida orchestrator-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
-                    );
-                    ExitCode::from(1)
-                }
+                Err(_) => emit_orchestrator_init_bundle_timeout(&state_dir, args.json),
             }
         }
         Ok(Err(error)) => {
@@ -2474,17 +2522,15 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
         }
-        Err(_) => {
-            crate::status_surface::emit_degraded_read_lock_surface(
-                "vida orchestrator-init",
-                &state_dir,
-                RenderMode::Plain,
-                args.json,
-                &format!(
-                    "Timed out opening authoritative state store for `vida orchestrator-init` after {COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS}s (cold authoritative state open timeout)"
-                ),
-            )
-        }
+        Err(_) => crate::status_surface::emit_degraded_read_lock_surface(
+            "vida orchestrator-init",
+            &state_dir,
+            RenderMode::Plain,
+            args.json,
+            &format!(
+                "Timed out opening authoritative state store for `vida orchestrator-init` after {COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS}s (cold authoritative state open timeout)"
+            ),
+        ),
     }
 }
 
@@ -4630,6 +4676,32 @@ mod agent_init_surface_tests {
         assert_eq!(
             runtime.block_on(run(cli(&["orchestrator-init", "--json"]))),
             ExitCode::SUCCESS
+        );
+    }
+
+    #[test]
+    fn orchestrator_init_bundle_timeout_payload_is_json_operator_envelope() {
+        let payload = orchestrator_init_bundle_timeout_payload(Path::new(".vida/data/state"));
+
+        assert_eq!(payload["surface"], "vida orchestrator-init");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["degraded"], true);
+        assert_eq!(
+            payload["blocker_codes"][0],
+            "taskflow_consume_bundle_timeout"
+        );
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert_eq!(
+            payload["operator_contracts"]["blocker_codes"][0],
+            "taskflow_consume_bundle_timeout"
+        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .unwrap()
+            .contains("vida orchestrator-init --json"));
+        assert_eq!(
+            payload["shared_fields"]["artifact_refs"]["timed_out_surface"],
+            "build_taskflow_consume_bundle_payload"
         );
     }
 
