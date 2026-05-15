@@ -3993,46 +3993,57 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let store = match crate::state_store::StateStore::open_existing_read_only_with_timeout(
-        state_dir.clone(),
-        TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
-    )
-    .await
-    {
-        Ok(store) => store,
-        Err(error) if crate::state_store::StateStore::error_is_lock_contention(&error) => {
-            let plan = match build_taskflow_scheduler_dispatch_plan_from_snapshot_lock_gate(
-                &state_dir,
-                scope_task_id.as_deref(),
-                current_task_id.as_deref(),
-                requested_parallel_limit,
-                dry_run || !execute_requested,
-                execute_requested,
-            ) {
-                Ok(plan) => plan,
-                Err(error) => {
-                    eprintln!("{error}");
-                    return ExitCode::from(1);
-                }
-            };
-            if as_json {
-                crate::print_json_pretty(
-                    &serde_json::to_value(&plan).expect("scheduler dispatch plan should serialize"),
-                );
-            } else {
-                print_surface_header(RenderMode::Plain, "vida taskflow scheduler dispatch");
-                print_surface_line(RenderMode::Plain, "status", &plan.status);
-                print_surface_line(
-                    RenderMode::Plain,
-                    "blocker_codes",
-                    &plan.blocker_codes.join(", "),
-                );
+    let store = if execute_requested && !dry_run {
+        match crate::state_store::StateStore::open_existing(state_dir.clone()).await {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("Failed to open authoritative state store: {error}");
+                return ExitCode::from(1);
             }
-            return ExitCode::from(1);
         }
-        Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            return ExitCode::from(1);
+    } else {
+        match crate::state_store::StateStore::open_existing_read_only_with_timeout(
+            state_dir.clone(),
+            TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
+        )
+        .await
+        {
+            Ok(store) => store,
+            Err(error) if crate::state_store::StateStore::error_is_lock_contention(&error) => {
+                let plan = match build_taskflow_scheduler_dispatch_plan_from_snapshot_lock_gate(
+                    &state_dir,
+                    scope_task_id.as_deref(),
+                    current_task_id.as_deref(),
+                    requested_parallel_limit,
+                    dry_run || !execute_requested,
+                    execute_requested,
+                ) {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+                if as_json {
+                    crate::print_json_pretty(
+                        &serde_json::to_value(&plan)
+                            .expect("scheduler dispatch plan should serialize"),
+                    );
+                } else {
+                    print_surface_header(RenderMode::Plain, "vida taskflow scheduler dispatch");
+                    print_surface_line(RenderMode::Plain, "status", &plan.status);
+                    print_surface_line(
+                        RenderMode::Plain,
+                        "blocker_codes",
+                        &plan.blocker_codes.join(", "),
+                    );
+                }
+                return ExitCode::from(1);
+            }
+            Err(error) => {
+                eprintln!("Failed to open authoritative state store: {error}");
+                return ExitCode::from(1);
+            }
         }
     };
 
@@ -4082,15 +4093,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         recovery.as_ref().and_then(|summary| summary.as_ref()),
         dispatch.as_ref().and_then(|summary| summary.as_ref()),
     );
-    drop(store);
     if execute_requested && !dry_run && runtime_gate_blockers.blocker_codes.is_empty() {
-        let store = match crate::state_store::StateStore::open_existing(state_dir.clone()).await {
-            Ok(store) => store,
-            Err(error) => {
-                eprintln!("Failed to open authoritative state store: {error}");
-                return ExitCode::from(1);
-            }
-        };
         match build_scheduler_packet_backed_execution_gate(&store, &plan).await {
             Ok(gate) => {
                 plan.packet_backed_execution_supported = gate.supported;
@@ -4106,6 +4109,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
             }
         }
     }
+    drop(store);
 
     if execute_requested && !dry_run && runtime_gate_blockers.blocker_codes.is_empty() {
         if let Err(error) = persist_scheduler_execute_receipt(&mut plan, &state_dir).await {
