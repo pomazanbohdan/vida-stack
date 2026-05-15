@@ -2209,7 +2209,13 @@ fn build_taskflow_next_decision(
         );
     }
 
-    if recovery_present && latest_runtime_consumption_kind != Some("final") {
+    let admissible_ready_head_selected = candidate_task_context.admissible_now
+        && candidate_task_context.admissibility_gate == "ready_now"
+        && primary_ready_task.is_some();
+    if recovery_present
+        && latest_runtime_consumption_kind != Some("final")
+        && !admissible_ready_head_selected
+    {
         if let Some(code) = crate::release1_contracts::blocker_code_value(
             crate::release1_contracts::BlockerCode::ExecutionPreparationGateBlocked,
         ) {
@@ -6924,6 +6930,10 @@ mod tests {
                 .map(|value| value.command.as_str()),
             Some("vida taskflow recovery latest --json")
         );
+        assert!(decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "execution_preparation_gate_blocked"));
     }
 
     #[test]
@@ -7331,7 +7341,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_closure_with_downstream_receipt_admits_ready_head() {
+    fn terminal_closure_with_downstream_receipt_and_bundle_check_admits_ready_head() {
         let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
             "closed-run",
             "closed-task",
@@ -7382,7 +7392,7 @@ mod tests {
             Some(&sample_task("ready-head")),
             false,
             true,
-            Some("final"),
+            Some("bundle-check"),
             None,
             Some(&dispatch),
             Some(&latest_status),
@@ -7408,6 +7418,10 @@ mod tests {
             .blocker_codes
             .iter()
             .any(|code| code == "completed_without_explicit_next_bounded_unit"));
+        assert!(!decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "execution_preparation_gate_blocked"));
     }
 
     #[test]
