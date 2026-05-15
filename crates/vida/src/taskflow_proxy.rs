@@ -1820,6 +1820,28 @@ fn active_exception_takeover_evidence_matches_status(
             .is_some_and(|value| !value.trim().is_empty())
 }
 
+fn downstream_dispatch_continuation_evidence_matches_status(
+    status: Option<&crate::state_store::RunGraphStatus>,
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> bool {
+    let Some(status) = status else {
+        return false;
+    };
+    let Some(dispatch) = dispatch else {
+        return false;
+    };
+    dispatch.run_id == status.run_id
+        && dispatch.downstream_dispatch_ready
+        && dispatch
+            .downstream_dispatch_status
+            .as_deref()
+            .is_some_and(|value| matches!(value, "packet_ready" | "executed"))
+        && dispatch
+            .downstream_dispatch_target
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
 fn active_exception_takeover_binding_matches_status(
     binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     status: Option<&crate::state_store::RunGraphStatus>,
@@ -1875,15 +1897,20 @@ fn build_taskflow_next_decision(
         active_exception_takeover_evidence && latest_run_graph_status_blocked;
     let explicit_next_task_binding =
         explicit_task_binding_matches_status(explicit_binding, latest_run_graph_status);
+    let downstream_dispatch_continuation_evidence =
+        downstream_dispatch_continuation_evidence_matches_status(latest_run_graph_status, dispatch);
     let terminal_consume_continue_without_next_unit = latest_run_graph_status
         .zip(terminal_consume_continue_run_id)
         .is_some_and(|(status, run_id)| status.run_id == run_id)
-        && !explicit_next_task_binding;
+        && !explicit_next_task_binding
+        && !downstream_dispatch_continuation_evidence;
     let latest_run_graph_status_blocks_admission = latest_run_graph_status_blocked
         && !active_exception_takeover_evidence
         && !terminal_consume_continue_without_next_unit;
     let completed_without_explicit_next_unit =
-        terminal_completed_without_next_unit(latest_run_graph_status) && !explicit_next_task_binding;
+        terminal_completed_without_next_unit(latest_run_graph_status)
+            && !explicit_next_task_binding
+            && !downstream_dispatch_continuation_evidence;
     let admissibility_gate = if recovery_holds_active_bound_run {
         "delegated_cycle_runtime_gate".to_string()
     } else if active_exception_takeover_continuation {
@@ -7301,6 +7328,86 @@ mod tests {
             .blocker_codes
             .iter()
             .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit"));
+    }
+
+    #[test]
+    fn terminal_closure_with_downstream_receipt_admits_ready_head() {
+        let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
+            "closed-run",
+            "closed-task",
+            "analysis",
+        );
+        latest_status.status = "completed".to_string();
+        latest_status.lifecycle_stage = "closure_complete".to_string();
+        latest_status.active_node = "closure".to_string();
+        latest_status.next_node = None;
+        latest_status.handoff_state = "none".to_string();
+        latest_status.resume_target = "none".to_string();
+        latest_status.recovery_ready = false;
+        let dispatch = crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: "closed-run".to_string(),
+            dispatch_target: "closure".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            blocker_code: None,
+            dispatch_surface: Some("vida taskflow closure-preview".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            exception_path_receipt_id: None,
+            supersedes_receipt_id: None,
+            recorded_at: "2026-05-15T14:58:07Z".to_string(),
+            activation_runtime_role: Some("worker".to_string()),
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_evidence: serde_json::Value::Null,
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            downstream_dispatch_ready: true,
+            downstream_dispatch_target: Some("coach".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_packet_path: Some("/tmp/downstream-packet.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_last_target: None,
+            downstream_dispatch_note: Some("after closure activate coach".to_string()),
+            downstream_dispatch_blockers: Vec::new(),
+        };
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("ready-head")),
+            false,
+            true,
+            Some("final"),
+            None,
+            Some(&dispatch),
+            Some(&latest_status),
+            false,
+            None,
+            Some("closed-run"),
+        );
+
+        assert_eq!(decision.status, "pass");
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "ready_now"
+        );
+        assert!(decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision
+                .primary_ready_task
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("ready-head")
+        );
+        assert!(!decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "completed_without_explicit_next_bounded_unit"));
     }
 
     #[test]
