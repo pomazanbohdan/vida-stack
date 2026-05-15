@@ -985,6 +985,9 @@ pub(crate) fn normalize_run_graph_lane_status(
     match value {
         Some(raw) if !raw.trim().is_empty() => {
             let canonical_lane_status = canonical_lane_status_str(raw).unwrap_or(raw).trim();
+            if dispatch_status.trim() == "executed" && canonical_lane_status == "lane_completed" {
+                return canonical_lane_status.to_string();
+            }
             if canonical_lane_status == derived_lane_status {
                 return canonical_lane_status.to_string();
             }
@@ -2342,6 +2345,46 @@ mod tests {
             summary.downstream_dispatch_blockers,
             ["missing_owned_write_scope"]
         );
+    }
+
+    #[test]
+    fn executed_lane_completed_dispatch_receipt_signal_is_not_ambiguous() {
+        let summary = RunGraphDispatchReceiptSummary::from_receipt(RunGraphDispatchReceipt {
+            run_id: "run-lane-complete-signal".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida lane complete".to_string()),
+            dispatch_command: Some("vida lane complete run-lane-complete-signal".to_string()),
+            dispatch_packet_path: Some("runtime-consumption/dispatch-packets/run.json".to_string()),
+            dispatch_result_path: Some("runtime-consumption/dispatch-results/run.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("writer".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("activate writer".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["missing_owned_write_scope".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: Some(
+                "runtime-consumption/dispatch-results/run.json".to_string(),
+            ),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: Some("analysis".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-15T08:00:00Z".to_string(),
+        });
+
+        assert!(!latest_run_graph_dispatch_receipt_signal_is_ambiguous(
+            &summary
+        ));
     }
 
     #[tokio::test]
