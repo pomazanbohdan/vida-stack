@@ -624,7 +624,9 @@ impl RunGraphDispatchReceiptSummary {
         } else if downstream_dispatch_allows_completed_lane_status(
             receipt.downstream_dispatch_status.as_deref(),
             canonical_lane_status,
-        ) {
+        ) || (canonical_lane_status == LaneStatus::LaneCompleted.as_str()
+            && receipt.dispatch_status == "executed")
+        {
             canonical_lane_status.to_string()
         } else {
             normalize_run_graph_lane_status(
@@ -2298,6 +2300,48 @@ mod tests {
             validation_outcome: "pass".to_string(),
             recorded_at: recorded_at.to_string(),
         }
+    }
+
+    #[test]
+    fn dispatch_summary_preserves_executed_explicit_lane_completed_receipt() {
+        let summary = RunGraphDispatchReceiptSummary::from_receipt(RunGraphDispatchReceipt {
+            run_id: "run-lane-complete".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida lane complete".to_string()),
+            dispatch_command: Some("vida lane complete run-lane-complete".to_string()),
+            dispatch_packet_path: Some("runtime-consumption/dispatch-packets/run.json".to_string()),
+            dispatch_result_path: Some("runtime-consumption/dispatch-results/run.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("writer".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("activate writer".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["missing_owned_write_scope".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: Some(
+                "runtime-consumption/dispatch-results/run.json".to_string(),
+            ),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: Some("analysis".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-15T08:00:00Z".to_string(),
+        });
+
+        assert_eq!(summary.lane_status, "lane_completed");
+        assert_eq!(
+            summary.downstream_dispatch_blockers,
+            ["missing_owned_write_scope"]
+        );
     }
 
     #[tokio::test]

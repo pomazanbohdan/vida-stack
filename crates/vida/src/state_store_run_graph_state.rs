@@ -413,10 +413,14 @@ impl From<RunGraphDispatchReceiptStored> for RunGraphDispatchReceipt {
             .unwrap_or_default();
         let canonical_lane_status =
             canonical_lane_status_str(raw_lane_status).unwrap_or(raw_lane_status);
+        let explicit_completed_receipt = canonical_lane_status
+            == LaneStatus::LaneCompleted.as_str()
+            && stored.dispatch_status == "executed";
         let normalized_lane_status = if downstream_dispatch_allows_completed_lane_status(
             stored.downstream_dispatch_status.as_deref(),
             canonical_lane_status,
-        ) {
+        ) || explicit_completed_receipt
+        {
             canonical_lane_status.to_string()
         } else {
             normalize_run_graph_lane_status(
@@ -906,5 +910,55 @@ mod tests {
             status.memory_governance_projection(Some(&approval_receipt("approval_complete")));
         assert_eq!(complete_projection.enforcement_state, "pass");
         assert!(complete_projection.blocker_codes.is_empty());
+    }
+
+    #[test]
+    fn executed_explicit_lane_completed_receipt_survives_projection() {
+        let projected: crate::state_store::RunGraphDispatchReceipt =
+            RunGraphDispatchReceiptStored {
+                run_id: "run-lane-complete".to_string(),
+                dispatch_target: "analysis".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some(LaneStatus::LaneCompleted.as_str().to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida lane complete".to_string()),
+                dispatch_command: Some("vida lane complete run-lane-complete".to_string()),
+                dispatch_packet_path: Some(
+                    "runtime-consumption/dispatch-packets/run-lane-complete.json".to_string(),
+                ),
+                dispatch_result_path: Some(
+                    "runtime-consumption/dispatch-results/run-lane-complete.json".to_string(),
+                ),
+                blocker_code: None,
+                downstream_dispatch_target: Some("writer".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some(
+                    "activate writer after analysis completion".to_string(),
+                ),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["missing_owned_write_scope".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: Some(
+                    "runtime-consumption/dispatch-results/run-lane-complete.json".to_string(),
+                ),
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("analysis".to_string()),
+                downstream_dispatch_last_target: Some("analysis".to_string()),
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-05-15T08:00:00Z".to_string(),
+            }
+            .into();
+
+        assert_eq!(projected.lane_status, LaneStatus::LaneCompleted.as_str());
+        assert_eq!(
+            projected.downstream_dispatch_blockers,
+            ["missing_owned_write_scope"]
+        );
     }
 }
