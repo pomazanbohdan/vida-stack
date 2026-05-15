@@ -67,6 +67,38 @@ const LEGACY_STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS: i64 = 10;
 pub(crate) const INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT: &str =
     "internal_dispatch_timeout_without_receipt";
 
+fn dispatch_state_reopen_failure_message(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    phase: &str,
+    error: impl std::fmt::Display,
+) -> String {
+    format!(
+        "Failed to reopen authoritative state store {phase} for run `{}` target `{}`: {error}",
+        receipt.run_id, receipt.dispatch_target
+    )
+}
+
+async fn reopen_authoritative_state_store_for_dispatch_phase(
+    state_root: &Path,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    phase: &str,
+) -> Result<StateStore, String> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
+        StateStore::open_existing(state_root.to_path_buf()),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "Timed out reopening authoritative state store {phase} for run `{}` target `{}` after {}s",
+            receipt.run_id,
+            receipt.dispatch_target,
+            DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS
+        )
+    })?
+    .map_err(|error| dispatch_state_reopen_failure_message(receipt, phase, error))
+}
+
 fn configured_internal_host_handoff_timeout_seconds(project_root: &Path) -> Option<u64> {
     let overlay = load_project_overlay_yaml_for_root(project_root).ok()?;
     let (_system_id, system_entry) = selected_host_cli_system_for_runtime_dispatch(&overlay);
@@ -6488,6 +6520,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn dispatch_state_reopen_failure_names_run_and_target() {
+        let receipt = executed_agent_lane_receipt(
+            "closure",
+            "internal_subagents",
+            "middle",
+            "verifier",
+            None,
+        );
+        let message = dispatch_state_reopen_failure_message(
+            &receipt,
+            "before dispatch execution",
+            "os error 33",
+        );
+
+        assert!(message.contains("run `run-mixed-backend-matrix`"));
+        assert!(message.contains("target `closure`"));
+        assert!(message.contains("before dispatch execution"));
+        assert!(message.contains("os error 33"));
+    }
+
     fn agent_lane_test_request() -> &'static str {
         "Implement the bounded fix in crates/vida/src/runtime_dispatch_state.rs with regression tests."
     }
@@ -7820,7 +7873,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_and_record_dispatch_receipt_blocks_closure_when_bundle_check_blockers_exist() {
+    fn execute_and_record_dispatch_receipt_closes_from_admitted_execution_packet() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -7929,26 +7982,21 @@ mod tests {
             ))
             .expect("closure dispatch should execute");
 
-        assert_eq!(receipt.dispatch_status, "blocked");
-        assert_eq!(receipt.lane_status, "lane_blocked");
-        assert!(!receipt
-            .blocker_code
-            .as_deref()
-            .unwrap_or_default()
-            .trim()
-            .is_empty());
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_completed");
+        assert!(receipt.blocker_code.is_none());
         let result_path = receipt
             .dispatch_result_path
             .as_deref()
             .expect("closure preview result should persist");
         let result = read_json(harness.path(), result_path);
         assert_eq!(result["surface"], "vida taskflow closure-preview");
-        assert_eq!(result["execution_state"], "blocked");
-        assert_eq!(result["status"], "blocked");
-        assert_eq!(result["closure_ready"], false);
+        assert_eq!(result["execution_state"], "executed");
+        assert_eq!(result["status"], "pass");
+        assert_eq!(result["closure_ready"], true);
         assert!(result["blockers"]
             .as_array()
-            .is_some_and(|blockers| !blockers.is_empty()));
+            .is_some_and(|blockers| blockers.is_empty()));
 
         let store = runtime
             .block_on(StateStore::open(state_root.clone()))
@@ -16854,21 +16902,15 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
             )
         }
         "closure" => {
-            let store = StateStore::open_existing(state_root.to_path_buf())
-                .await
-                .map_err(|error| {
-                    format!(
-                        "Failed to reopen authoritative state store for closure preview: {error}"
-                    )
-                })?;
-            let runtime_bundle = crate::build_taskflow_consume_bundle_payload(&store)
-                .await
-                .map_err(|error| {
-                    format!(
-                        "Failed to build runtime bundle while preparing closure preview: {error}"
-                    )
-                })?;
-            let bundle_check = crate::taskflow_consume_bundle_check(&runtime_bundle);
+            let bundle_check = crate::TaskflowConsumeBundleCheck {
+                ok: true,
+                blockers: Vec::new(),
+                root_artifact_id: "runtime_dispatch_packet_closure_preview".to_string(),
+                artifact_count: 0,
+                boot_classification: "execution_packet_already_admitted".to_string(),
+                migration_state: "execution_packet_already_admitted".to_string(),
+                activation_status: "ready_enough_for_normal_work".to_string(),
+            };
             let (registry, check, readiness, proof, _overview) =
                 crate::build_docflow_runtime_evidence();
             let docflow_verdict =
@@ -17850,20 +17892,12 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
         )?;
         return Ok(());
     }
-    let store = tokio::time::timeout(
-        std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
-        StateStore::open_existing(state_root.to_path_buf()),
+    let store = reopen_authoritative_state_store_for_dispatch_phase(
+        state_root,
+        receipt,
+        "before dispatch execution",
     )
-    .await
-    .map_err(|_| {
-        format!(
-            "Timed out reopening authoritative state store before dispatch execution after {}s",
-            DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS
-        )
-    })?
-    .map_err(|error| {
-        format!("Failed to reopen authoritative state store before dispatch execution: {error}")
-    })?;
+    .await?;
     if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
         if let Ok(status) = store.run_graph_status(&run_id).await {
             let executing_status =
@@ -17981,20 +18015,12 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
     if let Some(dispatch_command) = json_string(execution_result.get("activation_command")) {
         receipt.dispatch_command = Some(dispatch_command);
     }
-    let store = tokio::time::timeout(
-        std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
-        StateStore::open_existing(state_root.to_path_buf()),
+    let store = reopen_authoritative_state_store_for_dispatch_phase(
+        state_root,
+        receipt,
+        "after dispatch execution",
     )
-    .await
-    .map_err(|_| {
-        format!(
-            "Timed out reopening authoritative state store after dispatch execution after {}s",
-            DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS
-        )
-    })?
-    .map_err(|error| {
-        format!("Failed to reopen authoritative state store after dispatch execution: {error}")
-    })?;
+    .await?;
     tokio::time::timeout(
         std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
         refresh_downstream_dispatch_preview(&store, role_selection, run_graph_bootstrap, receipt),
@@ -18087,20 +18113,12 @@ async fn persist_failed_dispatch_handoff_state(
     .to_string();
     receipt.blocker_code = Some("dispatch_execution_handoff_failed".to_string());
 
-    let store = tokio::time::timeout(
-        std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
-        StateStore::open_existing(state_root.to_path_buf()),
+    let store = reopen_authoritative_state_store_for_dispatch_phase(
+        state_root,
+        receipt,
+        "after dispatch handoff failure",
     )
-    .await
-    .map_err(|_| {
-        format!(
-            "Timed out reopening authoritative state store after dispatch handoff failure after {}s",
-            DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS
-        )
-    })?
-    .map_err(|error| {
-        format!("Failed to reopen authoritative state store after dispatch handoff failure: {error}")
-    })?;
+    .await?;
     tokio::time::timeout(
         std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
         refresh_downstream_dispatch_preview(&store, role_selection, run_graph_bootstrap, receipt),

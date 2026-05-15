@@ -112,9 +112,14 @@ impl StateStore {
     }
 
     pub(crate) fn message_is_lock_contention(message: &str) -> bool {
-        message.contains("LOCK")
-            || message.contains("lock")
-            || message.contains("Resource temporarily unavailable")
+        let normalized = message.to_ascii_lowercase();
+        normalized.contains("lock")
+            || normalized.contains("resource temporarily unavailable")
+            || normalized.contains("os error 32")
+            || normalized.contains("os error 33")
+            || normalized.contains("being used by another process")
+            || normalized.contains("process cannot access the file")
+            || normalized.contains("portion of the file")
     }
 
     async fn sanitize_legacy_task_execution_semantics(&self) -> Result<(), StateStoreError> {
@@ -385,6 +390,20 @@ mod tests {
     fn error_is_lock_contention_ignores_non_lock_errors() {
         let error = StateStoreError::MissingStateDir(PathBuf::from("/tmp/vida-lock-missing-state"));
         assert!(!StateStore::error_is_lock_contention(&error));
+    }
+
+    #[test]
+    fn db_wrapped_windows_lock_messages_are_lock_contention() {
+        for message in [
+            "IO error: The process cannot access the file because another process has locked a portion of the file. (os error 33)",
+            "IO error: The process cannot access the file because it is being used by another process. (os error 32)",
+            "surrealkv: failed to open database: resource temporarily unavailable",
+        ] {
+            assert!(
+                StateStore::message_is_lock_contention(message),
+                "DB-wrapped lock message should be retried as lock contention: {message}"
+            );
+        }
     }
 
     #[test]
