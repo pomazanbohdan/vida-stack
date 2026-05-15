@@ -70,6 +70,189 @@ fn emit_orchestrator_init_bundle_timeout(state_dir: &Path, as_json: bool) -> Exi
     ExitCode::from(1)
 }
 
+fn agent_init_bundle_timeout_payload(state_dir: &Path) -> serde_json::Value {
+    let blocker_codes = vec!["taskflow_consume_bundle_timeout"];
+    let next_actions = vec![
+        "Retry `vida agent-init --json` after concurrent VIDA state readers finish.",
+        "Run `vida status --json` and `vida taskflow recovery latest --json` to inspect current runtime state if the timeout repeats.",
+    ];
+    let artifact_refs = serde_json::json!({
+        "state_dir": state_dir.display().to_string(),
+        "timeout_seconds": DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS,
+        "timed_out_surface": "build_taskflow_consume_bundle_payload",
+    });
+    serde_json::json!({
+        "surface": "vida agent-init",
+        "status": "blocked",
+        "degraded": true,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+        "state_read": {
+            "mode": "authoritative_open",
+            "lock_resilient": true,
+            "fallback": "degraded_timeout_surface",
+        },
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+            "risk_tier": null,
+            "trace_id": null,
+            "workflow_class": null,
+        },
+        "shared_fields": {
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+        },
+    })
+}
+
+fn emit_agent_init_bundle_timeout(state_dir: &Path, as_json: bool) -> ExitCode {
+    if as_json {
+        crate::print_json_pretty(&agent_init_bundle_timeout_payload(state_dir));
+    } else {
+        eprintln!(
+            "Timed out building taskflow consume bundle for `vida agent-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+        );
+    }
+    ExitCode::from(1)
+}
+
+fn agent_init_dispatch_timeout_artifact_refs(
+    run_id: &str,
+    dispatch_result_path: Option<&str>,
+    timeout_seconds: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "run_id": run_id,
+        "surface": "vida agent-init",
+        "dispatch_result_path": dispatch_result_path,
+        "timeout_seconds": timeout_seconds,
+    })
+}
+
+fn agent_init_dispatch_timeout_blocker_codes(result_json: &serde_json::Value) -> Vec<String> {
+    result_json
+        .get("blocker_code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| vec![value.to_string()])
+        .unwrap_or_else(|| vec!["timeout_without_takeover_authority".to_string()])
+}
+
+fn agent_init_dispatch_timeout_next_actions() -> Vec<&'static str> {
+    vec![
+        "Inspect continuation evidence with `vida status --json` and `vida taskflow recovery latest --json`.",
+        "Keep the timeout dispatch result as blocked evidence before retrying `vida agent-init --execute-dispatch --json`.",
+    ]
+}
+
+fn agent_init_dispatch_timeout_operator_envelope(
+    mut result_json: serde_json::Value,
+    dispatch_mode: &serde_json::Value,
+    run_id: &str,
+    dispatch_result_path: Option<&str>,
+    timeout_seconds: u64,
+    warning: Option<&str>,
+) -> serde_json::Value {
+    let blocker_codes = agent_init_dispatch_timeout_blocker_codes(&result_json);
+    let next_actions = agent_init_dispatch_timeout_next_actions();
+    let artifact_refs =
+        agent_init_dispatch_timeout_artifact_refs(run_id, dispatch_result_path, timeout_seconds);
+    if let Some(object) = result_json.as_object_mut() {
+        object.insert("dispatch_mode".to_string(), dispatch_mode.clone());
+        object.insert(
+            "blocker_codes".to_string(),
+            serde_json::json!(blocker_codes),
+        );
+        object.insert("next_actions".to_string(), serde_json::json!(next_actions));
+        object.insert("artifact_refs".to_string(), artifact_refs.clone());
+        if let Some(warning) = warning {
+            object.insert("timeout_reconciliation_warning".to_string(), warning.into());
+        }
+        object.insert(
+            "operator_contracts".to_string(),
+            serde_json::json!({
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "status": "blocked",
+                "blocker_codes": blocker_codes,
+                "next_actions": next_actions,
+                "artifact_refs": artifact_refs,
+                "risk_tier": null,
+                "trace_id": null,
+                "workflow_class": null,
+            }),
+        );
+        object.insert(
+            "shared_fields".to_string(),
+            serde_json::json!({
+                "status": "blocked",
+                "blocker_codes": blocker_codes,
+                "next_actions": next_actions,
+                "artifact_refs": artifact_refs,
+            }),
+        );
+    }
+    result_json
+}
+
+fn agent_init_dispatch_timeout_fallback_payload(
+    dispatch_mode: &serde_json::Value,
+    run_id: &str,
+    dispatch_result_path: Option<&str>,
+    timeout_seconds: u64,
+    error: Option<&str>,
+) -> serde_json::Value {
+    let blocker_codes = vec!["timeout_without_takeover_authority"];
+    let next_actions = agent_init_dispatch_timeout_next_actions();
+    let artifact_refs =
+        agent_init_dispatch_timeout_artifact_refs(run_id, dispatch_result_path, timeout_seconds);
+    let mut payload = serde_json::json!({
+        "surface": "vida agent-init",
+        "status": "blocked",
+        "execution_state": "blocked",
+        "dispatch_mode": dispatch_mode,
+        "blocker_code": "timeout_without_takeover_authority",
+        "blocker_codes": blocker_codes,
+        "provider_error": format!(
+            "Timed out executing agent-init dispatch packet after {timeout_seconds}s total without receipt-backed completion"
+        ),
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+            "risk_tier": null,
+            "trace_id": null,
+            "workflow_class": null,
+        },
+        "shared_fields": {
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+        },
+    });
+    if let Some(error) = error {
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("materialization_error".to_string(), error.into());
+        }
+    }
+    payload
+}
+
 fn build_orchestrator_runtime_contract(
     init_view: &serde_json::Value,
     dev_team_readiness: &serde_json::Value,
@@ -2567,12 +2750,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     eprintln!("{error}");
                     return ExitCode::from(1);
                 }
-                Err(_) => {
-                    eprintln!(
-                        "Timed out building taskflow consume bundle for `vida agent-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
-                    );
-                    return ExitCode::from(1);
-                }
+                Err(_) => return emit_agent_init_bundle_timeout(&state_dir, args.json),
             };
             let packet_arg_count = usize::from(args.dispatch_packet.is_some())
                 + usize::from(args.downstream_packet.is_some());
@@ -2780,20 +2958,68 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                 dispatch_handoff_timeout_seconds,
                             )
                         {
+                            if args.json {
+                                crate::print_json_pretty(
+                                    &agent_init_dispatch_timeout_fallback_payload(
+                                        &dispatch_mode,
+                                        &resume_inputs.dispatch_receipt.run_id,
+                                        resume_inputs
+                                            .dispatch_receipt
+                                            .dispatch_result_path
+                                            .as_deref(),
+                                        execute_dispatch_timeout_seconds,
+                                        Some(&error.to_string()),
+                                    ),
+                                );
+                                return ExitCode::from(1);
+                            }
                             eprintln!(
                                 "Timed out executing agent-init dispatch packet after {execute_dispatch_timeout_seconds}s total without receipt-backed completion, and failed to materialize timeout receipt: {error}"
                             );
                             return ExitCode::from(1);
                         }
-                        if let Some(warning) =
+                        let timeout_warning =
                             best_effort_record_agent_init_dispatch_timeout_receipt(
                                 &state_root,
                                 &resume_inputs.run_graph_bootstrap,
                                 &resume_inputs.dispatch_receipt,
                                 execute_dispatch_timeout_seconds,
                             )
-                            .await
-                        {
+                            .await;
+                        if args.json {
+                            let dispatch_result_path = resume_inputs
+                                .dispatch_receipt
+                                .dispatch_result_path
+                                .as_deref();
+                            let result_json = dispatch_result_path
+                                .and_then(|path| {
+                                    std::fs::read_to_string(path)
+                                        .ok()
+                                        .and_then(|body| serde_json::from_str(&body).ok())
+                                })
+                                .map(|result_json| {
+                                    agent_init_dispatch_timeout_operator_envelope(
+                                        result_json,
+                                        &dispatch_mode,
+                                        &resume_inputs.dispatch_receipt.run_id,
+                                        dispatch_result_path,
+                                        execute_dispatch_timeout_seconds,
+                                        timeout_warning.as_deref(),
+                                    )
+                                })
+                                .unwrap_or_else(|| {
+                                    agent_init_dispatch_timeout_fallback_payload(
+                                        &dispatch_mode,
+                                        &resume_inputs.dispatch_receipt.run_id,
+                                        dispatch_result_path,
+                                        execute_dispatch_timeout_seconds,
+                                        timeout_warning.as_deref(),
+                                    )
+                                });
+                            crate::print_json_pretty(&result_json);
+                            return ExitCode::from(1);
+                        }
+                        if let Some(warning) = timeout_warning {
                             eprintln!("{warning}");
                         }
                         eprintln!(
@@ -4702,6 +4928,67 @@ mod agent_init_surface_tests {
         assert_eq!(
             payload["shared_fields"]["artifact_refs"]["timed_out_surface"],
             "build_taskflow_consume_bundle_payload"
+        );
+    }
+
+    #[test]
+    fn agent_init_bundle_timeout_payload_is_json_operator_envelope() {
+        let payload = agent_init_bundle_timeout_payload(Path::new(".vida/data/state"));
+
+        assert_eq!(payload["surface"], "vida agent-init");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["degraded"], true);
+        assert_eq!(
+            payload["blocker_codes"][0],
+            "taskflow_consume_bundle_timeout"
+        );
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert_eq!(
+            payload["operator_contracts"]["blocker_codes"][0],
+            "taskflow_consume_bundle_timeout"
+        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .unwrap()
+            .contains("vida agent-init --json"));
+        assert_eq!(
+            payload["shared_fields"]["artifact_refs"]["timed_out_surface"],
+            "build_taskflow_consume_bundle_payload"
+        );
+    }
+
+    #[test]
+    fn agent_init_dispatch_timeout_operator_envelope_adds_contract_fields() {
+        let dispatch_mode = serde_json::json!({
+            "mode": "execution_dispatch",
+            "execution_dispatch": true
+        });
+        let payload = agent_init_dispatch_timeout_operator_envelope(
+            serde_json::json!({
+                "surface": "vida agent-init",
+                "status": "blocked",
+                "execution_state": "blocked",
+                "blocker_code": "internal_dispatch_timeout_without_receipt",
+            }),
+            &dispatch_mode,
+            "run-timeout",
+            Some("dispatch-result.json"),
+            12,
+            Some("deferred reconciliation"),
+        );
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["dispatch_mode"]["mode"], "execution_dispatch");
+        assert_eq!(
+            payload["blocker_codes"][0],
+            "internal_dispatch_timeout_without_receipt"
+        );
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert_eq!(payload["shared_fields"]["status"], "blocked");
+        assert_eq!(payload["artifact_refs"]["run_id"], "run-timeout");
+        assert_eq!(
+            payload["timeout_reconciliation_warning"],
+            "deferred reconciliation"
         );
     }
 
