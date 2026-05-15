@@ -70,6 +70,14 @@ The normal top-level loop is:
 7. dispatch the packet,
 8. synthesize the result into the next bounded step or closure.
 
+Session ownership rule:
+
+1. each root-lane invocation runs as one `orchestrator_session_id`, not as the project-global orchestrator,
+2. packet shaping must name the current bounded unit, intended claim kind, conflict domain, owned path scope, and whether the work is exclusive or parallel-safe,
+3. a blocked lane from another session in the same project root is foreign visibility evidence unless it conflicts with the current task/run, owned paths, exclusive conflict domain, or a global state-integrity blocker,
+4. if runtime status cannot distinguish current-session state from foreign-session state, the orchestrator must fail closed to diagnosis rather than inheriting another session's active task,
+5. releasing, superseding, or reclaiming a claim is part of closure for the bounded step and must be receipt-backed.
+
 Intent-binding clarification:
 
 1. `continue development` authorizes orchestrator-led continuation only after the active bounded unit is explicitly bound,
@@ -339,5 +347,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-operating-protocol.md
 created_at: '2026-03-13T18:40:00+02:00'
-updated_at: 2026-04-04T20:12:10.232383544Z
+updated_at: 2026-05-15T09:13:17.0722456Z
 changelog_ref: project-orchestrator-operating-protocol.changelog.jsonl
