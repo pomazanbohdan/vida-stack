@@ -1603,8 +1603,6 @@ impl StateStore {
 
     #[allow(dead_code)]
     pub async fn run_graph_status(&self, run_id: &str) -> Result<RunGraphStatus, StateStoreError> {
-        self.record_run_graph_owner_evidence(run_id, "run_graph_status")
-            .await?;
         let execution: Option<ExecutionPlanStateRow> =
             self.db.select(("execution_plan_state", run_id)).await?;
         let execution = execution.ok_or_else(|| StateStoreError::MissingTask {
@@ -2526,6 +2524,45 @@ mod tests {
                     .is_some_and(|value| !value.trim().is_empty())
             );
         }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_status_read_does_not_record_owner_evidence() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-read-owner-evidence-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .record_run_graph_owner_evidence("seed-owner-evidence", "dispatch_context")
+            .await
+            .expect("seed owner evidence table");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-read-only-owner-evidence".to_string();
+        status.task_id = "task-read-only-owner-evidence".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let loaded = store
+            .run_graph_status("run-read-only-owner-evidence")
+            .await
+            .expect("read run graph status");
+        assert_eq!(loaded.run_id, "run-read-only-owner-evidence");
+        assert!(store
+            .run_graph_owner_evidence_record("run-read-only-owner-evidence", "run_graph_status")
+            .await
+            .expect("read owner evidence")
+            .is_none());
 
         let _ = fs::remove_dir_all(&root);
     }
