@@ -616,6 +616,81 @@ fn push_unique_strings(target: &mut Vec<String>, values: impl IntoIterator<Item 
     }
 }
 
+fn latest_run_graph_evidence_is_ambiguous(
+    latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+    latest_run_graph_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    latest_run_graph_checkpoint: Option<&crate::state_store::RunGraphCheckpointSummary>,
+    latest_run_graph_gate: Option<&crate::state_store::RunGraphGateSummary>,
+    latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    dispatch_receipt_checkpoint_leakage: bool,
+) -> bool {
+    dispatch_receipt_checkpoint_leakage
+        || latest_run_graph_dispatch_receipt.is_some_and(|receipt| {
+            crate::state_store::latest_run_graph_dispatch_receipt_signal_is_ambiguous(receipt)
+        })
+        || (!dispatch_receipt_checkpoint_leakage
+            && crate::state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
+                latest_run_graph_status.map(|status| status.run_id.as_str()),
+                latest_run_graph_dispatch_receipt.map(|receipt| receipt.run_id.as_str()),
+            ))
+        || (!dispatch_receipt_checkpoint_leakage
+            && !crate::state_store::latest_run_graph_evidence_snapshot_is_consistent(
+                latest_run_graph_status.map(|status| status.run_id.as_str()),
+                latest_run_graph_recovery.map(|summary| summary.run_id.as_str()),
+                latest_run_graph_checkpoint.map(|summary| summary.run_id.as_str()),
+                latest_run_graph_gate.map(|summary| summary.run_id.as_str()),
+                latest_run_graph_dispatch_receipt.map(|receipt| receipt.run_id.as_str()),
+            ))
+}
+
+async fn latest_run_graph_dispatch_receipt_and_evidence_ambiguity(
+    store: &crate::StateStore,
+    latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+    latest_run_graph_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+) -> Result<
+    (
+        Option<crate::state_store::RunGraphDispatchReceiptSummary>,
+        bool,
+    ),
+    String,
+> {
+    let latest_run_graph_checkpoint = store
+        .latest_run_graph_checkpoint_summary()
+        .await
+        .map_err(|error| format!("Failed to read latest run graph checkpoint summary: {error}"))?;
+    let latest_run_graph_gate = store
+        .latest_run_graph_gate_summary()
+        .await
+        .map_err(|error| format!("Failed to read latest run graph gate summary: {error}"))?;
+    let mut dispatch_receipt_checkpoint_leakage = false;
+    let latest_run_graph_dispatch_receipt =
+        match store.latest_run_graph_dispatch_receipt_summary().await {
+            Ok(summary) => summary,
+            Err(error) => {
+                if error
+                    .to_string()
+                    .contains("latest checkpoint evidence must share the same run_id")
+                {
+                    dispatch_receipt_checkpoint_leakage = true;
+                    None
+                } else {
+                    return Err(format!(
+                        "Failed to read latest dispatch receipt summary: {error}"
+                    ));
+                }
+            }
+        };
+    let evidence_ambiguous = latest_run_graph_evidence_is_ambiguous(
+        latest_run_graph_status,
+        latest_run_graph_recovery,
+        latest_run_graph_checkpoint.as_ref(),
+        latest_run_graph_gate.as_ref(),
+        latest_run_graph_dispatch_receipt.as_ref(),
+        dispatch_receipt_checkpoint_leakage,
+    );
+    Ok((latest_run_graph_dispatch_receipt, evidence_ambiguous))
+}
+
 fn continuation_dispatch_gate_from_decision(
     decision: &TaskflowNextDecision,
     continuation_binding_summary: &serde_json::Value,
@@ -2008,10 +2083,12 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
         .latest_run_graph_recovery_summary()
         .await
         .map_err(|error| format!("Failed to read latest recovery summary: {error}"))?;
-    let dispatch = store
-        .latest_run_graph_dispatch_receipt_summary()
-        .await
-        .map_err(|error| format!("Failed to read latest dispatch receipt summary: {error}"))?;
+    let (dispatch, evidence_ambiguous) = latest_run_graph_dispatch_receipt_and_evidence_ambiguity(
+        store,
+        latest_run_graph.as_ref(),
+        recovery.as_ref(),
+    )
+    .await?;
     let explicit_binding = store
         .latest_explicit_run_graph_continuation_binding()
         .await
@@ -2045,7 +2122,7 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
             recovery.as_ref(),
             dispatch.as_ref(),
             terminal_consume_continue_run_id.as_deref(),
-            false,
+            evidence_ambiguous,
             false,
             latest_run_graph_task_closed,
         );
@@ -3310,13 +3387,20 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let dispatch = match store.latest_run_graph_dispatch_receipt_summary().await {
-        Ok(summary) => summary,
-        Err(error) => {
-            eprintln!("Failed to read latest dispatch receipt summary: {error}");
-            return ExitCode::from(1);
-        }
-    };
+    let (dispatch, evidence_ambiguous) =
+        match latest_run_graph_dispatch_receipt_and_evidence_ambiguity(
+            &store,
+            latest_run_graph.as_ref(),
+            recovery.as_ref(),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
+        };
     let explicit_binding = match store.latest_explicit_run_graph_continuation_binding().await {
         Ok(summary) => summary,
         Err(error) => {
@@ -3360,7 +3444,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             recovery.as_ref(),
             dispatch.as_ref(),
             terminal_consume_continue_run_id.as_deref(),
-            false,
+            evidence_ambiguous,
             false,
             latest_run_graph_task_closed,
         );
@@ -7198,6 +7282,24 @@ mod tests {
         assert_eq!(plan.dispatch_receipt.dispatch_status, "blocked");
         assert!(plan.dispatch_receipt.selected_task_ids.is_empty());
         assert!(plan.dispatch_receipt.reservation_ids.is_empty());
+    }
+
+    #[test]
+    fn run_graph_evidence_gate_treats_missing_dispatch_receipt_as_ambiguous() {
+        let status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-without-dispatch-receipt",
+            "task-without-dispatch-receipt",
+            "implementation",
+        );
+
+        assert!(super::latest_run_graph_evidence_is_ambiguous(
+            Some(&status),
+            None,
+            None,
+            None,
+            None,
+            false,
+        ));
     }
 
     fn sample_task(task_id: &str) -> crate::state_store::TaskRecord {
