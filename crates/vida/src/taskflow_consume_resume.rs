@@ -9,11 +9,68 @@ const DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS: [&str; 3] = [
     "docs/process",
 ];
 const CONSUME_RESUME_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+const CONSUME_RESUME_PREPARATION_GATE_TIMEOUT: Duration = Duration::from_secs(10);
+const CONSUME_RESUME_HANDOFF_TIMEOUT: Duration = Duration::from_secs(60);
+
+fn state_store_lock_marker_error(state_root: &Path, label: &str) -> Option<String> {
+    let lock_path = state_root.join("LOCK");
+    match std::fs::metadata(&lock_path) {
+        Ok(metadata) if metadata.is_file() => Some(format!(
+            "consume continue failed fast: {label}: authoritative datastore LOCK exists at `{}`; wait for the state-store holder or run recovery before retrying",
+            lock_path.display()
+        )),
+        _ => None,
+    }
+}
+
+async fn consume_continue_handoff_with_timeout<F>(
+    label: &str,
+    timeout: Duration,
+    future: F,
+) -> Result<(), String>
+where
+    F: std::future::Future<Output = Result<(), String>>,
+{
+    match tokio::time::timeout(timeout, future).await {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "Timed out executing runtime dispatch handoff during {label} after {}s",
+            timeout.as_secs()
+        )),
+    }
+}
+
+fn consume_continue_blocking_step_with_timeout<F>(
+    label: &str,
+    timeout: Duration,
+    step: F,
+) -> Result<(), String>
+where
+    F: FnOnce() -> Result<(), String> + Send + 'static,
+{
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(step());
+    });
+    match receiver.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "Timed out executing runtime dispatch handoff during {label} after {}s",
+            timeout.as_secs()
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(format!(
+            "consume continue failed fast: {label} blocking worker exited before returning a result"
+        )),
+    }
+}
 
 async fn fail_fast_state_store_open(
     state_root: std::path::PathBuf,
     label: &str,
 ) -> Result<super::StateStore, String> {
+    if let Some(error) = state_store_lock_marker_error(&state_root, label) {
+        return Err(error);
+    }
     match tokio::time::timeout(
         CONSUME_RESUME_LOCK_TIMEOUT,
         super::StateStore::open_existing(state_root),
@@ -46,6 +103,9 @@ async fn fail_fast_state_store_open_read_only_with_timeout(
     label: &str,
     timeout: Duration,
 ) -> Result<super::StateStore, String> {
+    if let Some(error) = state_store_lock_marker_error(&state_root, label) {
+        return Err(error);
+    }
     match tokio::time::timeout(
         timeout,
         super::StateStore::open_existing_read_only(state_root),
@@ -1159,17 +1219,52 @@ fn final_snapshot_missing_failure_control_evidence(snapshot_path: &str) -> bool 
     !runtime_consumption_snapshot_has_failure_control_evidence(&summary_json)
 }
 
+fn latest_runtime_consumption_snapshot_path_for_resume_gate(
+    state_root: &std::path::Path,
+) -> Result<String, String> {
+    let snapshot_dir = state_root.join("runtime-consumption");
+    if !snapshot_dir.exists() {
+        return Err("execution_preparation_gate_blocked: latest runtime-consumption snapshot is not `final`".to_string());
+    }
+    let mut candidates = Vec::new();
+    for entry in std::fs::read_dir(&snapshot_dir)
+        .map_err(|error| format!("Failed to read runtime-consumption directory: {error}"))?
+    {
+        let entry =
+            entry.map_err(|error| format!("Failed to inspect runtime-consumption entry: {error}"))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !file_name.starts_with("final-") {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        candidates.push((modified, path));
+    }
+    candidates.sort_by(|left, right| right.0.cmp(&left.0));
+    candidates
+        .into_iter()
+        .map(|(_, path)| path.display().to_string())
+        .next()
+        .ok_or_else(|| {
+            "execution_preparation_gate_blocked: latest runtime-consumption snapshot is not `final`"
+                .to_string()
+        })
+}
+
 fn latest_runtime_consumption_snapshot_for_resume_gate(
     state_root: &std::path::Path,
 ) -> Result<serde_json::Value, String> {
-    let snapshot_path = match super::latest_final_runtime_consumption_snapshot_path(state_root)? {
-        Some(path) => path,
-        None => super::latest_recorded_final_runtime_consumption_snapshot_path(state_root)?
-            .ok_or_else(|| {
-            "execution_preparation_gate_blocked: latest runtime-consumption snapshot is not `final`"
-                .to_string()
-            })?,
-    };
+    let snapshot_path = latest_runtime_consumption_snapshot_path_for_resume_gate(state_root)?;
     let snapshot_body = std::fs::read_to_string(&snapshot_path).map_err(|error| {
         format!(
             "execution_preparation_gate_blocked: failed to read runtime-consumption snapshot: {error}"
@@ -3525,6 +3620,24 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
         );
     let terminal_completed_run =
         status.status == "completed" && status.lifecycle_stage == "closure_complete";
+    let explicit_task_graph_bound_run_id = if let Some(binding) =
+        explicit_continuation_binding.as_ref().filter(|binding| {
+            binding.status == "bound"
+                && binding.active_bounded_unit["kind"].as_str() == Some("task_graph_task")
+        }) {
+        let binding_run_id = binding.active_bounded_unit["run_id"]
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(binding.run_id.as_str());
+        explicit_bound_task_graph_resume_run_id(store, binding_run_id).await?
+    } else {
+        None
+    };
+    if let Some(bound_run_id) = explicit_task_graph_bound_run_id.as_deref() {
+        if bound_run_id == status.run_id.as_str() || terminal_completed_run {
+            return Ok(bound_run_id.to_string());
+        }
+    }
     if terminal_completed_run {
         return Ok(status.run_id);
     }
@@ -4288,7 +4401,16 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 && requested_dispatch_packet_path.is_none()
                 && requested_downstream_packet_path.is_none()
             {
-                if let Err(error) = enforce_consume_continue_execution_preparation_gate(&state_root)
+                let preparation_gate_state_root = state_root.clone();
+                if let Err(error) = consume_continue_blocking_step_with_timeout(
+                    "execution preparation gate",
+                    CONSUME_RESUME_PREPARATION_GATE_TIMEOUT,
+                    move || {
+                        enforce_consume_continue_execution_preparation_gate(
+                            &preparation_gate_state_root,
+                        )
+                    },
+                )
                 {
                     if emit_output {
                         eprintln!("{error}");
@@ -4555,11 +4677,15 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         .is_some();
                 if allow_taskflow_pack_execution {
                     drop(store);
-                    if let Err(error) = super::execute_and_record_dispatch_receipt(
-                        &state_root,
-                        &role_selection,
-                        &run_graph_bootstrap,
-                        &mut dispatch_receipt,
+                    if let Err(error) = consume_continue_handoff_with_timeout(
+                        "resumed runtime dispatch handoff",
+                        CONSUME_RESUME_HANDOFF_TIMEOUT,
+                        super::execute_and_record_dispatch_receipt(
+                            &state_root,
+                            &role_selection,
+                            &run_graph_bootstrap,
+                            &mut dispatch_receipt,
+                        ),
                     )
                     .await
                     {
@@ -4634,14 +4760,22 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 }
                 drop(store);
             }
-            if let Err(error) = super::execute_downstream_dispatch_chain(
-                &state_root,
-                &role_selection,
-                &run_graph_bootstrap,
-                &mut dispatch_receipt,
+            if let Err(error) = consume_continue_handoff_with_timeout(
+                "downstream dispatch chain",
+                CONSUME_RESUME_HANDOFF_TIMEOUT,
+                super::execute_downstream_dispatch_chain(
+                    &state_root,
+                    &role_selection,
+                    &run_graph_bootstrap,
+                    &mut dispatch_receipt,
+                ),
             )
             .await
             {
+                if as_json && emit_output {
+                    emit_consume_continue_resume_error_json(&error, surface_name);
+                    return ExitCode::from(1);
+                }
                 eprintln!("{error}");
                 return ExitCode::from(1);
             }
@@ -4905,8 +5039,10 @@ mod tests {
         blocked_external_dispatch_artifact_mismatched_as_internal_activation,
         build_failure_control_evidence, canonical_resume_dispatch_status,
         canonical_resume_lane_status, canonical_resume_string_array_entries,
+        consume_advance_success_payload, consume_continue_blocking_step_with_timeout,
+        consume_continue_handoff_with_timeout, consume_continue_resume_error_blocker_code,
         consume_continue_resume_error_payload, consume_continue_state_access_blocker_payload,
-        consume_advance_success_payload, dispatch_receipt_internal_retry_eligible,
+        consume_continue_state_access_blocker_code, dispatch_receipt_internal_retry_eligible,
         dispatch_receipt_primary_rebind_eligible, dispatch_receipt_retry_eligible,
         emit_runtime_consumption_resume_json,
         enforce_consume_continue_execution_preparation_gate,
@@ -4924,8 +5060,8 @@ mod tests {
         runtime_consumption_resume_blocker_code, runtime_consumption_resume_receipt_blocker_codes,
         runtime_consumption_resume_receipt_next_actions,
         runtime_consumption_snapshot_has_failure_control_evidence,
-        should_refresh_resumed_downstream_preview, sync_run_graph_after_retry_artifact,
-        validate_receipt_packet_pair, validate_run_graph_resume_state,
+        should_refresh_resumed_downstream_preview, state_store_lock_marker_error,
+        sync_run_graph_after_retry_artifact, validate_receipt_packet_pair, validate_run_graph_resume_state,
         validate_run_graph_resume_state_for_downstream_packet, PacketPathPlatform,
         DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
@@ -5160,6 +5296,31 @@ mod tests {
     }
 
     #[test]
+    fn state_store_lock_marker_error_reports_authoritative_lock_without_opening_store() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-continue-lock-marker-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&root).expect("create state root");
+        fs::write(root.join("LOCK"), "holder").expect("write lock marker");
+
+        let error = state_store_lock_marker_error(&root, "opening authoritative state store")
+            .expect("lock marker should block before opening store");
+        assert!(error.contains("authoritative datastore LOCK exists"));
+        assert_eq!(
+            consume_continue_state_access_blocker_code(&error),
+            "authoritative_state_store_locked"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn read_only_reopen_fails_fast_while_write_guard_is_held() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -5191,6 +5352,48 @@ mod tests {
             drop(store);
             let _ = fs::remove_dir_all(&root);
         });
+    }
+
+    #[tokio::test]
+    async fn consume_continue_handoff_timeout_returns_operator_blocker() {
+        let error = consume_continue_handoff_with_timeout(
+            "test handoff",
+            Duration::from_millis(1),
+            std::future::pending::<Result<(), String>>(),
+        )
+        .await
+        .expect_err("pending handoff should time out");
+
+        assert!(
+            error.contains("Timed out executing runtime dispatch handoff during test handoff"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            consume_continue_resume_error_blocker_code(&error),
+            "runtime_dispatch_handoff_timeout"
+        );
+    }
+
+    #[test]
+    fn consume_continue_blocking_step_timeout_returns_operator_blocker() {
+        let error = consume_continue_blocking_step_with_timeout(
+            "blocking test gate",
+            Duration::from_millis(1),
+            || {
+                std::thread::sleep(Duration::from_millis(50));
+                Ok(())
+            },
+        )
+        .expect_err("slow blocking step should time out");
+
+        assert!(
+            error.contains("Timed out executing runtime dispatch handoff during blocking test gate"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            consume_continue_resume_error_blocker_code(&error),
+            "runtime_dispatch_handoff_timeout"
+        );
     }
 
     #[test]
@@ -13273,8 +13476,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn resolve_runtime_consumption_resume_inputs_for_run_id_switches_to_fresh_bound_task_run()
-    {
+    async fn resolve_runtime_consumption_resume_inputs_without_run_id_switches_to_fresh_bound_task_run(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -13333,8 +13536,11 @@ agent_system:
         );
         bound_status.task_id = bound_task_id.to_string();
         bound_status.active_node = "implementer".to_string();
+        bound_status.next_node = Some("implementer".to_string());
         bound_status.status = "ready".to_string();
         bound_status.lifecycle_stage = "implementer_ready".to_string();
+        bound_status.policy_gate = "single_task_scope_required".to_string();
+        bound_status.handoff_state = "awaiting_implementer".to_string();
         bound_status.resume_target = "dispatch.implementer".to_string();
         bound_status.recovery_ready = true;
         store
@@ -13452,6 +13658,19 @@ agent_system:
             })
             .await
             .expect("persist fresh bound-task dispatch receipt");
+
+        let default_resolved = resolve_runtime_consumption_resume_inputs(&store, None, None, None)
+            .await
+            .expect("default explicit binding should switch resume to fresh bound-task run");
+        assert_eq!(default_resolved.dispatch_receipt.run_id, bound_task_id);
+        assert_eq!(
+            default_resolved.dispatch_receipt.dispatch_target,
+            "implementer"
+        );
+        assert_eq!(
+            default_resolved.dispatch_packet_path,
+            packet_path.display().to_string()
+        );
 
         let resolved =
             resolve_runtime_consumption_resume_inputs(&store, Some(old_run_id), None, None)
