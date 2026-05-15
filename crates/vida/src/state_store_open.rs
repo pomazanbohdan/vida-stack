@@ -99,6 +99,28 @@ impl StateStore {
         }
     }
 
+    pub(crate) fn reclaim_self_owned_failed_authoritative_datastore_lock_marker(
+        root: &Path,
+    ) -> Result<bool, StateStoreError> {
+        let lock_path = root.join("LOCK");
+        let lock_text = match fs::read_to_string(&lock_path) {
+            Ok(lock_text) => lock_text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(StateStoreError::Io(error)),
+        };
+        let Ok(pid) = lock_text.trim().parse::<u32>() else {
+            return Ok(false);
+        };
+        if pid != std::process::id() {
+            return Ok(false);
+        }
+        match fs::remove_file(&lock_path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(StateStoreError::Io(error)),
+        }
+    }
+
     pub(crate) fn error_is_lock_contention(error: &StateStoreError) -> bool {
         match error {
             StateStoreError::Io(io_error) => {
@@ -167,15 +189,17 @@ impl StateStore {
         for attempt in 0..AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT {
             match open_once(root.clone()).await {
                 Ok(store) => return Ok(store),
-                Err(error)
-                    if attempt + 1 < AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT
-                        && Self::error_is_lock_contention(&error) =>
-                {
-                    tokio::time::sleep(std::time::Duration::from_millis(
-                        AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS,
-                    ))
-                    .await;
-                    continue;
+                Err(error) if Self::error_is_lock_contention(&error) => {
+                    let _ =
+                        Self::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)?;
+                    if attempt + 1 < AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT {
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS,
+                        ))
+                        .await;
+                        continue;
+                    }
+                    return Err(error);
                 }
                 Err(error) => return Err(error),
             }
@@ -279,28 +303,99 @@ fn process_may_be_alive(pid: u32) -> bool {
 #[cfg(windows)]
 fn process_may_be_alive(pid: u32) -> bool {
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
-    const ERROR_ACCESS_DENIED: u32 = 5;
-    const ERROR_INVALID_PARAMETER: u32 = 87;
+    const STILL_ACTIVE: u32 = 259;
+    const WINDOWS_PROCESS_STATUS_UNKNOWN_SAFE_ALIVE: bool = true;
     type Handle = *mut c_void;
     #[link(name = "kernel32")]
     extern "system" {
         fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> Handle;
         fn CloseHandle(hObject: Handle) -> i32;
+        fn GetExitCodeProcess(hProcess: Handle, lpExitCode: *mut u32) -> i32;
         fn GetLastError() -> u32;
     }
 
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if !handle.is_null() {
+        let mut exit_code = 0;
+        let exit_code_read = unsafe { GetExitCodeProcess(handle, &mut exit_code) };
         unsafe {
             let _ = CloseHandle(handle);
         }
-        return true;
+        return exit_code_read == 0 || exit_code == STILL_ACTIVE;
     }
-    match unsafe { GetLastError() } {
-        ERROR_INVALID_PARAMETER => false,
-        ERROR_ACCESS_DENIED => true,
-        _ => true,
+
+    let last_error = unsafe { GetLastError() };
+    if let Some(alive) = windows_open_process_error_means_alive(last_error) {
+        return alive;
     }
+
+    windows_tasklist_pid_is_present(pid).unwrap_or(WINDOWS_PROCESS_STATUS_UNKNOWN_SAFE_ALIVE)
+}
+
+#[cfg(windows)]
+fn windows_open_process_error_means_alive(last_error: u32) -> Option<bool> {
+    const ERROR_ACCESS_DENIED: u32 = 5;
+    const ERROR_INVALID_PARAMETER: u32 = 87;
+
+    match last_error {
+        ERROR_INVALID_PARAMETER => Some(false),
+        ERROR_ACCESS_DENIED => Some(true),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn windows_tasklist_pid_is_present(pid: u32) -> Option<bool> {
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Some(
+        windows_tasklist_csv_contains_pid(&stdout, pid)
+            || windows_tasklist_csv_contains_pid(&stderr, pid),
+    )
+}
+
+#[cfg(windows)]
+fn windows_tasklist_csv_contains_pid(output: &str, pid: u32) -> bool {
+    output
+        .lines()
+        .filter_map(windows_tasklist_csv_pid_field)
+        .any(|field| {
+            field
+                .trim()
+                .parse::<u32>()
+                .is_ok_and(|listed_pid| listed_pid == pid)
+        })
+}
+
+#[cfg(windows)]
+fn windows_tasklist_csv_pid_field(line: &str) -> Option<String> {
+    let mut fields = Vec::new();
+    let mut field = String::new();
+    let mut chars = line.chars().peekable();
+    let mut in_quotes = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' if in_quotes && chars.peek() == Some(&'"') => {
+                field.push('"');
+                let _ = chars.next();
+            }
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => {
+                fields.push(std::mem::take(&mut field));
+                if fields.len() == 2 {
+                    return fields.pop();
+                }
+            }
+            _ => field.push(ch),
+        }
+    }
+    fields.push(field);
+    fields.get(1).cloned()
 }
 
 #[cfg(all(not(unix), not(windows)))]
@@ -324,6 +419,33 @@ mod tests {
                 "Windows raw OS error {code} should be retried as lock contention"
             );
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_open_process_error_classifier_preserves_safe_edges() {
+        assert_eq!(windows_open_process_error_means_alive(87), Some(false));
+        assert_eq!(windows_open_process_error_means_alive(5), Some(true));
+        assert_eq!(windows_open_process_error_means_alive(123_456), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_tasklist_csv_parser_detects_exact_pid() {
+        let output = "\"Image Name\",\"PID\",\"Session Name\",\"Session#\",\"Mem Usage\"\n\
+\"vida.exe\",\"48248\",\"Console\",\"1\",\"12,344 K\"\n\
+\"other.exe\",\"4824\",\"Console\",\"1\",\"1,024 K\"";
+
+        assert!(windows_tasklist_csv_contains_pid(output, 48248));
+        assert!(!windows_tasklist_csv_contains_pid(output, 48249));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_tasklist_csv_parser_treats_no_tasks_output_as_absent() {
+        let output = "INFO: No tasks are running which match the specified criteria.";
+
+        assert!(!windows_tasklist_csv_contains_pid(output, 48248));
     }
 
     #[tokio::test]
@@ -446,6 +568,79 @@ mod tests {
 
         assert!(!reclaimed);
         assert!(root.join("LOCK").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn self_owned_failed_authoritative_lock_marker_is_reclaimed() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-self-owned-failed-authoritative-lock-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create state root");
+        fs::write(root.join("LOCK"), std::process::id().to_string()).expect("write self lock");
+
+        let reclaimed =
+            StateStore::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)
+                .expect("self-owned failed lock should not error");
+
+        assert!(reclaimed);
+        assert!(!root.join("LOCK").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn self_owned_failed_authoritative_lock_cleanup_preserves_foreign_pid() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-foreign-failed-authoritative-lock-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create state root");
+        let foreign_pid = std::process::id().saturating_add(1);
+        fs::write(root.join("LOCK"), foreign_pid.to_string()).expect("write foreign lock");
+
+        let reclaimed =
+            StateStore::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)
+                .expect("foreign lock should not error");
+
+        assert!(!reclaimed);
+        assert_eq!(
+            fs::read_to_string(root.join("LOCK")).expect("read preserved lock"),
+            foreign_pid.to_string()
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn self_owned_failed_authoritative_lock_cleanup_preserves_invalid_marker() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-invalid-failed-authoritative-lock-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create state root");
+        fs::write(root.join("LOCK"), "unknown").expect("write invalid lock");
+
+        let reclaimed =
+            StateStore::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)
+                .expect("invalid lock should not error");
+
+        assert!(!reclaimed);
+        assert_eq!(
+            fs::read_to_string(root.join("LOCK")).expect("read preserved lock"),
+            "unknown"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }
