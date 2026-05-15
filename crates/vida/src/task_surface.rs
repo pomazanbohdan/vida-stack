@@ -389,6 +389,35 @@ fn task_execution_semantics_from_create_args(
     }
 }
 
+fn task_create_semantics_requested(command: &TaskCreateArgs) -> bool {
+    command.execution_mode.is_some()
+        || command.order_bucket.is_some()
+        || command.parallel_group.is_some()
+        || command.conflict_domain.is_some()
+}
+
+fn task_create_semantics_mismatch(
+    existing: &state_store::TaskExecutionSemantics,
+    command: &TaskCreateArgs,
+) -> bool {
+    command
+        .execution_mode
+        .as_deref()
+        .is_some_and(|expected| existing.execution_mode.as_deref() != Some(expected))
+        || command
+            .order_bucket
+            .as_deref()
+            .is_some_and(|expected| existing.order_bucket.as_deref() != Some(expected))
+        || command
+            .parallel_group
+            .as_deref()
+            .is_some_and(|expected| existing.parallel_group.as_deref() != Some(expected))
+        || command
+            .conflict_domain
+            .as_deref()
+            .is_some_and(|expected| existing.conflict_domain.as_deref() != Some(expected))
+}
+
 fn task_update_semantics_arg(
     value: Option<&str>,
     clear: bool,
@@ -1864,6 +1893,46 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                         eprintln!("Failed to ensure task: {reason}");
                         return ExitCode::from(1);
                     }
+                    let task = if task_create_semantics_requested(&command)
+                        && task_create_semantics_mismatch(&task.execution_semantics, &command)
+                    {
+                        match store
+                            .update_task(state_store::UpdateTaskRequest {
+                                task_id: &command.task_id,
+                                status: None,
+                                notes: None,
+                                description: None,
+                                parent_id: None,
+                                add_labels: &[],
+                                remove_labels: &[],
+                                set_labels: None,
+                                execution_mode: command.execution_mode.as_deref().map(Some),
+                                order_bucket: command.order_bucket.as_deref().map(Some),
+                                parallel_group: command.parallel_group.as_deref().map(Some),
+                                conflict_domain: command.conflict_domain.as_deref().map(Some),
+                                planner_metadata: None,
+                            })
+                            .await
+                        {
+                            Ok(updated) => {
+                                if let Err(code) =
+                                    refresh_task_snapshot_after_mutation(&store, "vida task ensure")
+                                        .await
+                                {
+                                    return code;
+                                }
+                                updated
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to backfill task execution semantics during ensure: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        }
+                    } else {
+                        task
+                    };
                     print_task_mutation(command.render, "vida task ensure", &task, command.json);
                     return ExitCode::SUCCESS;
                 }
@@ -4514,7 +4583,8 @@ mod tests {
         select_task_next_lawful_binding, task_close_automation_receipt,
         task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
         task_close_feedback_blocker_summary, task_close_host_agent_telemetry,
-        task_close_uses_isolated_state_dir, task_create_title, task_handoff_accept_receipt,
+        task_close_uses_isolated_state_dir, task_create_semantics_mismatch,
+        task_create_semantics_requested, task_create_title, task_handoff_accept_receipt,
         task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
         task_json_success_status, task_next_lawful_receipt, task_owned_status_receipt,
         task_parent_id, task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
@@ -4707,6 +4777,19 @@ mod tests {
         )
         .expect("mismatch reason should exist");
         assert!(reason.contains("title mismatch"));
+    }
+
+    #[test]
+    fn task_ensure_detects_requested_execution_semantics_backfill() {
+        let existing = crate::state_store::TaskExecutionSemantics::default();
+        let mut command = minimal_task_create_args(Some("Ensure semantics"), None);
+        command.execution_mode = Some("parallel_safe".to_string());
+        command.order_bucket = Some("feature-x".to_string());
+        command.parallel_group = Some("dev-pack".to_string());
+        command.conflict_domain = Some("task-ensure-semantics".to_string());
+
+        assert!(task_create_semantics_requested(&command));
+        assert!(task_create_semantics_mismatch(&existing, &command));
     }
 
     #[test]

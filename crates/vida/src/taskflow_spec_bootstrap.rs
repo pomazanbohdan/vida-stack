@@ -7,7 +7,9 @@ use docflow_cli::Cli as DocflowCli;
 use time::format_description::well_known::Rfc3339;
 
 use crate::runtime_contract_vocab::TASK_CLASS_IMPLEMENTATION;
-use crate::state_store::{CreateTaskRequest, StateStore, TaskPlannerMetadata, UpdateTaskRequest};
+use crate::state_store::{
+    CreateTaskRequest, StateStore, TaskExecutionSemantics, TaskPlannerMetadata, UpdateTaskRequest,
+};
 use crate::taskflow_task_bridge::task_record_json;
 
 struct TaskCreationArgs<'a> {
@@ -20,6 +22,7 @@ struct TaskCreationArgs<'a> {
     parent_id: Option<&'a str>,
     labels: &'a [&'a str],
     description: Option<&'a str>,
+    execution_semantics: TaskExecutionSemantics,
     planner_metadata: TaskPlannerMetadata,
 }
 
@@ -36,27 +39,41 @@ fn create_task_if_missing_with_store(
         parent_id,
         labels,
         description,
+        execution_semantics,
         planner_metadata,
     } = args;
 
     if let Ok(existing) = crate::block_on_state_store(store.show_task(task_id)) {
-        if should_backfill_planner_metadata(&existing.planner_metadata, &planner_metadata) {
+        let backfill_planner =
+            should_backfill_planner_metadata(&existing.planner_metadata, &planner_metadata);
+        let backfill_semantics = should_backfill_execution_semantics(
+            &existing.execution_semantics,
+            &execution_semantics,
+        );
+        if backfill_planner || backfill_semantics {
             let empty_labels = Vec::<String>::new();
-            let updated = crate::block_on_state_store(store.update_task(UpdateTaskRequest {
-                task_id,
-                status: None,
-                notes: None,
-                description: None,
-                parent_id: None,
-                add_labels: &empty_labels,
-                remove_labels: &empty_labels,
-                set_labels: None,
-                execution_mode: None,
-                order_bucket: None,
-                parallel_group: None,
-                conflict_domain: None,
-                planner_metadata: Some(planner_metadata),
-            }))?;
+            let updated =
+                crate::block_on_state_store(
+                    store.update_task(UpdateTaskRequest {
+                        task_id,
+                        status: None,
+                        notes: None,
+                        description: None,
+                        parent_id: None,
+                        add_labels: &empty_labels,
+                        remove_labels: &empty_labels,
+                        set_labels: None,
+                        execution_mode: backfill_semantics
+                            .then_some(execution_semantics.execution_mode.as_deref()),
+                        order_bucket: backfill_semantics
+                            .then_some(execution_semantics.order_bucket.as_deref()),
+                        parallel_group: backfill_semantics
+                            .then_some(execution_semantics.parallel_group.as_deref()),
+                        conflict_domain: backfill_semantics
+                            .then_some(execution_semantics.conflict_domain.as_deref()),
+                        planner_metadata: backfill_planner.then_some(planner_metadata),
+                    }),
+                )?;
             return Ok((task_record_json(&updated), false));
         }
         return Ok((task_record_json(&existing), false));
@@ -77,7 +94,7 @@ fn create_task_if_missing_with_store(
         priority: 2,
         parent_id,
         labels: &label_rows,
-        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+        execution_semantics,
         planner_metadata,
         created_by: "vida taskflow",
         source_repo: &source_repo,
@@ -88,6 +105,30 @@ fn create_task_if_missing_with_store(
             Ok((task_record_json(&existing), false))
         }
         Err(error) => Err(error),
+    }
+}
+
+fn should_backfill_execution_semantics(
+    existing: &TaskExecutionSemantics,
+    expected: &TaskExecutionSemantics,
+) -> bool {
+    expected.execution_mode.is_some()
+        && (existing.execution_mode != expected.execution_mode
+            || existing.order_bucket != expected.order_bucket
+            || existing.parallel_group != expected.parallel_group
+            || existing.conflict_domain != expected.conflict_domain)
+}
+
+fn work_packet_execution_semantics(
+    epic_task_id: &str,
+    task_id: &str,
+    packet_label: &str,
+) -> TaskExecutionSemantics {
+    TaskExecutionSemantics {
+        execution_mode: Some("parallel_safe".to_string()),
+        order_bucket: Some(epic_task_id.to_string()),
+        parallel_group: Some(packet_label.to_string()),
+        conflict_domain: Some(task_id.to_string()),
     }
 }
 
@@ -516,6 +557,7 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         parent_id: None,
         labels: &["feature-request", "spec-first"],
         description: Some(request_text),
+        execution_semantics: TaskExecutionSemantics::default(),
         planner_metadata: TaskPlannerMetadata::default(),
     })?;
     if epic_created {
@@ -532,6 +574,7 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         parent_id: Some(epic_task_id),
         labels: &["spec-pack", "documentation"],
         description: Some("bounded design/spec packet for the feature request"),
+        execution_semantics: TaskExecutionSemantics::default(),
         planner_metadata: TaskPlannerMetadata::default(),
     })?;
     if spec_created {
@@ -692,6 +735,7 @@ pub(crate) fn execute_work_packet_create_with_store(
         parent_id: None,
         labels: &["feature-request"],
         description: Some("tracked feature epic for runtime-consumption dispatch"),
+        execution_semantics: TaskExecutionSemantics::default(),
         planner_metadata: TaskPlannerMetadata::default(),
     })?;
     if epic_created {
@@ -708,6 +752,7 @@ pub(crate) fn execute_work_packet_create_with_store(
         parent_id: Some(epic_task_id),
         labels: &[packet_label],
         description: Some(packet_description),
+        execution_semantics: work_packet_execution_semantics(epic_task_id, task_id, packet_label),
         planner_metadata: work_packet_planner_metadata(request_text, &tracked),
     })?;
     if packet_created {
@@ -814,6 +859,22 @@ mod tests {
             .block_on(store.show_task("feature-x-dev"))
             .expect("initial dev task should load");
         assert!(initial.planner_metadata.owned_paths.is_empty());
+        assert_eq!(
+            initial.execution_semantics.execution_mode.as_deref(),
+            Some("parallel_safe")
+        );
+        assert_eq!(
+            initial.execution_semantics.order_bucket.as_deref(),
+            Some("feature-x")
+        );
+        assert_eq!(
+            initial.execution_semantics.parallel_group.as_deref(),
+            Some("dev-pack")
+        );
+        assert_eq!(
+            initial.execution_semantics.conflict_domain.as_deref(),
+            Some("feature-x-dev")
+        );
 
         execute_work_packet_create_with_store(
             &unique_root,
@@ -828,16 +889,28 @@ mod tests {
             .block_on(store.show_task("feature-x-dev"))
             .expect("updated dev task should load");
         assert_eq!(updated.planner_metadata.owned_paths.len(), 2);
-        assert!(updated
-            .planner_metadata
-            .owned_paths
-            .contains(&"crates/vida/src/taskflow_spec_bootstrap.rs".to_string()));
-        assert!(updated
-            .planner_metadata
-            .owned_paths
-            .contains(&"crates/vida/src/runtime_dispatch_state.rs".to_string()));
+        assert!(
+            updated
+                .planner_metadata
+                .owned_paths
+                .contains(&"crates/vida/src/taskflow_spec_bootstrap.rs".to_string())
+        );
+        assert!(
+            updated
+                .planner_metadata
+                .owned_paths
+                .contains(&"crates/vida/src/runtime_dispatch_state.rs".to_string())
+        );
         assert!(!updated.planner_metadata.acceptance_targets.is_empty());
         assert!(!updated.planner_metadata.proof_targets.is_empty());
+        assert_eq!(
+            updated.execution_semantics.execution_mode.as_deref(),
+            Some("parallel_safe")
+        );
+        assert_eq!(
+            updated.execution_semantics.order_bucket.as_deref(),
+            Some("feature-x")
+        );
 
         fs::remove_dir_all(&unique_root).expect("cleanup should succeed");
     }
