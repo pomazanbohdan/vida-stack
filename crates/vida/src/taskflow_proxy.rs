@@ -1873,15 +1873,17 @@ fn build_taskflow_next_decision(
     );
     let active_exception_takeover_continuation =
         active_exception_takeover_evidence && latest_run_graph_status_blocked;
+    let explicit_next_task_binding =
+        explicit_task_binding_matches_status(explicit_binding, latest_run_graph_status);
     let terminal_consume_continue_without_next_unit = latest_run_graph_status
         .zip(terminal_consume_continue_run_id)
-        .is_some_and(|(status, run_id)| status.run_id == run_id);
+        .is_some_and(|(status, run_id)| status.run_id == run_id)
+        && !explicit_next_task_binding;
     let latest_run_graph_status_blocks_admission = latest_run_graph_status_blocked
         && !active_exception_takeover_evidence
         && !terminal_consume_continue_without_next_unit;
     let completed_without_explicit_next_unit =
-        terminal_completed_without_next_unit(latest_run_graph_status)
-            && !explicit_task_binding_matches_status(explicit_binding, latest_run_graph_status);
+        terminal_completed_without_next_unit(latest_run_graph_status) && !explicit_next_task_binding;
     let admissibility_gate = if recovery_holds_active_bound_run {
         "delegated_cycle_runtime_gate".to_string()
     } else if active_exception_takeover_continuation {
@@ -7235,6 +7237,70 @@ mod tests {
             .next_actions
             .iter()
             .all(|action| !action.contains("--task-id <task-id>")));
+    }
+
+    #[test]
+    fn terminal_continue_snapshot_with_explicit_task_binding_is_admissible() {
+        let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
+            "closed-run",
+            "closed-task",
+            "analysis",
+        );
+        latest_status.status = "completed".to_string();
+        latest_status.lifecycle_stage = "closure_complete".to_string();
+        latest_status.active_node = "closure".to_string();
+        latest_status.next_node = None;
+        latest_status.handoff_state = "none".to_string();
+        latest_status.resume_target = "none".to_string();
+        latest_status.recovery_ready = false;
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "closed-run".to_string(),
+            task_id: "ready-head".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": "ready-head",
+                "run_id": "closed-run",
+                "task_status": "open"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "Explicit next bounded task after terminal consume snapshot.".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: None,
+            recorded_at: "2026-05-15T09:40:00Z".to_string(),
+        };
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("ready-head")),
+            false,
+            true,
+            Some("final"),
+            None,
+            None,
+            Some(&latest_status),
+            false,
+            Some(&binding),
+            Some("closed-run"),
+        );
+
+        assert_eq!(decision.status, "pass");
+        assert!(decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "ready_now"
+        );
+        assert_eq!(
+            decision
+                .primary_ready_task
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("ready-head")
+        );
+        assert!(!decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit"));
     }
 
     #[test]
