@@ -703,7 +703,13 @@ fn derive_lane_show_truth(
         };
     }
 
-    if summary.lane_status == crate::LaneStatus::LaneCompleted.as_str() {
+    let completed_has_blocked_downstream =
+        summary.lane_status == crate::LaneStatus::LaneCompleted.as_str()
+            && (!summary.downstream_dispatch_blockers.is_empty()
+                || recovery_delegated_cycle_open(recovery));
+    if summary.lane_status == crate::LaneStatus::LaneCompleted.as_str()
+        && !completed_has_blocked_downstream
+    {
         return LaneShowTruth {
             blocked: false,
             blocker_codes: Vec::new(),
@@ -2137,6 +2143,28 @@ mod tests {
         assert!(truth
             .blocker_codes
             .contains(&"tool_execution_failed".to_string()));
+    }
+
+    #[test]
+    fn derive_lane_show_truth_marks_completed_downstream_blockers_as_blocked() {
+        let mut receipt = sample_receipt("executed");
+        receipt.blocker_code = None;
+        receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
+        receipt
+            .downstream_dispatch_blockers
+            .push("missing_owned_write_scope".to_string());
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+
+        let truth = derive_lane_show_truth(&summary, None);
+
+        assert!(truth.blocked);
+        assert!(truth
+            .blocker_codes
+            .contains(&"tool_execution_failed".to_string()));
+        assert!(truth
+            .next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow recovery status run-lane-test --json")));
     }
 
     #[test]
