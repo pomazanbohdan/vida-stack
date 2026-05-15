@@ -1458,6 +1458,34 @@ fn boot_succeeds() {
 }
 
 #[test]
+fn boot_releases_state_before_immediate_status_command() {
+    let state_dir = unique_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&boot.stdout),
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    let status = vida()
+        .args(["status", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("immediate status should run without external retry");
+    assert!(
+        status.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&status.stdout),
+        String::from_utf8_lossy(&status.stderr)
+    );
+}
+
+#[test]
 fn boot_supports_color_render_mode() {
     let output = vida()
         .args(["boot", "--render", "color"])

@@ -14,6 +14,7 @@ use crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload;
 
 const DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS: u64 = 10;
 const COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS: u64 = 30;
+const BOOT_RELEASE_VERIFICATION_RETRY_DELAY_MS: u64 = 25;
 const INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS: u64 = 45;
 const LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS: u64 = 30;
 
@@ -123,6 +124,64 @@ fn emit_agent_init_bundle_timeout(state_dir: &Path, as_json: bool) -> ExitCode {
         );
     }
     ExitCode::from(1)
+}
+
+async fn verify_authoritative_state_store_released_after_boot(
+    state_root: PathBuf,
+) -> Result<(), String> {
+    let timeout = std::time::Duration::from_secs(COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS);
+    let retry_delay = std::time::Duration::from_millis(BOOT_RELEASE_VERIFICATION_RETRY_DELAY_MS);
+    let deadline = std::time::Instant::now() + timeout;
+    let mut last_lock_contention = None;
+
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return Err(match last_lock_contention {
+                Some(error) => format!(
+                    "Timed out verifying authoritative state store release after `vida boot` after {COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS}s; last lock-contention error: {error}"
+                ),
+                None => format!(
+                    "Timed out verifying authoritative state store release after `vida boot` after {COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS}s"
+                ),
+            });
+        }
+
+        match tokio::time::timeout(
+            deadline.saturating_duration_since(now),
+            StateStore::open_existing(state_root.clone()),
+        )
+        .await
+        {
+            Ok(Ok(reopened_store)) => {
+                drop(reopened_store);
+                return Ok(());
+            }
+            Ok(Err(error)) if StateStore::error_is_lock_contention(&error) => {
+                last_lock_contention = Some(error.to_string());
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    continue;
+                }
+                tokio::time::sleep(retry_delay.min(remaining)).await;
+            }
+            Ok(Err(error)) => {
+                return Err(format!(
+                    "Failed to verify authoritative state store release after `vida boot`: {error}"
+                ));
+            }
+            Err(_) => {
+                return Err(match last_lock_contention {
+                    Some(error) => format!(
+                        "Timed out verifying authoritative state store release after `vida boot` after {COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS}s; last lock-contention error: {error}"
+                    ),
+                    None => format!(
+                        "Timed out verifying authoritative state store release after `vida boot` after {COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS}s"
+                    ),
+                });
+            }
+        }
+    }
 }
 
 fn agent_init_dispatch_timeout_artifact_refs(
@@ -2407,25 +2466,11 @@ pub(crate) async fn run_boot(args: BootArgs) -> ExitCode {
             .await;
             drop(store);
             if exit_code == ExitCode::SUCCESS {
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
-                    StateStore::open_existing(state_root),
-                )
-                .await
+                if let Err(error) =
+                    verify_authoritative_state_store_released_after_boot(state_root).await
                 {
-                    Ok(Ok(reopened_store)) => drop(reopened_store),
-                    Ok(Err(error)) => {
-                        eprintln!(
-                            "Failed to verify authoritative state store release after `vida boot`: {error}"
-                        );
-                        return ExitCode::from(1);
-                    }
-                    Err(_) => {
-                        eprintln!(
-                            "Timed out verifying authoritative state store release after `vida boot` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
-                        );
-                        return ExitCode::from(1);
-                    }
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
                 }
             }
             exit_code
