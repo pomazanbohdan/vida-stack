@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
@@ -22,6 +23,12 @@ fn session_store_path(state_dir: &Path) -> PathBuf {
     state_dir
         .join("orchestrator-sessions")
         .join("sessions.json")
+}
+
+fn session_token_store_dir(state_dir: &Path) -> PathBuf {
+    state_dir
+        .join("orchestrator-sessions")
+        .join("session-tokens")
 }
 
 fn sanitized_env(name: &str) -> Option<String> {
@@ -56,11 +63,75 @@ fn stable_local_session_id(state_dir: &Path) -> String {
     )
 }
 
+fn fallback_session_token_cache() -> &'static Mutex<BTreeMap<String, String>> {
+    static CACHE: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn synthesized_local_session_id(state_dir: &Path) -> String {
+    let state_dir_key = canonicalized_path_string(state_dir);
+    if let Some(token) = fallback_session_token_cache()
+        .lock()
+        .expect("fallback session token cache should not be poisoned")
+        .get(&state_dir_key)
+        .cloned()
+    {
+        return token;
+    }
+
+    let worktree = canonicalized_current_dir();
+    let generated_at_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let session_id = format!(
+        "local-session-{}-{}-{}",
+        stable_hash_hex(&format!("{worktree}\n{state_dir_key}")),
+        std::process::id(),
+        generated_at_nanos
+    );
+    let token_record = serde_json::json!({
+        "schema_version": "runtime-owner-fallback-session-token-v1",
+        "session_id": session_id,
+        "identity_source": "synthesized_local_session_token",
+        "fallback_replaces_legacy_stable_worktree_state_hash": stable_local_session_id(state_dir),
+        "project_root": worktree,
+        "state_dir": state_dir.display().to_string(),
+        "process_id": std::process::id(),
+        "generated_at_epoch_seconds": now_epoch_seconds(),
+    });
+    let token_path = session_token_store_dir(state_dir).join(format!("{session_id}.json"));
+    if let Some(parent) = token_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(body) = serde_json::to_string_pretty(&token_record) {
+        let _ = std::fs::write(token_path, body);
+    }
+
+    fallback_session_token_cache()
+        .lock()
+        .expect("fallback session token cache should not be poisoned")
+        .insert(state_dir_key, session_id.clone());
+    session_id
+}
+
 fn current_session_id(state_dir: &Path) -> String {
     sanitized_env("VIDA_ORCHESTRATOR_SESSION_ID")
         .or_else(|| sanitized_env("CODEX_SESSION_ID"))
         .or_else(|| sanitized_env("CODEX_THREAD_ID"))
-        .unwrap_or_else(|| stable_local_session_id(state_dir))
+        .unwrap_or_else(|| synthesized_local_session_id(state_dir))
+}
+
+fn current_session_identity_source() -> String {
+    if sanitized_env("VIDA_ORCHESTRATOR_SESSION_ID").is_some() {
+        "VIDA_ORCHESTRATOR_SESSION_ID".to_string()
+    } else if sanitized_env("CODEX_SESSION_ID").is_some() {
+        "CODEX_SESSION_ID".to_string()
+    } else if sanitized_env("CODEX_THREAD_ID").is_some() {
+        "CODEX_THREAD_ID".to_string()
+    } else {
+        "synthesized_local_session_token".to_string()
+    }
 }
 
 fn host_tool_identity() -> String {
@@ -112,6 +183,7 @@ fn current_session_record(state_dir: &Path) -> serde_json::Value {
     let now = now_epoch_seconds();
     serde_json::json!({
         "session_id": current_session_id(state_dir),
+        "identity_source": current_session_identity_source(),
         "owner_kind": "orchestrator",
         "state": "live",
         "host_tool": host_tool_identity(),
@@ -272,21 +344,13 @@ pub(crate) fn build_runtime_owner_evidence(
         write_sessions(&path, &sessions)?;
     }
     let (live_other_sessions, stale_sessions) = classify_sessions(&sessions, &current_id);
-    let mutation_gate = if live_other_sessions.is_empty() {
-        "current_session_allowed"
-    } else {
-        "blocked_live_other_orchestrator"
-    };
-    let blocker_codes = if live_other_sessions.is_empty() {
-        Vec::<String>::new()
-    } else {
-        vec!["live_other_orchestrator_owner".to_string()]
-    };
+    let mutation_gate = "current_session_allowed";
+    let blocker_codes = Vec::<String>::new();
     let next_actions = if live_other_sessions.is_empty() {
         Vec::<String>::new()
     } else {
         vec![
-            "Inspect `vida orchestrator-session show --json`; reclaim only stale sessions with `vida orchestrator-session reclaim <session-id> --json`.".to_string(),
+            "Inspect `vida orchestrator-session show --json`; foreign live sessions are visibility until a same task, owned-path, exclusive conflict-domain, or global state-integrity conflict is recorded.".to_string(),
         ]
     };
     Ok(serde_json::json!({
@@ -536,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_orchestrator_session_identity_is_stable_for_state_dir() {
+    fn fallback_orchestrator_session_identity_uses_synthesized_session_token() {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved = saved_session_env();
         clear_session_env();
@@ -554,7 +618,19 @@ mod tests {
             .as_str()
             .expect("second session id should be present");
         assert_eq!(first_id, second_id);
-        assert!(first_id.starts_with("local-worktree-"));
+        assert!(first_id.starts_with("local-session-"));
+        assert_eq!(
+            second["current_session"]["identity_source"],
+            "synthesized_local_session_token"
+        );
+        assert!(
+            harness
+                .path()
+                .join("orchestrator-sessions")
+                .join("session-tokens")
+                .join(format!("{second_id}.json"))
+                .exists()
+        );
         assert!(second["live_other_sessions"].as_array().unwrap().is_empty());
         assert!(
             !second["blocker_codes"]
@@ -562,6 +638,45 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|code| code == "live_other_orchestrator_owner")
+        );
+
+        restore_session_env(saved);
+    }
+
+    #[test]
+    fn live_other_orchestrator_is_visibility_not_global_mutation_blocker() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved = saved_session_env();
+        clear_session_env();
+
+        let harness = TempStateHarness::new().expect("temp state should initialize");
+        unsafe {
+            std::env::set_var("VIDA_ORCHESTRATOR_SESSION_ID", "session-a");
+        }
+        let _first = build_runtime_owner_evidence(harness.path(), true)
+            .expect("first owner evidence should build");
+
+        unsafe {
+            std::env::set_var("VIDA_ORCHESTRATOR_SESSION_ID", "session-b");
+        }
+        let second = build_runtime_owner_evidence(harness.path(), true)
+            .expect("second owner evidence should build");
+
+        assert_eq!(second["current_session"]["session_id"], "session-b");
+        assert_eq!(second["mutation_gate"], "current_session_allowed");
+        assert!(second["blocker_codes"].as_array().unwrap().is_empty());
+        assert!(
+            second["live_other_sessions"]
+                .as_array()
+                .expect("live other sessions should be present")
+                .iter()
+                .any(|session| session["session_id"] == "session-a")
+        );
+        assert!(
+            second["next_actions"][0]
+                .as_str()
+                .expect("next action should be text")
+                .contains("foreign live sessions are visibility")
         );
 
         restore_session_env(saved);
