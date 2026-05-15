@@ -14,6 +14,7 @@ use crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload;
 
 const DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS: u64 = 10;
 const COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS: u64 = 30;
+const INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS: u64 = 45;
 const LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS: u64 = 30;
 
 fn orchestrator_init_bundle_timeout_payload(state_dir: &Path) -> serde_json::Value {
@@ -24,7 +25,7 @@ fn orchestrator_init_bundle_timeout_payload(state_dir: &Path) -> serde_json::Val
     ];
     let artifact_refs = serde_json::json!({
         "state_dir": state_dir.display().to_string(),
-        "timeout_seconds": DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS,
+        "timeout_seconds": INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS,
         "timed_out_surface": "build_taskflow_consume_bundle_payload",
     });
     serde_json::json!({
@@ -64,7 +65,7 @@ fn emit_orchestrator_init_bundle_timeout(state_dir: &Path, as_json: bool) -> Exi
         crate::print_json_pretty(&orchestrator_init_bundle_timeout_payload(state_dir));
     } else {
         eprintln!(
-            "Timed out building taskflow consume bundle for `vida orchestrator-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+            "Timed out building taskflow consume bundle for `vida orchestrator-init` after {INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS}s"
         );
     }
     ExitCode::from(1)
@@ -78,7 +79,7 @@ fn agent_init_bundle_timeout_payload(state_dir: &Path) -> serde_json::Value {
     ];
     let artifact_refs = serde_json::json!({
         "state_dir": state_dir.display().to_string(),
-        "timeout_seconds": DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS,
+        "timeout_seconds": INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS,
         "timed_out_surface": "build_taskflow_consume_bundle_payload",
     });
     serde_json::json!({
@@ -118,7 +119,7 @@ fn emit_agent_init_bundle_timeout(state_dir: &Path, as_json: bool) -> ExitCode {
         crate::print_json_pretty(&agent_init_bundle_timeout_payload(state_dir));
     } else {
         eprintln!(
-            "Timed out building taskflow consume bundle for `vida agent-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+            "Timed out building taskflow consume bundle for `vida agent-init` after {INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS}s"
         );
     }
     ExitCode::from(1)
@@ -2481,7 +2482,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                 }
             }
             match tokio::time::timeout(
-                std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+                std::time::Duration::from_secs(INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS),
                 build_taskflow_consume_bundle_payload(&store),
             )
             .await
@@ -2740,7 +2741,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
         Ok(Ok(store)) => {
             let store_state_root = store.root().to_path_buf();
             let bundle = match tokio::time::timeout(
-                std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+                std::time::Duration::from_secs(INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS),
                 build_taskflow_consume_bundle_payload(&store),
             )
             .await
@@ -4929,6 +4930,10 @@ mod agent_init_surface_tests {
             payload["shared_fields"]["artifact_refs"]["timed_out_surface"],
             "build_taskflow_consume_bundle_payload"
         );
+        assert_eq!(
+            payload["shared_fields"]["artifact_refs"]["timeout_seconds"],
+            INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS
+        );
     }
 
     #[test]
@@ -4954,6 +4959,10 @@ mod agent_init_surface_tests {
         assert_eq!(
             payload["shared_fields"]["artifact_refs"]["timed_out_surface"],
             "build_taskflow_consume_bundle_payload"
+        );
+        assert_eq!(
+            payload["shared_fields"]["artifact_refs"]["timeout_seconds"],
+            INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS
         );
     }
 
