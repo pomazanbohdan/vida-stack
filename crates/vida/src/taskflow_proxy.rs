@@ -3336,6 +3336,10 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         .as_ref()
         .and_then(|status| all_tasks.iter().find(|task| task.id == status.task_id))
         .is_some_and(|task| task.status == "closed");
+    let terminal_consume_continue_run_id =
+        crate::latest_terminal_consume_continue_snapshot_run_id(&proxy_state_root)
+            .ok()
+            .flatten();
     let waves = build_graph_summary_waves(&all_tasks, &ready_tasks, &blocked_tasks);
     let continuation_decision = build_taskflow_next_decision(
         ready_tasks.first(),
@@ -3347,11 +3351,19 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         latest_run_graph.as_ref(),
         latest_run_graph_task_closed,
         explicit_binding.as_ref(),
-        crate::latest_terminal_consume_continue_snapshot_run_id(&proxy_state_root)
-            .ok()
-            .flatten()
-            .as_deref(),
+        terminal_consume_continue_run_id.as_deref(),
     );
+    let continuation_binding_summary =
+        crate::continuation_binding_summary::build_continuation_binding_summary_with_idle_policy(
+            explicit_binding.as_ref(),
+            latest_run_graph.as_ref(),
+            recovery.as_ref(),
+            dispatch.as_ref(),
+            terminal_consume_continue_run_id.as_deref(),
+            false,
+            false,
+            latest_run_graph_task_closed,
+        );
 
     let primary_ready_task = if continuation_decision.primary_ready_task.is_some() {
         scheduling.ready.first().map(|candidate| {
@@ -3435,7 +3447,8 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         "primary_blocked_task": primary_blocked_task,
         "candidate_task_context": continuation_decision.candidate_task_context,
         "latest_run_graph": latest_run_graph,
-        "continuation_binding": explicit_binding,
+        "continuation_binding": continuation_binding_summary,
+        "explicit_continuation_binding": explicit_binding,
         "recovery": recovery,
         "dispatch": dispatch,
         "runtime_consumption": runtime_consumption,
