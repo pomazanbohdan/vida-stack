@@ -16,6 +16,8 @@ use clap::{CommandFactory, Parser};
 use serde::Serialize;
 use taskflow_cli::Cli as TaskflowCli;
 
+const TASKFLOW_SCHEDULER_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct GraphSummaryTaskRef {
     pub(crate) id: String,
@@ -3993,7 +3995,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
     };
     let store = match crate::state_store::StateStore::open_existing_read_only_with_timeout(
         state_dir.clone(),
-        std::time::Duration::from_secs(2),
+        TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
     )
     .await
     {
@@ -5298,7 +5300,7 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         GraphSummaryWaveBucket, build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
-        taskflow_task_subcommand_supported,
+        taskflow_task_subcommand_supported, TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
     };
     use crate::state_store::{
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
@@ -5365,6 +5367,14 @@ mod tests {
             active_critical_path,
             parallel_blockers: parallel_blockers.into_iter().map(str::to_string).collect(),
         }
+    }
+
+    #[test]
+    fn scheduler_dispatch_lock_timeout_matches_readiness_surfaces() {
+        assert_eq!(
+            TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
+            std::time::Duration::from_secs(15)
+        );
     }
 
     #[test]
