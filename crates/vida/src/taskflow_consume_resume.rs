@@ -987,6 +987,46 @@ fn missing_explicit_downstream_resume_evidence_error(run_id: &str, bound_target:
     )
 }
 
+async fn terminal_closure_complete_resume_candidate(
+    store: &super::StateStore,
+    run_id: &str,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<Option<ResumeInputs>, String> {
+    let status = store
+        .run_graph_status(run_id)
+        .await
+        .map_err(|error| format!("Failed to read terminal run-graph status for `{run_id}`: {error}"))?;
+    if status.status != "completed"
+        || status.lifecycle_stage != "closure_complete"
+        || status.resume_target != "none"
+        || status.active_node != "closure"
+    {
+        return Ok(None);
+    }
+    let receipt_points_to_closure = receipt.dispatch_target == "closure"
+        || receipt.downstream_dispatch_target.as_deref() == Some("closure")
+        || receipt.downstream_dispatch_active_target.as_deref() == Some("closure")
+        || receipt.downstream_dispatch_last_target.as_deref() == Some("closure");
+    let closure_execution_recorded = receipt.dispatch_status == "executed"
+        || receipt.downstream_dispatch_status.as_deref() == Some("executed")
+        || receipt.lane_status == super::LaneStatus::LaneCompleted.as_str();
+    if !receipt_points_to_closure || !closure_execution_recorded {
+        return Ok(None);
+    }
+    let packet_path = receipt
+        .dispatch_packet_path
+        .clone()
+        .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
+    let packet = read_dispatch_packet(&packet_path)?;
+    let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
+    Ok(Some(terminal_closure_complete_resume_from_root_receipt(
+        receipt,
+        packet_path,
+        packet,
+        role_selection,
+    )))
+}
+
 async fn completed_task_close_reconcile_resume_target(
     store: &super::StateStore,
     run_id: &str,
@@ -3857,6 +3897,20 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
                     "Completed run `{run_id}` is explicitly bound to downstream target `{bound_target}`, but persisted downstream result lineage still points to stale target `{}`. Resume must fail closed until a fresh `{bound_target}` downstream packet is recorded.",
                     resume.dispatch_receipt.dispatch_target
                 ));
+            }
+        }
+        if bound_target == "closure" {
+            if let Some(resume) =
+                terminal_closure_complete_resume_candidate(store, run_id, &receipt).await?
+            {
+                record_run_graph_replay_lineage_receipt_for_resume(
+                    store,
+                    &receipt,
+                    &resume,
+                    "terminal_closure_complete",
+                )
+                .await?;
+                return Ok(resume);
             }
         }
         return Err(missing_explicit_downstream_resume_evidence_error(
@@ -14992,6 +15046,153 @@ agent_system:
         assert!(
             !prefer_ready_downstream_packet_over_active_result(&receipt),
             "same-target blocked active downstream result must beat stale ready downstream packet"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_runtime_consumption_resume_inputs_for_terminal_closure_complete_ignores_missing_closure_packet(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-terminal-closure-complete-missing-packet-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let run_id = "run-terminal-closure-complete-missing-packet";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "closure", "delivery");
+        status.task_id = "task-terminal-closure".to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist terminal run graph status");
+
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let root_packet_path = packet_dir.join("run-terminal-closure-root.json");
+        fs::write(
+            &root_packet_path,
+            serde_json::json!({
+                "packet_template_kind": "delivery_task_packet",
+                "run_id": run_id,
+                "role_selection_full": {
+                    "ok": true,
+                    "activation_source": "test",
+                    "selection_mode": "runtime",
+                    "fallback_role": "orchestrator",
+                    "request": "continue development",
+                    "selected_role": "pm",
+                    "conversational_mode": "development",
+                    "single_task_only": true,
+                    "tracked_flow_entry": "closure",
+                    "allow_freeform_chat": false,
+                    "confidence": "high",
+                    "matched_terms": ["closure"],
+                    "compiled_bundle": null,
+                    "execution_plan": null,
+                    "reason": "test"
+                },
+                "run_graph_bootstrap": { "run_id": run_id, "task_id": "task-terminal-closure" },
+                "delivery_task_packet": {
+                    "packet_id": format!("{run_id}::closure::delivery"),
+                    "goal": "Complete terminal closure",
+                    "scope_in": ["dispatch_target:closure"],
+                    "read_only_paths": ["runtime-consumption"],
+                    "definition_of_done": ["closure_complete persisted"],
+                    "verification_command": format!(
+                        "vida taskflow consume continue --run-id {run_id} --json"
+                    ),
+                    "proof_target": "terminal closure state",
+                    "stop_rules": ["stop after closure_complete"],
+                    "blocking_question": "What remains blocked?"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write root closure packet");
+
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: run_id.to_string(),
+                dispatch_target: "closure".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: crate::LaneStatus::LaneCompleted.as_str().to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some(root_packet_path.display().to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("closure".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some("closure executed by task close reconcile".to_string()),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("executed".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("closure".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("prover".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-05-15T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist closure dispatch receipt");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: run_id.to_string(),
+                    task_id: "task-terminal-closure".to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "downstream_dispatch_target",
+                        "task_id": "task-terminal-closure",
+                        "run_id": run_id,
+                        "dispatch_target": "closure",
+                    }),
+                    binding_source: "task_close_reconcile".to_string(),
+                    why_this_unit: "task close reconciled terminal closure".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_terminal_closure".to_string(),
+                    request_text: Some("continue after terminal closure".to_string()),
+                    recorded_at: "2026-05-15T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist stale closure binding");
+
+        let resolved = resolve_runtime_consumption_resume_inputs(&store, Some(run_id), None, None)
+            .await
+            .expect("terminal closure_complete should be authoritative without closure packet");
+
+        assert_eq!(resolved.dispatch_receipt.dispatch_target, "closure");
+        assert_eq!(resolved.dispatch_receipt.dispatch_status, "executed");
+        assert_eq!(
+            resolved.dispatch_receipt.downstream_dispatch_note.as_deref(),
+            Some("terminal closure_complete run-graph state is the authoritative final resume lineage")
         );
 
         let _ = fs::remove_dir_all(&root);
