@@ -659,6 +659,128 @@ fn route_primary_external_backends(overlay: &serde_yaml::Value) -> Vec<String> {
     backends
 }
 
+fn external_cli_backend_ids(overlay: &serde_yaml::Value) -> std::collections::BTreeSet<String> {
+    crate::yaml_lookup(overlay, &["agent_system", "subagents"])
+        .and_then(serde_yaml::Value::as_mapping)
+        .map(|mapping| {
+            mapping
+                .iter()
+                .filter_map(|(key, entry)| {
+                    let backend_id = key.as_str()?.trim();
+                    if backend_id.is_empty() {
+                        return None;
+                    }
+                    let enabled = crate::yaml_bool(crate::yaml_lookup(entry, &["enabled"]), false);
+                    let backend_class = crate::yaml_lookup(entry, &["subagent_backend_class"])
+                        .and_then(serde_yaml::Value::as_str)
+                        .map(str::trim)
+                        .unwrap_or_default();
+                    (enabled && backend_class == "external_cli").then(|| backend_id.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn backend_is_internal(overlay: &serde_yaml::Value, backend_id: &str) -> bool {
+    let backend_id = backend_id.trim();
+    if backend_id == "internal_subagents" {
+        return true;
+    }
+    crate::yaml_lookup(
+        overlay,
+        &[
+            "agent_system",
+            "subagents",
+            backend_id,
+            "subagent_backend_class",
+        ],
+    )
+    .and_then(serde_yaml::Value::as_str)
+    .map(str::trim)
+        == Some("internal")
+}
+
+fn route_has_internal_fallback(overlay: &serde_yaml::Value, route: &serde_yaml::Value) -> bool {
+    [
+        "fallback_executor_backend",
+        "route_fallback_backend",
+        "fallback_backend",
+        "bridge_fallback_subagent",
+    ]
+    .into_iter()
+    .filter_map(|field| {
+        crate::yaml_lookup(route, &[field])
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    })
+    .any(|backend_id| backend_is_internal(overlay, backend_id))
+        || crate::yaml_string_list(crate::yaml_lookup(route, &["fanout_executor_backends"]))
+            .iter()
+            .any(|backend_id| backend_is_internal(overlay, backend_id))
+}
+
+fn route_primary_external_backends_without_internal_fallback(
+    overlay: &serde_yaml::Value,
+) -> Vec<String> {
+    fn collect_required_external_backends_from_mapping(
+        overlay: &serde_yaml::Value,
+        external_backend_ids: &std::collections::BTreeSet<String>,
+        routes: &serde_yaml::Mapping,
+        backends: &mut Vec<String>,
+    ) {
+        for route in routes.values() {
+            if let Some(executor_backend) = crate::yaml_lookup(route, &["executor_backend"])
+                .and_then(serde_yaml::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                if external_backend_ids.contains(executor_backend)
+                    && !route_has_internal_fallback(overlay, route)
+                {
+                    backends.push(executor_backend.to_string());
+                }
+                continue;
+            }
+            if let Some(nested_routes) = crate::yaml_lookup(route, &["development_flow"])
+                .and_then(serde_yaml::Value::as_mapping)
+            {
+                collect_required_external_backends_from_mapping(
+                    overlay,
+                    external_backend_ids,
+                    nested_routes,
+                    backends,
+                );
+            }
+        }
+    }
+
+    let external_backend_ids = external_cli_backend_ids(overlay);
+    let mut backends = Vec::new();
+    for path in [
+        ["agent_system", "routing", "development_flow"].as_slice(),
+        ["agent_system", "routing"].as_slice(),
+        ["routing", "development_flow"].as_slice(),
+        ["routing"].as_slice(),
+        ["development_flow"].as_slice(),
+    ] {
+        if let Some(routes) =
+            crate::yaml_lookup(overlay, path).and_then(serde_yaml::Value::as_mapping)
+        {
+            collect_required_external_backends_from_mapping(
+                overlay,
+                &external_backend_ids,
+                routes,
+                &mut backends,
+            );
+        }
+    }
+    backends.sort();
+    backends.dedup();
+    backends
+}
+
 pub(crate) fn is_sandbox_active_from_env() -> bool {
     let candidates = [
         std::env::var("CODEX_SANDBOX_MODE").ok(),
@@ -746,8 +868,12 @@ pub(crate) fn external_cli_preflight_summary(
                 })
             })
             .unwrap_or(false);
+    let route_primary_backends = route_primary_external_backends(overlay);
+    let route_primary_required_backends =
+        route_primary_external_backends_without_internal_fallback(overlay);
+    let route_primary_external_required = !route_primary_required_backends.is_empty();
     let hybrid_external_cli_relevant = !selected_is_external && has_enabled_external_subagents;
-    let requires_external_cli = selected_is_external || hybrid_external_cli_relevant;
+    let requires_external_cli = selected_is_external || route_primary_external_required;
     let effective_execution_posture = if selected_is_external {
         "external"
     } else if hybrid_external_cli_relevant {
@@ -790,7 +916,6 @@ pub(crate) fn external_cli_preflight_summary(
     };
     let (trace_baseline, incident_baseline) = baseline_for_blocker(tool_contract_blocker);
     let carrier_readiness = external_cli_readiness_summaries(overlay);
-    let route_primary_backends = route_primary_external_backends(overlay);
     let blocked_primary_backends = carrier_readiness["carriers"]
         .as_array()
         .into_iter()
@@ -803,6 +928,15 @@ pub(crate) fn external_cli_preflight_summary(
                 .any(|backend| backend == backend_id)
         })
         .map(str::to_string)
+        .collect::<Vec<_>>();
+    let blocked_required_primary_backends = blocked_primary_backends
+        .iter()
+        .filter(|backend_id| {
+            route_primary_required_backends
+                .iter()
+                .any(|required| required == *backend_id)
+        })
+        .cloned()
         .collect::<Vec<_>>();
     let primary_blocker_next_actions = if blocked_primary_backends.is_empty() {
         serde_json::json!([])
@@ -827,7 +961,9 @@ pub(crate) fn external_cli_preflight_summary(
             "incident_baseline": incident_baseline,
             "carrier_readiness": carrier_readiness,
             "route_primary_external_backends": route_primary_backends,
+            "route_primary_external_required_backends": route_primary_required_backends,
             "blocked_primary_backends": blocked_primary_backends,
+            "blocked_required_primary_backends": blocked_required_primary_backends,
             "sandbox_active": sandbox_active,
             "network_reachable": network_reachable,
             "blocker_code": tool_contract["blocker_code"].clone(),
@@ -855,7 +991,9 @@ pub(crate) fn external_cli_preflight_summary(
             "incident_baseline": incident_baseline,
             "carrier_readiness": carrier_readiness,
             "route_primary_external_backends": route_primary_backends,
+            "route_primary_external_required_backends": route_primary_required_backends,
             "blocked_primary_backends": blocked_primary_backends,
+            "blocked_required_primary_backends": blocked_required_primary_backends,
             "sandbox_active": true,
             "network_reachable": false,
             "blocker_code": crate::release1_contracts::blocker_code_str(blocker_code),
@@ -870,12 +1008,22 @@ pub(crate) fn external_cli_preflight_summary(
     let no_ready_carriers = requires_external_cli
         && carrier_readiness["total"].as_u64().unwrap_or(0) > 0
         && carrier_readiness["ready_like_count"].as_u64().unwrap_or(0) == 0;
-    if no_ready_carriers {
+    let blocked_required_primary =
+        requires_external_cli && !blocked_required_primary_backends.is_empty();
+    if no_ready_carriers || blocked_required_primary {
         let first_blocker = carrier_readiness["carriers"]
             .as_array()
             .and_then(|rows| {
                 rows.iter()
-                    .find(|row| row["blocked"].as_bool() == Some(true))
+                    .find(|row| {
+                        row["blocked"].as_bool() == Some(true)
+                            && (!blocked_required_primary
+                                || row["backend_id"].as_str().is_some_and(|backend_id| {
+                                    blocked_required_primary_backends
+                                        .iter()
+                                        .any(|blocked| blocked == backend_id)
+                                }))
+                    })
                     .and_then(|row| row.get("blocker_code"))
                     .cloned()
             })
@@ -897,7 +1045,9 @@ pub(crate) fn external_cli_preflight_summary(
             "incident_baseline": incident_baseline,
             "carrier_readiness": carrier_readiness,
             "route_primary_external_backends": route_primary_backends,
+            "route_primary_external_required_backends": route_primary_required_backends,
             "blocked_primary_backends": blocked_primary_backends,
+            "blocked_required_primary_backends": blocked_required_primary_backends,
             "sandbox_active": sandbox_active,
             "network_reachable": network_reachable,
             "blocker_code": first_blocker,
@@ -921,7 +1071,9 @@ pub(crate) fn external_cli_preflight_summary(
         "incident_baseline": incident_baseline,
         "carrier_readiness": carrier_readiness,
         "route_primary_external_backends": route_primary_backends,
+        "route_primary_external_required_backends": route_primary_required_backends,
         "blocked_primary_backends": blocked_primary_backends,
+        "blocked_required_primary_backends": blocked_required_primary_backends,
         "sandbox_active": sandbox_active,
         "network_reachable": network_reachable,
         "blocker_code": serde_json::Value::Null,
@@ -984,7 +1136,7 @@ agent_system:
         let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
         let summary = external_cli_preflight_summary(&overlay, "codex", entry);
         assert_eq!(summary["status"], "pass");
-        assert_eq!(summary["requires_external_cli"], true);
+        assert_eq!(summary["requires_external_cli"], false);
         assert_eq!(summary["hybrid_external_cli_relevant"], true);
         assert_eq!(summary["selected_execution_class"], "internal");
         assert_eq!(summary["effective_execution_posture"], "mixed");
@@ -1095,7 +1247,7 @@ agent_system:
     }
 
     #[test]
-    fn external_cli_preflight_blocks_when_detect_command_is_missing() {
+    fn external_cli_preflight_keeps_missing_external_candidate_diagnostic_for_internal_route() {
         let overlay: serde_yaml::Value = serde_yaml::from_str(
             r#"
 host_environment:
@@ -1118,13 +1270,51 @@ agent_system:
         let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
         let summary = external_cli_preflight_summary(&overlay, "codex", entry);
 
-        assert_eq!(summary["status"], "blocked");
-        assert_eq!(summary["blocker_code"], "tool_execution_failed");
+        assert_eq!(summary["status"], "pass");
+        assert_eq!(summary["requires_external_cli"], false);
+        assert_eq!(summary["blocker_code"], serde_json::Value::Null);
         assert_eq!(summary["carrier_readiness"]["ready_like_count"], 0);
         assert_eq!(
             summary["carrier_readiness"]["carriers"][0]["status"],
             "external_cli_command_not_found"
         );
+    }
+
+    #[test]
+    fn external_cli_preflight_blocks_missing_external_route_without_internal_fallback() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      runtime_root: .codex
+routing:
+  development_flow:
+    coach:
+      executor_backend: hermes_cli
+agent_system:
+  subagents:
+    hermes_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      detect_command: vida-definitely-missing-external-cli-command-for-test
+"#,
+        )
+        .expect("overlay yaml should parse");
+
+        let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
+        let summary = external_cli_preflight_summary(&overlay, "codex", entry);
+
+        assert_eq!(summary["status"], "blocked");
+        assert_eq!(summary["requires_external_cli"], true);
+        assert_eq!(
+            summary["route_primary_external_required_backends"][0],
+            "hermes_cli"
+        );
+        assert_eq!(summary["blocker_code"], "tool_execution_failed");
     }
 
     #[test]
@@ -1220,14 +1410,9 @@ agent_system:
 
         let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
         let summary = external_cli_preflight_summary(&overlay, "codex", entry);
-        assert_eq!(summary["status"], "blocked");
-        assert_eq!(summary["blocker_code"], "interactive_auth_required");
-        assert_eq!(summary["trace_baseline"]["status"], "blocked");
-        assert_eq!(summary["trace_baseline"]["outcome"], "blocked");
-        assert_eq!(
-            summary["incident_baseline"]["recovery_outcome"],
-            "pending_remediation"
-        );
+        assert_eq!(summary["status"], "pass");
+        assert_eq!(summary["requires_external_cli"], false);
+        assert_eq!(summary["blocker_code"], serde_json::Value::Null);
         assert_eq!(
             summary["carrier_readiness"]["carriers"][0]["status"],
             "interactive_auth_required"
@@ -1426,7 +1611,9 @@ agent_system:
 
         let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
         let summary = external_cli_preflight_summary(&overlay, "codex", entry);
-        assert_eq!(summary["status"], "blocked");
+        assert_eq!(summary["status"], "pass");
+        assert_eq!(summary["requires_external_cli"], false);
+        assert_eq!(summary["blocker_code"], serde_json::Value::Null);
         assert_eq!(
             summary["carrier_readiness"]["carriers"][0]["status"],
             "model_not_pinned"
@@ -1570,8 +1757,9 @@ agent_system:
 
         let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
         let summary = external_cli_preflight_summary(&overlay, "codex", entry);
-        assert_eq!(summary["status"], "blocked");
-        assert_eq!(summary["blocker_code"], "provider_auth_failed");
+        assert_eq!(summary["status"], "pass");
+        assert_eq!(summary["requires_external_cli"], false);
+        assert_eq!(summary["blocker_code"], serde_json::Value::Null);
         assert_eq!(
             summary["carrier_readiness"]["carriers"][0]["status"],
             "provider_auth_failed"
@@ -1624,8 +1812,9 @@ agent_system:
 
         let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
         let summary = external_cli_preflight_summary(&overlay, "codex", entry);
-        assert_eq!(summary["status"], "blocked");
-        assert_eq!(summary["blocker_code"], "tool_execution_failed");
+        assert_eq!(summary["status"], "pass");
+        assert_eq!(summary["requires_external_cli"], false);
+        assert_eq!(summary["blocker_code"], serde_json::Value::Null);
         assert_eq!(
             summary["carrier_readiness"]["carriers"][0]["status"],
             "provider_failure_detected"
@@ -1683,8 +1872,9 @@ agent_system:
 
         let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
         let summary = external_cli_preflight_summary(&overlay, "codex", entry);
-        assert_eq!(summary["status"], "blocked");
-        assert_eq!(summary["blocker_code"], "tool_execution_failed");
+        assert_eq!(summary["status"], "pass");
+        assert_eq!(summary["requires_external_cli"], false);
+        assert_eq!(summary["blocker_code"], serde_json::Value::Null);
         assert_eq!(
             summary["carrier_readiness"]["carriers"][0]["status"],
             "provider_failure_detected"
@@ -1742,13 +1932,79 @@ agent_system:
 
         let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
         let summary = external_cli_preflight_summary(&overlay, "codex", entry);
-        assert_eq!(summary["status"], "pass");
+        assert_eq!(summary["status"], "blocked");
+        assert_eq!(summary["requires_external_cli"], true);
         assert_eq!(summary["blocked_primary_backends"][0], "hermes_cli");
         assert_eq!(summary["route_primary_external_backends"][0], "hermes_cli");
-        assert!(summary["next_actions"][0]
-            .as_str()
-            .expect("next action should render")
-            .contains("route-primary external backends are currently blocked"));
+        assert_eq!(
+            summary["route_primary_external_required_backends"][0],
+            "hermes_cli"
+        );
+        assert_eq!(summary["blocker_code"], "tool_execution_failed");
+    }
+
+    #[test]
+    fn external_cli_preflight_keeps_route_primary_with_internal_fallback_diagnostic() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vida-external-cli-primary-fallback-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_root);
+        let log_dir = temp_root.join("logs");
+        fs::create_dir_all(&log_dir).expect("log dir should exist");
+        fs::write(
+            log_dir.join("quota.log"),
+            "ERROR 429 You exceeded your current quota",
+        )
+        .expect("quota log should write");
+
+        let overlay: serde_yaml::Value = serde_yaml::from_str(&format!(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      runtime_root: .codex
+routing:
+  development_flow:
+    coach:
+      executor_backend: hermes_cli
+      fallback_executor_backend: internal_subagents
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+    hermes_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      readiness:
+        provider_failure:
+          mode: recent_dir_contains_any
+          path: {}
+          substring: exceeded your current quota
+          max_age_seconds: 3600
+          status: provider_failure_detected
+          blocker_code: tool_execution_failed
+"#,
+            log_dir.display()
+        ))
+        .expect("overlay yaml should parse");
+
+        let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
+        let summary = external_cli_preflight_summary(&overlay, "codex", entry);
+        assert_eq!(summary["status"], "pass");
+        assert_eq!(summary["requires_external_cli"], false);
+        assert_eq!(summary["blocked_primary_backends"][0], "hermes_cli");
+        assert!(
+            summary["route_primary_external_required_backends"]
+                .as_array()
+                .expect("required backends should be an array")
+                .is_empty()
+        );
+        assert_eq!(summary["blocker_code"], serde_json::Value::Null);
     }
 
     #[test]
