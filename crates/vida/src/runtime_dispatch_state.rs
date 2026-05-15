@@ -4,12 +4,12 @@ use time::format_description::well_known::Rfc3339;
 
 use super::*;
 use crate::release1_contracts::canonical_lane_status_str;
+use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
 use crate::runtime_contract_vocab::{
     RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM,
     RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER, TASK_CLASS_ARCHITECTURE,
     TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION, TASK_CLASS_VERIFICATION,
 };
-use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
 #[cfg(test)]
 use crate::runtime_dispatch_downstream_packets::downstream_dispatch_packet_body;
 use crate::runtime_dispatch_downstream_packets::{
@@ -496,12 +496,10 @@ pub(crate) fn build_runtime_closure_admission(
         } else {
             "blocked".to_string()
         },
-        evidence_refs: vec![
-            role_selection
-                .tracked_flow_entry
-                .clone()
-                .unwrap_or_else(|| "untracked_flow".to_string()),
-        ],
+        evidence_refs: vec![role_selection
+            .tracked_flow_entry
+            .clone()
+            .unwrap_or_else(|| "untracked_flow".to_string())],
         blockers: handoff_blockers,
     });
     evidence_table.push(RuntimeConsumptionClosureAdmissionEvidence {
@@ -14057,6 +14055,41 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_packet_declares_activation_view_only_allows_executable_delivery_task_packet() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-executable-template-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        let packet_path = root.join("delivery-task-packet.json");
+        std::fs::write(
+            &packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "dispatch_target": "analysis",
+                "activation_semantics": {
+                    "activation_kind": "activation_view",
+                    "view_only": true,
+                    "executes_packet": false,
+                    "records_completion_receipt": false
+                },
+                "delivery_task_packet": {
+                    "goal": "Execute bounded analysis handoff"
+                }
+            }))
+            .expect("packet json should encode"),
+        )
+        .expect("packet should write");
+
+        assert!(!dispatch_packet_declares_activation_view_only(Some(
+            &packet_path.display().to_string()
+        )));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn execute_and_record_dispatch_receipt_blocks_internal_activation_view_only_packet_without_launch(
     ) {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
@@ -14217,8 +14250,7 @@ agent_system:
             .as_deref()
             .expect("dispatch result path should record");
         let parsed: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(dispatch_result_path)
-                .expect("dispatch result should read"),
+            &std::fs::read_to_string(dispatch_result_path).expect("dispatch result should read"),
         )
         .expect("dispatch result should parse");
         assert_eq!(parsed["execution_state"], "blocked");
@@ -17144,6 +17176,9 @@ fn dispatch_packet_declares_activation_view_only(dispatch_packet_path: Option<&s
     else {
         return false;
     };
+    if dispatch_packet_has_executable_template(&packet) {
+        return false;
+    }
     let activation_semantics = packet
         .get("activation_semantics")
         .or_else(|| packet.pointer("/activation_evidence/activation_semantics"))
@@ -17159,6 +17194,18 @@ fn dispatch_packet_declares_activation_view_only(dispatch_packet_path: Option<&s
         || packet["activation_evidence"]["evidence_state"].as_str() == Some("activation_view_only")
         || packet["activation_vs_execution_evidence"]["evidence_state"].as_str()
             == Some("activation_view_only")
+}
+
+fn dispatch_packet_has_executable_template(packet: &serde_json::Value) -> bool {
+    matches!(
+        packet["packet_template_kind"].as_str(),
+        Some(
+            "delivery_task_packet"
+                | "execution_block_packet"
+                | "coach_review_packet"
+                | "verifier_proof_packet"
+        )
+    )
 }
 
 pub(crate) fn dispatch_result_stale_after_seconds(result: &serde_json::Value) -> i64 {
@@ -17257,7 +17304,8 @@ fn apply_internal_activation_view_only_to_receipt(
         internal_host_activation_view_only_blocker_code(project_root, role_selection, receipt);
     let execution_result =
         runtime_dispatch_internal_activation_view_only_result(receipt, blocker_code);
-    let dispatch_result_path = write_runtime_dispatch_result(state_root, receipt, &execution_result)?;
+    let dispatch_result_path =
+        write_runtime_dispatch_result(state_root, receipt, &execution_result)?;
     receipt.dispatch_result_path = Some(dispatch_result_path);
     receipt.dispatch_status = "blocked".to_string();
     receipt.lane_status = derive_lane_status(
@@ -17621,6 +17669,17 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
     receipt.dispatch_status = "executing".to_string();
     receipt.lane_status = LaneStatus::LaneRunning.as_str().to_string();
     receipt.blocker_code = None;
+    if dispatch_handoff_uses_internal_host(project_root.as_ref(), role_selection, receipt)
+        && dispatch_packet_declares_activation_view_only(receipt.dispatch_packet_path.as_deref())
+    {
+        apply_internal_activation_view_only_to_receipt(
+            state_root,
+            project_root.as_ref(),
+            role_selection,
+            receipt,
+        )?;
+        return Ok(());
+    }
     let store = tokio::time::timeout(
         std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
         StateStore::open_existing(state_root.to_path_buf()),
@@ -17665,23 +17724,6 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
             format!("Failed to persist in-flight dispatch receipt before execution: {error}")
         })?;
     drop(store);
-    if dispatch_handoff_uses_internal_host(project_root.as_ref(), role_selection, receipt)
-        && dispatch_packet_declares_activation_view_only(receipt.dispatch_packet_path.as_deref())
-    {
-        apply_internal_activation_view_only_to_receipt(
-            state_root,
-            project_root.as_ref(),
-            role_selection,
-            receipt,
-        )?;
-        if let Some(warning) =
-            coordinate_dispatch_timeout_state_best_effort(state_root, run_graph_bootstrap, receipt)
-                .await
-        {
-            return Err(warning);
-        }
-        return Ok(());
-    }
     let execution_result = if dispatch_handoff_requires_outer_timeout(
         project_root.as_ref(),
         role_selection,
