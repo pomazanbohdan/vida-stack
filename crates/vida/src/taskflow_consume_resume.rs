@@ -12,7 +12,7 @@ const CONSUME_RESUME_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const CONSUME_RESUME_LOCK_MARKER_RECLAIM_TIMEOUT: Duration = Duration::from_secs(30);
 const CONSUME_RESUME_LOCK_MARKER_RECLAIM_RETRY_DELAY: Duration = Duration::from_millis(25);
 const CONSUME_RESUME_PREPARATION_GATE_TIMEOUT: Duration = Duration::from_secs(10);
-const CONSUME_RESUME_HANDOFF_TIMEOUT: Duration = Duration::from_secs(60);
+const CONSUME_RESUME_HANDOFF_TIMEOUT: Duration = Duration::from_secs(25);
 
 fn state_store_lock_marker_error(state_root: &Path, label: &str) -> Option<String> {
     state_store_lock_marker_error_with_timeout(
@@ -5155,7 +5155,7 @@ mod tests {
         should_refresh_resumed_downstream_preview, state_store_lock_marker_error,
         sync_run_graph_after_retry_artifact, validate_receipt_packet_pair, validate_run_graph_resume_state,
         validate_run_graph_resume_state_for_downstream_packet, PacketPathPlatform,
-        DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
+        CONSUME_RESUME_HANDOFF_TIMEOUT, DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
     use crate::state_store::{CreateTaskRequest, TaskExecutionSemantics};
@@ -5511,6 +5511,12 @@ mod tests {
             consume_continue_resume_error_blocker_code(&error),
             "runtime_dispatch_handoff_timeout"
         );
+    }
+
+    #[test]
+    fn consume_continue_handoff_timeout_stays_inside_operator_window() {
+        assert!(CONSUME_RESUME_HANDOFF_TIMEOUT <= Duration::from_secs(25));
+        assert!(CONSUME_RESUME_HANDOFF_TIMEOUT * 2 < Duration::from_secs(60));
     }
 
     #[test]
