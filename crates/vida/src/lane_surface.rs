@@ -1189,6 +1189,18 @@ fn validate_lane_packet_path(
     ))
 }
 
+fn lane_completion_packet_path(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Option<(String, bool)> {
+    if let Some(packet_path) = receipt.downstream_dispatch_packet_path.clone() {
+        return Some((packet_path, false));
+    }
+    receipt
+        .dispatch_packet_path
+        .clone()
+        .map(|packet_path| (packet_path, true))
+}
+
 fn write_lane_packet(path: &str, packet: &serde_json::Value) -> Result<(), String> {
     let encoded = serde_json::to_string_pretty(packet)
         .map_err(|error| format!("Failed to encode persisted lane packet `{path}`: {error}"))?;
@@ -1368,11 +1380,8 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     }
                 };
             let takeover_active = lane_takeover_state(&receipt, recovery.as_ref()).is_active();
-            let Some(packet_path) = receipt.downstream_dispatch_packet_path.clone().or_else(|| {
-                (takeover_active && exception_path_metadata.is_some())
-                    .then(|| receipt.dispatch_packet_path.clone())
-                    .flatten()
-            }) else {
+            let Some((packet_path, allow_dispatch_packet)) = lane_completion_packet_path(&receipt)
+            else {
                 eprintln!(
                     "Lane `{run_id}` has no persisted dispatch packet evidence for bounded completion."
                 );
@@ -1382,7 +1391,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 store.root(),
                 run_id,
                 &packet_path,
-                takeover_active,
+                allow_dispatch_packet || takeover_active,
             ) {
                 Ok(path) => path,
                 Err(error) => {
@@ -3070,6 +3079,23 @@ mod tests {
         assert_eq!(binding.active_bounded_unit["active_node"], "implementer");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lane_complete_uses_current_dispatch_packet_when_downstream_packet_absent() {
+        let mut receipt = sample_receipt("blocked");
+        receipt.downstream_dispatch_packet_path = None;
+        receipt.dispatch_packet_path =
+            Some("runtime-consumption/dispatch-packets/current-writer.json".to_string());
+
+        let (packet_path, allow_dispatch_packet) =
+            lane_completion_packet_path(&receipt).expect("current dispatch packet should resolve");
+
+        assert_eq!(
+            packet_path,
+            "runtime-consumption/dispatch-packets/current-writer.json"
+        );
+        assert!(allow_dispatch_packet);
     }
 
     #[tokio::test]
