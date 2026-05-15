@@ -13,7 +13,9 @@ use crate::runtime_contract_vocab::{
 #[cfg(test)]
 use crate::runtime_dispatch_downstream_packets::downstream_dispatch_packet_body;
 use crate::runtime_dispatch_downstream_packets::{
-    write_runtime_downstream_dispatch_packet, write_runtime_downstream_dispatch_packet_at,
+    write_runtime_downstream_dispatch_packet,
+    write_runtime_downstream_dispatch_packet_at_with_owned_paths,
+    write_runtime_downstream_dispatch_packet_with_owned_paths,
 };
 use crate::runtime_dispatch_execution::{
     agent_lane_dispatch_result, execute_external_agent_lane_dispatch,
@@ -4435,7 +4437,13 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                 .unwrap_or("implementer")
                 .to_string();
             let missing_owned_scope =
-                request_missing_owned_write_scope_for_dispatch_target(role_selection, &next_target);
+                request_missing_owned_write_scope_for_dispatch_target(
+                    store,
+                    role_selection,
+                    receipt,
+                    &next_target,
+                )
+                .await;
             (
                 Some(next_target),
                 Some("vida agent-init".to_string()),
@@ -4488,9 +4496,12 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     .filter(|value| !value.is_empty())
                     .unwrap_or("writer");
                 let missing_owned_scope = request_missing_owned_write_scope_for_dispatch_target(
+                    store,
                     role_selection,
+                    receipt,
                     writer_target,
-                );
+                )
+                .await;
                 return (
                     Some(writer_target.to_string()),
                     Some("vida agent-init".to_string()),
@@ -4609,9 +4620,12 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     || dispatch_receipt_allows_synthetic_lane_completion(receipt)
                     || tracked_implementer_task_closed(store, role_selection, receipt).await;
                 let missing_owned_scope = request_missing_owned_write_scope_for_dispatch_target(
+                    store,
                     role_selection,
+                    receipt,
                     next_target,
-                );
+                )
+                .await;
                 (
                     Some(next_target.clone()),
                     Some("vida agent-init".to_string()),
@@ -4699,13 +4713,16 @@ pub(crate) async fn refresh_downstream_dispatch_preview(
     receipt.downstream_dispatch_trace_path = None;
     receipt.downstream_dispatch_last_target = None;
     receipt.downstream_dispatch_executed_count = 0;
+    let implementation_owned_paths =
+        implementation_owned_paths_for_dispatch_context(store, role_selection, receipt).await;
     receipt.downstream_dispatch_packet_path =
         if receipt.downstream_dispatch_status.as_deref() == Some("packet_ready") {
-            write_runtime_downstream_dispatch_packet(
+            write_runtime_downstream_dispatch_packet_with_owned_paths(
                 store.root(),
                 role_selection,
                 run_graph_bootstrap,
                 receipt,
+                &implementation_owned_paths,
             )?
         } else {
             None
@@ -4849,6 +4866,58 @@ pub(crate) fn implementation_owned_paths_for_role_selection(
     }
 }
 
+fn append_unique_owned_paths(target: &mut Vec<String>, source: &[String]) {
+    for path in source {
+        let normalized = path.trim();
+        if normalized.is_empty() {
+            continue;
+        }
+        if !target.iter().any(|existing| existing == normalized) {
+            target.push(normalized.to_string());
+        }
+    }
+}
+
+async fn planner_metadata_owned_paths_from_task(
+    store: &StateStore,
+    task_id: &str,
+) -> Vec<String> {
+    let task_id = task_id.trim();
+    if task_id.is_empty() {
+        return Vec::new();
+    }
+    store
+        .show_task(task_id)
+        .await
+        .map(|task| {
+            task.planner_metadata
+                .owned_paths
+                .into_iter()
+                .map(|path| path.trim().to_string())
+                .filter(|path| !path.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn implementation_owned_paths_for_dispatch_context(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Vec<String> {
+    let mut owned_paths = implementation_owned_paths_for_role_selection(role_selection);
+    if !owned_paths.is_empty() {
+        return owned_paths;
+    }
+    if let Some(task_id) = tracked_implementer_dev_task_id(role_selection) {
+        let task_paths = planner_metadata_owned_paths_from_task(store, task_id).await;
+        append_unique_owned_paths(&mut owned_paths, &task_paths);
+    }
+    let task_paths = planner_metadata_owned_paths_from_task(store, &receipt.run_id).await;
+    append_unique_owned_paths(&mut owned_paths, &task_paths);
+    owned_paths
+}
+
 pub(crate) fn apply_owned_paths_if_missing(
     packet: &mut serde_json::Value,
     owned_paths: &[String],
@@ -4863,13 +4932,17 @@ pub(crate) fn apply_owned_paths_if_missing(
     true
 }
 
-fn request_missing_owned_write_scope_for_dispatch_target(
+async fn request_missing_owned_write_scope_for_dispatch_target(
+    store: &StateStore,
     role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
     dispatch_target: &str,
 ) -> bool {
     dispatch_target_requires_owned_write_scope(role_selection, dispatch_target)
         && !request_has_explicit_owned_scope(&role_selection.request)
-        && implementation_owned_paths_for_role_selection(role_selection).is_empty()
+        && implementation_owned_paths_for_dispatch_context(store, role_selection, receipt)
+            .await
+            .is_empty()
 }
 
 fn single_task_move_scope_owned_paths(packet: &serde_json::Value) -> Option<Vec<String>> {
@@ -12554,6 +12627,103 @@ mod tests {
     }
 
     #[test]
+    fn refresh_downstream_dispatch_preview_uses_task_owned_paths_for_writer_handoff() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let owned_paths = vec!["crates/vida/src/runtime_dispatch_state.rs".to_string()];
+            let labels = vec!["runtime-recovery".to_string()];
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: "run-analysis-task-metadata-preview",
+                    title: "Runtime recovery",
+                    display_id: None,
+                    description: "runtime recovery",
+                    issue_type: "task",
+                    status: "open",
+                    priority: 1,
+                    parent_id: None,
+                    labels: &labels,
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata {
+                        owned_paths: owned_paths.clone(),
+                        ..Default::default()
+                    },
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("task with planner metadata should be created");
+            let mut role_selection = bridge_test_role_selection("unused-dev-task");
+            role_selection.request = "continue development".to_string();
+            role_selection.execution_plan["tracked_flow_bootstrap"] = serde_json::Value::Null;
+            role_selection.execution_plan["development_flow"]["implementation"] = json!({
+                "analysis_route_task_class": "analysis",
+                "writer_route_task_class": "writer"
+            });
+            let run_graph_bootstrap = json!({ "run_id": "run-analysis-task-metadata-preview" });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-analysis-task-metadata-preview".to_string(),
+                dispatch_target: "analysis".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/analysis-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("analysis".to_string()),
+                downstream_dispatch_last_target: Some("analysis".to_string()),
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("verifier".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-23T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            )
+            .await
+            .expect("preview should use task-owned paths");
+
+            assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("writer"));
+            assert!(receipt.downstream_dispatch_ready);
+            assert!(receipt.downstream_dispatch_blockers.is_empty());
+            let packet_path = receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .expect("downstream packet should be written");
+            let packet = read_json(harness.path(), packet_path);
+            assert_eq!(
+                packet["delivery_task_packet"]["owned_paths"],
+                serde_json::json!(owned_paths)
+            );
+        });
+    }
+
+    #[test]
     fn refresh_downstream_dispatch_preview_does_not_mark_implementer_packet_ready_without_owned_scope(
     ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -18046,12 +18216,19 @@ pub(crate) async fn execute_downstream_dispatch_chain(
             next_blockers,
             preview_result_path,
         );
+        let implementation_owned_paths = implementation_owned_paths_for_dispatch_context(
+            &store,
+            role_selection,
+            &downstream_receipt,
+        )
+        .await;
         downstream_receipt.downstream_dispatch_packet_path =
-            write_runtime_downstream_dispatch_packet(
+            write_runtime_downstream_dispatch_packet_with_owned_paths(
                 state_root,
                 role_selection,
                 run_graph_bootstrap,
                 &downstream_receipt,
+                &implementation_owned_paths,
             )
             .map_err(|error| {
                 format!("Failed to write chained downstream runtime dispatch packet: {error}")
@@ -18060,11 +18237,12 @@ pub(crate) async fn execute_downstream_dispatch_chain(
             .downstream_dispatch_packet_path
             .as_deref()
         {
-            write_runtime_downstream_dispatch_packet_at(
+            write_runtime_downstream_dispatch_packet_at_with_owned_paths(
                 Path::new(packet_path),
                 role_selection,
                 run_graph_bootstrap,
                 &downstream_receipt,
+                &implementation_owned_paths,
             )
             .map_err(|error| {
                 format!("Failed to refresh chained downstream runtime dispatch packet: {error}")
