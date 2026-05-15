@@ -77,6 +77,11 @@ async fn open_task_store(
 pub(crate) async fn open_read_only_task_store(
     state_dir: std::path::PathBuf,
 ) -> Result<StateStore, state_store::StateStoreError> {
+    match StateStore::reclaim_stale_authoritative_datastore_lock_marker(&state_dir) {
+        Ok(_) => {}
+        Err(error) if StateStore::error_is_lock_contention(&error) => {}
+        Err(error) => return Err(error),
+    }
     StateStore::open_existing_read_only(state_dir).await
 }
 
@@ -313,7 +318,9 @@ fn task_close_feedback_blocker_summary(
         "awaiting_approval" => {
             "Satisfy the approval requirement described in the close reason, then rerun `vida task close ... --json`."
         }
-        _ => "Resolve the deferred canonical close condition, then rerun `vida task close ... --json`.",
+        _ => {
+            "Resolve the deferred canonical close condition, then rerun `vida task close ... --json`."
+        }
     };
     Some((
         vec![
@@ -2408,8 +2415,7 @@ fn classify_task_close_git_stage_failure(
         };
         return TaskCloseGitStageFailure {
             blocker_code: "git_stage_read_only_or_sandbox_blocked",
-            next_action:
-                "Make the worktree writable or rerun outside the blocking sandbox, then retry the task-close command.",
+            next_action: "Make the worktree writable or rerun outside the blocking sandbox, then retry the task-close command.",
             detail,
         };
     }
@@ -2421,8 +2427,7 @@ fn classify_task_close_git_stage_failure(
         };
         return TaskCloseGitStageFailure {
             blocker_code: "git_stage_index_lock_blocked",
-            next_action:
-                "Clear the `.git/index.lock` blocker or stop the concurrent git writer, then retry the task-close command.",
+            next_action: "Clear the `.git/index.lock` blocker or stop the concurrent git writer, then retry the task-close command.",
             detail,
         };
     }
@@ -2436,16 +2441,14 @@ fn classify_task_close_git_stage_failure(
         {
             return TaskCloseGitStageFailure {
                 blocker_code: "git_stage_read_only_or_sandbox_blocked",
-                next_action:
-                    "Make the worktree writable or rerun outside the blocking sandbox, then retry the task-close command.",
+                next_action: "Make the worktree writable or rerun outside the blocking sandbox, then retry the task-close command.",
                 detail,
             };
         }
         if lower.contains("index.lock") {
             return TaskCloseGitStageFailure {
                 blocker_code: "git_stage_index_lock_blocked",
-                next_action:
-                    "Clear the `.git/index.lock` blocker or stop the concurrent git writer, then retry the task-close command.",
+                next_action: "Clear the `.git/index.lock` blocker or stop the concurrent git writer, then retry the task-close command.",
                 detail,
             };
         }
@@ -4197,7 +4200,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
                         Ok(rows) => rows,
                         Err(snapshot_error) => {
-                            eprintln!("Failed to read reverse dependencies from snapshot: {snapshot_error}");
+                            eprintln!(
+                                "Failed to read reverse dependencies from snapshot: {snapshot_error}"
+                            );
                             return ExitCode::from(1);
                         }
                     };
@@ -4498,27 +4503,27 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        blocked_task_next_lawful_receipt, build_adaptive_replan_finding_preview,
-        build_spawn_blocker_preview, build_split_mutation_preview,
-        canonical_json_string_array_entries, classify_task_close_git_stage_failure,
-        ensure_existing_task_mismatch_reason, load_adaptive_preview_finding_json,
-        normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
-        parse_label_values, parse_optional_label_value, parse_split_child_specs,
-        persist_task_handoff_accept_receipt, runtime_binding_open_delegated_cycle_next_action,
-        runtime_recovery_blocks_task_next_lawful, select_task_next_lawful_binding,
-        task_close_automation_receipt, task_close_commit_allowlist_next_actions,
-        task_close_commit_file_strings, task_close_feedback_blocker_summary,
-        task_close_host_agent_telemetry, task_close_uses_isolated_state_dir, task_create_title,
-        task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
-        task_handoff_receipt_root, task_json_success_status, task_next_lawful_receipt,
-        task_owned_status_receipt, task_parent_id, task_update_planner_metadata_arg,
-        validate_task_handoff_accept_receipt, ADAPTIVE_REPLAN_FINDING_KINDS,
+        ADAPTIVE_REPLAN_FINDING_KINDS, blocked_task_next_lawful_receipt,
+        build_adaptive_replan_finding_preview, build_spawn_blocker_preview,
+        build_split_mutation_preview, canonical_json_string_array_entries,
+        classify_task_close_git_stage_failure, ensure_existing_task_mismatch_reason,
+        load_adaptive_preview_finding_json, normalize_task_json_contract_arrays,
+        parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
+        parse_split_child_specs, persist_task_handoff_accept_receipt,
+        runtime_binding_open_delegated_cycle_next_action, runtime_recovery_blocks_task_next_lawful,
+        select_task_next_lawful_binding, task_close_automation_receipt,
+        task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
+        task_close_feedback_blocker_summary, task_close_host_agent_telemetry,
+        task_close_uses_isolated_state_dir, task_create_title, task_handoff_accept_receipt,
+        task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
+        task_json_success_status, task_next_lawful_receipt, task_owned_status_receipt,
+        task_parent_id, task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
+    use crate::test_cli_support::EnvVarGuard;
     use crate::test_cli_support::cli;
     use crate::test_cli_support::guard_current_dir;
-    use crate::test_cli_support::EnvVarGuard;
     use std::fs;
     use std::process::ExitCode;
 
@@ -4917,10 +4922,12 @@ mod tests {
                 "cargo check -p vida --bin vida"
             ]
         );
-        assert!(receipt
-            .receipt_path
-            .replace('\\', "/")
-            .ends_with(".vida/receipts/task-handoffs/task-handoff-123.json"));
+        assert!(
+            receipt
+                .receipt_path
+                .replace('\\', "/")
+                .ends_with(".vida/receipts/task-handoffs/task-handoff-123.json")
+        );
         assert_eq!(receipt.receipt_root, receipt_root.display().to_string());
         assert_eq!(receipt.isolation, "project_state_dir");
         validate_task_handoff_accept_receipt(&receipt)
@@ -5087,17 +5094,19 @@ mod tests {
             receipt["receipt_root"],
             isolated_state_dir.join("receipts").display().to_string()
         );
-        assert!(receipt["receipt_path"]
-            .as_str()
-            .expect("receipt path should be string")
-            .replace('\\', "/")
-            .starts_with(
-                isolated_handoff_receipts
-                    .to_str()
-                    .expect("receipt dir should be utf8")
-                    .replace('\\', "/")
-                    .as_str()
-            ));
+        assert!(
+            receipt["receipt_path"]
+                .as_str()
+                .expect("receipt path should be string")
+                .replace('\\', "/")
+                .starts_with(
+                    isolated_handoff_receipts
+                        .to_str()
+                        .expect("receipt dir should be utf8")
+                        .replace('\\', "/")
+                        .as_str()
+                )
+        );
     }
 
     #[test]
@@ -5121,10 +5130,12 @@ mod tests {
         );
         assert_eq!(receipt.binding_source, None);
         assert!(receipt.blocker_codes.is_empty());
-        assert!(receipt
-            .source_surfaces
-            .iter()
-            .any(|surface| surface == "vida task next-lawful"));
+        assert!(
+            receipt
+                .source_surfaces
+                .iter()
+                .any(|surface| surface == "vida task next-lawful")
+        );
     }
 
     #[test]
@@ -5303,10 +5314,12 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert_eq!(receipt.blocker_codes, vec!["continuation_source_drift"]);
-        assert!(receipt
-            .next_actions
-            .iter()
-            .any(|action| action.contains("consume_continue_after_downstream_chain")));
+        assert!(
+            receipt
+                .next_actions
+                .iter()
+                .any(|action| action.contains("consume_continue_after_downstream_chain"))
+        );
     }
 
     #[test]
@@ -5545,9 +5558,11 @@ mod tests {
             isolated_state_dir.display().to_string()
         );
         assert_eq!(telemetry["feedback_store"], "not_recorded");
-        assert!(!project_root
-            .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
-            .exists());
+        assert!(
+            !project_root
+                .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
+                .exists()
+        );
         assert!(!project_root.join(crate::WORKER_STRATEGY_STATE).exists());
     }
 
@@ -5754,10 +5769,12 @@ mod tests {
             vec!["invalid_adaptive_replan_finding_input".to_string()]
         );
         assert_eq!(error.field.as_deref(), Some("finding_kind"));
-        assert!(error
-            .supported_finding_kinds
-            .iter()
-            .any(|kind| kind == "verification_finding"));
+        assert!(
+            error
+                .supported_finding_kinds
+                .iter()
+                .any(|kind| kind == "verification_finding")
+        );
         assert_eq!(error.operator_truth["parsing_and_validation_only"], true);
     }
 

@@ -9,8 +9,8 @@ use crate::taskflow_run_graph::{
 use crate::taskflow_spec_bootstrap::run_taskflow_bootstrap_spec;
 use crate::taskflow_task_bridge::proxy_state_dir;
 use crate::{
-    print_surface_header, print_surface_line, surface_render, taskflow_consume,
-    taskflow_protocol_binding, Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs,
+    Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs, print_surface_header,
+    print_surface_line, surface_render, taskflow_consume, taskflow_protocol_binding,
 };
 use clap::{CommandFactory, Parser};
 use serde::Serialize;
@@ -177,6 +177,14 @@ pub(crate) struct TaskflowSchedulerDispatchPlan {
     pub(crate) dispatch_receipt: TaskflowSchedulerDispatchReceiptPreview,
     pub(crate) rejected_candidates: Vec<TaskflowSchedulerRejectedCandidate>,
     pub(crate) scheduling: crate::state_store::TaskSchedulingProjection,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct TaskflowContinuationDispatchGate {
+    pub(crate) admissible: bool,
+    pub(crate) admissibility_gate: String,
+    pub(crate) blocker_codes: Vec<String>,
+    pub(crate) next_actions: Vec<String>,
 }
 
 fn graph_summary_task_ref(task: &crate::state_store::TaskRecord) -> GraphSummaryTaskRef {
@@ -598,6 +606,108 @@ fn apply_scheduler_execute_runtime_gate_blockers(
             "Resolve scheduler dispatch blockers and retry after `vida taskflow recovery latest --json` reports a clear gate.".to_string(),
         );
     }
+}
+
+fn push_unique_strings(target: &mut Vec<String>, values: impl IntoIterator<Item = String>) {
+    for value in values {
+        if !target.iter().any(|existing| existing == &value) {
+            target.push(value);
+        }
+    }
+}
+
+fn continuation_dispatch_gate_from_decision(
+    decision: &TaskflowNextDecision,
+    continuation_binding_summary: &serde_json::Value,
+) -> Option<TaskflowContinuationDispatchGate> {
+    let continuation_binding_ambiguous =
+        continuation_binding_summary["status"].as_str() == Some("ambiguous");
+    if decision.candidate_task_context.admissible_now && !continuation_binding_ambiguous {
+        return None;
+    }
+
+    let mut blocker_codes = decision.blocker_codes.clone();
+    blocker_codes.extend(graph_summary_runtime_gate_blocker_codes(decision));
+    if continuation_binding_ambiguous {
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::ContinuationBindingAmbiguous,
+        ) {
+            blocker_codes.push(code);
+        }
+    }
+    blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    let mut next_actions = decision.next_actions.clone();
+    if let Some(actions) = continuation_binding_summary["next_actions"].as_array() {
+        push_unique_strings(
+            &mut next_actions,
+            actions
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string),
+        );
+    }
+    if next_actions.is_empty() {
+        next_actions.push(
+            crate::status_surface_signals::continuation_binding_ambiguous_next_action().to_string(),
+        );
+    }
+
+    Some(TaskflowContinuationDispatchGate {
+        admissible: false,
+        admissibility_gate: decision.candidate_task_context.admissibility_gate.clone(),
+        blocker_codes,
+        next_actions,
+    })
+}
+
+fn apply_scheduler_continuation_dispatch_gate(
+    plan: &mut TaskflowSchedulerDispatchPlan,
+    gate: &TaskflowContinuationDispatchGate,
+) {
+    if gate.admissible {
+        return;
+    }
+
+    plan.status = "blocked".to_string();
+    plan.selection_source = gate.admissibility_gate.clone();
+    plan.selected_current_task_id = None;
+    plan.selected_primary_task = None;
+    plan.selected_parallel_tasks.clear();
+    plan.selected_task_ids.clear();
+    plan.reservations.clear();
+    plan.execute_supported = false;
+    plan.execution_attempted = false;
+    plan.execution_status = gate.admissibility_gate.clone();
+    plan.activation_attempt_supported = false;
+    plan.activation_attempted = false;
+    plan.activation_status = gate.admissibility_gate.clone();
+    plan.activation_blocker_codes = gate.blocker_codes.clone();
+    plan.packet_backed_execution_supported = false;
+    plan.packet_backed_execution_status = gate.admissibility_gate.clone();
+    plan.packet_backed_execution_gate = None;
+    push_unique_strings(&mut plan.blocker_codes, gate.blocker_codes.clone());
+    plan.next_actions.clear();
+    push_unique_strings(&mut plan.next_actions, gate.next_actions.clone());
+
+    plan.dispatch_receipt.dispatch_status = "blocked".to_string();
+    plan.dispatch_receipt.execute_supported = false;
+    plan.dispatch_receipt.execution_attempted = false;
+    plan.dispatch_receipt.execute_status = gate.admissibility_gate.clone();
+    plan.dispatch_receipt.activation_attempt_supported = false;
+    plan.dispatch_receipt.activation_attempted = false;
+    plan.dispatch_receipt.activation_status = gate.admissibility_gate.clone();
+    plan.dispatch_receipt.activation_blocker_codes = gate.blocker_codes.clone();
+    plan.dispatch_receipt.packet_backed_execution_supported = false;
+    plan.dispatch_receipt.packet_backed_execution_status = gate.admissibility_gate.clone();
+    plan.dispatch_receipt.packet_backed_execution_gate = None;
+    plan.dispatch_receipt.preview_only_reason = Some(gate.admissibility_gate.clone());
+    plan.dispatch_receipt.execution_blocker_codes = gate.blocker_codes.clone();
+    plan.dispatch_receipt.selected_task_ids.clear();
+    plan.dispatch_receipt.reservation_ids.clear();
+    push_unique_strings(
+        &mut plan.dispatch_receipt.blocker_codes,
+        gate.blocker_codes.clone(),
+    );
 }
 
 fn scheduler_dispatch_receipt_id() -> String {
@@ -1747,7 +1857,7 @@ pub(crate) async fn build_taskflow_scheduler_dispatch_plan_from_store(
         initial_projection
     };
 
-    Ok(build_taskflow_scheduler_dispatch_plan(
+    let mut plan = build_taskflow_scheduler_dispatch_plan(
         scheduling,
         max_parallel_agents,
         requested_parallel_limit,
@@ -1757,6 +1867,192 @@ pub(crate) async fn build_taskflow_scheduler_dispatch_plan_from_store(
         state_dir,
         dry_run,
         execute_requested,
+    );
+
+    if current_task_id.is_none() {
+        if let Some(gate) =
+            build_taskflow_continuation_dispatch_gate_from_store(store, state_dir, scope_task_id)
+                .await?
+        {
+            apply_scheduler_continuation_dispatch_gate(&mut plan, &gate);
+        }
+    }
+
+    Ok(plan)
+}
+
+fn build_taskflow_scheduler_dispatch_plan_from_snapshot_lock_gate(
+    state_dir: &Path,
+    scope_task_id: Option<&str>,
+    current_task_id: Option<&str>,
+    requested_parallel_limit: Option<u64>,
+    dry_run: bool,
+    execute_requested: bool,
+) -> Result<TaskflowSchedulerDispatchPlan, String> {
+    let snapshot_path =
+        crate::state_store::StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
+    let rows = crate::state_store::StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path)
+        .map_err(|error| {
+            format!(
+                "Failed to read scheduler snapshot `{}` after datastore lock contention: {error}",
+                snapshot_path.display()
+            )
+        })?;
+    let scheduling = crate::state_store::StateStore::scheduling_projection_scoped_from_rows(
+        &rows,
+        scope_task_id,
+        current_task_id,
+        &BTreeSet::new(),
+    )
+    .map_err(|error| format!("Failed to compute scheduler snapshot projection: {error}"))?;
+    let max_parallel_agents = requested_parallel_limit.unwrap_or(1).max(1);
+    let mut plan = build_taskflow_scheduler_dispatch_plan(
+        scheduling,
+        max_parallel_agents,
+        requested_parallel_limit,
+        scope_task_id,
+        current_task_id,
+        None,
+        state_dir,
+        dry_run,
+        execute_requested,
+    );
+    if current_task_id.is_none() {
+        let blocker = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::ContinuationBindingAmbiguous,
+        )
+        .unwrap_or_else(|| "continuation_binding_ambiguous".to_string())
+        .to_string();
+        plan.status = "blocked".to_string();
+        plan.selection_source =
+            "state_store_lock_contention_without_explicit_current_task".to_string();
+        plan.selected_current_task_id = None;
+        plan.selected_primary_task = None;
+        plan.selected_parallel_tasks.clear();
+        plan.selected_task_ids.clear();
+        plan.reservations.clear();
+        plan.execute_supported = false;
+        plan.execution_attempted = false;
+        plan.execution_status = blocker.clone();
+        plan.activation_attempt_supported = false;
+        plan.activation_attempted = false;
+        plan.activation_status = blocker.clone();
+        plan.dispatch_receipt.dispatch_status = "blocked".to_string();
+        plan.dispatch_receipt.execute_supported = false;
+        plan.dispatch_receipt.execution_attempted = false;
+        plan.dispatch_receipt.execute_status = blocker.clone();
+        plan.dispatch_receipt.activation_attempt_supported = false;
+        plan.dispatch_receipt.activation_attempted = false;
+        plan.dispatch_receipt.activation_status = blocker.clone();
+        plan.dispatch_receipt.preview_only_reason = Some(blocker.clone());
+        plan.dispatch_receipt.selected_task_ids.clear();
+        plan.dispatch_receipt.reservation_ids.clear();
+        push_unique_strings(&mut plan.blocker_codes, [blocker.clone()]);
+        push_unique_strings(&mut plan.dispatch_receipt.blocker_codes, [blocker]);
+        plan.next_actions.clear();
+        plan.next_actions.push(
+            crate::status_surface_signals::continuation_binding_ambiguous_next_action().to_string(),
+        );
+        return Ok(plan);
+    }
+    let blocker = "execution_preparation_gate_blocked".to_string();
+    plan.status = "blocked".to_string();
+    plan.execution_status = blocker.clone();
+    plan.activation_status = blocker.clone();
+    plan.execute_supported = plan.selected_primary_task.is_some() && execute_requested;
+    plan.execution_attempted = false;
+    plan.activation_attempt_supported = plan.execute_supported;
+    plan.activation_attempted = false;
+    plan.dispatch_receipt.dispatch_status = "blocked".to_string();
+    plan.dispatch_receipt.execute_status = blocker.clone();
+    plan.dispatch_receipt.activation_status = blocker.clone();
+    plan.dispatch_receipt.execute_supported = plan.execute_supported;
+    plan.dispatch_receipt.execution_attempted = false;
+    plan.dispatch_receipt.activation_attempt_supported = plan.execute_supported;
+    plan.dispatch_receipt.activation_attempted = false;
+    plan.dispatch_receipt.preview_only_reason = Some(blocker.clone());
+    push_unique_strings(&mut plan.blocker_codes, [blocker.clone()]);
+    push_unique_strings(&mut plan.dispatch_receipt.blocker_codes, [blocker.clone()]);
+    push_unique_strings(
+        &mut plan.dispatch_receipt.execution_blocker_codes,
+        [blocker],
+    );
+    plan.next_actions.push(
+        "Authoritative state store is locked; scheduler dispatch rendered a snapshot-backed blocked projection instead of returning an empty operator response."
+            .to_string(),
+    );
+    Ok(plan)
+}
+
+pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
+    store: &crate::state_store::StateStore,
+    state_dir: &Path,
+    scope_task_id: Option<&str>,
+) -> Result<Option<TaskflowContinuationDispatchGate>, String> {
+    let ready_tasks = store
+        .ready_tasks_scoped(scope_task_id)
+        .await
+        .map_err(|error| format!("Failed to compute continuation dispatch ready tasks: {error}"))?;
+    let all_tasks = store
+        .list_tasks(None, true)
+        .await
+        .map_err(|error| format!("Failed to list tasks for continuation dispatch gate: {error}"))?;
+    let latest_run_graph = store
+        .latest_run_graph_status()
+        .await
+        .map_err(|error| format!("Failed to read latest run-graph status: {error}"))?;
+    if latest_run_graph.is_none() {
+        return Ok(None);
+    }
+    let recovery = store
+        .latest_run_graph_recovery_summary()
+        .await
+        .map_err(|error| format!("Failed to read latest recovery summary: {error}"))?;
+    let dispatch = store
+        .latest_run_graph_dispatch_receipt_summary()
+        .await
+        .map_err(|error| format!("Failed to read latest dispatch receipt summary: {error}"))?;
+    let explicit_binding = store
+        .latest_explicit_run_graph_continuation_binding()
+        .await
+        .map_err(|error| format!("Failed to read latest explicit continuation binding: {error}"))?;
+    let runtime_consumption = crate::runtime_consumption_summary(state_dir)
+        .map_err(|error| format!("Failed to read runtime consumption state: {error}"))?;
+    let terminal_consume_continue_run_id =
+        crate::latest_terminal_consume_continue_snapshot_run_id(state_dir).map_err(|error| {
+            format!("Failed to read latest terminal consume-continue snapshot: {error}")
+        })?;
+    let latest_run_graph_task_closed = latest_run_graph
+        .as_ref()
+        .and_then(|status| all_tasks.iter().find(|task| task.id == status.task_id))
+        .is_some_and(|task| task.status == "closed");
+    let decision = build_taskflow_next_decision(
+        ready_tasks.first(),
+        recovery_holds_active_bound_run(recovery.as_ref()),
+        recovery.is_some(),
+        runtime_consumption.latest_kind.as_deref(),
+        scope_task_id,
+        dispatch.as_ref(),
+        latest_run_graph.as_ref(),
+        latest_run_graph_task_closed,
+        explicit_binding.as_ref(),
+        terminal_consume_continue_run_id.as_deref(),
+    );
+    let continuation_binding_summary =
+        crate::continuation_binding_summary::build_continuation_binding_summary_with_idle_policy(
+            explicit_binding.as_ref(),
+            latest_run_graph.as_ref(),
+            recovery.as_ref(),
+            dispatch.as_ref(),
+            terminal_consume_continue_run_id.as_deref(),
+            false,
+            false,
+            latest_run_graph_task_closed,
+        );
+
+    Ok(continuation_dispatch_gate_from_decision(
+        &decision,
+        &continuation_binding_summary,
     ))
 }
 
@@ -3598,8 +3894,43 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let store = match crate::task_surface::open_read_only_task_store(state_dir.clone()).await {
+    let store = match crate::state_store::StateStore::open_existing_read_only_with_timeout(
+        state_dir.clone(),
+        std::time::Duration::from_secs(2),
+    )
+    .await
+    {
         Ok(store) => store,
+        Err(error) if crate::state_store::StateStore::error_is_lock_contention(&error) => {
+            let plan = match build_taskflow_scheduler_dispatch_plan_from_snapshot_lock_gate(
+                &state_dir,
+                scope_task_id.as_deref(),
+                current_task_id.as_deref(),
+                requested_parallel_limit,
+                dry_run || !execute_requested,
+                execute_requested,
+            ) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
+            };
+            if as_json {
+                crate::print_json_pretty(
+                    &serde_json::to_value(&plan).expect("scheduler dispatch plan should serialize"),
+                );
+            } else {
+                print_surface_header(RenderMode::Plain, "vida taskflow scheduler dispatch");
+                print_surface_line(RenderMode::Plain, "status", &plan.status);
+                print_surface_line(
+                    RenderMode::Plain,
+                    "blocker_codes",
+                    &plan.blocker_codes.join(", "),
+                );
+            }
+            return ExitCode::from(1);
+        }
         Err(error) => {
             eprintln!("Failed to open authoritative state store: {error}");
             return ExitCode::from(1);
@@ -4869,8 +5200,8 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
-        taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
+        GraphSummaryWaveBucket, build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
+        taskflow_task_subcommand_supported,
     };
     use crate::state_store::{
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
@@ -5240,18 +5571,22 @@ mod tests {
             plan.dispatch_receipt.packet_backed_execution_status,
             "blocked_lineage_preconditions_not_verified"
         );
-        assert!(plan.reservations[0]
-            .preview_only_reason
-            .as_deref()
-            .is_none());
+        assert!(
+            plan.reservations[0]
+                .preview_only_reason
+                .as_deref()
+                .is_none()
+        );
         assert_eq!(
             plan.reservations[0].execute_status,
             "execute_projection_not_executed"
         );
-        assert!(!plan
-            .next_actions
-            .iter()
-            .any(|action| { action.contains("execution is not attempted") }));
+        assert!(
+            !plan
+                .next_actions
+                .iter()
+                .any(|action| { action.contains("execution is not attempted") })
+        );
     }
 
     #[test]
@@ -5867,9 +6202,11 @@ mod tests {
             super::build_taskflow_graph_explain_payload(&projection, None, Some("blocked"));
         assert_eq!(blocked_payload["status"], "blocked");
         assert_eq!(blocked_payload["ready_now"], false);
-        assert!(blocked_payload["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| codes.contains(&serde_json::json!("graph_blocked"))));
+        assert!(
+            blocked_payload["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| codes.contains(&serde_json::json!("graph_blocked")))
+        );
         assert_eq!(blocked_payload["blocked_by"][0]["depends_on_id"], "current");
         assert_eq!(
             blocked_payload["next_lawful_action"]["surface"],
@@ -5880,19 +6217,23 @@ mod tests {
             super::build_taskflow_graph_explain_payload(&projection, None, Some("missing"));
         assert_eq!(missing_payload["status"], "blocked");
         assert_eq!(missing_payload["ready_now"], false);
-        assert!(missing_payload["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| {
-                codes.contains(&serde_json::json!("task_not_in_graph_projection"))
-            }));
+        assert!(
+            missing_payload["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| {
+                    codes.contains(&serde_json::json!("task_not_in_graph_projection"))
+                })
+        );
 
         let parallel_blocked_payload =
             super::build_taskflow_graph_explain_payload(&projection, None, Some("current"));
         assert_eq!(parallel_blocked_payload["status"], "blocked");
         assert_eq!(parallel_blocked_payload["ready_now"], true);
-        assert!(parallel_blocked_payload["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| !codes.is_empty()));
+        assert!(
+            parallel_blocked_payload["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| !codes.is_empty())
+        );
     }
 
     #[test]
@@ -6224,9 +6565,11 @@ mod tests {
             payload["routes"][0]["model_profile_readiness_audit"]["surface"],
             "vida taskflow model-profile readiness audit"
         );
-        assert!(payload["row_count"]
-            .as_u64()
-            .is_some_and(|count| count >= 10));
+        assert!(
+            payload["row_count"]
+                .as_u64()
+                .is_some_and(|count| count >= 10)
+        );
         let rows = payload["routes"][0]["rows"]
             .as_array()
             .expect("config actuation rows should render");
@@ -6453,9 +6796,11 @@ mod tests {
             unready["selected_profile"]["readiness"]["blocker_code"],
             "external_cli_missing_api_key"
         );
-        assert!(unready["next_actions"]
-            .as_array()
-            .is_some_and(|actions| !actions.is_empty()));
+        assert!(
+            unready["next_actions"]
+                .as_array()
+                .is_some_and(|actions| !actions.is_empty())
+        );
         assert_eq!(missing["status"], "blocked");
         assert_eq!(
             missing["blocker_codes"],
@@ -6581,12 +6926,16 @@ mod tests {
 
         let blocker_codes = super::authoritative_dispatch_blocker_codes(Some(&dispatch));
         assert_eq!(blocker_codes.len(), 2);
-        assert!(blocker_codes
-            .iter()
-            .any(|code| code == "timeout_without_takeover_authority"));
-        assert!(blocker_codes
-            .iter()
-            .any(|code| code == "pending_review_clean_evidence"));
+        assert!(
+            blocker_codes
+                .iter()
+                .any(|code| code == "timeout_without_takeover_authority")
+        );
+        assert!(
+            blocker_codes
+                .iter()
+                .any(|code| code == "pending_review_clean_evidence")
+        );
     }
 
     #[test]
@@ -6651,14 +7000,18 @@ mod tests {
             super::scheduler_execute_runtime_gate_blocker_codes(Some(&recovery), Some(&dispatch));
 
         assert_eq!(blocker_codes.blocker_codes.len(), 2);
-        assert!(blocker_codes
-            .blocker_codes
-            .iter()
-            .any(|code| code == "open_delegated_cycle"));
-        assert!(blocker_codes
-            .blocker_codes
-            .iter()
-            .any(|code| code == "execution_preparation_gate_blocked"));
+        assert!(
+            blocker_codes
+                .blocker_codes
+                .iter()
+                .any(|code| code == "open_delegated_cycle")
+        );
+        assert!(
+            blocker_codes
+                .blocker_codes
+                .iter()
+                .any(|code| code == "execution_preparation_gate_blocked")
+        );
     }
 
     #[test]
@@ -6701,14 +7054,18 @@ mod tests {
             super::scheduler_execute_runtime_gate_blocker_codes(None, Some(&dispatch));
 
         assert_eq!(blocker_codes.blocker_codes.len(), 2);
-        assert!(blocker_codes
-            .blocker_codes
-            .iter()
-            .any(|code| code == "timeout_without_takeover_authority"));
-        assert!(blocker_codes
-            .blocker_codes
-            .iter()
-            .any(|code| code == "pending_lane_evidence"));
+        assert!(
+            blocker_codes
+                .blocker_codes
+                .iter()
+                .any(|code| code == "timeout_without_takeover_authority")
+        );
+        assert!(
+            blocker_codes
+                .blocker_codes
+                .iter()
+                .any(|code| code == "pending_lane_evidence")
+        );
     }
 
     #[test]
@@ -6760,6 +7117,74 @@ mod tests {
         assert!(plan.next_actions.iter().any(|action| {
             action.contains("Resolve the open delegated-cycle gate before scheduler execute")
         }));
+    }
+
+    #[test]
+    fn scheduler_dispatch_plan_blocks_and_clears_selection_when_continuation_gate_is_terminal() {
+        let projection = crate::state_store::TaskSchedulingProjection {
+            current_task_id: Some("ready-head".to_string()),
+            ready: vec![scheduling_candidate(
+                sample_task("ready-head"),
+                true,
+                false,
+                true,
+                Vec::new(),
+                Vec::new(),
+            )],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+        let mut plan = super::build_taskflow_scheduler_dispatch_plan(
+            projection, 2, None, None, None, None, state_dir, true, false,
+        );
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-terminal",
+            "task-terminal",
+            "implementation",
+        );
+        status.status = "blocked".to_string();
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("ready-head")),
+            false,
+            true,
+            Some("final"),
+            None,
+            None,
+            Some(&status),
+            false,
+            None,
+            Some("run-terminal"),
+        );
+        let summary = serde_json::json!({
+            "status": "ambiguous",
+            "next_actions": ["bind an explicit next bounded unit"]
+        });
+        let gate = super::continuation_dispatch_gate_from_decision(&decision, &summary)
+            .expect("terminal continuation decision should produce a dispatch gate");
+
+        super::apply_scheduler_continuation_dispatch_gate(&mut plan, &gate);
+
+        assert_eq!(plan.status, "blocked");
+        assert_eq!(
+            plan.selection_source,
+            "terminal_continue_snapshot_without_next_bounded_unit"
+        );
+        assert!(plan.selected_primary_task.is_none());
+        assert!(plan.selected_parallel_tasks.is_empty());
+        assert!(plan.selected_task_ids.is_empty());
+        assert!(plan.reservations.is_empty());
+        assert!(
+            plan.blocker_codes
+                .contains(&"terminal_continue_snapshot_without_next_bounded_unit".to_string())
+        );
+        assert!(
+            plan.blocker_codes
+                .contains(&"continuation_binding_ambiguous".to_string())
+        );
+        assert_eq!(plan.dispatch_receipt.dispatch_status, "blocked");
+        assert!(plan.dispatch_receipt.selected_task_ids.is_empty());
+        assert!(plan.dispatch_receipt.reservation_ids.is_empty());
     }
 
     fn sample_task(task_id: &str) -> crate::state_store::TaskRecord {
@@ -6930,10 +7355,12 @@ mod tests {
                 .map(|value| value.command.as_str()),
             Some("vida taskflow recovery latest --json")
         );
-        assert!(decision
-            .blocker_codes
-            .iter()
-            .any(|code| code == "execution_preparation_gate_blocked"));
+        assert!(
+            decision
+                .blocker_codes
+                .iter()
+                .any(|code| code == "execution_preparation_gate_blocked")
+        );
     }
 
     #[test]
@@ -6971,7 +7398,7 @@ mod tests {
             downstream_dispatch_last_target: None,
             downstream_dispatch_note: Some("after coach, verify".to_string()),
             downstream_dispatch_blockers: vec![
-                "internal_dispatch_timeout_without_receipt".to_string()
+                "internal_dispatch_timeout_without_receipt".to_string(),
             ],
         };
 
@@ -7000,18 +7427,24 @@ mod tests {
             decision.recommended_surface.as_deref(),
             Some("vida lane show")
         );
-        assert!(!decision
-            .next_actions
-            .iter()
-            .any(|action| action.contains("vida taskflow consume continue --json")));
-        assert!(decision
-            .blocker_codes
-            .iter()
-            .any(|code| code == "open_delegated_cycle"));
-        assert!(decision
-            .blocker_codes
-            .iter()
-            .any(|code| code == "tool_execution_failed"));
+        assert!(
+            !decision
+                .next_actions
+                .iter()
+                .any(|action| action.contains("vida taskflow consume continue --json"))
+        );
+        assert!(
+            decision
+                .blocker_codes
+                .iter()
+                .any(|code| code == "open_delegated_cycle")
+        );
+        assert!(
+            decision
+                .blocker_codes
+                .iter()
+                .any(|code| code == "tool_execution_failed")
+        );
     }
 
     #[test]
@@ -7059,10 +7492,12 @@ mod tests {
                 .map(|value| value.category.as_str()),
             Some("latest_run_graph_status_blocked")
         );
-        assert!(decision
-            .blocker_codes
-            .iter()
-            .any(|code| code == "latest_run_graph_status_blocked"));
+        assert!(
+            decision
+                .blocker_codes
+                .iter()
+                .any(|code| code == "latest_run_graph_status_blocked")
+        );
         assert_eq!(
             decision
                 .next_action
@@ -7169,10 +7604,12 @@ mod tests {
             decision.recommended_surface.as_deref(),
             Some("vida taskflow consume continue")
         );
-        assert!(!decision
-            .blocker_codes
-            .iter()
-            .any(|code| code == "latest_run_graph_status_blocked"));
+        assert!(
+            !decision
+                .blocker_codes
+                .iter()
+                .any(|code| code == "latest_run_graph_status_blocked")
+        );
     }
 
     #[test]
@@ -7257,10 +7694,12 @@ mod tests {
             decision.recommended_surface.as_deref(),
             Some("vida taskflow run-graph status")
         );
-        assert!(decision
-            .blocker_codes
-            .iter()
-            .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit"));
+        assert!(
+            decision
+                .blocker_codes
+                .iter()
+                .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit")
+        );
         assert_eq!(
             decision
                 .next_action
@@ -7270,10 +7709,12 @@ mod tests {
                 "vida taskflow run-graph status runtime-audit-state-store-init-lock-timeout --json"
             )
         );
-        assert!(decision
-            .next_actions
-            .iter()
-            .all(|action| !action.contains("--task-id <task-id>")));
+        assert!(
+            decision
+                .next_actions
+                .iter()
+                .all(|action| !action.contains("--task-id <task-id>"))
+        );
     }
 
     #[test]
@@ -7301,7 +7742,8 @@ mod tests {
                 "task_status": "open"
             }),
             binding_source: "explicit_continuation_bind_task".to_string(),
-            why_this_unit: "Explicit next bounded task after terminal consume snapshot.".to_string(),
+            why_this_unit: "Explicit next bounded task after terminal consume snapshot."
+                .to_string(),
             primary_path: "normal_delivery_path".to_string(),
             sequential_vs_parallel_posture: "sequential_only".to_string(),
             request_text: None,
@@ -7334,10 +7776,12 @@ mod tests {
                 .map(|task| task.id.as_str()),
             Some("ready-head")
         );
-        assert!(!decision
-            .blocker_codes
-            .iter()
-            .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit"));
+        assert!(
+            !decision
+                .blocker_codes
+                .iter()
+                .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit")
+        );
     }
 
     #[test]
@@ -7414,14 +7858,18 @@ mod tests {
                 .map(|task| task.id.as_str()),
             Some("ready-head")
         );
-        assert!(!decision
-            .blocker_codes
-            .iter()
-            .any(|code| code == "completed_without_explicit_next_bounded_unit"));
-        assert!(!decision
-            .blocker_codes
-            .iter()
-            .any(|code| code == "execution_preparation_gate_blocked"));
+        assert!(
+            !decision
+                .blocker_codes
+                .iter()
+                .any(|code| code == "completed_without_explicit_next_bounded_unit")
+        );
+        assert!(
+            !decision
+                .blocker_codes
+                .iter()
+                .any(|code| code == "execution_preparation_gate_blocked")
+        );
     }
 
     #[test]
@@ -7506,10 +7954,12 @@ mod tests {
                 .map(|value| value.command.as_str()),
             Some("vida task ready --scope epic-1 --json")
         );
-        assert!(decision
-            .blocker_codes
-            .iter()
-            .any(|code| code == "no_ready_tasks"));
+        assert!(
+            decision
+                .blocker_codes
+                .iter()
+                .any(|code| code == "no_ready_tasks")
+        );
     }
 
     #[test]
@@ -7569,15 +8019,21 @@ mod tests {
             0,
         );
 
-        assert!(!next_actions
-            .iter()
-            .any(|action| action.contains("Inspect the primary ready task with `vida task show")));
-        assert!(next_actions
-            .iter()
-            .any(|action| action.contains("diagnostic only")));
-        assert!(next_actions
-            .iter()
-            .any(|action| action.contains("vida taskflow recovery latest --json")));
+        assert!(
+            !next_actions.iter().any(
+                |action| action.contains("Inspect the primary ready task with `vida task show")
+            )
+        );
+        assert!(
+            next_actions
+                .iter()
+                .any(|action| action.contains("diagnostic only"))
+        );
+        assert!(
+            next_actions
+                .iter()
+                .any(|action| action.contains("vida taskflow recovery latest --json"))
+        );
     }
 
     #[test]
@@ -7607,9 +8063,11 @@ mod tests {
         assert!(next_actions.iter().any(|action| {
             action.contains("Inspect the primary ready task with `vida task show task-1 --json`")
         }));
-        assert!(!next_actions
-            .iter()
-            .any(|action| action.contains("diagnostic only")));
+        assert!(
+            !next_actions
+                .iter()
+                .any(|action| action.contains("diagnostic only"))
+        );
     }
 
     #[test]
@@ -7711,10 +8169,12 @@ mod tests {
             decision.recommended_surface.as_deref(),
             Some("vida taskflow run-graph status")
         );
-        assert!(decision
-            .next_actions
-            .iter()
-            .all(|action| !action.contains("--task-id <task-id>")));
+        assert!(
+            decision
+                .next_actions
+                .iter()
+                .all(|action| !action.contains("--task-id <task-id>"))
+        );
     }
 }
 

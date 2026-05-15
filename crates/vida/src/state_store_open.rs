@@ -232,15 +232,17 @@ impl StateStore {
         for attempt in 0..READ_ONLY_OPEN_RETRY_COUNT {
             match Self::open_existing_read_only_once(root.clone()).await {
                 Ok(store) => return Ok(store),
-                Err(StateStoreError::Db(error)) if attempt + 1 < READ_ONLY_OPEN_RETRY_COUNT => {
-                    if Self::message_is_lock_contention(&error.to_string()) {
+                Err(error) if Self::error_is_lock_contention(&error) => {
+                    let _ =
+                        Self::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)?;
+                    if attempt + 1 < READ_ONLY_OPEN_RETRY_COUNT {
                         tokio::time::sleep(std::time::Duration::from_millis(
                             READ_ONLY_OPEN_RETRY_DELAY_MS,
                         ))
                         .await;
                         continue;
                     }
-                    return Err(StateStoreError::Db(error));
+                    return Err(error);
                 }
                 Err(error) => return Err(error),
             }
