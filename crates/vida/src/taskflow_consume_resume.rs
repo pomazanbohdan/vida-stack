@@ -13,6 +13,7 @@ const CONSUME_RESUME_PREPARATION_GATE_TIMEOUT: Duration = Duration::from_secs(10
 const CONSUME_RESUME_HANDOFF_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn state_store_lock_marker_error(state_root: &Path, label: &str) -> Option<String> {
+    let _ = super::StateStore::reclaim_stale_authoritative_datastore_lock_marker(state_root);
     let lock_path = state_root.join("LOCK");
     match std::fs::metadata(&lock_path) {
         Ok(metadata) if metadata.is_file() => Some(format!(
@@ -1230,8 +1231,8 @@ fn latest_runtime_consumption_snapshot_path_for_resume_gate(
     for entry in std::fs::read_dir(&snapshot_dir)
         .map_err(|error| format!("Failed to read runtime-consumption directory: {error}"))?
     {
-        let entry =
-            entry.map_err(|error| format!("Failed to inspect runtime-consumption entry: {error}"))?;
+        let entry = entry
+            .map_err(|error| format!("Failed to inspect runtime-consumption entry: {error}"))?;
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -4410,8 +4411,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                             &preparation_gate_state_root,
                         )
                     },
-                )
-                {
+                ) {
                     if emit_output {
                         eprintln!("{error}");
                     }
@@ -4694,7 +4694,9 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                             return ExitCode::from(1);
                         }
                         if emit_output {
-                            eprintln!("Failed to execute resumed runtime dispatch handoff: {error}");
+                            eprintln!(
+                                "Failed to execute resumed runtime dispatch handoff: {error}"
+                            );
                         }
                         return ExitCode::from(1);
                     }
@@ -5041,11 +5043,10 @@ mod tests {
         canonical_resume_lane_status, canonical_resume_string_array_entries,
         consume_advance_success_payload, consume_continue_blocking_step_with_timeout,
         consume_continue_handoff_with_timeout, consume_continue_resume_error_blocker_code,
-        consume_continue_resume_error_payload, consume_continue_state_access_blocker_payload,
-        consume_continue_state_access_blocker_code, dispatch_receipt_internal_retry_eligible,
+        consume_continue_resume_error_payload, consume_continue_state_access_blocker_code,
+        consume_continue_state_access_blocker_payload, dispatch_receipt_internal_retry_eligible,
         dispatch_receipt_primary_rebind_eligible, dispatch_receipt_retry_eligible,
-        emit_runtime_consumption_resume_json,
-        enforce_consume_continue_execution_preparation_gate,
+        emit_runtime_consumption_resume_json, enforce_consume_continue_execution_preparation_gate,
         fail_fast_state_store_open_read_only_with_timeout, normalize_runtime_dispatch_packet,
         normalize_stale_in_flight_dispatch_receipt, packet_path_components_for_platform,
         persisted_dispatch_packet_lineage_task_id,
@@ -5061,9 +5062,9 @@ mod tests {
         runtime_consumption_resume_receipt_next_actions,
         runtime_consumption_snapshot_has_failure_control_evidence,
         should_refresh_resumed_downstream_preview, state_store_lock_marker_error,
-        sync_run_graph_after_retry_artifact, validate_receipt_packet_pair, validate_run_graph_resume_state,
-        validate_run_graph_resume_state_for_downstream_packet, PacketPathPlatform,
-        DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
+        sync_run_graph_after_retry_artifact, validate_receipt_packet_pair,
+        validate_run_graph_resume_state, validate_run_graph_resume_state_for_downstream_packet,
+        PacketPathPlatform, DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
     use crate::state_store::{CreateTaskRequest, TaskExecutionSemantics};
@@ -5115,7 +5116,10 @@ mod tests {
             payload["operator_contracts"]["contract_id"],
             "release-1-operator-contracts"
         );
-        assert_eq!(payload["operator_contracts"]["schema_version"], "release-1-v1");
+        assert_eq!(
+            payload["operator_contracts"]["schema_version"],
+            "release-1-v1"
+        );
     }
 
     #[test]
@@ -5321,6 +5325,28 @@ mod tests {
     }
 
     #[test]
+    fn state_store_lock_marker_error_reclaims_stale_numeric_lock_marker() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-continue-stale-lock-marker-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&root).expect("create state root");
+        let stale_pid = std::process::id().saturating_add(10_000_000);
+        fs::write(root.join("LOCK"), stale_pid.to_string()).expect("write stale lock marker");
+
+        let error = state_store_lock_marker_error(&root, "opening authoritative state store");
+
+        assert!(error.is_none());
+        assert!(!root.join("LOCK").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn read_only_reopen_fails_fast_while_write_guard_is_held() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -5387,7 +5413,8 @@ mod tests {
         .expect_err("slow blocking step should time out");
 
         assert!(
-            error.contains("Timed out executing runtime dispatch handoff during blocking test gate"),
+            error
+                .contains("Timed out executing runtime dispatch handoff during blocking test gate"),
             "unexpected error: {error}"
         );
         assert_eq!(

@@ -1,5 +1,7 @@
 use super::*;
 use fs2::FileExt;
+#[cfg(windows)]
+use std::ffi::c_void;
 use std::fs::OpenOptions;
 
 const AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS: u64 = 25;
@@ -75,6 +77,28 @@ pub(super) fn state_schema_document() -> String {
 }
 
 impl StateStore {
+    pub(crate) fn reclaim_stale_authoritative_datastore_lock_marker(
+        root: &Path,
+    ) -> Result<bool, StateStoreError> {
+        let lock_path = root.join("LOCK");
+        let lock_text = match fs::read_to_string(&lock_path) {
+            Ok(lock_text) => lock_text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(StateStoreError::Io(error)),
+        };
+        let Ok(pid) = lock_text.trim().parse::<u32>() else {
+            return Ok(false);
+        };
+        if pid == 0 || pid == std::process::id() || process_may_be_alive(pid) {
+            return Ok(false);
+        }
+        match fs::remove_file(&lock_path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(StateStoreError::Io(error)),
+        }
+    }
+
     pub(crate) fn error_is_lock_contention(error: &StateStoreError) -> bool {
         match error {
             StateStoreError::Io(io_error) => {
@@ -157,6 +181,7 @@ impl StateStore {
 
     pub async fn open(root: PathBuf) -> Result<Self, StateStoreError> {
         fs::create_dir_all(&root)?;
+        let _ = Self::reclaim_stale_authoritative_datastore_lock_marker(&root)?;
         let _guard = AuthoritativeOpenGuard::acquire(&root).await?;
         Self::open_with_authoritative_lock_retry(root, Self::open_once).await
     }
@@ -165,6 +190,7 @@ impl StateStore {
         if !root.exists() {
             return Err(StateStoreError::MissingStateDir(root));
         }
+        let _ = Self::reclaim_stale_authoritative_datastore_lock_marker(&root)?;
         let _guard = AuthoritativeOpenGuard::acquire(&root).await?;
         Self::open_with_authoritative_lock_retry(root, Self::open_existing_once).await
     }
@@ -233,6 +259,48 @@ impl StateStore {
     pub fn root(&self) -> &Path {
         &self.root
     }
+}
+
+#[cfg(unix)]
+fn process_may_be_alive(pid: u32) -> bool {
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if result == 0 {
+        return true;
+    }
+    let error = std::io::Error::last_os_error();
+    matches!(error.raw_os_error(), Some(code) if code == libc::EPERM)
+}
+
+#[cfg(windows)]
+fn process_may_be_alive(pid: u32) -> bool {
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const ERROR_ACCESS_DENIED: u32 = 5;
+    const ERROR_INVALID_PARAMETER: u32 = 87;
+    type Handle = *mut c_void;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> Handle;
+        fn CloseHandle(hObject: Handle) -> i32;
+        fn GetLastError() -> u32;
+    }
+
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if !handle.is_null() {
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        return true;
+    }
+    match unsafe { GetLastError() } {
+        ERROR_INVALID_PARAMETER => false,
+        ERROR_ACCESS_DENIED => true,
+        _ => true,
+    }
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn process_may_be_alive(_pid: u32) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -317,5 +385,48 @@ mod tests {
     fn error_is_lock_contention_ignores_non_lock_errors() {
         let error = StateStoreError::MissingStateDir(PathBuf::from("/tmp/vida-lock-missing-state"));
         assert!(!StateStore::error_is_lock_contention(&error));
+    }
+
+    #[test]
+    fn stale_authoritative_datastore_lock_with_dead_pid_is_reclaimed() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-stale-authoritative-lock-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create state root");
+        let stale_pid = std::process::id().saturating_add(10_000_000);
+        fs::write(root.join("LOCK"), stale_pid.to_string()).expect("write stale lock");
+
+        let reclaimed = StateStore::reclaim_stale_authoritative_datastore_lock_marker(&root)
+            .expect("reclaim stale lock");
+
+        assert!(reclaimed);
+        assert!(!root.join("LOCK").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn live_authoritative_datastore_lock_pid_is_preserved() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-live-authoritative-lock-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create state root");
+        fs::write(root.join("LOCK"), std::process::id().to_string()).expect("write live lock");
+
+        let reclaimed = StateStore::reclaim_stale_authoritative_datastore_lock_marker(&root)
+            .expect("live lock should not error");
+
+        assert!(!reclaimed);
+        assert!(root.join("LOCK").exists());
+        let _ = fs::remove_dir_all(&root);
     }
 }
