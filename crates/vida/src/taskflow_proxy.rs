@@ -217,7 +217,8 @@ fn dispatch_receipt_resolves_recovery_bound_run(
             && !dispatch.downstream_dispatch_ready
             && !dispatch
                 .downstream_dispatch_status
-                .eq_ignore_ascii_case("packet_ready")
+                .as_deref()
+                .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"))
             && dispatch
                 .downstream_dispatch_blockers
                 .iter()

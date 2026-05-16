@@ -771,7 +771,8 @@ fn recovery_projection_resolves_persisted_open_cycle(
                 && !receipt.downstream_dispatch_ready
                 && !receipt
                     .downstream_dispatch_status
-                    .eq_ignore_ascii_case("packet_ready")
+                    .as_deref()
+                    .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"))
                 && receipt.downstream_dispatch_blockers.is_empty()
         })
 }

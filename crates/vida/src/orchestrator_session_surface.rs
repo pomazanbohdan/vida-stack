@@ -336,8 +336,8 @@ fn classify_sessions_with_liveness(
         let process_id = session["process_id"]
             .as_u64()
             .and_then(|value| u32::try_from(value).ok());
-        let process_is_dead = process_id
-            .is_some_and(|value| process_liveness(value) == ProcessLiveness::Dead);
+        let process_is_dead =
+            process_id.is_some_and(|value| process_liveness(value) == ProcessLiveness::Dead);
         let heartbeat_fresh = heartbeat <= now && (now - heartbeat) <= SESSION_TTL_SECONDS;
         if state == "live" && heartbeat_fresh && process_id.is_some() && !process_is_dead {
             live_other.push(session.clone());
@@ -802,7 +802,6 @@ mod tests {
         assert_eq!(stale[0]["state"], "stale");
     }
 
-
     #[test]
     fn live_session_without_process_id_is_stale_not_live_other() {
         let now = now_epoch_seconds();
@@ -813,7 +812,9 @@ mod tests {
         })];
 
         let (live_other, stale) =
-            classify_sessions_with_liveness(&sessions, "current-session", |_| ProcessLiveness::Alive);
+            classify_sessions_with_liveness(&sessions, "current-session", |_| {
+                ProcessLiveness::Alive
+            });
 
         assert!(live_other.is_empty());
         assert_eq!(stale.len(), 1);
@@ -831,7 +832,9 @@ mod tests {
         })];
 
         let (live_other, stale) =
-            classify_sessions_with_liveness(&sessions, "current-session", |_| ProcessLiveness::Unknown);
+            classify_sessions_with_liveness(&sessions, "current-session", |_| {
+                ProcessLiveness::Unknown
+            });
 
         assert!(live_other.is_empty());
         assert_eq!(stale.len(), 1);

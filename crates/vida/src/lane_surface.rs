@@ -704,14 +704,14 @@ fn derive_lane_show_truth(
         };
     }
 
-    let completed_has_blocked_downstream =
-        summary.lane_status == crate::LaneStatus::LaneCompleted.as_str()
-            && (lane_summary_dispatch_is_blocked(summary)
-                || summary
-                    .downstream_dispatch_blockers
-                    .iter()
-                    .any(|value| !value.trim().is_empty())
-                || recovery_delegated_cycle_open(recovery));
+    let completed_has_blocked_downstream = summary.lane_status
+        == crate::LaneStatus::LaneCompleted.as_str()
+        && (lane_summary_dispatch_is_blocked(summary)
+            || summary
+                .downstream_dispatch_blockers
+                .iter()
+                .any(|value| !value.trim().is_empty())
+            || recovery_delegated_cycle_open(recovery));
     if summary.lane_status == crate::LaneStatus::LaneCompleted.as_str()
         && !completed_has_blocked_downstream
     {

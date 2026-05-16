@@ -3860,13 +3860,12 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
             .filter(|value| !value.is_empty())
             == Some(bound_target);
         if allow_downstream_lineage && !active_target_matches_bound {
-            if let Some(resume) =
-                maybe_resume_inputs_from_ready_downstream_packet(
-                    store,
-                    Some(&resolved_run_id),
-                    &receipt,
-                )
-                    .await?
+            if let Some(resume) = maybe_resume_inputs_from_ready_downstream_packet(
+                store,
+                Some(&resolved_run_id),
+                &receipt,
+            )
+            .await?
             {
                 if resume.dispatch_receipt.dispatch_target == bound_target {
                     record_run_graph_replay_lineage_receipt_for_resume(
@@ -3885,13 +3884,12 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
             }
         }
         if allow_downstream_lineage {
-            if let Some(resume) =
-                maybe_resume_inputs_from_active_downstream_result(
-                    store,
-                    Some(&resolved_run_id),
-                    &receipt,
-                )
-                    .await?
+            if let Some(resume) = maybe_resume_inputs_from_active_downstream_result(
+                store,
+                Some(&resolved_run_id),
+                &receipt,
+            )
+            .await?
             {
                 if resume.dispatch_receipt.dispatch_target == bound_target {
                     record_run_graph_replay_lineage_receipt_for_resume(
@@ -3930,13 +3928,12 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         ));
     } else {
         if allow_downstream_lineage && prefer_ready_downstream_packet_over_active_result(&receipt) {
-            if let Some(resume) =
-                maybe_resume_inputs_from_ready_downstream_packet(
-                    store,
-                    Some(&resolved_run_id),
-                    &receipt,
-                )
-                    .await?
+            if let Some(resume) = maybe_resume_inputs_from_ready_downstream_packet(
+                store,
+                Some(&resolved_run_id),
+                &receipt,
+            )
+            .await?
             {
                 record_run_graph_replay_lineage_receipt_for_resume(
                     store,
@@ -3949,13 +3946,12 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
             }
         }
         if allow_downstream_lineage {
-            if let Some(resume) =
-                maybe_resume_inputs_from_active_downstream_result(
-                    store,
-                    Some(&resolved_run_id),
-                    &receipt,
-                )
-                    .await?
+            if let Some(resume) = maybe_resume_inputs_from_active_downstream_result(
+                store,
+                Some(&resolved_run_id),
+                &receipt,
+            )
+            .await?
             {
                 record_run_graph_replay_lineage_receipt_for_resume(
                     store,
@@ -3968,13 +3964,12 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
             }
         }
         if allow_downstream_lineage {
-            if let Some(resume) =
-                maybe_resume_inputs_from_ready_downstream_packet(
-                    store,
-                    Some(&resolved_run_id),
-                    &receipt,
-                )
-                    .await?
+            if let Some(resume) = maybe_resume_inputs_from_ready_downstream_packet(
+                store,
+                Some(&resolved_run_id),
+                &receipt,
+            )
+            .await?
             {
                 record_run_graph_replay_lineage_receipt_for_resume(
                     store,
@@ -5183,10 +5178,10 @@ mod tests {
         canonical_resume_lane_status, canonical_resume_string_array_entries,
         consume_advance_success_payload, consume_continue_blocking_step_with_timeout,
         consume_continue_handoff_with_timeout, consume_continue_resume_error_blocker_code,
-        consume_continue_resume_error_payload,
-        consume_continue_state_access_blocker_payload, dispatch_receipt_internal_retry_eligible,
-        dispatch_receipt_primary_rebind_eligible, dispatch_receipt_retry_eligible,
-        emit_runtime_consumption_resume_json, enforce_consume_continue_execution_preparation_gate,
+        consume_continue_resume_error_payload, consume_continue_state_access_blocker_payload,
+        dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
+        dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
+        enforce_consume_continue_execution_preparation_gate,
         fail_fast_state_store_open_read_only_with_timeout, normalize_runtime_dispatch_packet,
         normalize_stale_in_flight_dispatch_receipt, packet_path_components_for_platform,
         persisted_dispatch_packet_lineage_task_id,
@@ -5201,10 +5196,10 @@ mod tests {
         runtime_consumption_resume_blocker_code, runtime_consumption_resume_receipt_blocker_codes,
         runtime_consumption_resume_receipt_next_actions,
         runtime_consumption_snapshot_has_failure_control_evidence,
-        should_refresh_resumed_downstream_preview,
-        sync_run_graph_after_retry_artifact, validate_receipt_packet_pair,
-        validate_run_graph_resume_state, validate_run_graph_resume_state_for_downstream_packet,
-        PacketPathPlatform, CONSUME_RESUME_HANDOFF_TIMEOUT, DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
+        should_refresh_resumed_downstream_preview, sync_run_graph_after_retry_artifact,
+        validate_receipt_packet_pair, validate_run_graph_resume_state,
+        validate_run_graph_resume_state_for_downstream_packet, PacketPathPlatform,
+        CONSUME_RESUME_HANDOFF_TIMEOUT, DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
     use crate::state_store::{CreateTaskRequest, TaskExecutionSemantics};
