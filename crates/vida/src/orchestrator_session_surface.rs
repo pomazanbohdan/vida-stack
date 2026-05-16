@@ -160,11 +160,19 @@ enum ProcessLiveness {
 }
 
 #[cfg(target_os = "windows")]
+fn windows_tasklist_path() -> std::path::PathBuf {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    std::path::Path::new(&root)
+        .join("System32")
+        .join("tasklist.exe")
+}
+
+#[cfg(target_os = "windows")]
 fn local_process_liveness(process_id: u32) -> ProcessLiveness {
     if process_id == std::process::id() {
         return ProcessLiveness::Alive;
     }
-    let Ok(output) = std::process::Command::new("tasklist")
+    let Ok(output) = std::process::Command::new(windows_tasklist_path())
         .args(["/FI", &format!("PID eq {process_id}"), "/FO", "CSV", "/NH"])
         .output()
     else {
