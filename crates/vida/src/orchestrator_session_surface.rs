@@ -337,23 +337,25 @@ fn classify_sessions_with_liveness(
             .as_u64()
             .and_then(|value| u32::try_from(value).ok());
         let heartbeat_fresh = heartbeat <= now && (now - heartbeat) <= SESSION_TTL_SECONDS;
-        let recent_live = state == "live" && heartbeat_fresh;
-        if recent_live && process_id.is_some() {
+        if state == "live" && heartbeat_fresh && process_id.is_some() {
             let process_is_dead =
                 process_id.is_some_and(|value| process_liveness(value) == ProcessLiveness::Dead);
-            if !process_is_dead {
-                live_other.push(session.clone());
+            if process_is_dead {
+                let mut cloned = session.clone();
+                cloned["state"] = serde_json::Value::String("stale".to_string());
+                stale.push(cloned);
                 continue;
             }
-        }
-
-        let mut cloned = session.clone();
-        cloned["state"] = serde_json::Value::String(if state.trim().is_empty() {
-            "legacy_global_owner_unknown".to_string()
+            live_other.push(session.clone());
         } else {
-            "stale".to_string()
-        });
-        stale.push(cloned);
+            let mut cloned = session.clone();
+            cloned["state"] = serde_json::Value::String(if state.trim().is_empty() {
+                "legacy_global_owner_unknown".to_string()
+            } else {
+                "stale".to_string()
+            });
+            stale.push(cloned);
+        }
     }
     (live_other, stale)
 }

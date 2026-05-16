@@ -224,6 +224,10 @@ fn terminal_closure_status(status: &RunGraphStatus) -> bool {
             .is_none()
 }
 
+fn task_status_is_terminal_for_continuation(status: &str) -> bool {
+    matches!(status.trim(), "closed" | "completed")
+}
+
 fn terminal_closure_status_has_explicit_receipt_override(
     status: &RunGraphStatus,
     receipt: &RunGraphDispatchReceiptStored,
@@ -342,19 +346,43 @@ pub(crate) fn normalize_legacy_downstream_preview_drift(
 fn reconcile_run_graph_status_with_closed_task(
     mut status: RunGraphStatus,
     task: Option<&TaskRecord>,
+    receipt: Option<&RunGraphDispatchReceiptStored>,
 ) -> RunGraphStatus {
     let Some(task) = task else {
         return status;
     };
-    if task.status != "closed" {
+    if !task_status_is_terminal_for_continuation(&task.status) {
         return status;
     }
-    if !StateStore::run_graph_status_allows_task_close_closure_binding(&status) {
+    if receipt.and_then(|receipt| receipt.lane_status.as_deref()) == Some("lane_exception_recorded")
+    {
+        if status.active_node == "closure"
+            && status.status == "blocked"
+            && status.lifecycle_stage == "closure_blocked"
+        {
+            status.lifecycle_stage = "closure_complete".to_string();
+        }
+        return status;
+    }
+    let terminal_closure_status = status.active_node == "closure"
+        && matches!(status.status.as_str(), "blocked" | "completed")
+        && matches!(
+            status.lifecycle_stage.as_str(),
+            "closure_blocked" | "closure_complete"
+        )
+        && status.next_node.is_none()
+        && status.handoff_state == "none"
+        && status.resume_target == "none";
+    if !StateStore::run_graph_status_allows_task_close_closure_binding(&status)
+        && !terminal_closure_status
+    {
         return status;
     }
 
     status.status = "completed".to_string();
-    if status.lifecycle_stage != "closure_complete" {
+    if status.active_node == "closure" {
+        status.lifecycle_stage = "closure_complete".to_string();
+    } else if status.lifecycle_stage != "closure_complete" {
         status.lifecycle_stage = "implementation_complete".to_string();
     }
     status.next_node = None;
@@ -1501,7 +1529,7 @@ impl StateStore {
                 Err(StateStoreError::MissingTask { .. }) => return Ok(Some(binding)),
                 Err(error) => return Err(error),
             };
-            if task.status == "closed" {
+            if task_status_is_terminal_for_continuation(&task.status) {
                 continue;
             }
 
@@ -1546,7 +1574,7 @@ impl StateStore {
             }
             Err(error) => return Err(error),
         };
-        if task.status != "closed" {
+        if !task_status_is_terminal_for_continuation(&task.status) {
             return Ok(Some(binding));
         }
         if !self
@@ -1657,7 +1685,8 @@ impl StateStore {
         let receipt = self.run_graph_dispatch_receipt_stored(run_id).await?;
         let status = reconcile_run_graph_status_with_dispatch_receipt(status, receipt.as_ref())?;
         let task = self.show_task(&status.task_id).await.ok();
-        let status = reconcile_run_graph_status_with_closed_task(status, task.as_ref());
+        let status =
+            reconcile_run_graph_status_with_closed_task(status, task.as_ref(), receipt.as_ref());
         status.validate_memory_governance()?;
         Ok(status)
     }
@@ -4036,6 +4065,69 @@ mod tests {
         assert_eq!(latest.binding_source, "explicit_continuation_bind_task");
         assert_eq!(latest.active_bounded_unit["kind"], "task_graph_task");
         assert_eq!(latest.active_bounded_unit["task_status"], "in_progress");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_explicit_run_graph_continuation_binding_skips_completed_bound_task() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-latest-explicit-run-graph-continuation-binding-completed-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "task-completed-binding",
+                title: "Completed explicit binding task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "completed",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create completed task");
+
+        store
+            .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
+                run_id: "run-completed-binding".to_string(),
+                task_id: "task-completed-binding".to_string(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "task_graph_task",
+                    "task_id": "task-completed-binding",
+                    "run_id": "run-completed-binding",
+                    "task_status": "completed",
+                    "issue_type": "task"
+                }),
+                binding_source: "explicit_continuation_bind_task".to_string(),
+                why_this_unit: "stale explicit completed task binding".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+                request_text: Some("continue".to_string()),
+                recorded_at: "2026-04-16T09:00:00Z".to_string(),
+            })
+            .await
+            .expect("record completed explicit binding");
+
+        assert!(store
+            .latest_explicit_run_graph_continuation_binding()
+            .await
+            .expect("read latest explicit binding")
+            .is_none());
 
         let _ = fs::remove_dir_all(&root);
     }
