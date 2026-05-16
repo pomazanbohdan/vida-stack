@@ -6,6 +6,7 @@ use super::*;
 use crate::release1_contracts::canonical_lane_status_str;
 use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
 use crate::runtime_contract_vocab::{
+    canonical_dispatch_target_name,
     RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM,
     RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER, TASK_CLASS_ARCHITECTURE,
     TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION, TASK_CLASS_VERIFICATION,
@@ -919,17 +920,17 @@ pub(crate) fn dispatch_target_runtime_assignment(
     (serde_json::Value::Null, "missing")
 }
 
-fn canonical_dispatch_target_for_backend_resolution(dispatch_target: &str) -> &str {
-    match dispatch_target {
-        "implementer" | "analysis" => "implementation",
-        "execution_preparation" => "architecture",
-        _ => dispatch_target,
+fn canonical_dispatch_target_for_backend_resolution(dispatch_target: &str) -> String {
+    match canonical_dispatch_target_name(dispatch_target).as_str() {
+        "implementer" => "implementation".to_string(),
+        "execution_preparation" => "architecture".to_string(),
+        other => other.to_string(),
     }
 }
 
 fn dispatch_target_requires_strict_backend_admissibility(dispatch_target: &str) -> bool {
     matches!(
-        canonical_dispatch_target_for_backend_resolution(dispatch_target),
+        canonical_dispatch_target_for_backend_resolution(dispatch_target).as_str(),
         "implementation" | "verification"
     )
 }
@@ -954,7 +955,7 @@ pub(crate) fn backend_is_admissible_for_dispatch_target(
         return !strict_required;
     };
     lane_admissibility
-        .get(canonical_target)
+        .get(canonical_target.as_str())
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(!strict_required)
 }
