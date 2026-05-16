@@ -1651,7 +1651,10 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             receipt.blocker_code = None;
             receipt.exception_path_receipt_id = None;
             receipt.supersedes_receipt_id = None;
-            receipt.downstream_dispatch_ready = true;
+            receipt.downstream_dispatch_target = None;
+            receipt.downstream_dispatch_command = None;
+            receipt.downstream_dispatch_packet_path = None;
+            receipt.downstream_dispatch_ready = false;
             receipt.downstream_dispatch_blockers.clear();
             receipt.downstream_dispatch_status = Some("retired_closed_task_run".to_string());
             receipt.downstream_dispatch_result_path = Some(completion_result_path.clone());
@@ -2697,6 +2700,10 @@ mod tests {
             receipt.downstream_dispatch_status.as_deref(),
             Some("retired_closed_task_run")
         );
+        assert!(!receipt.downstream_dispatch_ready);
+        assert!(receipt.downstream_dispatch_target.is_none());
+        assert!(receipt.downstream_dispatch_command.is_none());
+        assert!(receipt.downstream_dispatch_packet_path.is_none());
         assert!(store
             .run_graph_continuation_binding(run_id)
             .await
