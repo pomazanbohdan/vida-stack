@@ -405,20 +405,6 @@ pub(crate) fn latest_recorded_final_runtime_consumption_snapshot_path(
 pub(crate) fn release_admission_operator_evidence_incomplete(
     state_root: &Path,
 ) -> Result<bool, String> {
-    if let Some(snapshot_path) = latest_final_runtime_consumption_snapshot_path(state_root)? {
-        let payload = std::fs::read_to_string(&snapshot_path).map_err(|error| {
-            format!("Failed to read runtime-consumption snapshot `{snapshot_path}`: {error}")
-        })?;
-        let summary_json = serde_json::from_str::<serde_json::Value>(&payload).map_err(|error| {
-            format!("Failed to parse runtime-consumption snapshot `{snapshot_path}`: {error}")
-        })?;
-        return Ok(
-            crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json)
-                .is_some()
-                || !runtime_consumption_snapshot_has_release_admission_evidence(&summary_json),
-        );
-    }
-
     let Some(snapshot_path) = latest_recorded_final_runtime_consumption_snapshot_path(state_root)?
     else {
         return Ok(true);
@@ -1156,6 +1142,85 @@ mod tests {
             .to_string(),
         )
         .expect("final snapshot should be writable");
+
+        assert!(release_admission_operator_evidence_incomplete(&root)
+            .expect("release-admission evidence check should succeed"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn release_admission_operator_evidence_incomplete_rejects_newest_final_without_evidence() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-release-admission-evidence-stale-bypass-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let runtime_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
+
+        let older_admissible_path = runtime_dir.join("final-2026-05-16T12-00-00Z.json");
+        fs::write(
+            &older_admissible_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "status": "pass",
+                "operator_contracts": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {}
+                },
+                "shared_fields": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {}
+                },
+                "payload": {
+                    "closure_admission": {
+                        "status": "pass",
+                        "admitted": true,
+                        "blockers": [],
+                        "proof_surfaces": ["vida taskflow consume final"],
+                        "evidence_table": [{
+                            "requirement": "closure_admission",
+                            "status": "pass",
+                            "evidence_refs": ["vida taskflow consume final"],
+                            "blockers": []
+                        }]
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("older admissible final snapshot should be writable");
+
+        let newer_incomplete_path = runtime_dir.join("final-2026-05-16T12-00-01Z.json");
+        fs::write(
+            &newer_incomplete_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "status": "pass",
+                "operator_contracts": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {}
+                },
+                "shared_fields": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {}
+                }
+            })
+            .to_string(),
+        )
+        .expect("newer incomplete final snapshot should be writable");
 
         assert!(release_admission_operator_evidence_incomplete(&root)
             .expect("release-admission evidence check should succeed"));
