@@ -569,15 +569,6 @@ fn next_lawful_operator_action_for_projection(
     receipt: Option<&RunGraphDispatchReceipt>,
     terminal_consume_continue_run_id: Option<&str>,
 ) -> Option<String> {
-    if let Some(command) = receipt.and_then(|value| {
-        next_lawful_operator_action_for_dispatch_resolution(
-            status,
-            value,
-            terminal_consume_continue_run_id,
-        )
-    }) {
-        return Some(command);
-    }
     if receipt.is_some_and(blocked_external_dispatch_artifact_mismatched_as_internal_activation) {
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
             return Some(fail_closed_terminal_continue_followup(status));
@@ -586,6 +577,15 @@ fn next_lawful_operator_action_for_projection(
             "vida taskflow consume continue --run-id {} --json",
             status.run_id
         ));
+    }
+    if let Some(command) = receipt.and_then(|value| {
+        next_lawful_operator_action_for_dispatch_resolution(
+            status,
+            value,
+            terminal_consume_continue_run_id,
+        )
+    }) {
+        return Some(command);
     }
     next_lawful_operator_action_for_status(status)
 }
