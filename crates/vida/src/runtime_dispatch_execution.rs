@@ -738,13 +738,22 @@ fn parse_internal_codex_exec_output(stdout: &str) -> ParsedInternalCodexOutput {
     }
 }
 
+fn internal_codex_stderr_is_benign_warning(stderr: &str) -> bool {
+    stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .all(|line| line.starts_with("WARN ") || line.contains(" WARN "))
+}
+
 fn internal_codex_output_confirms_execution(
     parsed_output: &ParsedInternalCodexOutput,
     stderr: &str,
     exit_success: bool,
 ) -> bool {
-    let _ = stderr;
     exit_success
+        && parsed_output.error_messages.is_empty()
+        && internal_codex_stderr_is_benign_warning(stderr)
         && parsed_output
             .result_text
             .as_deref()
@@ -2245,19 +2254,14 @@ mod tests {
     }
 
     #[test]
-    fn internal_codex_output_allows_warning_streams_with_agent_message_result() {
+    fn internal_codex_output_requires_clean_error_streams() {
         let parsed_with_error = parse_internal_codex_exec_output(
             r#"{"type":"item.completed","item":{"id":"1","type":"error","message":"warning"}}
 {"type":"item.completed","item":{"id":"2","type":"agent_message","text":"final"}}"#,
         );
-        assert!(internal_codex_output_confirms_execution(
+        assert!(!internal_codex_output_confirms_execution(
             &parsed_with_error,
             "",
-            true
-        ));
-        assert!(internal_codex_output_confirms_execution(
-            &parsed_with_error,
-            "2026-05-12T20:35:57Z WARN codex_core::features: unknown feature key in config: hooks",
             true
         ));
 
@@ -2267,6 +2271,16 @@ mod tests {
         assert!(internal_codex_output_confirms_execution(
             &parsed_clean,
             "",
+            true
+        ));
+        assert!(internal_codex_output_confirms_execution(
+            &parsed_clean,
+            "2026-05-12T20:35:57Z WARN codex_core::features: unknown feature key in config: hooks",
+            true
+        ));
+        assert!(!internal_codex_output_confirms_execution(
+            &parsed_clean,
+            "sandbox denied write to /workspace/secret",
             true
         ));
         assert!(!internal_codex_output_confirms_execution(
