@@ -705,8 +705,10 @@ fn derive_lane_show_truth(
 
     let completed_has_blocked_downstream =
         summary.lane_status == crate::LaneStatus::LaneCompleted.as_str()
-            && (!summary.downstream_dispatch_blockers.is_empty()
-                || recovery_delegated_cycle_open(recovery));
+            && summary
+                .downstream_dispatch_blockers
+                .iter()
+                .any(|value| !value.trim().is_empty());
     if summary.lane_status == crate::LaneStatus::LaneCompleted.as_str()
         && !completed_has_blocked_downstream
     {
@@ -2174,6 +2176,45 @@ mod tests {
             .next_actions
             .iter()
             .any(|action| action.contains("vida taskflow recovery status run-lane-test --json")));
+    }
+
+    #[test]
+    fn lane_completed_recovery_pass_does_not_surface_open_delegated_cycle() {
+        let mut receipt = sample_receipt("executed");
+        receipt.blocker_code = None;
+        receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-lane-test".to_string(),
+            task_id: "task-lane-test".to_string(),
+            active_node: "coach".to_string(),
+            lifecycle_stage: "coach_active".to_string(),
+            resume_node: None,
+            resume_status: "none".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            policy_gate: "single_task_scope_required".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "coach".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "delegated_lane_active".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "delegated_cycle_open".to_string(),
+                continuation_signal: "continue_delegated_cycle".to_string(),
+                blocker_code: None,
+                lifecycle_stage: "coach_active".to_string(),
+            },
+        };
+
+        let truth = derive_lane_show_truth(&summary, Some(&recovery));
+
+        assert!(!truth.blocked);
+        assert!(!truth
+            .blocker_codes
+            .contains(&"open_delegated_cycle".to_string()));
+        assert!(truth.next_actions.is_empty());
     }
 
     #[test]

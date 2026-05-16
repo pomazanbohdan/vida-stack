@@ -207,6 +207,28 @@ fn recovery_holds_active_bound_run(
     recovery.is_some_and(|summary| summary.delegation_gate.delegated_cycle_open)
 }
 
+fn dispatch_receipt_resolves_recovery_bound_run(
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> bool {
+    dispatch.is_some_and(|dispatch| {
+        dispatch.dispatch_status == "executed"
+            && dispatch.lane_status == "lane_completed"
+            && dispatch.blocker_code.is_none()
+            && dispatch
+                .downstream_dispatch_blockers
+                .iter()
+                .all(|value| value.trim().is_empty())
+    })
+}
+
+fn recovery_holds_unresolved_active_bound_run(
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> bool {
+    recovery_holds_active_bound_run(recovery)
+        && !dispatch_receipt_resolves_recovery_bound_run(dispatch)
+}
+
 fn latest_run_graph_status_blocks_normal_continuation(
     status: Option<&crate::state_store::RunGraphStatus>,
 ) -> bool {
@@ -507,7 +529,7 @@ fn scheduler_execute_runtime_gate_blocker_codes(
     let mut open_delegated_cycle = false;
     let mut active_reservation = false;
 
-    if recovery_holds_active_bound_run(recovery) {
+    if recovery_holds_unresolved_active_bound_run(recovery, dispatch) {
         if let Some(code) = crate::release1_contracts::blocker_code_value(
             crate::release1_contracts::BlockerCode::OpenDelegatedCycle,
         ) {
@@ -2107,7 +2129,7 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
         .is_some_and(|task| task.status == "closed");
     let decision = build_taskflow_next_decision(
         ready_tasks.first(),
-        recovery_holds_active_bound_run(recovery.as_ref()),
+        recovery_holds_unresolved_active_bound_run(recovery.as_ref(), dispatch.as_ref()),
         recovery.is_some(),
         runtime_consumption.latest_kind.as_deref(),
         scope_task_id,
@@ -3179,7 +3201,8 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         None => None,
     };
 
-    let recovery_holds_active_bound_run = recovery_holds_active_bound_run(recovery.as_ref());
+    let recovery_holds_active_bound_run =
+        recovery_holds_unresolved_active_bound_run(recovery.as_ref(), dispatch.as_ref());
     let latest_run_graph_task_closed = match (store.as_ref(), latest_run_graph.as_ref()) {
         (Some(store), Some(status)) => match store.list_tasks(None, true).await {
             Ok(tasks) => tasks
@@ -3429,7 +3452,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     let waves = build_graph_summary_waves(&all_tasks, &ready_tasks, &blocked_tasks);
     let continuation_decision = build_taskflow_next_decision(
         ready_tasks.first(),
-        recovery_holds_active_bound_run(recovery.as_ref()),
+        recovery_holds_unresolved_active_bound_run(recovery.as_ref(), dispatch.as_ref()),
         recovery.is_some(),
         runtime_consumption.latest_kind.as_deref(),
         None,
@@ -6997,6 +7020,78 @@ mod tests {
 
         assert!(!super::recovery_holds_active_bound_run(Some(&recovery)));
         assert!(!super::recovery_holds_active_bound_run(None));
+    }
+
+    #[test]
+    fn graph_summary_runtime_gate_ignores_stale_recovery_after_clean_completed_dispatch_receipt() {
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-1".to_string(),
+            task_id: "task-1".to_string(),
+            active_node: "coach".to_string(),
+            lifecycle_stage: "coach_active".to_string(),
+            resume_node: Some("coach".to_string()),
+            resume_status: "ready".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "awaiting_coach".to_string(),
+            recovery_ready: true,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "coach".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "handoff_pending".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                lifecycle_stage: "coach_active".to_string(),
+            },
+        };
+        let dispatch = crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: "run-1".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            blocker_code: None,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_target: Some("coach".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("proof".to_string()),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("/tmp/downstream-result.json".to_string()),
+            downstream_dispatch_packet_path: Some("/tmp/downstream-packet.json".to_string()),
+            downstream_dispatch_trace_path: Some("/tmp/downstream-trace.json".to_string()),
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_last_target: Some("coach".to_string()),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            selected_backend: Some("opencode_cli".to_string()),
+            exception_path_receipt_id: None,
+            supersedes_receipt_id: None,
+            recorded_at: "2026-05-16T00:00:00Z".to_string(),
+            activation_runtime_role: Some("worker".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_evidence: serde_json::Value::Null,
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+        };
+
+        assert!(super::recovery_holds_active_bound_run(Some(&recovery)));
+        assert!(!super::recovery_holds_unresolved_active_bound_run(
+            Some(&recovery),
+            Some(&dispatch)
+        ));
+        let blocker_codes =
+            super::scheduler_execute_runtime_gate_blocker_codes(Some(&recovery), Some(&dispatch));
+        assert!(!blocker_codes
+            .blocker_codes
+            .iter()
+            .any(|code| code == "open_delegated_cycle"));
     }
 
     #[test]
