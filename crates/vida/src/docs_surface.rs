@@ -195,6 +195,7 @@ fn write_scoped_doc(
 ) -> Result<ScopedDocWrite, String> {
     let target = scoped_target_path(project_root, relative_path)?;
     reject_symlink_target(&target)?;
+    reject_symlink_ancestors(project_root, &target)?;
     if let Some(parent) = target.parent() {
         super::ensure_dir(parent)?;
     }
@@ -234,6 +235,35 @@ fn scoped_target_path(project_root: &Path, relative_path: &Path) -> Result<PathB
         ));
     }
     Ok(project_root.join(relative_path))
+}
+
+fn reject_symlink_ancestors(project_root: &Path, target: &Path) -> Result<(), String> {
+    let parent = target.parent().ok_or_else(|| {
+        format!(
+            "Scoped docs target has no parent directory: {}",
+            target.display()
+        )
+    })?;
+    let relative_parent = parent.strip_prefix(project_root).map_err(|_| {
+        format!(
+            "Scoped docs target escaped project root while validating parents: {}",
+            parent.display()
+        )
+    })?;
+
+    let mut cursor = project_root.to_path_buf();
+    for component in relative_parent.components() {
+        cursor.push(component.as_os_str());
+        if let Ok(metadata) = std::fs::symlink_metadata(&cursor)
+            && metadata.file_type().is_symlink()
+        {
+            return Err(format!(
+                "Refusing to update scoped docs through symlinked parent: {}",
+                cursor.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn reject_symlink_target(target: &Path) -> Result<(), String> {
@@ -406,6 +436,49 @@ mod tests {
             fs::read_to_string(project_root.join("docs/product/index.md"))
                 .expect("product doc should read"),
             "# product\n"
+        );
+    }
+
+    #[test]
+    fn docs_update_rejects_symlinked_instruction_parent_directory() {
+        let harness = crate::temp_state::TempStateHarness::new().expect("temp root should init");
+        let project_root = harness.path().join("project");
+        let source_root = harness.path().join("source");
+        let source_instructions = source_root.join("vida/config/instructions");
+        let outside_root = harness.path().join("outside");
+
+        fs::create_dir_all(source_root.join("install/assets")).expect("source assets should exist");
+        fs::create_dir_all(source_instructions.join("instruction-contracts"))
+            .expect("source protocols should exist");
+        fs::create_dir_all(&outside_root).expect("outside root should exist");
+
+        fs::write(
+            source_root.join("install/assets/AGENTS.scaffold.md"),
+            "# canonical agents\n",
+        )
+        .expect("agents source should write");
+        fs::write(
+            source_instructions.join("instruction-contracts/core.demo-protocol.md"),
+            "# canonical protocol\n",
+        )
+        .expect("protocol source should write");
+
+        fs::create_dir_all(project_root.join("vida/config")).expect("project config should exist");
+        std::os::unix::fs::symlink(&outside_root, project_root.join("vida/config/instructions"))
+            .expect("symlink should write");
+
+        let error = update_current_docs_at_root(&project_root, &source_root)
+            .expect_err("docs update should reject symlinked parent");
+
+        assert!(
+            error.contains("symlinked parent"),
+            "expected symlinked parent error, got: {error}"
+        );
+        assert!(
+            !outside_root
+                .join("instruction-contracts/core.demo-protocol.md")
+                .exists(),
+            "protocol write should not escape project root"
         );
     }
 
