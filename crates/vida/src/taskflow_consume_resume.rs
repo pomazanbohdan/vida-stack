@@ -34,7 +34,6 @@ fn state_store_lock_marker_error_with_timeout(
         let _ = super::StateStore::reclaim_self_owned_failed_authoritative_datastore_lock_marker(
             state_root,
         );
-        let _ = super::StateStore::reclaim_stale_authoritative_datastore_lock_marker(state_root);
         match std::fs::metadata(&lock_path) {
             Ok(metadata) if metadata.is_file() => {
                 let nonnumeric_marker = std::fs::read_to_string(&lock_path)

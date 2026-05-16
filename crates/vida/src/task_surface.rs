@@ -77,11 +77,6 @@ async fn open_task_store(
 pub(crate) async fn open_read_only_task_store(
     state_dir: std::path::PathBuf,
 ) -> Result<StateStore, state_store::StateStoreError> {
-    match StateStore::reclaim_stale_authoritative_datastore_lock_marker(&state_dir) {
-        Ok(_) => {}
-        Err(error) if StateStore::error_is_lock_contention(&error) => {}
-        Err(error) => return Err(error),
-    }
     StateStore::open_existing_read_only(state_dir).await
 }
 
