@@ -1487,9 +1487,9 @@ impl StateStore {
 mod tests {
     use super::*;
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
     #[cfg(unix)]
-    use std::{io::ErrorKind, os::unix::fs::symlink};
+    use std::os::unix::fs::symlink;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_task_store_temp_root(prefix: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -1773,10 +1773,13 @@ mod tests {
             .expect_err("symlink write should be rejected");
         assert!(
             matches!(
-                error,
+                &error,
                 StateStoreError::InvalidTaskRecord { reason }
                 if reason.contains("refusing to write task export to symlink path")
-            ) || matches!(error, StateStoreError::Io(io_error) if io_error.kind() == ErrorKind::FilesystemLoop)
+            ) || matches!(
+                &error,
+                StateStoreError::Io(io_error) if io_error.raw_os_error() == Some(libc::ELOOP)
+            )
         );
         let victim_after = fs::read_to_string(&victim_path).expect("read victim");
         assert_eq!(victim_after, "original");
