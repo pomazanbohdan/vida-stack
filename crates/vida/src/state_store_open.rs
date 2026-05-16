@@ -11,6 +11,7 @@ const AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT: usize = AUTHORITATIVE_DATASTORE_LOCK
 const AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS: u64 = AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS;
 const READ_ONLY_OPEN_RETRY_COUNT: usize = 800;
 const READ_ONLY_OPEN_RETRY_DELAY_MS: u64 = 25;
+const DATASTORE_CLOSE_SETTLE_MS: u64 = 250;
 
 struct AuthoritativeOpenGuard {
     file: std::fs::File,
@@ -139,19 +140,22 @@ impl StateStore {
         let lock_text = match fs::read_to_string(&lock_path) {
             Ok(lock_text) => lock_text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => {
+                return Ok(false);
+            }
             Err(error) => return Err(StateStoreError::Io(error)),
         };
         let Ok(pid) = lock_text.trim().parse::<u32>() else {
             return Ok(false);
         };
-        let recoverable =
-            pid == std::process::id() || process_liveness(pid) == ProcessLiveness::Dead;
+        let recoverable = process_liveness(pid) == ProcessLiveness::Dead;
         if !recoverable {
             return Ok(false);
         };
         match fs::remove_file(&lock_path) {
             Ok(()) => Ok(true),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => Ok(false),
             Err(error) => Err(StateStoreError::Io(error)),
         }
     }
@@ -178,6 +182,7 @@ impl StateStore {
             }
             StateStoreError::Db(db_error) => {
                 Self::message_is_lock_contention(&db_error.to_string())
+                    || Self::message_is_lock_contention(&format!("{db_error:?}"))
             }
             _ => false,
         }
@@ -310,6 +315,11 @@ impl StateStore {
         }
     }
 
+    pub(crate) async fn close(self) {
+        drop(self);
+        tokio::time::sleep(std::time::Duration::from_millis(DATASTORE_CLOSE_SETTLE_MS)).await;
+    }
+
     async fn open_existing_once(root: PathBuf) -> Result<Self, StateStoreError> {
         Self::open_once(root).await
     }
@@ -368,7 +378,7 @@ mod tests {
         ));
 
         let store = StateStore::open(root.clone()).await.expect("open store");
-        drop(store);
+        store.close().await;
 
         let _guard = AuthoritativeOpenGuard::acquire(&root)
             .await
@@ -396,7 +406,7 @@ mod tests {
         ));
 
         let store = StateStore::open(root.clone()).await.expect("open store");
-        drop(store);
+        store.close().await;
 
         let first_reader = StateStore::open_existing_read_only(root.clone())
             .await
@@ -412,7 +422,10 @@ mod tests {
             .await
             .expect("second read-only open should wait for the first read lock")
             .expect("second read-only task should not panic");
-        assert!(second_result.is_ok());
+        assert!(
+            second_result.is_ok(),
+            "second read-only open should succeed after first reader closes: {second_result:?}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -437,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn self_owned_failed_authoritative_lock_marker_is_reclaimed() {
+    fn self_pid_authoritative_lock_marker_is_preserved() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -450,10 +463,13 @@ mod tests {
         fs::write(root.join("LOCK"), std::process::id().to_string()).expect("write self lock");
 
         let reclaimed = StateStore::reclaim_recoverable_authoritative_datastore_lock_marker(&root)
-            .expect("self-owned failed lock should not error");
+            .expect("self-pid lock marker should not error");
 
-        assert!(reclaimed);
-        assert!(!root.join("LOCK").exists());
+        assert!(!reclaimed);
+        assert_eq!(
+            fs::read_to_string(root.join("LOCK")).expect("read preserved self-pid lock"),
+            std::process::id().to_string()
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
