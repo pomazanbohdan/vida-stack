@@ -2175,6 +2175,7 @@ fn terminal_completed_without_next_unit(
 fn explicit_task_binding_matches_status(
     binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     status: Option<&crate::state_store::RunGraphStatus>,
+    ready_head: Option<&GraphSummaryTaskRef>,
 ) -> bool {
     let Some(binding) = binding else {
         return false;
@@ -2182,6 +2183,12 @@ fn explicit_task_binding_matches_status(
     let Some(status) = status else {
         return false;
     };
+    let bound_task_id = binding
+        .active_bounded_unit
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     binding.run_id == status.run_id
         && binding.binding_source == "explicit_continuation_bind_task"
         && binding
@@ -2189,6 +2196,9 @@ fn explicit_task_binding_matches_status(
             .get("kind")
             .and_then(serde_json::Value::as_str)
             == Some("task_graph_task")
+        && bound_task_id
+            .zip(ready_head.map(|task| task.id.as_str()))
+            .is_some_and(|(bound_task_id, ready_task_id)| bound_task_id == ready_task_id)
 }
 
 fn active_exception_takeover_evidence_matches_status(
@@ -2292,8 +2302,11 @@ fn build_taskflow_next_decision(
     );
     let active_exception_takeover_continuation =
         active_exception_takeover_evidence && latest_run_graph_status_blocked;
-    let explicit_next_task_binding =
-        explicit_task_binding_matches_status(explicit_binding, latest_run_graph_status);
+    let explicit_next_task_binding = explicit_task_binding_matches_status(
+        explicit_binding,
+        latest_run_graph_status,
+        ready_head.as_ref(),
+    );
     let downstream_dispatch_continuation_evidence =
         downstream_dispatch_continuation_evidence_matches_status(latest_run_graph_status, dispatch);
     let terminal_consume_continue_without_next_unit = latest_run_graph_status
