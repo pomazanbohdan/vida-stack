@@ -769,6 +769,10 @@ fn recovery_projection_resolves_persisted_open_cycle(
             receipt.dispatch_status == "executed"
                 && receipt.lane_status == "lane_completed"
                 && receipt.blocker_code.is_none()
+                && !receipt.downstream_dispatch_ready
+                && !receipt
+                    .downstream_dispatch_status
+                    .eq_ignore_ascii_case("packet_ready")
                 && receipt.downstream_dispatch_blockers.is_empty()
         })
 }
