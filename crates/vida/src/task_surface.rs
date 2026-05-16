@@ -1899,7 +1899,9 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                         match store
                             .update_task(state_store::UpdateTaskRequest {
                                 task_id: &command.task_id,
+                                title: None,
                                 status: None,
+                                priority: None,
                                 notes: None,
                                 description: None,
                                 parent_id: None,
@@ -4007,7 +4009,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     match store
                         .update_task(state_store::UpdateTaskRequest {
                             task_id: &command.task_id,
+                            title: command.title.as_deref(),
                             status: command.status.as_deref(),
+                            priority: command.priority,
                             notes: notes.as_deref(),
                             description: command.description.as_deref(),
                             parent_id,

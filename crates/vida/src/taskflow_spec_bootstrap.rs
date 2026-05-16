@@ -56,7 +56,9 @@ fn create_task_if_missing_with_store(
                 crate::block_on_state_store(
                     store.update_task(UpdateTaskRequest {
                         task_id,
+                        title: None,
                         status: None,
+                        priority: None,
                         notes: None,
                         description: None,
                         parent_id: None,

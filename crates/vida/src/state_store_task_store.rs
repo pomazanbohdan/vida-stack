@@ -1071,7 +1071,9 @@ impl StateStore {
     ) -> Result<TaskRecord, StateStoreError> {
         let UpdateTaskRequest {
             task_id,
+            title,
             status,
+            priority,
             notes,
             description,
             parent_id,
@@ -1085,6 +1087,15 @@ impl StateStore {
             planner_metadata,
         } = request;
         let mut task = self.show_task(task_id).await?;
+        if let Some(title) = title {
+            let trimmed = title.trim();
+            if trimmed.is_empty() {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!("task `{task_id}` title cannot be empty"),
+                });
+            }
+            task.title = trimmed.to_string();
+        }
         if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
             if status == "closed" {
                 let tasks = self.all_tasks().await?;
@@ -1118,6 +1129,9 @@ impl StateStore {
                 task.closed_at = None;
                 task.close_reason = None;
             }
+        }
+        if let Some(priority) = priority {
+            task.priority = priority;
         }
         if let Some(notes) = notes {
             task.notes = Some(notes.to_string());

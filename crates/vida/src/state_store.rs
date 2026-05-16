@@ -780,7 +780,9 @@ hierarchy: framework,contracts
         let updated = store
             .update_task(UpdateTaskRequest {
                 task_id: "vida-root",
+                title: None,
                 status: Some("in_progress"),
+                priority: None,
                 notes: Some("steady"),
                 description: Some("adjusted"),
                 parent_id: None,
@@ -809,7 +811,9 @@ hierarchy: framework,contracts
         let updated_again = store
             .update_task(UpdateTaskRequest {
                 task_id: "vida-root",
+                title: None,
                 status: Some("open"),
+                priority: None,
                 notes: None,
                 description: None,
                 parent_id: None,
@@ -889,7 +893,9 @@ hierarchy: framework,contracts
         let error = store
             .update_task(UpdateTaskRequest {
                 task_id: "vida-root",
+                title: None,
                 status: Some("closed"),
+                priority: None,
                 notes: None,
                 description: None,
                 parent_id: None,
@@ -967,7 +973,9 @@ hierarchy: framework,contracts
         let reparented = store
             .update_task(UpdateTaskRequest {
                 task_id: "child-task",
+                title: None,
                 status: None,
+                priority: None,
                 notes: None,
                 description: None,
                 parent_id: Some(Some("root-b")),
@@ -999,7 +1007,9 @@ hierarchy: framework,contracts
         let detached = store
             .update_task(UpdateTaskRequest {
                 task_id: "child-task",
+                title: None,
                 status: None,
+                priority: None,
                 notes: None,
                 description: None,
                 parent_id: Some(None),

@@ -114,6 +114,7 @@ fn default_activation_view(
 
 const DEFAULT_DISPATCH_TIMEOUT_KILL_AFTER_GRACE_SECONDS: u64 = 1;
 const DEFAULT_ACTIVATION_VIEW_RENDER_TIMEOUT_SECONDS: u64 = 5;
+const DEFAULT_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_CAP_SECONDS: u64 = 60;
 
 async fn bounded_activation_view(
     state_root: &Path,
@@ -211,6 +212,7 @@ fn configured_internal_host_dispatch_wall_timeout_seconds(
         role_selection,
         receipt,
     )
+    .min(DEFAULT_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_CAP_SECONDS)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1134,12 +1136,15 @@ pub(crate) fn agent_lane_dispatch_result(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     host_runtime: serde_json::Value,
 ) -> serde_json::Value {
-    let effective_selected_backend =
-        crate::runtime_dispatch_state::canonical_selected_backend_for_receipt(
-            role_selection,
-            receipt,
-        )
-        .or_else(|| receipt.selected_backend.clone());
+    let effective_selected_backend = preferred_backend
+        .map(str::to_string)
+        .or_else(|| receipt.selected_backend.clone())
+        .or_else(|| {
+            crate::runtime_dispatch_state::canonical_selected_backend_for_receipt(
+                role_selection,
+                receipt,
+            )
+        });
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let blocker_code =
         crate::runtime_dispatch_state::internal_host_activation_view_only_blocker_code(
@@ -3090,6 +3095,24 @@ agent_system:
                 kill_after_grace_seconds: 1,
             })
         );
+    }
+
+    #[test]
+    fn internal_host_dispatch_wall_timeout_cap_stays_below_operator_timeout() {
+        let wrapped = wrap_command_with_optional_timeout(
+            "codex".to_string(),
+            vec!["exec".to_string()],
+            Some(super::DEFAULT_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_CAP_SECONDS + 180),
+        );
+
+        assert_eq!(
+            wrapped.timeout_wrapper,
+            Some(CommandTimeoutWrapper {
+                timeout_seconds: super::DEFAULT_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_CAP_SECONDS + 180,
+                kill_after_grace_seconds: 1,
+            })
+        );
+        assert!(super::DEFAULT_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_CAP_SECONDS < 120);
     }
 
     #[cfg(unix)]
