@@ -357,8 +357,75 @@ impl StateStore {
         &self,
         task_id: &str,
     ) -> Result<TaskDependencyTreeNode, StateStoreError> {
-        let tasks = self.all_tasks().await?;
-        Self::task_dependency_tree_from_rows(&tasks, task_id)
+        let task = self.show_task(task_id).await?;
+        let mut dependencies = Vec::new();
+        for dependency in &task.dependencies {
+            let mut edge = TaskDependencyTreeEdge {
+                issue_id: dependency.issue_id.clone(),
+                depends_on_id: dependency.depends_on_id.clone(),
+                edge_type: dependency.edge_type.clone(),
+                dependency_status: "missing".to_string(),
+                dependency_issue_type: None,
+                node: None,
+                cycle: dependency.depends_on_id == task.id,
+                missing: false,
+            };
+            match self.show_task(&dependency.depends_on_id).await {
+                Ok(dependency_task) => {
+                    edge.dependency_status = dependency_task.status;
+                    edge.dependency_issue_type = Some(dependency_task.issue_type);
+                }
+                Err(StateStoreError::MissingTask { .. }) => {
+                    edge.missing = true;
+                }
+                Err(error) => return Err(error),
+            }
+            dependencies.push(edge);
+        }
+
+        let mut query = self
+            .db
+            .query(format!(
+                "SELECT * FROM task_dependency WHERE depends_on_id = '{}' AND edge_type = 'parent-child' ORDER BY issue_id ASC;",
+                escape_surql_literal(&task.id)
+            ))
+            .await?;
+        let child_edges: Vec<TaskDependencyRecord> = query.take(0)?;
+        let mut children = Vec::new();
+        for child_edge in child_edges {
+            let mut child = TaskDependencyTreeChild {
+                child_id: child_edge.issue_id.clone(),
+                child_status: "missing".to_string(),
+                child_issue_type: None,
+                node: None,
+                cycle: child_edge.issue_id == task.id,
+                missing: false,
+            };
+            match self.show_task(&child_edge.issue_id).await {
+                Ok(child_task) => {
+                    child.child_status = child_task.status;
+                    child.child_issue_type = Some(child_task.issue_type);
+                }
+                Err(StateStoreError::MissingTask { .. }) => {
+                    child.missing = true;
+                }
+                Err(error) => return Err(error),
+            }
+            children.push(child);
+        }
+
+        dependencies.sort_by(|left, right| {
+            left.edge_type
+                .cmp(&right.edge_type)
+                .then_with(|| left.depends_on_id.cmp(&right.depends_on_id))
+        });
+        children.sort_by(|left, right| left.child_id.cmp(&right.child_id));
+
+        Ok(TaskDependencyTreeNode {
+            task,
+            dependencies,
+            children,
+        })
     }
 
     pub(crate) fn task_dependency_tree_from_rows(
@@ -408,10 +475,6 @@ impl StateStore {
             } else if let Some(child) = by_id.get(&dependency.depends_on_id) {
                 edge.dependency_status = child.status.clone();
                 edge.dependency_issue_type = Some(child.issue_type.clone());
-                let child_id = child.id.clone();
-                let child_node =
-                    Self::build_task_dependency_tree(by_id, children_by_parent, &child_id, active)?;
-                edge.node = Some(Box::new(child_node));
             } else {
                 edge.missing = true;
             }
@@ -434,13 +497,6 @@ impl StateStore {
                 } else if let Some(child_task) = by_id.get(child_id) {
                     child.child_status = child_task.status.clone();
                     child.child_issue_type = Some(child_task.issue_type.clone());
-                    let child_node = Self::build_task_dependency_tree(
-                        by_id,
-                        children_by_parent,
-                        child_id,
-                        active,
-                    )?;
-                    child.node = Some(Box::new(child_node));
                 } else {
                     child.missing = true;
                 }
@@ -893,6 +949,96 @@ mod tests {
             .blocked_by
             .iter()
             .any(|dependency| dependency.dependency_status == "missing"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn task_tree_payload_is_bounded_by_default() {
+        let root = temp_root("task-tree-bounded-default");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        create_task_with_semantics(&store, "root-task", None, None, None, None).await;
+        create_task_with_semantics(&store, "dependency-task", None, None, None, None).await;
+        create_task_with_semantics(&store, "nested-dependency", None, None, None, None).await;
+        create_task_with_semantics(&store, "child-task", None, None, None, None).await;
+        create_task_with_semantics(&store, "grandchild-task", None, None, None, None).await;
+
+        let mut root_task = store.show_task("root-task").await.expect("root exists");
+        root_task.dependencies.push(TaskDependencyRecord {
+            issue_id: "root-task".to_string(),
+            depends_on_id: "dependency-task".to_string(),
+            edge_type: "blocks".to_string(),
+            created_at: "1".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        });
+        store
+            .persist_task_record(root_task)
+            .await
+            .expect("persist root dependency");
+
+        let mut dependency_task = store
+            .show_task("dependency-task")
+            .await
+            .expect("dependency exists");
+        dependency_task.dependencies.push(TaskDependencyRecord {
+            issue_id: "dependency-task".to_string(),
+            depends_on_id: "nested-dependency".to_string(),
+            edge_type: "blocks".to_string(),
+            created_at: "1".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        });
+        store
+            .persist_task_record(dependency_task)
+            .await
+            .expect("persist nested dependency");
+
+        let mut child_task = store.show_task("child-task").await.expect("child exists");
+        child_task.dependencies.push(TaskDependencyRecord {
+            issue_id: "child-task".to_string(),
+            depends_on_id: "root-task".to_string(),
+            edge_type: "parent-child".to_string(),
+            created_at: "1".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        });
+        store
+            .persist_task_record(child_task)
+            .await
+            .expect("persist child edge");
+
+        let mut grandchild_task = store
+            .show_task("grandchild-task")
+            .await
+            .expect("grandchild exists");
+        grandchild_task.dependencies.push(TaskDependencyRecord {
+            issue_id: "grandchild-task".to_string(),
+            depends_on_id: "child-task".to_string(),
+            edge_type: "parent-child".to_string(),
+            created_at: "1".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        });
+        store
+            .persist_task_record(grandchild_task)
+            .await
+            .expect("persist grandchild edge");
+
+        let tree = store
+            .task_dependency_tree("root-task")
+            .await
+            .expect("tree should render");
+
+        assert_eq!(tree.dependencies.len(), 1);
+        assert_eq!(tree.children.len(), 1);
+        assert!(tree.dependencies[0].node.is_none());
+        assert!(tree.children[0].node.is_none());
 
         let _ = fs::remove_dir_all(root);
     }

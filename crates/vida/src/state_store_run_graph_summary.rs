@@ -224,6 +224,10 @@ fn terminal_closure_status(status: &RunGraphStatus) -> bool {
             .is_none()
 }
 
+fn task_status_is_terminal_for_continuation(status: &str) -> bool {
+    matches!(status.trim(), "closed" | "completed")
+}
+
 fn terminal_closure_status_has_explicit_receipt_override(
     status: &RunGraphStatus,
     receipt: &RunGraphDispatchReceiptStored,
@@ -346,7 +350,7 @@ fn reconcile_run_graph_status_with_closed_task(
     let Some(task) = task else {
         return status;
     };
-    if task.status != "closed" {
+    if !task_status_is_terminal_for_continuation(&task.status) {
         return status;
     }
     if !StateStore::run_graph_status_allows_task_close_closure_binding(&status) {
@@ -1501,7 +1505,7 @@ impl StateStore {
                 Err(StateStoreError::MissingTask { .. }) => return Ok(Some(binding)),
                 Err(error) => return Err(error),
             };
-            if task.status == "closed" {
+            if task_status_is_terminal_for_continuation(&task.status) {
                 continue;
             }
 
@@ -1546,7 +1550,7 @@ impl StateStore {
             }
             Err(error) => return Err(error),
         };
-        if task.status != "closed" {
+        if !task_status_is_terminal_for_continuation(&task.status) {
             return Ok(Some(binding));
         }
         if !self
@@ -4036,6 +4040,69 @@ mod tests {
         assert_eq!(latest.binding_source, "explicit_continuation_bind_task");
         assert_eq!(latest.active_bounded_unit["kind"], "task_graph_task");
         assert_eq!(latest.active_bounded_unit["task_status"], "in_progress");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_explicit_run_graph_continuation_binding_skips_completed_bound_task() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-latest-explicit-run-graph-continuation-binding-completed-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "task-completed-binding",
+                title: "Completed explicit binding task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "completed",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create completed task");
+
+        store
+            .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
+                run_id: "run-completed-binding".to_string(),
+                task_id: "task-completed-binding".to_string(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "task_graph_task",
+                    "task_id": "task-completed-binding",
+                    "run_id": "run-completed-binding",
+                    "task_status": "completed",
+                    "issue_type": "task"
+                }),
+                binding_source: "explicit_continuation_bind_task".to_string(),
+                why_this_unit: "stale explicit completed task binding".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+                request_text: Some("continue".to_string()),
+                recorded_at: "2026-04-16T09:00:00Z".to_string(),
+            })
+            .await
+            .expect("record completed explicit binding");
+
+        assert!(store
+            .latest_explicit_run_graph_continuation_binding()
+            .await
+            .expect("read latest explicit binding")
+            .is_none());
 
         let _ = fs::remove_dir_all(&root);
     }

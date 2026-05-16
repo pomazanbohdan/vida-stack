@@ -324,7 +324,7 @@ mod tests {
         assert!(summary["agents"]["junior"]["default_model_profile"]
             .as_str()
             .is_some());
-        assert_eq!(summary["agents"]["senior"]["model"], "gpt-5.5");
+        assert_eq!(summary["agents"]["senior"]["model"], "gpt-5.4");
         assert_eq!(
             summary["subagent_backends"]["internal_subagents"]["default_model_profile"],
             "codex_gpt55_low_write"

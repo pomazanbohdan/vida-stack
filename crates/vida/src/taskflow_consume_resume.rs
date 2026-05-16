@@ -214,6 +214,10 @@ fn consume_continue_resume_error_blocker_code(error: &str) -> &'static str {
         "continuation_binding_mismatch"
     } else if error.contains("not resumeable through default") {
         "continuation_binding_not_resumeable"
+    } else if error.contains("No persisted run-graph dispatch receipt exists")
+        || error.contains("missing receipt recovery could not load dispatch context")
+    {
+        "missing_run_graph_dispatch_receipt"
     } else if error.contains("Timed out executing runtime dispatch handoff") {
         "runtime_dispatch_handoff_timeout"
     } else {
@@ -11714,6 +11718,22 @@ agent_system:
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn consume_continue_resume_error_classifies_missing_dispatch_receipt() {
+        assert_eq!(
+            consume_continue_resume_error_blocker_code(
+                "No persisted run-graph dispatch receipt exists for run_id `run-a`"
+            ),
+            "missing_run_graph_dispatch_receipt"
+        );
+        assert_eq!(
+            consume_continue_resume_error_blocker_code(
+                "No persisted run-graph dispatch receipt exists for run_id `run-a` and missing receipt recovery could not load dispatch context"
+            ),
+            "missing_run_graph_dispatch_receipt"
+        );
     }
 
     #[tokio::test]

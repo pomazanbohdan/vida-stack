@@ -510,13 +510,50 @@ pub(crate) fn print_task_dependency_tree(
     tree: &TaskDependencyTreeNode,
     as_json: bool,
 ) {
+    let dependencies = tree
+        .dependencies
+        .iter()
+        .map(|edge| {
+            serde_json::json!({
+                "id": edge.depends_on_id,
+                "status": edge.dependency_status,
+                "issue_type": edge.dependency_issue_type,
+                "edge_type": edge.edge_type,
+                "missing": edge.missing,
+                "cycle": edge.cycle,
+            })
+        })
+        .collect::<Vec<_>>();
+    let children = tree
+        .children
+        .iter()
+        .map(|child| {
+            serde_json::json!({
+                "id": child.child_id,
+                "status": child.child_status,
+                "issue_type": child.child_issue_type,
+                "missing": child.missing,
+                "cycle": child.cycle,
+            })
+        })
+        .collect::<Vec<_>>();
     let payload = build_pass_operator_surface_payload(
         "vida task tree",
         serde_json::json!({
+            "root": {
+                "id": tree.task.id,
+                "status": tree.task.status,
+                "title": tree.task.title,
+                "priority": tree.task.priority,
+                "issue_type": tree.task.issue_type,
+            },
             "root_task_id": tree.task.id,
             "dependency_count": tree.dependencies.len(),
             "child_count": tree.children.len(),
-            "tree": tree,
+            "dependencies": dependencies,
+            "children": children,
+            "tree_depth": "immediate_edges_only",
+            "drill_down": "run vida task tree <task-id> --json on a listed dependency or child for the next bounded slice",
         }),
     );
     if crate::surface_render::print_surface_json(
@@ -867,14 +904,20 @@ mod tests {
         let payload = build_pass_operator_surface_payload(
             "vida task tree",
             serde_json::json!({
+                "root": {
+                    "id": "task-root",
+                    "status": "open",
+                    "title": "Sample task",
+                    "priority": 1,
+                    "issue_type": "task",
+                },
                 "root_task_id": "task-root",
                 "dependency_count": 0,
                 "child_count": 0,
-                "tree": {
-                    "task": sample_task("task-root"),
-                    "dependencies": [],
-                    "children": [],
-                },
+                "dependencies": [],
+                "children": [],
+                "tree_depth": "immediate_edges_only",
+                "drill_down": "run vida task tree <task-id> --json on a listed dependency or child for the next bounded slice",
             }),
         );
 

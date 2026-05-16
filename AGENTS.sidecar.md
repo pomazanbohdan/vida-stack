@@ -119,12 +119,64 @@ Project-routing rule:
 25c. `Крок 3/3: code fix` must apply the bounded code fix for the selected defect, or explicitly close the cycle as `no-code-fix-required` with current runtime evidence that the selected defect no longer reproduces. Test authoring, proof execution, release build/install, diagnostics, TaskFlow closure, commit, and push are mandatory post-fix gates, but they occur after the three repair steps and are not counted as repair steps. If the defect changes shape during investigation, restate the active bounded unit, why it remains the same unit or bind a new one, then restart the numbered 1/3 through 3/3 cadence for that new defect shape.
 25d. During `Крок 1/3: дослідження`, after identifying the defect and reading the related/dependent code paths but before deciding how to fix it, explicitly actualize the expected behavior from the project documentation that specifies agent behavior across the affected levels: the relevant project spec, protocol, design note, canonical runtime/agent-behavior map, command/operator contract, and any mapped docs from this sidecar. Runtime code contracts are supporting evidence, not a substitute for the project documentation when agent behavior is specified there. The architecture decision in `Крок 2/3: архітектурне рішення + bounded write scope` must state the expected behavior being restored, the project-doc/spec/protocol evidence used, and how the selected bounded fix will be validated against that expected behavior. If the relevant expected behavior cannot be resolved from existing project documentation or mapped runtime/operator contracts, fail closed to a specification/contract clarification task instead of implementing from intuition.
 26. During active development, in addition to continuously tracking and fixing runtime defects, the system must also continuously track command surfaces, command options, and operator information output; when gaps, missing commands/options, or needed output additions are detected, immediately analyze the related code paths, relevant specs, and operator/runtime impact, then add or correct those command and output surfaces proactively and automatically rather than deferring them.
+26a. Runtime/operator command latency is a product invariant. The target operator command processing speed is up to two seconds for normal inspection, planning, scheduling, continuation, and status surfaces unless a command is explicitly documented as a long-running build/test/release action. If a runtime operation times out, repeatedly exceeds that target, or blocks orchestration throughput, classify it as Priority 0 architectural runtime debt. Handle it through meta-analysis first: identify the slow command family, state-store/lock/IO/graph/reconciliation path, expected spec behavior, and architectural refactor needed to restore fast bounded operation. P0 timeout work may preempt ordinary ready tasks until command throughput is restored.
 27. When a user explicitly orders post-fix release actions, treat that sequence as mandatory: after the bounded implementation wave is complete, run a fresh release build, update the system-installed binary, create a commit, and push it before declaring that wave finished.
 27a. When a user explicitly requires release actions after task closure, treat that rule as sticky for the active session: immediately after closing each bounded task, run a fresh release build, update the system-installed binary, create a commit, push it, and then bind the next lawful agent task without waiting for another user prompt.
 28. Commentary, status output, and intermediate reports are visibility only; they do not create a lawful pause boundary and must not be treated as completion or as permission to idle when the next lawful continuation item is already evidenced.
 29. After any bounded result, green test, successful build, or delegated handoff, immediately bind the next already-evidenced lawful continuation item and continue in the same execution cycle rather than pausing at summary/reporting.
 30. Agent carriers, visible host-agent templates, carrier topology, and default lane-to-carrier assumptions must not be hardcoded in owner/runtime code paths; the source of truth is the active configuration and registries, primarily `vida.config.yaml` plus the enabled agent-extension registries.
 31. File-system template layouts such as `.codex/agents/*.toml` are materialization outputs, not authority surfaces; when code or runtime summaries need the available carriers/templates, resolve them from the configured carrier catalog first and treat on-disk templates as projection/evidence only.
+
+## Defective Runtime Emulation Mode
+
+Use this project-local recovery mode when the VIDA runtime surfaces that should normally plan, dispatch, continue, prioritize, or close work are themselves defective, timing out, returning contradictory state, or blocking progress with evidence that violates the project specs. This mode exists to keep recovery development fast and spec-faithful while the broken runtime is being repaired. It is an emulation of VIDA runtime behavior by the orchestrator, not a replacement owner layer and not a weakening of framework law.
+
+Activation criteria:
+
+1. Prefer normal `vida orchestrator-init`, `vida taskflow graph-summary`, `vida task next`, `vida taskflow run-graph dispatch-init`, `vida agent-init --execute-dispatch`, `vida lane ...`, `vida task update`, `vida doctor`, and DocFlow surfaces first.
+2. Enter this mode only after one or more canonical surfaces are proven defective for the active bounded recovery unit: timeout without receipt, activation-view-only handoff, stale/contradictory continuation binding, impossible recommended command, missing dispatch context, datastore lock contention, release/install command denial, or diagnostics that cannot be satisfied by the command they recommend.
+3. Record the defect as evidence in the active task notes or a new TaskFlow defect task when the task store is writable. If TaskFlow mutation is broken, keep a concise in-session evidence ledger until the store is writable again, then backfill the task notes.
+4. Keep `active_bounded_unit`, `why_this_unit`, and `sequential_vs_parallel_posture` explicit before any emulated planning or execution move.
+5. If a blocking condition is discovered that prevents continuation of the active recovery/development flow, fixing that blocker is allowed and should be treated as elevated-priority work. Keep the blocker repair bounded to the smallest file/state/operator surface that restores continuation, record why it outranks the previous ready item, and resume the interrupted flow immediately after proof.
+6. If a command timeout or slow runtime operation is discovered, treat it as Priority 0 when it affects planning, scheduling, status, recovery, continuation, dispatch, lane, packet, doctor, or task surfaces. First run meta-analysis over the command family and related state-store/graph/IO paths, then perform an architectural refactor rather than increasing timeouts or working around the symptom. The target restored behavior is command processing within two seconds for ordinary operator surfaces.
+
+Emulated runtime responsibilities:
+
+1. Planning: derive the next bounded unit from TaskFlow-ready evidence, critical-path position, explicit user priority, dependency graph, and conflict domains. Do not self-select adjacent backlog work when those fields are ambiguous.
+2. Replanning: when a selected unit changes shape, restate the bounded unit and either keep it with evidence or create/update the correct follow-up task under the correct epic. Do not hide new runtime defects as informal notes.
+3. Prioritization: continuously re-rank ready work by unblock value, critical path, severity, proof cost, command-latency impact, and conflict-domain safety. A newly discovered blocker that prevents continuation is allowed to preempt the current ready item with elevated priority until the flow can continue. Command timeout and slow-operator defects are Priority 0 when they affect normal runtime operation, with a two-second target for ordinary command processing. Prefer recovery work that restores normal runtime operation over cosmetic cleanup.
+4. Parallelization: treat tasks as parallel-safe only when runtime evidence or task execution semantics show disjoint conflict domains, disjoint owned paths, and no current delegated-cycle conflict. If the scheduler surface is contradictory, fail closed to sequential execution.
+5. Agent execution: emulate the canonical delegated lane sequence by producing the same external evidence an agent lane should have produced: bounded goal, owner role, read/write scope, inputs, outputs, proof target, result summary, and blocker/receipt status. Host subagent APIs may be used only as carrier details; the canonical lane model remains TaskFlow/agent-init.
+6. Continuation: after every green proof, build, release install attempt, diagnostic result, handoff, or closure, immediately re-evaluate the next lawful continuation item instead of pausing at commentary.
+7. Closure: close or update tasks only with concrete proof evidence, including command names, pass/fail status, installed binary fingerprint when release is required, and any diagnostic blocker that remains.
+
+Write and safety rules during emulation:
+
+1. This mode may bypass a defective command surface as an operator mechanism, but it must not bypass the expected behavior defined by the specs.
+2. Host-local write remains bounded to the active recovery unit and the smallest safe file set needed to restore spec-compliant runtime behavior.
+3. Before write-producing work, first attempt canonical delegated dispatch or scoped exception takeover when those surfaces are available. If those surfaces are the defect under repair, document why they cannot provide lawful execution evidence and keep the emulated write scope tied to the active defect task.
+4. Never treat `activation_view_only`, `receipt_recorded`, stale lane state, or a ready patch idea as completion evidence.
+5. Never delete runtime locks, packets, receipts, or state artifacts by hand as a bypass. Use them as evidence and repair the code path that produced the bad state.
+6. Never invent dispatch receipts, completion receipts, or green diagnostics. If a command cannot produce a receipt, record the failure shape and continue with explicit emulated evidence until the runtime can be repaired.
+7. Keep the three-step active-defect cadence from this sidecar active: `Крок 1/3: дослідження`, `Крок 2/3: архітектурне рішення + bounded write scope`, and `Крок 3/3: code fix`.
+
+Spec evidence to consult before and during this mode:
+
+1. `docs/process/team-development-and-orchestration-protocol.md`
+2. `docs/process/project-orchestrator-operating-protocol.md`
+3. `docs/process/project-packet-and-lane-runtime-capsule.md`
+4. `docs/product/spec/canonical-runtime-readiness-law.md`
+5. `docs/product/spec/canonical-runtime-layer-matrix.md`
+6. `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
+7. The active task, lane, run-graph, packet, recovery, and doctor JSON surfaces when they are readable.
+
+Exit criteria:
+
+1. The repaired runtime can again select, dispatch, continue, recover, diagnose, and close the active bounded unit through canonical surfaces.
+2. Focused tests for the repaired invariant pass.
+3. A release build has been produced and the environment-resolved `vida` binary has been updated or the install blocker has been recorded as its own runtime defect.
+4. Runtime self-diagnostic has run and any remaining blockers are routed as TaskFlow work.
+5. The next continuation item is selected through the restored runtime surfaces, or the reason emulation must continue is recorded explicitly.
 
 ## Complex And Architectural Processing Contract
 
@@ -167,5 +219,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-05-12T22:54:22.6287522Z
+updated_at: 2026-05-16T18:15:00+03:00
 changelog_ref: AGENTS.sidecar.changelog.jsonl

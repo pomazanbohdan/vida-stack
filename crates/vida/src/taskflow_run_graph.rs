@@ -2758,6 +2758,39 @@ fn run_graph_dispatch_init_error_evidence(error: &str) -> Option<serde_json::Val
     }))
 }
 
+async fn record_dispatch_init_timeout_blocker(
+    store: &StateStore,
+    run_id: &str,
+) -> Result<bool, String> {
+    if matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_))) {
+        return Ok(false);
+    }
+    let mut status = match store.run_graph_status(run_id).await {
+        Ok(status) => status,
+        Err(_) => return Ok(false),
+    };
+    if status.status == "completed" {
+        return Ok(false);
+    }
+
+    status.next_node = None;
+    status.status = "blocked".to_string();
+    status.lifecycle_stage = "dispatch_init_timeout".to_string();
+    status.policy_gate = RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER.to_string();
+    status.handoff_state = "blocked_dispatch_init_timeout".to_string();
+    status.context_state = "blocked".to_string();
+    status.checkpoint_kind = "dispatch_init_timeout".to_string();
+    status.resume_target = "none".to_string();
+    status.recovery_ready = false;
+    record_run_graph_status_with_continuation_sync(
+        store,
+        &status,
+        "run_graph_dispatch_init_timeout",
+    )
+    .await?;
+    Ok(true)
+}
+
 fn run_graph_blocker_code(status: &str) -> Option<&'static str> {
     match status {
         "denied" => Some(crate::release1_contracts::blocker_code_str(
@@ -4522,7 +4555,10 @@ async fn run_graph_dispatch_init(
             )?;
             Ok(payload)
         }),
-        Err(_) => Err(run_graph_dispatch_init_timeout_message(run_id)),
+        Err(_) => {
+            let _ = record_dispatch_init_timeout_blocker(store, run_id).await;
+            Err(run_graph_dispatch_init_timeout_message(run_id))
+        }
     }
 }
 
@@ -5559,6 +5595,48 @@ mod tests {
             serde_json::json!([RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER])
         );
         assert!(run_graph_dispatch_init_error_evidence("unrelated dispatch-init error").is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_timeout_marks_missing_receipt_status_blocked() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        let run_id = "dispatch-init-timeout-missing-receipt";
+        let mut status = default_run_graph_status(run_id, "implementation", "implementation");
+        status.run_id = run_id.to_string();
+        status.task_id = run_id.to_string();
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "implementation_dispatch_ready".to_string();
+        status.active_node = "planning".to_string();
+        status.next_node = Some("implementer".to_string());
+        status.policy_gate = "single_task_scope_required".to_string();
+        status.handoff_state = "awaiting_implementer".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.implementer".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist timeout candidate status");
+
+        assert!(
+            record_dispatch_init_timeout_blocker(&store, run_id)
+                .await
+                .expect("timeout blocker should record"),
+            "missing receipt timeout should mutate status"
+        );
+
+        let blocked = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read blocked status");
+        assert_eq!(blocked.status, "blocked");
+        assert_eq!(blocked.policy_gate, RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER);
+        assert_eq!(blocked.resume_target, "none");
+        assert!(!blocked.recovery_ready);
     }
 
     fn packet_gate_status(task_id: &str) -> RunGraphStatus {

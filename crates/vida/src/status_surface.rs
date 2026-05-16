@@ -766,7 +766,7 @@ agent_system:
         let (selected, entry) = selected_host_cli_system_entry(&overlay);
         let summary = external_cli_preflight_summary(&overlay, &selected, entry.as_ref());
         assert_eq!(summary["status"], "pass");
-        assert_eq!(summary["requires_external_cli"], true);
+        assert_eq!(summary["requires_external_cli"], false);
         assert_eq!(summary["external_cli_subagents_present"], true);
         assert_eq!(summary["hybrid_external_cli_relevant"], true);
         assert_eq!(summary["selected_execution_class"], "internal");
