@@ -1,5 +1,5 @@
 pub(crate) use crate::runtime_lane_summary::{
-    RuntimeConsumptionLaneSelection, build_runtime_lane_selection_with_store,
+    build_runtime_lane_selection_with_store, RuntimeConsumptionLaneSelection,
 };
 
 fn canonicalize_moved_test_request(request: &str) -> String {
@@ -234,10 +234,10 @@ fn request_requires_execution_preparation(
             .flatten()
             .filter_map(serde_json::Value::as_str)
             .collect::<Vec<_>>();
-        let task_class =
-            crate::runtime_assignment_from_execution_plan(&selection.execution_plan)["task_class"]
-                .as_str()
-                .unwrap_or("implementation");
+        let task_class = crate::runtime_assignment_from_execution_plan(&selection.execution_plan)
+            ["task_class"]
+            .as_str()
+            .unwrap_or("implementation");
         let validation_gate = if crate::json_bool(policy.get("honor_validation_gate"), false) {
             crate::json_bool(
                 compiled_bundle["autonomous_execution"]

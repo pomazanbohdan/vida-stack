@@ -815,8 +815,9 @@ mod tests {
             evidence_table: vec![super::RuntimeConsumptionClosureAdmissionEvidence {
                 requirement: "docflow_readiness".to_string(),
                 status: "pass".to_string(),
-                evidence_refs: vec!["vida docflow readiness-check --profile active-canon"
-                    .to_string()],
+                evidence_refs: vec![
+                    "vida docflow readiness-check --profile active-canon".to_string()
+                ],
                 blockers: Vec::new(),
             }],
         };
@@ -838,7 +839,10 @@ mod tests {
             artifact["evidence_bundle_refs"][0],
             "vida docflow readiness-check --profile active-canon"
         );
-        assert_eq!(artifact["evidence_table"][0]["requirement"], "docflow_readiness");
+        assert_eq!(
+            artifact["evidence_table"][0]["requirement"],
+            "docflow_readiness"
+        );
         assert_eq!(
             artifact["evidence_bundle_refs"][1],
             "vida docflow proofcheck --profile active-canon"

@@ -6,10 +6,10 @@ use super::*;
 use crate::release1_contracts::canonical_lane_status_str;
 use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
 use crate::runtime_contract_vocab::{
-    canonical_dispatch_target_name,
-    RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM,
-    RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER, TASK_CLASS_ARCHITECTURE,
-    TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION, TASK_CLASS_VERIFICATION,
+    canonical_dispatch_target_name, RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH,
+    RUNTIME_ROLE_PM, RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER,
+    TASK_CLASS_ARCHITECTURE, TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION,
+    TASK_CLASS_VERIFICATION,
 };
 #[cfg(test)]
 use crate::runtime_dispatch_downstream_packets::downstream_dispatch_packet_body;
@@ -24,13 +24,12 @@ use crate::runtime_dispatch_execution::{
 };
 use crate::runtime_dispatch_packet_text::{runtime_packet_prompt, runtime_tracked_flow_packet};
 #[cfg(test)]
-use crate::runtime_dispatch_packets::{
-    explicit_request_scope_paths, normalize_safe_owned_scope_path_candidate,
-};
+use crate::runtime_dispatch_packets::explicit_request_scope_paths;
 #[cfg(test)]
 use crate::runtime_dispatch_packets::runtime_delivery_task_packet;
 use crate::runtime_dispatch_packets::{
-    delivery_packet_owned_paths, request_has_explicit_owned_scope, runtime_coach_review_packet,
+    delivery_packet_owned_paths, normalize_safe_owned_scope_path_candidate,
+    request_has_explicit_owned_scope, runtime_coach_review_packet,
     runtime_delivery_task_packet_with_scope_context, runtime_escalation_packet,
     runtime_execution_block_packet, runtime_verifier_proof_packet, single_task_move_scope_paths,
 };
@@ -4905,16 +4904,13 @@ fn append_unique_owned_paths(target: &mut Vec<String>, source: &[String]) {
         let Some(normalized) = normalize_safe_owned_scope_path_candidate(path) else {
             continue;
         };
-        if !target.iter().any(|existing| existing == normalized) {
+        if !target.iter().any(|existing| existing == &normalized) {
             target.push(normalized);
         }
     }
 }
 
-async fn planner_metadata_owned_paths_from_task(
-    store: &StateStore,
-    task_id: &str,
-) -> Vec<String> {
+async fn planner_metadata_owned_paths_from_task(store: &StateStore, task_id: &str) -> Vec<String> {
     let task_id = task_id.trim();
     if task_id.is_empty() {
         return Vec::new();
@@ -12756,7 +12752,10 @@ mod tests {
             .await
             .expect("preview should use task-owned paths");
 
-            assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("writer"));
+            assert_eq!(
+                receipt.downstream_dispatch_target.as_deref(),
+                Some("writer")
+            );
             assert!(receipt.downstream_dispatch_ready);
             assert!(receipt.downstream_dispatch_blockers.is_empty());
             let packet_path = receipt
@@ -12816,7 +12815,8 @@ mod tests {
                 "analysis_route_task_class": "analysis",
                 "writer_route_task_class": "writer"
             });
-            let run_graph_bootstrap = json!({ "run_id": "run-analysis-task-metadata-unsafe-preview" });
+            let run_graph_bootstrap =
+                json!({ "run_id": "run-analysis-task-metadata-unsafe-preview" });
             let mut receipt = crate::state_store::RunGraphDispatchReceipt {
                 run_id: "run-analysis-task-metadata-unsafe-preview".to_string(),
                 dispatch_target: "analysis".to_string(),
@@ -12857,7 +12857,10 @@ mod tests {
             .await
             .expect("preview should filter unsafe task-owned paths");
 
-            assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("writer"));
+            assert_eq!(
+                receipt.downstream_dispatch_target.as_deref(),
+                Some("writer")
+            );
             assert!(receipt.downstream_dispatch_ready);
             let packet_path = receipt
                 .downstream_dispatch_packet_path

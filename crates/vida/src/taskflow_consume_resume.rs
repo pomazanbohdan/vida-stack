@@ -1028,10 +1028,9 @@ async fn terminal_closure_complete_resume_candidate(
     run_id: &str,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<Option<ResumeInputs>, String> {
-    let status = store
-        .run_graph_status(run_id)
-        .await
-        .map_err(|error| format!("Failed to read terminal run-graph status for `{run_id}`: {error}"))?;
+    let status = store.run_graph_status(run_id).await.map_err(|error| {
+        format!("Failed to read terminal run-graph status for `{run_id}`: {error}")
+    })?;
     if status.status != "completed"
         || status.lifecycle_stage != "closure_complete"
         || status.resume_target != "none"
@@ -3825,8 +3824,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         .as_deref()
         .and_then(|path| read_dispatch_packet(path).ok())
         .and_then(|packet| decode_role_selection_from_packet(&packet, "dispatch packet").ok());
-    if strict_blocked_receipts
-        && receipt_has_active_exception_takeover(&receipt, &resolved_run_id)
+    if strict_blocked_receipts && receipt_has_active_exception_takeover(&receipt, &resolved_run_id)
     {
         if let Some(packet_path) = receipt.dispatch_packet_path.as_deref() {
             if read_dispatch_packet(packet_path)
@@ -3855,13 +3853,12 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         }
     }
     if !strict_blocked_receipts {
-        if let Some(resume) =
-            maybe_resume_inputs_from_ready_downstream_packet(
-                store,
-                Some(&resolved_run_id),
-                &receipt,
-            )
-            .await?
+        if let Some(resume) = maybe_resume_inputs_from_ready_downstream_packet(
+            store,
+            Some(&resolved_run_id),
+            &receipt,
+        )
+        .await?
         {
             record_run_graph_replay_lineage_receipt_for_resume(
                 store,
@@ -5175,9 +5172,9 @@ mod tests {
         runtime_consumption_resume_receipt_next_actions,
         runtime_consumption_snapshot_has_failure_control_evidence,
         should_refresh_resumed_downstream_preview, state_store_lock_marker_error,
-        sync_run_graph_after_retry_artifact, validate_receipt_packet_pair, validate_run_graph_resume_state,
-        validate_run_graph_resume_state_for_downstream_packet, PacketPathPlatform,
-        CONSUME_RESUME_HANDOFF_TIMEOUT, DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
+        sync_run_graph_after_retry_artifact, validate_receipt_packet_pair,
+        validate_run_graph_resume_state, validate_run_graph_resume_state_for_downstream_packet,
+        PacketPathPlatform, CONSUME_RESUME_HANDOFF_TIMEOUT, DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
     use crate::state_store::{CreateTaskRequest, TaskExecutionSemantics};
@@ -15231,7 +15228,9 @@ agent_system:
                 blocker_code: None,
                 downstream_dispatch_target: Some("closure".to_string()),
                 downstream_dispatch_command: Some("vida agent-init".to_string()),
-                downstream_dispatch_note: Some("closure executed by task close reconcile".to_string()),
+                downstream_dispatch_note: Some(
+                    "closure executed by task close reconcile".to_string(),
+                ),
                 downstream_dispatch_ready: false,
                 downstream_dispatch_blockers: Vec::new(),
                 downstream_dispatch_packet_path: None,

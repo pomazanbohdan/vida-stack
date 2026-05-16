@@ -704,12 +704,12 @@ fn derive_lane_show_truth(
         };
     }
 
-    let completed_has_blocked_downstream =
-        summary.lane_status == crate::LaneStatus::LaneCompleted.as_str()
-            && summary
-                .downstream_dispatch_blockers
-                .iter()
-                .any(|value| !value.trim().is_empty());
+    let completed_has_blocked_downstream = summary.lane_status
+        == crate::LaneStatus::LaneCompleted.as_str()
+        && summary
+            .downstream_dispatch_blockers
+            .iter()
+            .any(|value| !value.trim().is_empty());
     if summary.lane_status == crate::LaneStatus::LaneCompleted.as_str()
         && !completed_has_blocked_downstream
     {

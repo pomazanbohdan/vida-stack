@@ -33,7 +33,8 @@ pub(crate) fn infer_runtime_task_class(
     if selection.selected_role == RUNTIME_ROLE_COACH || !coach_terms.is_empty() {
         return TASK_CLASS_COACH.to_string();
     }
-    if selection.selected_role == RUNTIME_ROLE_VERIFIER || selection.selected_role == RUNTIME_ROLE_PROVER
+    if selection.selected_role == RUNTIME_ROLE_VERIFIER
+        || selection.selected_role == RUNTIME_ROLE_PROVER
     {
         return TASK_CLASS_VERIFICATION.to_string();
     }
@@ -44,17 +45,17 @@ pub(crate) fn infer_runtime_task_class(
         return TASK_CLASS_SPECIFICATION.to_string();
     }
     if !super::contains_keywords(
-            &normalized_request,
-            &[
-                "verify".to_string(),
-                "verification".to_string(),
-                "proof".to_string(),
-                "review".to_string(),
-                "audit".to_string(),
-                "test".to_string(),
-            ],
-        )
-        .is_empty()
+        &normalized_request,
+        &[
+            "verify".to_string(),
+            "verification".to_string(),
+            "proof".to_string(),
+            "review".to_string(),
+            "audit".to_string(),
+            "test".to_string(),
+        ],
+    )
+    .is_empty()
     {
         return TASK_CLASS_VERIFICATION.to_string();
     }

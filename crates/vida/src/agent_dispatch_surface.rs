@@ -1,8 +1,8 @@
 use std::process::ExitCode;
 
 use crate::{
-    AgentArgs, AgentCommand, AgentDispatchNextArgs, AgentSelectArgs, state_store,
-    state_store::StateStore,
+    state_store, state_store::StateStore, AgentArgs, AgentCommand, AgentDispatchNextArgs,
+    AgentSelectArgs,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1170,27 +1170,26 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
     let explicit_state_dir = command.state_dir.as_deref();
     match StateStore::open_existing_read_only(state_dir.clone()).await {
         Ok(store) => {
-            let mut activation_bundle = match crate::build_taskflow_consume_bundle_payload(&store)
-                .await
-            {
-                Ok(payload) => payload.activation_bundle,
-                Err(error) => {
-                    let booted_state =
-                        matches!(store.latest_boot_compatibility_summary().await, Ok(Some(_)))
-                            && matches!(
-                                store.latest_migration_preflight_summary().await,
-                                Ok(Some(_))
-                            );
-                    if !booted_state {
-                        eprintln!(
+            let mut activation_bundle =
+                match crate::build_taskflow_consume_bundle_payload(&store).await {
+                    Ok(payload) => payload.activation_bundle,
+                    Err(error) => {
+                        let booted_state =
+                            matches!(store.latest_boot_compatibility_summary().await, Ok(Some(_)))
+                                && matches!(
+                                    store.latest_migration_preflight_summary().await,
+                                    Ok(Some(_))
+                                );
+                        if !booted_state {
+                            eprintln!(
                             "Failed to load activation bundle for agent dispatch preview: {error}"
                         );
-                        return ExitCode::from(1);
+                            return ExitCode::from(1);
+                        }
+                        crate::taskflow_proxy::runtime_project_config_activation_bundle()
+                            .unwrap_or(serde_json::Value::Null)
                     }
-                    crate::taskflow_proxy::runtime_project_config_activation_bundle()
-                        .unwrap_or(serde_json::Value::Null)
-                }
-            };
+                };
             let preview = if command.dev_team {
                 let configured_max_parallel_agents =
                     configured_max_parallel_agents_from_activation_bundle(&activation_bundle);
@@ -1318,7 +1317,7 @@ mod tests {
         TaskSchedulingProjection,
     };
     use crate::temp_state::TempStateHarness;
-    use crate::test_cli_support::{EnvVarGuard, cli};
+    use crate::test_cli_support::{cli, EnvVarGuard};
     use std::process::ExitCode;
 
     fn task_with_labels(id: &str, title: &str, labels: &[&str]) -> TaskRecord {
@@ -1813,11 +1812,9 @@ mod tests {
     fn assertion_message_contains_actionable_blocker(blocker_codes: &[String], task_id: &str) {
         let expected_prefix =
             format!("selected_lane_runtime_assignment_truth_missing:task={task_id}:");
-        assert!(
-            blocker_codes
-                .iter()
-                .any(|code| code.starts_with(&expected_prefix))
-        );
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code.starts_with(&expected_prefix)));
     }
 
     #[test]
@@ -1862,24 +1859,21 @@ mod tests {
             "gpt-5.4"
         );
         assert_eq!(preview.selected_lanes[0].selection_truth.rate, 1);
-        assert!(
-            preview.selected_lanes[0]
-                .selection_truth
-                .selection_source_paths["selected_rate"]
-                .as_str()
-                .is_some_and(|path| path
-                    .starts_with("carrier_runtime.roles[junior].model_profiles.")
-                    && path.ends_with(".normalized_cost_units"))
-        );
+        assert!(preview.selected_lanes[0]
+            .selection_truth
+            .selection_source_paths["selected_rate"]
+            .as_str()
+            .is_some_and(
+                |path| path.starts_with("carrier_runtime.roles[junior].model_profiles.")
+                    && path.ends_with(".normalized_cost_units")
+            ));
         assert_eq!(
             preview.selected_lanes[0].selection_truth.pricing_readiness["pricing_freshness_status"],
             "missing"
         );
-        assert!(
-            preview.selected_lanes[1]
-                .dispatch_command
-                .contains("--state-dir /tmp/vida-state")
-        );
+        assert!(preview.selected_lanes[1]
+            .dispatch_command
+            .contains("--state-dir /tmp/vida-state"));
         assert_eq!(
             preview.parallelization_planner["status"],
             "proposals_available"
@@ -1888,20 +1882,16 @@ mod tests {
             preview.parallelization_planner["materializes_packets"],
             false
         );
-        assert!(
-            preview.parallelization_planner["packet_proposals"]
-                .as_array()
-                .is_some_and(|proposals| proposals.len() == 2)
-        );
+        assert!(preview.parallelization_planner["packet_proposals"]
+            .as_array()
+            .is_some_and(|proposals| proposals.len() == 2));
         assert_eq!(
             preview.carrier_selection_api["surface"],
             "vida agent select"
         );
-        assert!(
-            preview.carrier_selection_api["first_class_carriers"]
-                .as_array()
-                .is_some_and(|rows| rows.iter().any(|row| row["api_id"] == "senior_verifier"))
-        );
+        assert!(preview.carrier_selection_api["first_class_carriers"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["api_id"] == "senior_verifier")));
     }
 
     #[test]
@@ -1965,12 +1955,10 @@ mod tests {
         assert_eq!(preview.lanes_selected, 1);
         assert!(preview.blocker_codes.is_empty());
         assert_eq!(preview.blocked_candidates[0].task_id, "task-b");
-        assert!(
-            preview
-                .next_actions
-                .iter()
-                .any(|action| action.contains("remain blocked candidates and are not selected"))
-        );
+        assert!(preview
+            .next_actions
+            .iter()
+            .any(|action| action.contains("remain blocked candidates and are not selected")));
     }
 
     #[test]
@@ -2031,11 +2019,9 @@ mod tests {
 
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
-        assert!(
-            preview
-                .blocker_codes
-                .contains(&"selected_lane_runtime_assignment_truth_required".to_string())
-        );
+        assert!(preview
+            .blocker_codes
+            .contains(&"selected_lane_runtime_assignment_truth_required".to_string()));
         assert!(preview.blocker_codes.iter().any(|code| {
             code.starts_with("selected_lane_runtime_assignment_truth_missing:task=task-a:")
         }));
@@ -2191,8 +2177,8 @@ mod tests {
     }
 
     #[test]
-    fn agent_dispatch_next_preview_dev_team_reports_no_task_lane_for_release_closure_and_still_selects_roles()
-     {
+    fn agent_dispatch_next_preview_dev_team_reports_no_task_lane_for_release_closure_and_still_selects_roles(
+    ) {
         let projection = TaskSchedulingProjection {
             current_task_id: Some("task-analyst".to_string()),
             ready: vec![
@@ -2224,12 +2210,10 @@ mod tests {
         assert_eq!(preview.status, "pass");
         assert_eq!(preview.mode, "preview-dev-team");
         assert_eq!(preview.lanes_selected, 4);
-        assert!(
-            preview
-                .next_actions
-                .iter()
-                .any(|action| action.contains("closure-oriented"))
-        );
+        assert!(preview
+            .next_actions
+            .iter()
+            .any(|action| action.contains("closure-oriented")));
     }
 
     #[test]
@@ -2255,11 +2239,9 @@ mod tests {
         assert!(preview.blocker_codes.iter().any(|code| {
             code.starts_with("selected_lane_runtime_assignment_truth_missing:task=task-a:")
         }));
-        assert!(
-            preview
-                .blocker_codes
-                .contains(&"selected_lane_runtime_assignment_truth_required".to_string())
-        );
+        assert!(preview
+            .blocker_codes
+            .contains(&"selected_lane_runtime_assignment_truth_required".to_string()));
     }
 
     #[test]
@@ -2283,12 +2265,10 @@ mod tests {
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
         assertion_message_contains_actionable_blocker(&preview.blocker_codes, "task-a");
-        assert!(
-            preview
-                .blocker_codes
-                .iter()
-                .any(|code| code.ends_with(":selected_carrier_id_missing"))
-        );
+        assert!(preview
+            .blocker_codes
+            .iter()
+            .any(|code| code.ends_with(":selected_carrier_id_missing")));
     }
 
     #[test]
@@ -2312,12 +2292,10 @@ mod tests {
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
         assertion_message_contains_actionable_blocker(&preview.blocker_codes, "task-a");
-        assert!(
-            preview
-                .blocker_codes
-                .iter()
-                .any(|code| code.ends_with(":selected_model_profile_id_missing"))
-        );
+        assert!(preview
+            .blocker_codes
+            .iter()
+            .any(|code| code.ends_with(":selected_model_profile_id_missing")));
     }
 
     #[test]
@@ -2367,12 +2345,10 @@ mod tests {
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
         assertion_message_contains_actionable_blocker(&preview.blocker_codes, "task-a");
-        assert!(
-            preview
-                .blocker_codes
-                .iter()
-                .any(|code| code.ends_with(":selected_rate_missing"))
-        );
+        assert!(preview
+            .blocker_codes
+            .iter()
+            .any(|code| code.ends_with(":selected_rate_missing")));
         assert!(preview.blocked_candidates.is_empty());
     }
 
@@ -2405,12 +2381,10 @@ mod tests {
                     == "build_taskflow_consume_bundle_payload.activation_bundle.agent_system.max_parallel_agents"
             )
         );
-        assert!(
-            preview
-                .source_surfaces
-                .iter()
-                .any(|surface| surface == "vida agent-init --role worker <task-id> --json")
-        );
+        assert!(preview
+            .source_surfaces
+            .iter()
+            .any(|surface| surface == "vida agent-init --role worker <task-id> --json"));
     }
 
     #[test]
@@ -2449,21 +2423,15 @@ mod tests {
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
         assert!(preview.selected_lanes.is_empty());
-        assert!(
-            preview
-                .blocker_codes
-                .contains(&"terminal_continue_snapshot_without_next_bounded_unit".to_string())
-        );
-        assert!(
-            preview
-                .blocker_codes
-                .contains(&"continuation_binding_ambiguous".to_string())
-        );
-        assert!(
-            preview
-                .next_actions
-                .contains(&"bind an explicit next bounded unit".to_string())
-        );
+        assert!(preview
+            .blocker_codes
+            .contains(&"terminal_continue_snapshot_without_next_bounded_unit".to_string()));
+        assert!(preview
+            .blocker_codes
+            .contains(&"continuation_binding_ambiguous".to_string()));
+        assert!(preview
+            .next_actions
+            .contains(&"bind an explicit next bounded unit".to_string()));
     }
 
     #[test]

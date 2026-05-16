@@ -5174,9 +5174,7 @@ mod tests {
             evidence["blockers"],
             serde_json::json!([RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER])
         );
-        assert!(
-            run_graph_dispatch_init_error_evidence("unrelated dispatch-init error").is_none()
-        );
+        assert!(run_graph_dispatch_init_error_evidence("unrelated dispatch-init error").is_none());
     }
 
     fn packet_gate_status(task_id: &str) -> RunGraphStatus {

@@ -186,8 +186,12 @@ fn create_dir_all_without_symlinks(path: &Path) -> Result<(), String> {
             }
             continue;
         }
-        std::fs::create_dir(&cursor)
-            .map_err(|error| format!("create orchestrator session dir {}: {error}", cursor.display()))?;
+        std::fs::create_dir(&cursor).map_err(|error| {
+            format!(
+                "create orchestrator session dir {}: {error}",
+                cursor.display()
+            )
+        })?;
     }
     Ok(())
 }
@@ -584,8 +588,8 @@ pub(crate) fn context_summary_map(state_dir: &Path) -> BTreeMap<String, String> 
 #[cfg(test)]
 mod tests {
     use super::{
-        ProcessLiveness, build_runtime_owner_evidence, classify_sessions_with_liveness,
-        context_summary_map, current_session_id, now_epoch_seconds,
+        build_runtime_owner_evidence, classify_sessions_with_liveness, context_summary_map,
+        current_session_id, now_epoch_seconds, ProcessLiveness,
     };
     use crate::temp_state::TempStateHarness;
     use std::sync::{Mutex, OnceLock};
@@ -675,22 +679,18 @@ mod tests {
             second["current_session"]["identity_source"],
             "synthesized_local_session_token"
         );
-        assert!(
-            harness
-                .path()
-                .join("orchestrator-sessions")
-                .join("session-tokens")
-                .join(format!("{second_id}.json"))
-                .exists()
-        );
+        assert!(harness
+            .path()
+            .join("orchestrator-sessions")
+            .join("session-tokens")
+            .join(format!("{second_id}.json"))
+            .exists());
         assert!(second["live_other_sessions"].as_array().unwrap().is_empty());
-        assert!(
-            !second["blocker_codes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|code| code == "live_other_orchestrator_owner")
-        );
+        assert!(!second["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "live_other_orchestrator_owner"));
 
         restore_session_env(saved);
     }
@@ -716,26 +716,20 @@ mod tests {
 
         assert_eq!(second["current_session"]["session_id"], "session-b");
         assert_eq!(second["mutation_gate"], "blocked_live_other_orchestrator");
-        assert!(
-            second["blocker_codes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|code| code == "live_other_orchestrator_owner")
-        );
-        assert!(
-            second["live_other_sessions"]
-                .as_array()
-                .expect("live other sessions should be present")
-                .iter()
-                .any(|session| session["session_id"] == "session-a")
-        );
-        assert!(
-            second["next_actions"][0]
-                .as_str()
-                .expect("next action should be text")
-                .contains("Stop or age out foreign orchestrator sessions")
-        );
+        assert!(second["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "live_other_orchestrator_owner"));
+        assert!(second["live_other_sessions"]
+            .as_array()
+            .expect("live other sessions should be present")
+            .iter()
+            .any(|session| session["session_id"] == "session-a"));
+        assert!(second["next_actions"][0]
+            .as_str()
+            .expect("next action should be text")
+            .contains("Stop or age out foreign orchestrator sessions"));
 
         restore_session_env(saved);
     }

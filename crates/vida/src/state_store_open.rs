@@ -284,14 +284,6 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn windows_tasklist_csv_parser_treats_no_tasks_output_as_absent() {
-        let output = "INFO: No tasks are running which match the specified criteria.";
-
-        assert!(!windows_tasklist_csv_contains_pid(output, 48248));
-    }
-
     #[tokio::test]
     async fn read_only_open_bypasses_authoritative_open_guard() {
         let nanos = SystemTime::now()

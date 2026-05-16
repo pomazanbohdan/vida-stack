@@ -1998,12 +1998,10 @@ agent_system:
         assert_eq!(summary["status"], "pass");
         assert_eq!(summary["requires_external_cli"], false);
         assert_eq!(summary["blocked_primary_backends"][0], "hermes_cli");
-        assert!(
-            summary["route_primary_external_required_backends"]
-                .as_array()
-                .expect("required backends should be an array")
-                .is_empty()
-        );
+        assert!(summary["route_primary_external_required_backends"]
+            .as_array()
+            .expect("required backends should be an array")
+            .is_empty());
         assert_eq!(summary["blocker_code"], serde_json::Value::Null);
     }
 

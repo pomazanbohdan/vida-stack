@@ -2803,7 +2803,10 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
                     crate::print_json_pretty(&agent_init_dispatch_timeout_fallback_payload(
                         dispatch_mode,
                         &resume_inputs.dispatch_receipt.run_id,
-                        resume_inputs.dispatch_receipt.dispatch_result_path.as_deref(),
+                        resume_inputs
+                            .dispatch_receipt
+                            .dispatch_result_path
+                            .as_deref(),
                         execute_dispatch_timeout_seconds,
                         Some(&error.to_string()),
                     ));
@@ -2822,7 +2825,10 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
             )
             .await;
             if json_output {
-                let dispatch_result_path = resume_inputs.dispatch_receipt.dispatch_result_path.as_deref();
+                let dispatch_result_path = resume_inputs
+                    .dispatch_receipt
+                    .dispatch_result_path
+                    .as_deref();
                 let result_json = dispatch_result_path
                     .and_then(|path| {
                         std::fs::read_to_string(path)
@@ -2860,7 +2866,10 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
             return ExitCode::from(1);
         }
     }
-    let Some(dispatch_result_path) = resume_inputs.dispatch_receipt.dispatch_result_path.as_deref()
+    let Some(dispatch_result_path) = resume_inputs
+        .dispatch_receipt
+        .dispatch_result_path
+        .as_deref()
     else {
         eprintln!("Agent init execute-dispatch did not produce a dispatch result artifact.");
         return ExitCode::from(1);
@@ -2868,7 +2877,9 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
     let result_body = match std::fs::read_to_string(dispatch_result_path) {
         Ok(body) => body,
         Err(error) => {
-            eprintln!("Failed to read agent-init dispatch result `{dispatch_result_path}`: {error}");
+            eprintln!(
+                "Failed to read agent-init dispatch result `{dispatch_result_path}`: {error}"
+            );
             return ExitCode::from(1);
         }
     };
@@ -3019,8 +3030,8 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        let selection_value = serde_json::to_value(&resume_inputs.role_selection)
-            .unwrap_or(serde_json::Value::Null);
+        let selection_value =
+            serde_json::to_value(&resume_inputs.role_selection).unwrap_or(serde_json::Value::Null);
         let dispatch_mode = agent_init_dispatch_mode(&args, &selection_value);
         return execute_agent_init_dispatch_from_resume_inputs(
             args.json,

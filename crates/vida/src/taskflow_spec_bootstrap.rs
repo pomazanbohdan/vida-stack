@@ -895,18 +895,14 @@ mod tests {
             .block_on(store.show_task("feature-x-dev"))
             .expect("updated dev task should load");
         assert_eq!(updated.planner_metadata.owned_paths.len(), 2);
-        assert!(
-            updated
-                .planner_metadata
-                .owned_paths
-                .contains(&"crates/vida/src/taskflow_spec_bootstrap.rs".to_string())
-        );
-        assert!(
-            updated
-                .planner_metadata
-                .owned_paths
-                .contains(&"crates/vida/src/runtime_dispatch_state.rs".to_string())
-        );
+        assert!(updated
+            .planner_metadata
+            .owned_paths
+            .contains(&"crates/vida/src/taskflow_spec_bootstrap.rs".to_string()));
+        assert!(updated
+            .planner_metadata
+            .owned_paths
+            .contains(&"crates/vida/src/runtime_dispatch_state.rs".to_string()));
         assert!(!updated.planner_metadata.acceptance_targets.is_empty());
         assert!(!updated.planner_metadata.proof_targets.is_empty());
         assert_eq!(

@@ -9,8 +9,8 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 #[cfg(windows)]
 use std::os::windows::process::ExitStatusExt;
 
-use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::runtime_contract_vocab::canonical_dispatch_target_name;
+use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 
 fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String {
@@ -3123,7 +3123,8 @@ agent_system:
         assert_eq!(
             wrapped.timeout_wrapper,
             Some(CommandTimeoutWrapper {
-                timeout_seconds: super::DEFAULT_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_CAP_SECONDS + 180,
+                timeout_seconds: super::DEFAULT_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_CAP_SECONDS
+                    + 180,
                 kill_after_grace_seconds: 1,
             })
         );

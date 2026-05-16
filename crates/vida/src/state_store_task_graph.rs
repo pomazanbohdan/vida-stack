@@ -769,12 +769,10 @@ mod tests {
 
         assert!(legacy.ready_now);
         assert!(!legacy.ready_parallel_safe);
-        assert!(
-            legacy
-                .parallel_blockers
-                .iter()
-                .any(|value| value == "execution_mode_not_parallel_safe")
-        );
+        assert!(legacy
+            .parallel_blockers
+            .iter()
+            .any(|value| value == "execution_mode_not_parallel_safe"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -832,12 +830,10 @@ mod tests {
             .find(|candidate| candidate.task.id == "task-collision")
             .expect("collision task should be present");
         assert!(!collision.ready_parallel_safe);
-        assert!(
-            collision
-                .parallel_blockers
-                .iter()
-                .any(|value| value == "conflict_domain_collision")
-        );
+        assert!(collision
+            .parallel_blockers
+            .iter()
+            .any(|value| value == "conflict_domain_collision"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -879,11 +875,9 @@ mod tests {
             .ready_tasks_scoped(None)
             .await
             .expect("ready tasks should render");
-        assert!(
-            ready
-                .iter()
-                .all(|task| task.id != "task-with-missing-dependency")
-        );
+        assert!(ready
+            .iter()
+            .all(|task| task.id != "task-with-missing-dependency"));
 
         let projection = store
             .scheduling_projection_scoped(None, None)
@@ -895,12 +889,10 @@ mod tests {
             .find(|candidate| candidate.task.id == "task-with-missing-dependency")
             .expect("task should be blocked");
         assert!(!blocked.ready_now);
-        assert!(
-            blocked
-                .blocked_by
-                .iter()
-                .any(|dependency| dependency.dependency_status == "missing")
-        );
+        assert!(blocked
+            .blocked_by
+            .iter()
+            .any(|dependency| dependency.dependency_status == "missing"));
 
         let _ = fs::remove_dir_all(root);
     }
