@@ -638,6 +638,7 @@ fn blocked_lane_show_next_action(
     summary: &crate::state_store::RunGraphDispatchReceiptSummary,
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
 ) -> String {
+    let run_id = crate::shell_quote(summary.run_id.trim());
     let dispatch_target = summary.dispatch_target.trim();
     let lane = if dispatch_target.is_empty() {
         "the blocked delegated lane".to_string()
@@ -646,7 +647,7 @@ fn blocked_lane_show_next_action(
     };
     let mut action = format!(
         "Inspect {lane} for run `{}` with `vida taskflow recovery status {} --json` and keep the blocked dispatch result from `vida lane show {} --json` as evidence.",
-        summary.run_id, summary.run_id, summary.run_id
+        summary.run_id, run_id, run_id
     );
     if recovery_delegated_cycle_open(recovery) {
         action.push_str(&format!(
@@ -656,7 +657,7 @@ fn blocked_lane_show_next_action(
     } else {
         action.push_str(&format!(
             " If the dispatch blocker has already been resolved, rerun `vida taskflow consume continue --run-id {} --json` to refresh continuation evidence.",
-            summary.run_id
+            run_id
         ));
     }
     action
@@ -738,15 +739,17 @@ fn derive_lane_show_truth(
                 .exception_path_receipt_id
                 .as_deref()
                 .unwrap_or_default();
+            let run_id = crate::shell_quote(summary.run_id.trim());
             next_actions.push(if receipt_id.trim().is_empty() {
                 format!(
                     "Exception-path receipt recorded for lane `{}` but no concrete receipt id is available; inspect `vida lane show {} --json` and recover the recorded receipt before supersession.",
-                    summary.run_id, summary.run_id
+                    summary.run_id, run_id
                 )
             } else {
+                let receipt_id = crate::shell_quote(receipt_id.trim());
                 format!(
                     "Exception-path receipt recorded; record explicit supersession with `vida lane supersede {} --receipt-id {} --json` before local write becomes active.",
-                    summary.run_id, receipt_id
+                    run_id, receipt_id
                 )
             });
         }

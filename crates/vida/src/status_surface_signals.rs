@@ -84,7 +84,7 @@ pub(crate) fn terminal_next_action_requires_authoritative_run_state(
     match run_id.filter(|value| !value.trim().is_empty()) {
         Some(run_id) => format!(
             "Do not continue by heuristic. First inspect the authoritative run state with `vida taskflow run-graph status {run_id} --json`, then either cite the explicit next bounded unit from the user and bind it with `vida taskflow continuation bind` using that concrete `run_id` and `task_id`, or stop and reconcile why the authoritative run state still lacks the next bounded unit before further implementation."
-        ),
+        , run_id = crate::shell_quote(run_id.trim())),
         None => "Do not continue by heuristic. First inspect the authoritative run state with `vida status --json`, then inspect the authoritative run with `vida taskflow run-graph status` using that concrete `run_id`; if user intent already names the next bounded unit, bind it explicitly with `vida taskflow continuation bind` using the cited `task_id` and `run_id` before further implementation.".to_string(),
     }
 }

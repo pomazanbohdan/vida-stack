@@ -3066,6 +3066,7 @@ fn runtime_binding_task_closed_next_action(
         return crate::status_surface_signals::continuation_binding_ambiguous_next_action()
             .to_string();
     }
+    let run_id = crate::shell_quote(run_id);
     format!(
         "Runtime binding points to closed task `{}` for run `{run_id}`. Inspect the concrete recovery state with `vida taskflow recovery status {run_id} --json`; resolve or retire the blocked run, then refresh continuation evidence with `vida taskflow consume continue --json` before selecting the next bounded step.",
         binding.task_id
