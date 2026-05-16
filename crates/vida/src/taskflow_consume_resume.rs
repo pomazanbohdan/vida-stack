@@ -350,8 +350,9 @@ fn consume_advance_success_payload(
     snapshot_path: &str,
     rounds: usize,
 ) -> serde_json::Value {
-    let blocker_codes: Vec<String> = Vec::new();
-    let next_actions: Vec<String> = Vec::new();
+    let blocker_codes = runtime_consumption_resume_receipt_blocker_codes(dispatch_receipt);
+    let next_actions = runtime_consumption_resume_receipt_next_actions(dispatch_receipt, &blocker_codes);
+    let status = if blocker_codes.is_empty() { "ok" } else { "blocked" };
     let artifact_refs = serde_json::json!({
         "surface": "vida taskflow consume advance",
         "run_id": dispatch_receipt.run_id,
@@ -360,7 +361,7 @@ fn consume_advance_success_payload(
     });
     serde_json::json!({
         "surface": "vida taskflow consume advance",
-        "status": "ok",
+        "status": status,
         "source_run_id": dispatch_receipt.run_id,
         "source_dispatch_packet_path": source_dispatch_packet_path,
         "dispatch_receipt": dispatch_receipt,
@@ -370,7 +371,7 @@ fn consume_advance_success_payload(
         "next_actions": next_actions,
         "artifact_refs": artifact_refs,
         "shared_fields": {
-            "status": "ok",
+            "status": status,
             "blocker_codes": blocker_codes,
             "next_actions": next_actions,
             "artifact_refs": artifact_refs,
@@ -378,7 +379,7 @@ fn consume_advance_success_payload(
         "operator_contracts": {
             "contract_id": "release-1-operator-contracts",
             "schema_version": "release-1-v1",
-            "status": "ok",
+            "status": status,
             "blocker_codes": blocker_codes,
             "next_actions": next_actions,
             "artifact_refs": artifact_refs,
