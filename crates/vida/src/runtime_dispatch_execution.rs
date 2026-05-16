@@ -10,19 +10,20 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::os::windows::process::ExitStatusExt;
 
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
+use crate::runtime_contract_vocab::canonical_dispatch_target_name;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 
-fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> &str {
-    match dispatch_target {
-        "implementer" => "implementation",
-        "execution_preparation" => "architecture",
-        _ => dispatch_target,
+fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String {
+    match canonical_dispatch_target_name(dispatch_target).as_str() {
+        "implementer" => "implementation".to_string(),
+        "execution_preparation" => "architecture".to_string(),
+        other => other.to_string(),
     }
 }
 
 fn dispatch_target_requires_strict_admissibility(dispatch_target: &str) -> bool {
     matches!(
-        canonical_dispatch_target_for_admissibility(dispatch_target),
+        canonical_dispatch_target_for_admissibility(dispatch_target).as_str(),
         "implementation" | "architecture"
     )
 }
@@ -51,7 +52,7 @@ fn backend_is_admissible_for_dispatch_target(
         return !strict_required;
     };
     lane_admissibility
-        .get(canonical_target)
+        .get(canonical_target.as_str())
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(!strict_required)
 }
