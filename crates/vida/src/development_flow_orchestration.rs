@@ -1,5 +1,5 @@
 pub(crate) use crate::runtime_lane_summary::{
-    build_runtime_lane_selection_with_store, RuntimeConsumptionLaneSelection,
+    RuntimeConsumptionLaneSelection, build_runtime_lane_selection_with_store,
 };
 
 fn canonicalize_moved_test_request(request: &str) -> String {
@@ -58,6 +58,18 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
     let work_pool_title = format!("Work-pool pack: {feature_title}");
     let dev_title = format!("Dev pack: {feature_title}");
     let quoted_request = crate::shell_quote(&canonical_request);
+    let work_pool_semantics = crate::launcher_task_commands::TaskExecutionSemanticsCommandArgs {
+        execution_mode: "parallel_safe",
+        order_bucket: &epic_task_id,
+        parallel_group: "work-pool-pack",
+        conflict_domain: &work_pool_task_id,
+    };
+    let dev_semantics = crate::launcher_task_commands::TaskExecutionSemanticsCommandArgs {
+        execution_mode: "parallel_safe",
+        order_bucket: &epic_task_id,
+        parallel_group: "dev-pack",
+        conflict_domain: &dev_task_id,
+    };
 
     serde_json::json!({
         "required": true,
@@ -82,6 +94,7 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
                 None,
                 &["feature-request", "spec-first"],
                 Some(&quoted_request),
+                None,
             ),
             "close_command": crate::build_task_close_command(
                 &epic_task_id,
@@ -101,6 +114,7 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
                 Some(&epic_task_id),
                 &["spec-pack", "documentation"],
                 Some(&crate::shell_quote("bounded design/spec packet for the feature request")),
+                None,
             ),
             "create_command": crate::build_task_create_command(
                 &spec_task_id,
@@ -109,6 +123,7 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
                 Some(&epic_task_id),
                 &["spec-pack", "documentation"],
                 Some(&crate::shell_quote("bounded design/spec packet for the feature request")),
+                None,
             ),
             "close_command": crate::build_task_close_command(
                 &spec_task_id,
@@ -128,6 +143,7 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
                 Some(&epic_task_id),
                 &["work-pool-pack"],
                 None,
+                Some(work_pool_semantics),
             ),
             "create_command": crate::build_task_create_command(
                 &work_pool_task_id,
@@ -136,6 +152,7 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
                 Some(&epic_task_id),
                 &["work-pool-pack"],
                 None,
+                Some(work_pool_semantics),
             ),
             "close_command": crate::build_task_close_command(
                 &work_pool_task_id,
@@ -155,6 +172,7 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
                 Some(&epic_task_id),
                 &["dev-pack"],
                 None,
+                Some(dev_semantics),
             ),
             "create_command": crate::build_task_create_command(
                 &dev_task_id,
@@ -163,6 +181,7 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
                 Some(&epic_task_id),
                 &["dev-pack"],
                 None,
+                Some(dev_semantics),
             ),
             "close_command": crate::build_task_close_command(
                 &dev_task_id,
@@ -215,10 +234,10 @@ fn request_requires_execution_preparation(
             .flatten()
             .filter_map(serde_json::Value::as_str)
             .collect::<Vec<_>>();
-        let task_class = crate::runtime_assignment_from_execution_plan(&selection.execution_plan)
-            ["task_class"]
-            .as_str()
-            .unwrap_or("implementation");
+        let task_class =
+            crate::runtime_assignment_from_execution_plan(&selection.execution_plan)["task_class"]
+                .as_str()
+                .unwrap_or("implementation");
         let validation_gate = if crate::json_bool(policy.get("honor_validation_gate"), false) {
             crate::json_bool(
                 compiled_bundle["autonomous_execution"]
@@ -984,6 +1003,32 @@ mod tests {
             ),
             "bootstrap command should not retain the bare moved-test proof target"
         );
+    }
+
+    #[test]
+    fn design_first_work_packet_commands_carry_execution_semantics() {
+        let bootstrap = build_design_first_tracked_flow_bootstrap(
+            "Research the feature, write detailed specifications, create a plan, and implement runtime flow",
+        );
+        let work_pool_ensure = bootstrap["work_pool_task"]["ensure_command"]
+            .as_str()
+            .expect("work-pool ensure command should render");
+        let work_pool_task_id = bootstrap["work_pool_task"]["task_id"]
+            .as_str()
+            .expect("work-pool task id should render");
+        let dev_ensure = bootstrap["dev_task"]["ensure_command"]
+            .as_str()
+            .expect("dev ensure command should render");
+        let dev_task_id = bootstrap["dev_task"]["task_id"]
+            .as_str()
+            .expect("dev task id should render");
+
+        assert!(work_pool_ensure.contains("--execution-mode parallel_safe"));
+        assert!(work_pool_ensure.contains("--parallel-group work-pool-pack"));
+        assert!(work_pool_ensure.contains(&format!("--conflict-domain {work_pool_task_id}")));
+        assert!(dev_ensure.contains("--execution-mode parallel_safe"));
+        assert!(dev_ensure.contains("--parallel-group dev-pack"));
+        assert!(dev_ensure.contains(&format!("--conflict-domain {dev_task_id}")));
     }
 
     #[test]

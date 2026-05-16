@@ -226,11 +226,12 @@ Initialization success rule:
 It owns:
 
 1. opening a bounded runtime session against the initialized project,
-2. checking whether required imported state is present and valid,
-3. determining the active init/bundle/runtime posture,
-4. loading the bounded orchestrator or general-agent bootstrap payload,
-5. exposing the minimum help/status/remediation surfaces needed at session start,
-6. refusing to continue into non-bootstrap execution when required state is missing or invalid.
+2. assigning or resuming the current `orchestrator_session_id` and `worktree_environment_id`,
+3. checking whether required imported state is present and valid,
+4. determining the active init/bundle/runtime posture,
+5. loading the bounded orchestrator or general-agent bootstrap payload,
+6. exposing the minimum help/status/remediation surfaces needed at session start,
+7. refusing to continue into non-bootstrap execution when required state is missing or invalid.
 
 Bootstrap rule:
 
@@ -610,6 +611,7 @@ Rules:
 3. no silent explosion from one discussion into many tracked tasks,
 4. broader planning requires explicit operator broadening rather than inertia.
 5. automatic continuation may resume only the already explicit active bounded scope; it must not self-select a neighboring candidate task/PBI by plausibility alone.
+6. the one-active-task rule is scoped to the current orchestrator session; a foreign blocked session in the same project root is visible status evidence, not a blocker for disjoint current-session work.
 
 ### 8.5 Canonical Intake Flow
 
@@ -1071,5 +1073,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md
 created_at: '2026-03-12T21:25:00+02:00'
-updated_at: 2026-04-30T22:15:51.1458614Z
+updated_at: 2026-05-15T09:13:16.7732737Z
 changelog_ref: user-facing-runtime-flow-and-operating-loop-model.changelog.jsonl

@@ -278,7 +278,9 @@ pub struct CreateTaskRequest<'a> {
 #[derive(Debug)]
 pub struct UpdateTaskRequest<'a> {
     pub task_id: &'a str,
+    pub title: Option<&'a str>,
     pub status: Option<&'a str>,
+    pub priority: Option<u32>,
     pub notes: Option<&'a str>,
     pub description: Option<&'a str>,
     pub parent_id: Option<Option<&'a str>>,

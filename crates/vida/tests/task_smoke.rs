@@ -851,8 +851,12 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
             "task",
             "update",
             "vida-b",
+            "--title",
+            "Task B reprioritized",
             "--status",
             "in_progress",
+            "--priority",
+            "5",
             "--notes",
             "planning round trip proof",
             "--json",
@@ -861,7 +865,9 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
     );
     assert_eq!(updated["surface"], "vida task update");
     assert_eq!(updated["status"], "pass");
+    assert_eq!(updated["task"]["title"], "Task B reprioritized");
     assert_eq!(updated["task"]["status"], "in_progress");
+    assert_eq!(updated["task"]["priority"], 5);
     assert_eq!(updated["task"]["notes"], "planning round trip proof");
 
     let deps = run_command_json(&["task", "deps", "vida-b", "--json"], &state_dir);
@@ -921,9 +927,62 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
     let shown = run_command_json(&["task", "show", "vida-b", "--json"], &state_dir);
     assert_eq!(shown["status"], "pass");
     assert_eq!(shown["surface"], "vida task show");
+    assert_eq!(shown["task"]["title"], "Task B reprioritized");
     assert_eq!(shown["task"]["status"], "closed");
+    assert_eq!(shown["task"]["priority"], 5);
     assert_eq!(shown["task"]["close_reason"], "planning proof complete");
     assert_eq!(shown["task"]["notes"], "planning round trip proof");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_update_title_priority() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            "vida-update",
+            "Original task",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--priority",
+            "3",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+    assert_eq!(created["task"]["title"], "Original task");
+    assert_eq!(created["task"]["priority"], 3);
+
+    let updated = run_command_json(
+        &[
+            "task",
+            "update",
+            "vida-update",
+            "--title",
+            "Renamed task",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(updated["surface"], "vida task update");
+    assert_eq!(updated["status"], "pass");
+    assert_eq!(updated["task"]["title"], "Renamed task");
+    assert_eq!(updated["task"]["priority"], 1);
+
+    let shown = run_command_json(&["task", "show", "vida-update", "--json"], &state_dir);
+    assert_eq!(shown["status"], "pass");
+    assert_eq!(shown["task"]["title"], "Renamed task");
+    assert_eq!(shown["task"]["priority"], 1);
 
     let _ = fs::remove_dir_all(&state_dir);
 }

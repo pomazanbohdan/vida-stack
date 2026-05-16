@@ -434,40 +434,41 @@ pub(crate) fn build_continuation_binding_summary_with_idle_policy(
             });
         }
 
-        if !terminal_completed_without_next_unit {
-            if let Some(receipt) = latest_run_graph_dispatch_receipt {
-                let downstream_target = receipt
-                    .downstream_dispatch_target
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty());
-                let downstream_status_ready = matches!(
-                    receipt.downstream_dispatch_status.as_deref(),
-                    Some("packet_ready") | Some("executed")
-                );
-                if receipt.downstream_dispatch_ready && downstream_status_ready {
-                    if let Some(dispatch_target) = downstream_target {
-                        return serde_json::json!({
-                            "status": "bound",
-                            "continuation_allowed": true,
-                            "continuation_required_now": false,
-                            "active_bounded_unit": {
-                                "kind": "downstream_dispatch_target",
-                                "task_id": status.task_id,
-                                "run_id": status.run_id,
-                                "dispatch_target": dispatch_target,
-                            },
-                            "binding_source": "latest_run_graph_dispatch_receipt",
-                            "why_this_unit": format!(
-                                "Latest dispatch receipt explicitly names downstream target `{}` as the next lawful bounded unit.",
-                                dispatch_target
-                            ),
-                            "primary_path": "normal_delivery_path",
-                            "sequential_vs_parallel_posture": "sequential_only_downstream_bound",
-                            "pause_boundary_gate": "allowed_if_no_further_bound_work_is_evidenced",
-                            "ambiguity_reason": serde_json::Value::Null,
-                            "next_actions": []
-                        });
-                    }
+        if let Some(receipt) = latest_run_graph_dispatch_receipt {
+            let downstream_target = receipt
+                .downstream_dispatch_target
+                .as_deref()
+                .filter(|value| !value.trim().is_empty());
+            let downstream_status_ready = matches!(
+                receipt.downstream_dispatch_status.as_deref(),
+                Some("packet_ready") | Some("executed")
+            );
+            if receipt.run_id == status.run_id
+                && receipt.downstream_dispatch_ready
+                && downstream_status_ready
+            {
+                if let Some(dispatch_target) = downstream_target {
+                    return serde_json::json!({
+                        "status": "bound",
+                        "continuation_allowed": true,
+                        "continuation_required_now": false,
+                        "active_bounded_unit": {
+                            "kind": "downstream_dispatch_target",
+                            "task_id": status.task_id,
+                            "run_id": status.run_id,
+                            "dispatch_target": dispatch_target,
+                        },
+                        "binding_source": "latest_run_graph_dispatch_receipt",
+                        "why_this_unit": format!(
+                            "Latest dispatch receipt explicitly names downstream target `{}` as the next lawful bounded unit.",
+                            dispatch_target
+                        ),
+                        "primary_path": "normal_delivery_path",
+                        "sequential_vs_parallel_posture": "sequential_only_downstream_bound",
+                        "pause_boundary_gate": "allowed_if_no_further_bound_work_is_evidenced",
+                        "ambiguity_reason": serde_json::Value::Null,
+                        "next_actions": []
+                    });
                 }
             }
         }
@@ -1219,6 +1220,46 @@ mod tests {
             summary["ambiguity_reason"],
             "completed_without_explicit_next_bounded_unit"
         );
+    }
+
+    #[test]
+    fn completed_closure_binds_receipt_backed_downstream_target() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "task-1",
+            "implementation",
+            "implementation",
+        );
+        status.active_node = "closure".to_string();
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.next_node = None;
+
+        let mut receipt = exception_takeover_dispatch("task-1");
+        receipt.downstream_dispatch_target = Some("coach".to_string());
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+
+        let summary = build_continuation_binding_summary_with_idle_policy(
+            None,
+            Some(&status),
+            None,
+            Some(&receipt),
+            None,
+            false,
+            false,
+            false,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(
+            summary["binding_source"],
+            "latest_run_graph_dispatch_receipt"
+        );
+        assert_eq!(
+            summary["active_bounded_unit"]["kind"],
+            "downstream_dispatch_target"
+        );
+        assert_eq!(summary["active_bounded_unit"]["dispatch_target"], "coach");
     }
 
     #[test]

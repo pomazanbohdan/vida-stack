@@ -28,11 +28,28 @@ fn neutral_downstream_activation_evidence() -> serde_json::Value {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn downstream_dispatch_packet_body(
     role_selection: &RuntimeConsumptionLaneSelection,
     run_graph_bootstrap: &serde_json::Value,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     packet_path: Option<&Path>,
+) -> serde_json::Value {
+    downstream_dispatch_packet_body_with_owned_paths(
+        role_selection,
+        run_graph_bootstrap,
+        receipt,
+        packet_path,
+        &[],
+    )
+}
+
+pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    run_graph_bootstrap: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    packet_path: Option<&Path>,
+    implementation_owned_paths_override: &[String],
 ) -> serde_json::Value {
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let downstream_target = receipt
@@ -103,10 +120,13 @@ pub(crate) fn downstream_dispatch_packet_body(
         crate::runtime_dispatch_state::tracked_design_doc_path(role_selection),
     );
     if handoff_task_class == crate::runtime_contract_vocab::TASK_CLASS_IMPLEMENTATION {
-        let owned_paths =
+        let owned_paths = if implementation_owned_paths_override.is_empty() {
             crate::runtime_dispatch_state::implementation_owned_paths_for_role_selection(
                 role_selection,
-            );
+            )
+        } else {
+            implementation_owned_paths_override.to_vec()
+        };
         crate::runtime_dispatch_state::apply_owned_paths_if_missing(
             &mut delivery_task_packet,
             &owned_paths,
@@ -355,17 +375,35 @@ fn runtime_assignment_activation_field(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn write_runtime_downstream_dispatch_packet_at(
     packet_path: &Path,
     role_selection: &RuntimeConsumptionLaneSelection,
     run_graph_bootstrap: &serde_json::Value,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<(), String> {
-    let body = downstream_dispatch_packet_body(
+    write_runtime_downstream_dispatch_packet_at_with_owned_paths(
+        packet_path,
+        role_selection,
+        run_graph_bootstrap,
+        receipt,
+        &[],
+    )
+}
+
+pub(crate) fn write_runtime_downstream_dispatch_packet_at_with_owned_paths(
+    packet_path: &Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    run_graph_bootstrap: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    implementation_owned_paths_override: &[String],
+) -> Result<(), String> {
+    let body = downstream_dispatch_packet_body_with_owned_paths(
         role_selection,
         run_graph_bootstrap,
         receipt,
         Some(packet_path),
+        implementation_owned_paths_override,
     );
     validate_runtime_dispatch_packet_contract(&body, "Runtime downstream dispatch packet")?;
     let encoded = serde_json::to_string_pretty(&body)
@@ -381,6 +419,22 @@ pub(crate) fn write_runtime_downstream_dispatch_packet(
     run_graph_bootstrap: &serde_json::Value,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<Option<String>, String> {
+    write_runtime_downstream_dispatch_packet_with_owned_paths(
+        state_root,
+        role_selection,
+        run_graph_bootstrap,
+        receipt,
+        &[],
+    )
+}
+
+pub(crate) fn write_runtime_downstream_dispatch_packet_with_owned_paths(
+    state_root: &Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    run_graph_bootstrap: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    implementation_owned_paths_override: &[String],
+) -> Result<Option<String>, String> {
     let Some(target) = receipt.downstream_dispatch_target.as_deref() else {
         return Ok(None);
     };
@@ -395,11 +449,12 @@ pub(crate) fn write_runtime_downstream_dispatch_packet(
         .expect("rfc3339 timestamp should render")
         .replace(':', "-");
     let packet_path = packet_dir.join(format!("{}-{ts}.json", receipt.run_id));
-    write_runtime_downstream_dispatch_packet_at(
+    write_runtime_downstream_dispatch_packet_at_with_owned_paths(
         &packet_path,
         role_selection,
         run_graph_bootstrap,
         receipt,
+        implementation_owned_paths_override,
     )?;
     let _ = target;
     Ok(Some(packet_path.display().to_string()))

@@ -184,16 +184,33 @@ impl StateStore {
     ) -> Result<TaskSchedulingProjection, StateStoreError> {
         let mut rows = self.all_tasks().await?;
         rows.sort_by(task_sort_key);
+        let mut critical_path_ids = BTreeSet::new();
+        if let Ok(path) = self.critical_path().await {
+            critical_path_ids.extend(path.nodes.into_iter().map(|node| node.id));
+        }
+
+        Self::scheduling_projection_scoped_from_rows(
+            &rows,
+            scope_task_id,
+            current_task_id,
+            &critical_path_ids,
+        )
+    }
+
+    pub(crate) fn scheduling_projection_scoped_from_rows(
+        rows: &[TaskRecord],
+        scope_task_id: Option<&str>,
+        current_task_id: Option<&str>,
+        critical_path_ids: &BTreeSet<String>,
+    ) -> Result<TaskSchedulingProjection, StateStoreError> {
+        let mut rows = rows.to_vec();
+        rows.sort_by(task_sort_key);
 
         let scope_ids = if let Some(scope_task_id) = scope_task_id {
             Some(Self::ready_scope_ids_from_rows(&rows, scope_task_id)?)
         } else {
             None
         };
-        let mut critical_path_ids = BTreeSet::new();
-        if let Ok(path) = self.critical_path().await {
-            critical_path_ids.extend(path.nodes.into_iter().map(|node| node.id));
-        }
 
         let by_id = rows
             .iter()
@@ -752,10 +769,12 @@ mod tests {
 
         assert!(legacy.ready_now);
         assert!(!legacy.ready_parallel_safe);
-        assert!(legacy
-            .parallel_blockers
-            .iter()
-            .any(|value| value == "execution_mode_not_parallel_safe"));
+        assert!(
+            legacy
+                .parallel_blockers
+                .iter()
+                .any(|value| value == "execution_mode_not_parallel_safe")
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -813,10 +832,12 @@ mod tests {
             .find(|candidate| candidate.task.id == "task-collision")
             .expect("collision task should be present");
         assert!(!collision.ready_parallel_safe);
-        assert!(collision
-            .parallel_blockers
-            .iter()
-            .any(|value| value == "conflict_domain_collision"));
+        assert!(
+            collision
+                .parallel_blockers
+                .iter()
+                .any(|value| value == "conflict_domain_collision")
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -858,9 +879,11 @@ mod tests {
             .ready_tasks_scoped(None)
             .await
             .expect("ready tasks should render");
-        assert!(ready
-            .iter()
-            .all(|task| task.id != "task-with-missing-dependency"));
+        assert!(
+            ready
+                .iter()
+                .all(|task| task.id != "task-with-missing-dependency")
+        );
 
         let projection = store
             .scheduling_projection_scoped(None, None)
@@ -872,10 +895,12 @@ mod tests {
             .find(|candidate| candidate.task.id == "task-with-missing-dependency")
             .expect("task should be blocked");
         assert!(!blocked.ready_now);
-        assert!(blocked
-            .blocked_by
-            .iter()
-            .any(|dependency| dependency.dependency_status == "missing"));
+        assert!(
+            blocked
+                .blocked_by
+                .iter()
+                .any(|dependency| dependency.dependency_status == "missing")
+        );
 
         let _ = fs::remove_dir_all(root);
     }

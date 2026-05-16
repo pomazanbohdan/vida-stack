@@ -7,7 +7,6 @@ use crate::status_surface_json_report::{build_status_json_report, StatusJsonRepo
 use crate::status_surface_operator_contracts::{
     build_status_operator_contracts, StatusOperatorContractInputs,
 };
-use crate::status_surface_signals::final_snapshot_missing_release_admission_evidence;
 use crate::status_surface_text_report::{emit_status_text_report, StatusTextReportInputs};
 use crate::status_surface_truth_inputs::build_status_truth_inputs;
 
@@ -336,8 +335,6 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 );
                 let host_agents = status_truth_inputs.host_agents;
                 let latest_final_snapshot_path = status_truth_inputs.latest_final_snapshot_path;
-                let latest_recorded_final_snapshot_path =
-                    status_truth_inputs.latest_recorded_final_snapshot_path;
                 let mut root_session_write_guard = status_truth_inputs.root_session_write_guard;
                 let activation_truth = status_truth_inputs.activation_truth;
                 let project_activation_status = status_truth_inputs.project_activation_status;
@@ -388,10 +385,15 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         .and_then(|value| value.get("activation_vs_execution_evidence"));
                 if as_json {
                     let incomplete_release_admission_operator_evidence =
-                        latest_recorded_final_snapshot_path
-                            .as_deref()
-                            .map(final_snapshot_missing_release_admission_evidence)
-                            .unwrap_or(true);
+                        match crate::runtime_consumption_state::release_admission_operator_evidence_incomplete(
+                            store.root(),
+                        ) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                eprintln!("Failed to evaluate release-admission evidence: {error}");
+                                return ExitCode::from(1);
+                            }
+                        };
                     let operator_contracts =
                         match build_status_operator_contracts(StatusOperatorContractInputs {
                             boot_compatibility: boot_compatibility.as_ref(),

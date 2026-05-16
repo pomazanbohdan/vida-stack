@@ -64,6 +64,7 @@ Current promoted runtime-control specs:
 - `docs/product/spec/autonomous-report-continuation-law.md`
 - `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 - `docs/product/spec/checkpoint-commit-and-replay-model.md`
+- `docs/product/spec/multi-orchestrator-session-ownership-and-claims-design.md`
 
 -----
 artifact_path: product/spec/readme
@@ -74,7 +75,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-30T22:16:37.515945Z
+updated_at: 2026-05-15T09:14:47.5191228Z
 changelog_ref: README.changelog.jsonl
-- `docs/product/spec/update-agents-sidecar-only-add-project-design.md`
-- `docs/product/spec/github-114-design-document-deterministic-post-design.md`

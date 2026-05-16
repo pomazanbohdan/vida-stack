@@ -23,7 +23,15 @@ Project development stays:
 2. delegation-first for normal write-producing work,
 3. `delivery_task` as the default leaf,
 4. `execution_block` only when one-owner bounded closure still fails,
-5. coach-separated and verifier-backed before closure.
+5. coach-separated and verifier-backed before closure,
+6. session-scoped when multiple orchestrators share one project root.
+
+Session-scoped shorthand:
+
+1. the current session must know its `orchestrator_session_id` before shaping write-producing work,
+2. every active packet must map to a claim kind, conflict domain, and path scope,
+3. foreign blocked lanes are reported separately from current-session blockers,
+4. only same task/run, path intersection, exclusive conflict domain, or global state-integrity blockers stop the current session.
 
 ## Packet Minimum
 
@@ -93,5 +101,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-packet-and-lane-runtime-capsule.md
 created_at: '2026-03-13T18:05:15+02:00'
-updated_at: 2026-04-04T20:12:10.23251331Z
+updated_at: 2026-05-15T09:13:17.2218573Z
 changelog_ref: project-packet-and-lane-runtime-capsule.changelog.jsonl

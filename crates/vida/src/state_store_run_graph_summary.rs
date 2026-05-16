@@ -246,6 +246,11 @@ fn stored_receipt_has_active_exception_takeover(receipt: &RunGraphDispatchReceip
         && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref())
 }
 
+fn stored_receipt_supersedes_lane(receipt: &RunGraphDispatchReceiptStored) -> bool {
+    receipt.lane_status.as_deref() == Some("lane_superseded")
+        && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref())
+}
+
 fn continuation_binding_active_kind(binding: &RunGraphContinuationBinding) -> Option<&str> {
     binding
         .active_bounded_unit
@@ -985,6 +990,9 @@ pub(crate) fn normalize_run_graph_lane_status(
     match value {
         Some(raw) if !raw.trim().is_empty() => {
             let canonical_lane_status = canonical_lane_status_str(raw).unwrap_or(raw).trim();
+            if dispatch_status.trim() == "executed" && canonical_lane_status == "lane_completed" {
+                return canonical_lane_status.to_string();
+            }
             if canonical_lane_status == derived_lane_status {
                 return canonical_lane_status.to_string();
             }
@@ -1600,8 +1608,6 @@ impl StateStore {
 
     #[allow(dead_code)]
     pub async fn run_graph_status(&self, run_id: &str) -> Result<RunGraphStatus, StateStoreError> {
-        self.record_run_graph_owner_evidence(run_id, "run_graph_status")
-            .await?;
         let execution: Option<ExecutionPlanStateRow> =
             self.db.select(("execution_plan_state", run_id)).await?;
         let execution = execution.ok_or_else(|| StateStoreError::MissingTask {
@@ -1694,11 +1700,20 @@ impl StateStore {
         let mut query = self
             .db
             .query(
-                "SELECT run_id, updated_at FROM execution_plan_state ORDER BY updated_at DESC, run_id DESC LIMIT 1;",
+                "SELECT run_id, updated_at FROM execution_plan_state ORDER BY updated_at DESC, run_id DESC LIMIT 25;",
             )
             .await?;
         let rows: Vec<RunGraphLatestRow> = query.take(0)?;
-        Ok(rows.into_iter().next().map(|latest| latest.run_id))
+        for latest in rows {
+            let receipt = self
+                .run_graph_dispatch_receipt_stored(&latest.run_id)
+                .await?;
+            if receipt.as_ref().is_some_and(stored_receipt_supersedes_lane) {
+                continue;
+            }
+            return Ok(Some(latest.run_id));
+        }
+        Ok(None)
     }
 
     pub(crate) async fn latest_run_graph_run_id_for_task(
@@ -2344,6 +2359,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn executed_lane_completed_dispatch_receipt_signal_is_not_ambiguous() {
+        let summary = RunGraphDispatchReceiptSummary::from_receipt(RunGraphDispatchReceipt {
+            run_id: "run-lane-complete-signal".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida lane complete".to_string()),
+            dispatch_command: Some("vida lane complete run-lane-complete-signal".to_string()),
+            dispatch_packet_path: Some("runtime-consumption/dispatch-packets/run.json".to_string()),
+            dispatch_result_path: Some("runtime-consumption/dispatch-results/run.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("writer".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("activate writer".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["missing_owned_write_scope".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: Some(
+                "runtime-consumption/dispatch-results/run.json".to_string(),
+            ),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: Some("analysis".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-15T08:00:00Z".to_string(),
+        });
+
+        assert!(!latest_run_graph_dispatch_receipt_signal_is_ambiguous(
+            &summary
+        ));
+    }
+
     #[tokio::test]
     async fn run_graph_continuation_binding_and_dispatch_context_round_trip() {
         let nanos = SystemTime::now()
@@ -2488,6 +2543,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_graph_status_read_does_not_record_owner_evidence() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-read-owner-evidence-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .record_run_graph_owner_evidence("seed-owner-evidence", "dispatch_context")
+            .await
+            .expect("seed owner evidence table");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-read-only-owner-evidence".to_string();
+        status.task_id = "task-read-only-owner-evidence".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let loaded = store
+            .run_graph_status("run-read-only-owner-evidence")
+            .await
+            .expect("read run graph status");
+        assert_eq!(loaded.run_id, "run-read-only-owner-evidence");
+        assert!(
+            store
+                .run_graph_owner_evidence_record("run-read-only-owner-evidence", "run_graph_status")
+                .await
+                .expect("read owner evidence")
+                .is_none()
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn run_graph_status_does_not_reconcile_closed_in_progress_task_into_completed() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2596,8 +2692,9 @@ mod tests {
 
         for lifecycle_stage in ["closure_blocked", "closure_complete"] {
             let run_id = format!("run-{lifecycle_stage}");
-            let mut status =
-                crate::taskflow_run_graph::default_run_graph_status(&run_id, "delivery", "delivery");
+            let mut status = crate::taskflow_run_graph::default_run_graph_status(
+                &run_id, "delivery", "delivery",
+            );
             status.task_id = "feature-terminal-closure".to_string();
             status.active_node = "closure".to_string();
             status.status = "blocked".to_string();
@@ -2633,8 +2730,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch(
-    ) {
+    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -2881,6 +2978,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn latest_run_graph_status_skips_superseded_lane_run() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-latest-run-graph-skips-superseded-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let active = crate::taskflow_run_graph::default_run_graph_status(
+            "run-active",
+            "task-active",
+            "implementation",
+        );
+        store
+            .record_run_graph_status(&active)
+            .await
+            .expect("persist active status");
+
+        let stale = crate::taskflow_run_graph::default_run_graph_status(
+            "run-stale-superseded",
+            "task-stale",
+            "implementation",
+        );
+        store
+            .record_run_graph_status(&stale)
+            .await
+            .expect("persist stale status");
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-stale-superseded".to_string(),
+                dispatch_target: "business_analyst".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_superseded".to_string(),
+                supersedes_receipt_id: Some("supersede-stale-run".to_string()),
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init --dispatch-packet packet.json".to_string()),
+                dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: Some("internal_activation_view_only".to_string()),
+                downstream_dispatch_target: Some("work-pool-pack".to_string()),
+                downstream_dispatch_command: Some("vida task ensure feature-x".to_string()),
+                downstream_dispatch_note: Some("stale delegated cycle".to_string()),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["pending_specification_evidence".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("business_analyst".to_string()),
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("middle".to_string()),
+                recorded_at: "2026-05-15T19:40:00Z".to_string(),
+            })
+            .await
+            .expect("persist superseded dispatch receipt");
+
+        let latest = store
+            .latest_run_graph_status()
+            .await
+            .expect("latest status should load")
+            .expect("non-superseded status should remain");
+        assert_eq!(latest.run_id, "run-active");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn completed_run_status_is_downgraded_by_exception_recorded_receipt() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -3046,8 +3219,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active(
-    ) {
+    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -3863,8 +4036,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn active_exception_takeover_reconciles_stale_continuation_binding_for_next_lawful_sources(
-    ) {
+    async fn active_exception_takeover_reconciles_stale_continuation_binding_for_next_lawful_sources()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -4110,8 +4283,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open(
-    ) {
+    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -4610,8 +4783,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none(
-    ) {
+    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())

@@ -105,15 +105,17 @@ Companion rule:
     Sources: `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/team-coordination-model.md`, `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/release-1-plan.md`, current artifact query code in `crates/vida/src/taskflow_artifacts.rs`, and the current v1 decision to insert an explicit preparation stage between planning and code-shaped implementation
 19. [operational-state-and-synchronization-model.md](operational-state-and-synchronization-model.md)
     Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/embedded-runtime-and-editable-projection-model.md`, `docs/product/spec/runtime-paths-and-derived-cache-model.md`, and the current DB-first synchronization boundary decisions
-20. [host-agent-layer-status-matrix.md](host-agent-layer-status-matrix.md)
+20. [multi-orchestrator-session-ownership-and-claims-design.md](multi-orchestrator-session-ownership-and-claims-design.md)
+    Sources: current runtime defect evidence from session-collapsed orchestrator status, `docs/product/spec/operational-state-and-synchronization-model.md`, `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/product/spec/release-1-state-machine-specs.md`, `docs/product/spec/release-1-decision-tables.md`, `docs/process/project-orchestrator-operating-protocol.md`, and official OpenAI/Microsoft/Kubernetes/OpenTelemetry session-thread/lease/trace baselines reviewed for this design
+21. [host-agent-layer-status-matrix.md](host-agent-layer-status-matrix.md)
     Sources: `vida.config.yaml`, `docs/process/codex-agent-configuration-guide.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`, `work.host-cli-agent-setup-protocol.md`, and current Rust launcher/runtime status surfaces
-21. [specification-lane-scope-hardening-design.md](specification-lane-scope-hardening-design.md)
+22. [specification-lane-scope-hardening-design.md](specification-lane-scope-hardening-design.md)
     Sources: `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/process/documentation-tooling-map.md`, current packet/render/validation code in `crates/vida/src/{runtime_dispatch_packets,runtime_dispatch_state,runtime_dispatch_downstream_packets,taskflow_consume_resume}.rs`, and the active runtime evidence showing `specification` / `business_analyst` lanes incorrectly inheriting code `owned_paths`
-22. [repair-fail-closed-resume-closure-truth-design.md](repair-fail-closed-resume-closure-truth-design.md)
+23. [repair-fail-closed-resume-closure-truth-design.md](repair-fail-closed-resume-closure-truth-design.md)
    Sources: `docs/product/spec/specification-lane-scope-hardening-design.md`, current resume/validation code in `crates/vida/src/taskflow_consume_resume.rs`, active runtime evidence from `vida taskflow consume continue --run-id task-recovery-cluster-fail-closed-resume-rewrite-truth --json`, and the persisted dispatch packet lineage that previously kept stale code-owned scope under a specification delivery packet
-23. [lane-supersede-and-shared-truth-envelope-design.md](lane-supersede-and-shared-truth-envelope-design.md)
+24. [lane-supersede-and-shared-truth-envelope-design.md](lane-supersede-and-shared-truth-envelope-design.md)
    Sources: `docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md`, `docs/product/spec/release-1-operator-surface-contract.md`, `docs/product/spec/release-1-error-and-exception-taxonomy.md`, current lane-surface/write-guard code in `crates/vida/src/{lane_surface,status_surface_write_guard,release1_contracts,taskflow_layer4}.rs`, and the active A2 runtime work to split recorded exception evidence from explicit supersession-backed takeover authority
-24. [implementation-backend-admissibility-and-selection-truth-design.md](implementation-backend-admissibility-and-selection-truth-design.md)
+25. [implementation-backend-admissibility-and-selection-truth-design.md](implementation-backend-admissibility-and-selection-truth-design.md)
    Sources: `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`, current backend-admissibility code in `crates/vida/src/{runtime_lane_summary,runtime_dispatch_execution,runtime_dispatch_state,state_store_run_graph_summary}.rs`, and the active A3 runtime work to stop implementation-lane operator surfaces from projecting inadmissible raw backend drift as canonical selected-backend truth
 
 ### Project And Packaging
@@ -267,5 +269,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-provenance-map.md
 created_at: '2026-03-16T09:05:00+02:00'
-updated_at: 2026-04-26T14:58:34.965110628Z
+updated_at: 2026-05-15T09:13:16.5263495Z
 changelog_ref: current-spec-provenance-map.changelog.jsonl

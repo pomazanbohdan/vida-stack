@@ -36,6 +36,7 @@ Project development runs as:
 8. skill-aware before bounded work begins,
 9. fail-closed on missing packet data or shared-scope ambiguity.
 10. explorer/read-only findings feed packet shaping, not root-session write ownership.
+11. session-scoped: one blocked orchestrator session must not block another session's disjoint task in the same project root.
 
 ## Team Topology
 
@@ -51,6 +52,13 @@ The active project development team is:
    - carrier tier for independent duplication/architecture reuse review, proof, and closure-readiness checks with `runtime_role=verifier`
 5. `architect`
    - carrier tier for high-cost conflict resolution with `runtime_role=solution_architect`
+
+Multiple orchestrator sessions:
+
+1. each root orchestrator session is a separate controller over shared DB-first project truth,
+2. each controller must hold claims for its active planning, dispatch, write, proof, or recovery work,
+3. parallel orchestrators are lawful only when task/run identity, owned paths, and exclusive conflict domains do not overlap,
+4. foreign blocked sessions remain visible to the team but are not inherited as the current session's active bounded unit.
 
 The configured development chain is:
 
@@ -418,5 +426,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/team-development-and-orchestration-protocol.md
 created_at: '2026-03-13T17:00:00+02:00'
-updated_at: 2026-03-16T08:15:49.128428218Z
+updated_at: 2026-05-15T09:13:17.1482677Z
 changelog_ref: team-development-and-orchestration-protocol.changelog.jsonl

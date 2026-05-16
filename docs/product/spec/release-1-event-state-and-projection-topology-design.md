@@ -140,7 +140,7 @@ Will implement / choose:
 
 ### 2. Event-source only lawful transition domains, not every mutable artifact
 Will implement / choose:
-- Event-state is limited to execution, approval, tool/policy, replay/recovery, bundle/protocol-binding revision, DocFlow operational verdicts, and sync/reconcile decisions.
+- Event-state is limited to execution, approval, tool/policy, replay/recovery, orchestrator session claim transitions, bundle/protocol-binding revision, DocFlow operational verdicts, and sync/reconcile decisions.
 - Canonical docs, retrieval indexes, and vector payloads remain outside the event-spine truth model.
 - Why:
   - Release 1 needs replay and auditability at transition boundaries, not event copies of every document body.
@@ -210,6 +210,8 @@ Will implement / choose:
     - minimum fields: `event_id`, `event_type`, `stream_id`, `stream_kind`, `aggregate_id`, `aggregate_version`, `partition_key`, `correlation_id`, `causation_id`, `trace_id`, `workflow_class`, `risk_tier`, `actor_kind`, `actor_id`, `occurred_at`, `payload_schema_version`, `blocker_codes[]`, `related_artifact_ids[]`, `side_effect_class`, `replay_safe`, `payload`
   - `projection_checkpoint_record`
     - minimum fields: `projector_id`, `checkpoint_group`, `lineage_kind`, `origin_checkpoint_ref`, `replay_scope`, `fork_parent`, `last_gapless_position`, `updated_at`
+  - `orchestrator_claim`
+    - minimum fields: `claim_id`, `state_root_id`, `worktree_environment_id`, `orchestrator_session_id`, `task_id`, `run_id`, `lane_id`, `claim_kind`, `conflict_domain`, `owned_paths[]`, `read_only_paths[]`, `lease_mode`, `status`, `lease_expires_at`, `last_heartbeat_at`, `resource_revision`
   - `resumability_capsule`
     - remains the minimum continuation packet for runtime resume and must align with checkpoint/replay law
 - Receipts / runtime state / config fields:
@@ -225,6 +227,7 @@ Will implement / choose:
   - no new public root command is added until the operator surface contract is closed
 - Runtime-family handoffs:
   - `TaskFlow` emits/consumes execution, approval, recovery, and closure artifacts
+  - `TaskFlow` emits/consumes orchestrator session claim events and projects current-session, foreign-session, and global blocker summaries for `status`, `next`, and continuation binding
   - `DocFlow` emits mutation/validation/readiness/proof verdict events consumable by `TaskFlow`
 - Cross-document / cross-protocol dependencies:
   - `release-1-canonical-artifact-schemas.md` must gain the event/projection artifacts if this design is promoted,
@@ -379,5 +382,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-event-state-and-projection-topology-design.md
 created_at: '2026-04-03T09:54:07+03:00'
-updated_at: 2026-04-03T09:54:07+03:00
+updated_at: 2026-05-15T09:13:16.9963966Z
 changelog_ref: release-1-event-state-and-projection-topology-design.changelog.jsonl

@@ -62,6 +62,16 @@ For the host-project domain:
 2. the runtime may update semantic search, graph state, code index, and memory artifacts,
 3. these updates support orchestration, search, and context resolution for the host project.
 
+### 5.3 Orchestrator Session And Claim Domain
+
+For active runtime control:
+
+1. the project state store is shared across orchestrator sessions,
+2. each orchestrator session must have a distinct `orchestrator_session_id` and optional `worktree_environment_id`,
+3. write-producing or dispatching work must record a claim with task/run/lane identity, conflict domain, owned paths, lease mode, and heartbeat evidence,
+4. a blocked foreign claim is not a current-session conflict unless task/run identity, owned paths, exclusive conflict domain, or global state-integrity blocker class overlaps,
+5. claim release, expiry, reclaim, and supersession are explicit state transitions with receipts.
+
 ## 6. Reactive-Flow Rule
 
 1. watcher detects,
@@ -105,5 +115,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/operational-state-and-synchronization-model.md
 created_at: '2026-03-13T08:39:49+02:00'
-updated_at: '2026-03-13T08:47:25+02:00'
+updated_at: 2026-05-15T09:13:16.6944672Z
 changelog_ref: operational-state-and-synchronization-model.changelog.jsonl

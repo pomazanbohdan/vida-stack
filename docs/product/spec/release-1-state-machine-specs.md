@@ -12,7 +12,8 @@ This document defines FSMs for:
 2. approval lifecycle,
 3. tool execution lifecycle,
 4. incident and recovery lifecycle,
-5. prompt rollout lifecycle.
+5. prompt rollout lifecycle,
+6. orchestrator session claim lifecycle.
 
 ## 2. General Transition Rule
 
@@ -150,11 +151,48 @@ Allowed transitions:
 5. `canary | promoted -> rolled_back`
    - requires rollback target and incident or regression evidence
 
-## 8. References
+## 8. Orchestrator Session Claim Lifecycle FSM
+
+States:
+
+1. `claim_requested`
+2. `claim_active`
+3. `claim_renewed`
+4. `claim_blocked`
+5. `claim_released`
+6. `claim_expired`
+7. `claim_superseded`
+8. `claim_reclaimed`
+
+Allowed transitions:
+
+1. `claim_requested -> claim_active`
+   - requires session id, bounded unit, claim kind, lease mode, conflict domain, and path scope
+2. `claim_active -> claim_renewed`
+   - requires heartbeat and unchanged or version-checked scope
+3. `claim_active | claim_renewed -> claim_blocked`
+   - requires concrete conflict evidence with same task/run, path intersection, exclusive conflict domain, or global blocker class
+4. `claim_active | claim_renewed | claim_blocked -> claim_released`
+   - requires completion, cancellation, or explicit handoff evidence
+5. `claim_active | claim_renewed | claim_blocked -> claim_expired`
+   - requires lease expiry timestamp
+6. `claim_active | claim_renewed | claim_blocked -> claim_superseded`
+   - requires supersession receipt
+7. `claim_expired | claim_superseded -> claim_reclaimed`
+   - requires reclaim receipt and new owning session evidence
+
+Forbidden transitions:
+
+1. `claim_blocked -> claim_released` without blocker resolution, supersession, or explicit cancellation evidence
+2. `claim_expired -> claim_active` without reclaim receipt
+3. treating a foreign `claim_blocked` as current-session blocking without concrete conflict evidence
+
+## 9. References
 
 1. `docs/product/spec/release-1-decision-tables.md`
 2. `docs/product/spec/release-1-control-metrics-and-gates.md`
 3. `docs/product/spec/release-1-canonical-artifact-schemas.md`
+4. `docs/product/spec/multi-orchestrator-session-ownership-and-claims-design.md`
 
 -----
 artifact_path: product/spec/release-1-state-machine-specs
@@ -165,5 +203,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/release-1-state-machine-specs.md
 created_at: 2026-03-16T11:35:00Z
-updated_at: 2026-03-16T11:28:19.784049012Z
+updated_at: 2026-05-15T09:13:16.8453445Z
 changelog_ref: release-1-state-machine-specs.changelog.jsonl

@@ -110,6 +110,17 @@ This control matrix strengthens the layer status view with owner, proof, and mig
 | Layer 8 | `runtime-family execution` | `observability.map.md`; `canonical-runtime-readiness-law.md`; `operational-state-and-synchronization-model.md` | `vida docflow`; TaskFlow observability/readiness surfaces; future Rust readiness shell in `vida`/`taskflow-*` | `vida docflow readiness-check`; `proofcheck`; readiness reports and reconciliation views | `bridge_backed` | readiness cannot prove trust and direct runtime use must remain blocked | readiness is green canonically, but native TaskFlow observability/readiness closure is still converging |
 | Layer 9 | `runtime-family execution` + `DocFlow` activation seam | `runtime.direct-runtime-consumption-protocol.md`; `compiled-autonomous-delivery-runtime-architecture.md`; `taskflow-v1-runtime-modernization-plan.md`; `docflow-v1-runtime-modernization-plan.md` | TaskFlow direct-consumption surfaces; `crates/vida/src/main.rs`; active Rust `taskflow-*` and `docflow-*` integration surfaces | `vida taskflow consume final|continue|advance`; `vida docflow proofcheck`; explicit `DocFlow` activation for final evidence | `bridge_backed` | runtime consumes incomplete canon or bypasses `DocFlow` evidence and closure trust must fail closed | `TaskFlow -> DocFlow` direct native seam is still converging while both Rust families are under active development |
 
+## 0.4 Session-Scoped Ownership Alignment
+
+The runtime layer model treats the project state store as shared truth, not as proof that exactly one orchestrator session exists. Layer 2 owns session, claim, lease, and receipt vocabulary. Layer 3 records run/lane execution under those claims. Layer 4 uses claim compatibility to select lanes and carriers. Layer 8 reports current-session, foreign-session, and global blockers separately.
+
+Session-scoped ownership law:
+
+1. a blocked run owned by another live orchestrator session is not a current-session blocker unless it shares task/run identity, path scope, exclusive conflict domain, or a global state-integrity blocker class,
+2. latest-run projections must be scoped by current session or explicit bounded unit before they are used for continuation binding,
+3. root-local write guard decisions must include active claim evidence, not only the latest project-wide run-graph status,
+4. status/readiness surfaces must expose foreign blocked runs as visibility evidence so operators can diagnose competing work without stopping unrelated sessions.
+
 ## 1. Scope
 
 This spec defines:
@@ -456,5 +467,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/canonical-runtime-layer-matrix.md
 created_at: '2026-03-10T15:01:10+02:00'
-updated_at: '2026-03-15T08:58:09+02:00'
+updated_at: 2026-05-15T09:13:16.6074088Z
 changelog_ref: canonical-runtime-layer-matrix.changelog.jsonl

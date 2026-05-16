@@ -11,6 +11,14 @@ pub(crate) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct TaskExecutionSemanticsCommandArgs<'a> {
+    pub(crate) execution_mode: &'a str,
+    pub(crate) order_bucket: &'a str,
+    pub(crate) parallel_group: &'a str,
+    pub(crate) conflict_domain: &'a str,
+}
+
 fn shell_quote_joined_labels(labels: &[&str]) -> Option<String> {
     let joined = labels
         .iter()
@@ -21,6 +29,21 @@ fn shell_quote_joined_labels(labels: &[&str]) -> Option<String> {
     (!joined.is_empty()).then(|| shell_quote(&joined))
 }
 
+fn append_execution_semantics_args(
+    command: &mut String,
+    semantics: Option<TaskExecutionSemanticsCommandArgs<'_>>,
+) {
+    if let Some(semantics) = semantics {
+        command.push_str(&format!(
+            " --execution-mode {} --order-bucket {} --parallel-group {} --conflict-domain {}",
+            shell_quote(semantics.execution_mode),
+            shell_quote(semantics.order_bucket),
+            shell_quote(semantics.parallel_group),
+            shell_quote(semantics.conflict_domain),
+        ));
+    }
+}
+
 pub(crate) fn build_task_create_command(
     task_id: &str,
     title: &str,
@@ -28,6 +51,7 @@ pub(crate) fn build_task_create_command(
     parent_id: Option<&str>,
     labels: &[&str],
     description_quoted: Option<&str>,
+    execution_semantics: Option<TaskExecutionSemanticsCommandArgs<'_>>,
 ) -> String {
     let mut command = format!(
         "vida task create {} {} --type {} --status open",
@@ -44,6 +68,7 @@ pub(crate) fn build_task_create_command(
     if let Some(description_quoted) = description_quoted {
         command.push_str(&format!(" --description {description_quoted}"));
     }
+    append_execution_semantics_args(&mut command, execution_semantics);
     command.push_str(" --json");
     command
 }
@@ -55,6 +80,7 @@ pub(crate) fn build_task_ensure_command(
     parent_id: Option<&str>,
     labels: &[&str],
     description_quoted: Option<&str>,
+    execution_semantics: Option<TaskExecutionSemanticsCommandArgs<'_>>,
 ) -> String {
     let mut command = format!(
         "vida task ensure {} {} --type {} --status open",
@@ -71,6 +97,7 @@ pub(crate) fn build_task_ensure_command(
     if let Some(description_quoted) = description_quoted {
         command.push_str(&format!(" --description {description_quoted}"));
     }
+    append_execution_semantics_args(&mut command, execution_semantics);
     command.push_str(" --json");
     command
 }

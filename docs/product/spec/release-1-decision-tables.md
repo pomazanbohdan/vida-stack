@@ -13,7 +13,8 @@ This document defines decision tables for:
 3. tool execution gates,
 4. retrieval trust gates,
 5. memory write gates,
-6. rollback and incident gates.
+6. rollback and incident gates,
+7. orchestrator session claim admission gates.
 
 This document does not define:
 
@@ -52,7 +53,19 @@ This document does not define:
 | worker timeout with no exception receipt | no | open lane receipt remains authoritative | block |
 | sensitive delegated workflow `risk_tier >= R2` | yes with approval | delegation chain evidence, approval record | block |
 
-## 5. Tool Execution Decision Table
+## 5. Session Claim Admission Decision Table
+
+| Condition | Claim/admission allowed | Required artifacts | Outcome if absent |
+|---|---|---|---|
+| current session requests disjoint task/run, disjoint owned paths, and disjoint conflict domain | yes | session id, task/run id, owned path scope, conflict domain, lease mode | block if any identifier is missing |
+| foreign session is blocked on unrelated bounded unit | yes | foreign blocker surfaced as visibility evidence | continue with warning/status evidence |
+| same task/run already has a live exclusive foreign claim | no | conflict report naming claim/session/run | block |
+| owned path scope intersects a live exclusive foreign claim | no | normalized path-intersection report | block |
+| exclusive conflict domain matches a live foreign claim | no | conflict-domain report | block |
+| claim lease is expired | reclaim only | expiry evidence and reclaim/supersede receipt | block direct reuse |
+| global state-integrity blocker exists | no | global blocker report | block all sessions |
+
+## 6. Tool Execution Decision Table
 
 | Condition | Tool call allowed | Required artifacts | Outcome if absent |
 |---|---|---|---|
@@ -63,7 +76,7 @@ This document does not define:
 | tool returns failure and rollback posture exists | yes, enter compensation flow | incident evidence bundle, rollback execution trace | escalate if rollback fails |
 | tool returns failure and rollback posture missing for mutating workflow | no | incident evidence bundle | block and escalate |
 
-## 6. Retrieval Trust Decision Table
+## 7. Retrieval Trust Decision Table
 
 | Condition | Retrieval answer allowed | Required artifacts | Outcome if absent |
 |---|---|---|---|
@@ -73,7 +86,7 @@ This document does not define:
 | answer cites unsupported or unregistered source | no | none | block |
 | answer is non-retrieval and no external citation claim is made | yes | trace root | continue |
 
-## 7. Memory Write Decision Table
+## 8. Memory Write Decision Table
 
 | Condition | Memory write allowed | Required artifacts | Outcome if absent |
 |---|---|---|---|
@@ -82,7 +95,7 @@ This document does not define:
 | correction or deletion requested | yes | correction/deletion ref, trace, audit chain | block |
 | memory source trace is absent | no | none | block |
 
-## 8. Rollback And Incident Decision Table
+## 9. Rollback And Incident Decision Table
 
 | Condition | Rollback required | Required artifacts | Outcome if absent |
 |---|---|---|---|
@@ -91,12 +104,13 @@ This document does not define:
 | workflow is read-only and fails | no rollback | trace and failure taxonomy | continue or retry |
 | recovery workflow executes | yes as core behavior | incident evidence bundle, restore trace, trust reevaluation verdict | block if incomplete |
 
-## 9. References
+## 10. References
 
 1. `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
 2. `docs/product/spec/release-1-closure-contract.md`
 3. `docs/product/spec/release-1-control-metrics-and-gates.md`
 4. `docs/product/spec/release-1-canonical-artifact-schemas.md`
+5. `docs/product/spec/multi-orchestrator-session-ownership-and-claims-design.md`
 
 -----
 artifact_path: product/spec/release-1-decision-tables
@@ -107,5 +121,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/release-1-decision-tables.md
 created_at: 2026-03-16T11:35:00Z
-updated_at: 2026-03-16T11:28:19.767293185Z
+updated_at: 2026-05-15T09:13:16.9190851Z
 changelog_ref: release-1-decision-tables.changelog.jsonl
