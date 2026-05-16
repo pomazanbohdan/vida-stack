@@ -1,7 +1,7 @@
 use crate::taskflow_run_graph::validate_run_graph_resume_gate;
 use std::path::Path;
 use std::process::ExitCode;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 const DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS: [&str; 3] = [
     ".vida/data/state/runtime-consumption",
@@ -9,56 +9,8 @@ const DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS: [&str; 3] = [
     "docs/process",
 ];
 const CONSUME_RESUME_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
-const CONSUME_RESUME_LOCK_MARKER_RECLAIM_TIMEOUT: Duration = Duration::from_secs(30);
-const CONSUME_RESUME_LOCK_MARKER_RECLAIM_RETRY_DELAY: Duration = Duration::from_millis(25);
 const CONSUME_RESUME_PREPARATION_GATE_TIMEOUT: Duration = Duration::from_secs(10);
 const CONSUME_RESUME_HANDOFF_TIMEOUT: Duration = Duration::from_secs(25);
-
-fn state_store_lock_marker_error(state_root: &Path, label: &str) -> Option<String> {
-    state_store_lock_marker_error_with_timeout(
-        state_root,
-        label,
-        CONSUME_RESUME_LOCK_MARKER_RECLAIM_TIMEOUT,
-    )
-}
-
-fn state_store_lock_marker_error_with_timeout(
-    state_root: &Path,
-    label: &str,
-    timeout: Duration,
-) -> Option<String> {
-    let started = Instant::now();
-    let lock_path = state_root.join("LOCK");
-
-    loop {
-        let _ = super::StateStore::reclaim_self_owned_failed_authoritative_datastore_lock_marker(
-            state_root,
-        );
-        match std::fs::metadata(&lock_path) {
-            Ok(metadata) if metadata.is_file() => {
-                let nonnumeric_marker = std::fs::read_to_string(&lock_path)
-                    .ok()
-                    .is_some_and(|lock_text| lock_text.trim().parse::<u32>().is_err());
-                if nonnumeric_marker {
-                    return Some(format!(
-                        "consume continue failed fast: {label}: authoritative datastore LOCK exists at `{}`; wait for the state-store holder or run recovery before retrying",
-                        lock_path.display()
-                    ));
-                }
-                let elapsed = started.elapsed();
-                if elapsed >= timeout {
-                    return Some(format!(
-                        "consume continue failed fast: {label}: authoritative datastore LOCK exists at `{}`; wait for the state-store holder or run recovery before retrying",
-                        lock_path.display()
-                    ));
-                }
-                let remaining = timeout.saturating_sub(elapsed);
-                std::thread::sleep(CONSUME_RESUME_LOCK_MARKER_RECLAIM_RETRY_DELAY.min(remaining));
-            }
-            _ => return None,
-        }
-    }
-}
 
 async fn consume_continue_handoff_with_timeout<F>(
     label: &str,
@@ -105,9 +57,6 @@ async fn fail_fast_state_store_open(
     state_root: std::path::PathBuf,
     label: &str,
 ) -> Result<super::StateStore, String> {
-    if let Some(error) = state_store_lock_marker_error(&state_root, label) {
-        return Err(error);
-    }
     match tokio::time::timeout(
         CONSUME_RESUME_LOCK_TIMEOUT,
         super::StateStore::open_existing(state_root),
@@ -140,9 +89,6 @@ async fn fail_fast_state_store_open_read_only_with_timeout(
     label: &str,
     timeout: Duration,
 ) -> Result<super::StateStore, String> {
-    if let Some(error) = state_store_lock_marker_error(&state_root, label) {
-        return Err(error);
-    }
     match tokio::time::timeout(
         timeout,
         super::StateStore::open_existing_read_only(state_root),
@@ -5237,7 +5183,7 @@ mod tests {
         canonical_resume_lane_status, canonical_resume_string_array_entries,
         consume_advance_success_payload, consume_continue_blocking_step_with_timeout,
         consume_continue_handoff_with_timeout, consume_continue_resume_error_blocker_code,
-        consume_continue_resume_error_payload, consume_continue_state_access_blocker_code,
+        consume_continue_resume_error_payload,
         consume_continue_state_access_blocker_payload, dispatch_receipt_internal_retry_eligible,
         dispatch_receipt_primary_rebind_eligible, dispatch_receipt_retry_eligible,
         emit_runtime_consumption_resume_json, enforce_consume_continue_execution_preparation_gate,
@@ -5255,7 +5201,7 @@ mod tests {
         runtime_consumption_resume_blocker_code, runtime_consumption_resume_receipt_blocker_codes,
         runtime_consumption_resume_receipt_next_actions,
         runtime_consumption_snapshot_has_failure_control_evidence,
-        should_refresh_resumed_downstream_preview, state_store_lock_marker_error,
+        should_refresh_resumed_downstream_preview,
         sync_run_graph_after_retry_artifact, validate_receipt_packet_pair,
         validate_run_graph_resume_state, validate_run_graph_resume_state_for_downstream_packet,
         PacketPathPlatform, CONSUME_RESUME_HANDOFF_TIMEOUT, DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
@@ -5490,75 +5436,6 @@ mod tests {
                 .as_str()
                 .is_some_and(|value| value.contains("do not delete datastore LOCK files"))));
 
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn state_store_lock_marker_error_reports_authoritative_lock_without_opening_store() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-consume-continue-lock-marker-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        fs::create_dir_all(&root).expect("create state root");
-        fs::write(root.join("LOCK"), "holder").expect("write lock marker");
-
-        let error = state_store_lock_marker_error(&root, "opening authoritative state store")
-            .expect("lock marker should block before opening store");
-        assert!(error.contains("authoritative datastore LOCK exists"));
-        assert_eq!(
-            consume_continue_state_access_blocker_code(&error),
-            "authoritative_state_store_locked"
-        );
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn state_store_lock_marker_error_reclaims_stale_numeric_lock_marker() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-consume-continue-stale-lock-marker-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        fs::create_dir_all(&root).expect("create state root");
-        let stale_pid = std::process::id().saturating_add(10_000_000);
-        fs::write(root.join("LOCK"), stale_pid.to_string()).expect("write stale lock marker");
-
-        let error = state_store_lock_marker_error(&root, "opening authoritative state store");
-
-        assert!(error.is_none());
-        assert!(!root.join("LOCK").exists());
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn state_store_lock_marker_error_reclaims_self_owned_failed_lock_marker() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-consume-continue-self-lock-marker-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        fs::create_dir_all(&root).expect("create state root");
-        fs::write(root.join("LOCK"), std::process::id().to_string())
-            .expect("write self-owned lock marker");
-
-        let error = state_store_lock_marker_error(&root, "opening authoritative state store");
-
-        assert!(error.is_none());
-        assert!(!root.join("LOCK").exists());
         let _ = fs::remove_dir_all(&root);
     }
 
