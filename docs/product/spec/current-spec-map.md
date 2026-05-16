@@ -109,19 +109,22 @@ Companion rule:
 20. [multi-orchestrator-session-ownership-and-claims-design.md](multi-orchestrator-session-ownership-and-claims-design.md)
     Config families: orchestrator session identity, worktree-scoped claims, lease/heartbeat ownership, scoped status/continuation admission, foreign blocker visibility, and multi-session TaskFlow scheduling
     Registered path: `docs/product/spec/multi-orchestrator-session-ownership-and-claims-design.md`
-21. [host-agent-layer-status-matrix.md](host-agent-layer-status-matrix.md)
+21. [spec-protocol-foundation-session-scoped-orchestr-design.md](spec-protocol-foundation-session-scoped-orchestr-design.md)
+    Config families: session-scoped orchestrator protocol foundation, active claim admission, delegated lane ownership, exception takeover state naming, and continuation posture across TaskFlow, lane, status, and self-diagnostic surfaces
+    Registered path: `docs/product/spec/spec-protocol-foundation-session-scoped-orchestr-design.md`
+22. [host-agent-layer-status-matrix.md](host-agent-layer-status-matrix.md)
     Config families: host-agent activation layers, overlay-owned tier ladders, tier selection economics, local score/state surfaces, task-close feedback ingestion, and status/budget observability over `.vida/state/**`
-22. [specification-lane-scope-hardening-design.md](specification-lane-scope-hardening-design.md)
+23. [specification-lane-scope-hardening-design.md](specification-lane-scope-hardening-design.md)
     Config families: runtime dispatch packet scope policy, tracked design-doc write ownership for specification lanes, downstream packet parity, and legacy packet normalization for task-class-aware scope hardening
-23. [repair-fail-closed-resume-closure-truth-design.md](repair-fail-closed-resume-closure-truth-design.md)
+24. [repair-fail-closed-resume-closure-truth-design.md](repair-fail-closed-resume-closure-truth-design.md)
     Config families: fail-closed resume-time packet reconciliation, persisted specification packet repair toward tracked design-doc scope, and active A1 recovery-truth closure for stale dispatch lineage
-24. [lane-supersede-and-shared-truth-envelope-design.md](lane-supersede-and-shared-truth-envelope-design.md)
+25. [lane-supersede-and-shared-truth-envelope-design.md](lane-supersede-and-shared-truth-envelope-design.md)
    Config families: explicit lane supersession mutation, shared lane-envelope truth derivation across `show`/`exception-takeover`/`supersede`, admissible-versus-active takeover posture, and recovery-adjacent lane-command discoverability
-25. [implementation-backend-admissibility-and-selection-truth-design.md](implementation-backend-admissibility-and-selection-truth-design.md)
+26. [implementation-backend-admissibility-and-selection-truth-design.md](implementation-backend-admissibility-and-selection-truth-design.md)
    Config families: implementation-lane backend admissibility truth, canonical selected-backend resolution, route-primary versus effective-backend diagnostic split, and packet/summary/status projection alignment
-26. [coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md](coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md)
+27. [coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md](coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md)
    Config families: coach-lane downstream backend canonicalization, explicit review-route preference over inherited internal fallback, mixed-lane backend lineage, and runtime dispatch receipt/status alignment
-27. [blocked-external-coach-artifact-truth-not-reconciled-design.md](blocked-external-coach-artifact-truth-not-reconciled-design.md)
+28. [blocked-external-coach-artifact-truth-not-reconciled-design.md](blocked-external-coach-artifact-truth-not-reconciled-design.md)
    Config families: blocked dispatch semantic-mismatch detection, run-graph projection stale truth beyond executing-only timeout cases, consume-resume continuation repair for obsolete blocked artifacts, and lane/status operator parity for mismatched blocked evidence
    Registered path: `docs/product/spec/blocked-external-coach-artifact-truth-not-reconciled-design.md`
 
