@@ -1017,7 +1017,7 @@ pub(crate) fn downstream_dispatch_allows_completed_lane_status(
 ) -> bool {
     matches!(
         downstream_dispatch_status,
-        Some("executed" | "packet_ready" | "retired_closed_task_run")
+        Some("executed" | "retired_closed_task_run")
     ) && canonical_lane_status == "lane_completed"
 }
 
