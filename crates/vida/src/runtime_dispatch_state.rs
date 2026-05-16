@@ -23,7 +23,9 @@ use crate::runtime_dispatch_execution::{
 };
 use crate::runtime_dispatch_packet_text::{runtime_packet_prompt, runtime_tracked_flow_packet};
 #[cfg(test)]
-use crate::runtime_dispatch_packets::explicit_request_scope_paths;
+use crate::runtime_dispatch_packets::{
+    explicit_request_scope_paths, normalize_safe_owned_scope_path_candidate,
+};
 #[cfg(test)]
 use crate::runtime_dispatch_packets::runtime_delivery_task_packet;
 use crate::runtime_dispatch_packets::{
@@ -4871,13 +4873,12 @@ pub(crate) fn planner_metadata_owned_paths_from_role_selection(
     {
         let Some(path) = value
             .as_str()
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
+            .and_then(normalize_safe_owned_scope_path_candidate)
         else {
             continue;
         };
-        if !owned_paths.iter().any(|existing| existing == path) {
-            owned_paths.push(path.to_string());
+        if !owned_paths.iter().any(|existing| existing == &path) {
+            owned_paths.push(path);
         }
     }
     owned_paths
@@ -4900,12 +4901,11 @@ pub(crate) fn implementation_owned_paths_for_role_selection(
 
 fn append_unique_owned_paths(target: &mut Vec<String>, source: &[String]) {
     for path in source {
-        let normalized = path.trim();
-        if normalized.is_empty() {
+        let Some(normalized) = normalize_safe_owned_scope_path_candidate(path) else {
             continue;
-        }
+        };
         if !target.iter().any(|existing| existing == normalized) {
-            target.push(normalized.to_string());
+            target.push(normalized);
         }
     }
 }
@@ -4925,8 +4925,7 @@ async fn planner_metadata_owned_paths_from_task(
             task.planner_metadata
                 .owned_paths
                 .into_iter()
-                .map(|path| path.trim().to_string())
-                .filter(|path| !path.is_empty())
+                .filter_map(|path| normalize_safe_owned_scope_path_candidate(&path))
                 .collect()
         })
         .unwrap_or_default()
@@ -12767,6 +12766,106 @@ mod tests {
             assert_eq!(
                 packet["delivery_task_packet"]["owned_paths"],
                 serde_json::json!(owned_paths)
+            );
+        });
+    }
+
+    #[test]
+    fn refresh_downstream_dispatch_preview_filters_unsafe_task_owned_paths() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let labels = vec!["runtime-recovery".to_string()];
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: "run-analysis-task-metadata-unsafe-preview",
+                    title: "Runtime recovery",
+                    display_id: None,
+                    description: "runtime recovery",
+                    issue_type: "task",
+                    status: "open",
+                    priority: 1,
+                    parent_id: None,
+                    labels: &labels,
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata {
+                        owned_paths: vec![
+                            "../../.ssh/config".to_string(),
+                            "/home/user/.bashrc".to_string(),
+                            "./local.rs".to_string(),
+                            "crates/vida/src/runtime_dispatch_state.rs".to_string(),
+                        ],
+                        ..Default::default()
+                    },
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("task with planner metadata should be created");
+            let mut role_selection = bridge_test_role_selection("unused-dev-task");
+            role_selection.request = "continue development".to_string();
+            role_selection.execution_plan["tracked_flow_bootstrap"] = serde_json::Value::Null;
+            role_selection.execution_plan["development_flow"]["implementation"] = json!({
+                "analysis_route_task_class": "analysis",
+                "writer_route_task_class": "writer"
+            });
+            let run_graph_bootstrap = json!({ "run_id": "run-analysis-task-metadata-unsafe-preview" });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-analysis-task-metadata-unsafe-preview".to_string(),
+                dispatch_target: "analysis".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/analysis-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("analysis".to_string()),
+                downstream_dispatch_last_target: Some("analysis".to_string()),
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("verifier".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-23T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            )
+            .await
+            .expect("preview should filter unsafe task-owned paths");
+
+            assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("writer"));
+            assert!(receipt.downstream_dispatch_ready);
+            let packet_path = receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .expect("downstream packet should be written");
+            let packet = read_json(harness.path(), packet_path);
+            assert_eq!(
+                packet["delivery_task_packet"]["owned_paths"],
+                serde_json::json!(["crates/vida/src/runtime_dispatch_state.rs"])
             );
         });
     }
