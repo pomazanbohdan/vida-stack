@@ -1055,6 +1055,7 @@ async fn terminal_closure_complete_resume_candidate(
         .clone()
         .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
     let packet = read_dispatch_packet(&packet_path)?;
+    validate_receipt_packet_pair(receipt, &packet, &packet_path, "dispatch packet")?;
     let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
     Ok(Some(terminal_closure_complete_resume_from_root_receipt(
         receipt,
