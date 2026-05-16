@@ -214,6 +214,10 @@ fn dispatch_receipt_resolves_recovery_bound_run(
         dispatch.dispatch_status == "executed"
             && dispatch.lane_status == "lane_completed"
             && dispatch.blocker_code.is_none()
+            && !dispatch.downstream_dispatch_ready
+            && !dispatch
+                .downstream_dispatch_status
+                .eq_ignore_ascii_case("packet_ready")
             && dispatch
                 .downstream_dispatch_blockers
                 .iter()
