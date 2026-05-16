@@ -346,6 +346,7 @@ pub(crate) fn normalize_legacy_downstream_preview_drift(
 fn reconcile_run_graph_status_with_closed_task(
     mut status: RunGraphStatus,
     task: Option<&TaskRecord>,
+    receipt: Option<&RunGraphDispatchReceiptStored>,
 ) -> RunGraphStatus {
     let Some(task) = task else {
         return status;
@@ -353,12 +354,35 @@ fn reconcile_run_graph_status_with_closed_task(
     if !task_status_is_terminal_for_continuation(&task.status) {
         return status;
     }
-    if !StateStore::run_graph_status_allows_task_close_closure_binding(&status) {
+    if receipt.and_then(|receipt| receipt.lane_status.as_deref()) == Some("lane_exception_recorded")
+    {
+        if status.active_node == "closure"
+            && status.status == "blocked"
+            && status.lifecycle_stage == "closure_blocked"
+        {
+            status.lifecycle_stage = "closure_complete".to_string();
+        }
+        return status;
+    }
+    let terminal_closure_status = status.active_node == "closure"
+        && matches!(status.status.as_str(), "blocked" | "completed")
+        && matches!(
+            status.lifecycle_stage.as_str(),
+            "closure_blocked" | "closure_complete"
+        )
+        && status.next_node.is_none()
+        && status.handoff_state == "none"
+        && status.resume_target == "none";
+    if !StateStore::run_graph_status_allows_task_close_closure_binding(&status)
+        && !terminal_closure_status
+    {
         return status;
     }
 
     status.status = "completed".to_string();
-    if status.lifecycle_stage != "closure_complete" {
+    if status.active_node == "closure" {
+        status.lifecycle_stage = "closure_complete".to_string();
+    } else if status.lifecycle_stage != "closure_complete" {
         status.lifecycle_stage = "implementation_complete".to_string();
     }
     status.next_node = None;
@@ -1661,7 +1685,8 @@ impl StateStore {
         let receipt = self.run_graph_dispatch_receipt_stored(run_id).await?;
         let status = reconcile_run_graph_status_with_dispatch_receipt(status, receipt.as_ref())?;
         let task = self.show_task(&status.task_id).await.ok();
-        let status = reconcile_run_graph_status_with_closed_task(status, task.as_ref());
+        let status =
+            reconcile_run_graph_status_with_closed_task(status, task.as_ref(), receipt.as_ref());
         status.validate_memory_governance()?;
         Ok(status)
     }

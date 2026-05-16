@@ -98,11 +98,7 @@ fn launcher_binary_fingerprint(path: &Path) -> Result<String, String> {
     })?;
     let size = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
     if size > MAX_LAUNCHER_BINARY_BYTES {
-        return Err(format!(
-            "launcher binary `{}` exceeds max fingerprint size of {} bytes",
-            path.display(),
-            MAX_LAUNCHER_BINARY_BYTES
-        ));
+        return Ok(launcher_binary_fingerprint_skipped(size));
     }
     let mut reader = std::io::BufReader::new(file);
     let mut hasher = blake3::Hasher::new();
@@ -120,15 +116,15 @@ fn launcher_binary_fingerprint(path: &Path) -> Result<String, String> {
         }
         total_bytes = total_bytes.saturating_add(read as u64);
         if total_bytes > MAX_LAUNCHER_BINARY_BYTES {
-            return Err(format!(
-                "launcher binary `{}` exceeds max fingerprint size of {} bytes",
-                path.display(),
-                MAX_LAUNCHER_BINARY_BYTES
-            ));
+            return Ok(launcher_binary_fingerprint_skipped(total_bytes));
         }
         hasher.update(&chunk[..read]);
     }
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn launcher_binary_fingerprint_skipped(size: u64) -> String {
+    format!("fingerprint-skipped:size-exceeds-limit:{size}:{MAX_LAUNCHER_BINARY_BYTES}")
 }
 
 fn installed_launcher_binary_evidence(
@@ -696,8 +692,8 @@ pub(crate) fn blocking_lane_selection(
 mod tests {
     use super::{
         build_docflow_receipt_evidence, canonical_closure_admission_artifact_json,
-        doctor_launcher_summary_for_root, RuntimeConsumptionClosureAdmission,
-        RuntimeConsumptionEvidence, CANONICAL_LAUNCHER_COMMAND,
+        doctor_launcher_summary_for_root, launcher_binary_fingerprint_skipped,
+        RuntimeConsumptionClosureAdmission, RuntimeConsumptionEvidence, CANONICAL_LAUNCHER_COMMAND,
     };
     use std::path::PathBuf;
 
@@ -769,6 +765,16 @@ mod tests {
                 == PathBuf::from(&summary.active_executable_path)
                     .canonicalize()
                     .expect("active executable path should canonicalize")));
+    }
+
+    #[test]
+    fn oversized_launcher_fingerprint_degrades_to_bounded_marker() {
+        let marker = launcher_binary_fingerprint_skipped(super::MAX_LAUNCHER_BINARY_BYTES + 1);
+
+        assert_eq!(
+            marker,
+            "fingerprint-skipped:size-exceeds-limit:268435457:268435456"
+        );
     }
 
     #[test]

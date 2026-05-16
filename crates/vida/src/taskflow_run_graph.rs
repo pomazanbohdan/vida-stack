@@ -572,10 +572,7 @@ fn next_lawful_operator_action_for_projection(
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
             return Some(fail_closed_terminal_continue_followup(status));
         }
-        return Some(format!(
-            "vida taskflow consume continue --run-id {} --json",
-            status.run_id
-        ));
+        return Some(format!("vida lane show {} --json", status.run_id));
     }
     if let Some(command) = receipt.and_then(|value| {
         next_lawful_operator_action_for_dispatch_resolution(
@@ -765,15 +762,16 @@ fn recovery_projection_resolves_persisted_open_cycle(
         .dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
-            receipt.dispatch_status == "executed"
+            let clean_completed_receipt = receipt.dispatch_status == "executed"
                 && receipt.lane_status == "lane_completed"
                 && receipt.blocker_code.is_none()
-                && !receipt.downstream_dispatch_ready
-                && !receipt
+                && receipt.downstream_dispatch_blockers.is_empty();
+            let downstream_has_no_blocking_state = !receipt.downstream_dispatch_ready
+                || receipt
                     .downstream_dispatch_status
                     .as_deref()
-                    .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"))
-                && receipt.downstream_dispatch_blockers.is_empty()
+                    .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"));
+            clean_completed_receipt && downstream_has_no_blocking_state
         })
 }
 
