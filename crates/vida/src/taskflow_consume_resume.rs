@@ -1,7 +1,7 @@
 use crate::taskflow_run_graph::validate_run_graph_resume_gate;
 use std::path::Path;
 use std::process::ExitCode;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 const DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS: [&str; 3] = [
     ".vida/data/state/runtime-consumption",
@@ -9,55 +9,22 @@ const DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS: [&str; 3] = [
     "docs/process",
 ];
 const CONSUME_RESUME_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
-const CONSUME_RESUME_LOCK_MARKER_RECLAIM_TIMEOUT: Duration = Duration::from_secs(30);
-const CONSUME_RESUME_LOCK_MARKER_RECLAIM_RETRY_DELAY: Duration = Duration::from_millis(25);
 const CONSUME_RESUME_PREPARATION_GATE_TIMEOUT: Duration = Duration::from_secs(10);
 const CONSUME_RESUME_HANDOFF_TIMEOUT: Duration = Duration::from_secs(25);
 
 fn state_store_lock_marker_error(state_root: &Path, label: &str) -> Option<String> {
-    state_store_lock_marker_error_with_timeout(
-        state_root,
-        label,
-        CONSUME_RESUME_LOCK_MARKER_RECLAIM_TIMEOUT,
-    )
-}
-
-fn state_store_lock_marker_error_with_timeout(
-    state_root: &Path,
-    label: &str,
-    timeout: Duration,
-) -> Option<String> {
-    let started = Instant::now();
     let lock_path = state_root.join("LOCK");
+    let _ = super::StateStore::reclaim_self_owned_failed_authoritative_datastore_lock_marker(
+        state_root,
+    );
+    let _ = super::StateStore::reclaim_stale_authoritative_datastore_lock_marker(state_root);
 
-    loop {
-        let _ = super::StateStore::reclaim_self_owned_failed_authoritative_datastore_lock_marker(
-            state_root,
-        );
-        let _ = super::StateStore::reclaim_stale_authoritative_datastore_lock_marker(state_root);
-        match std::fs::metadata(&lock_path) {
-            Ok(metadata) if metadata.is_file() => {
-                let nonnumeric_marker = std::fs::read_to_string(&lock_path)
-                    .ok()
-                    .is_some_and(|lock_text| lock_text.trim().parse::<u32>().is_err());
-                if nonnumeric_marker {
-                    return Some(format!(
-                        "consume continue failed fast: {label}: authoritative datastore LOCK exists at `{}`; wait for the state-store holder or run recovery before retrying",
-                        lock_path.display()
-                    ));
-                }
-                let elapsed = started.elapsed();
-                if elapsed >= timeout {
-                    return Some(format!(
-                        "consume continue failed fast: {label}: authoritative datastore LOCK exists at `{}`; wait for the state-store holder or run recovery before retrying",
-                        lock_path.display()
-                    ));
-                }
-                let remaining = timeout.saturating_sub(elapsed);
-                std::thread::sleep(CONSUME_RESUME_LOCK_MARKER_RECLAIM_RETRY_DELAY.min(remaining));
-            }
-            _ => return None,
-        }
+    match std::fs::metadata(&lock_path) {
+        Ok(metadata) if metadata.is_file() => Some(format!(
+            "consume continue failed fast: {label}: authoritative datastore LOCK exists at `{}`; wait for the state-store holder or run recovery before retrying",
+            lock_path.display()
+        )),
+        _ => None,
     }
 }
 
