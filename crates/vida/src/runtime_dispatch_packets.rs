@@ -47,6 +47,20 @@ fn trim_owned_scope_path_candidate(segment: &str) -> String {
         .to_string()
 }
 
+pub(crate) fn normalize_safe_owned_scope_path_candidate(candidate: &str) -> Option<String> {
+    let normalized = trim_owned_scope_path_candidate(candidate);
+    if normalized.is_empty()
+        || !normalized.contains('/')
+        || !normalized.contains('.')
+        || normalized.starts_with('/')
+        || normalized.starts_with("./")
+        || normalized.starts_with("../")
+    {
+        return None;
+    }
+    Some(normalized)
+}
+
 fn trim_move_request_scope_path(segment: &str) -> String {
     segment
         .trim()
@@ -100,16 +114,9 @@ pub(crate) fn single_task_move_scope_paths(request_text: &str) -> Option<Vec<Str
 pub(crate) fn explicit_request_scope_paths(request_text: &str) -> Vec<String> {
     let mut owned_paths = Vec::new();
     let mut push_path = |candidate: &str| {
-        let normalized = trim_owned_scope_path_candidate(candidate);
-        if normalized.is_empty()
-            || !normalized.contains('/')
-            || !normalized.contains('.')
-            || normalized.starts_with('/')
-            || normalized.starts_with("./")
-            || normalized.starts_with("../")
-        {
+        let Some(normalized) = normalize_safe_owned_scope_path_candidate(candidate) else {
             return;
-        }
+        };
         if !owned_paths.iter().any(|existing| existing == &normalized) {
             owned_paths.push(normalized);
         }
@@ -172,16 +179,9 @@ pub(crate) fn tracked_design_doc_bounded_file_set_paths(
     let mut in_bounded_file_set = false;
     let mut owned_paths = Vec::new();
     let mut push_path = |candidate: &str| {
-        let normalized = trim_owned_scope_path_candidate(candidate);
-        if normalized.is_empty()
-            || !normalized.contains('/')
-            || !normalized.contains('.')
-            || normalized.starts_with('/')
-            || normalized.starts_with("./")
-            || normalized.starts_with("../")
-        {
+        let Some(normalized) = normalize_safe_owned_scope_path_candidate(candidate) else {
             return;
-        }
+        };
         if !owned_paths.iter().any(|existing| existing == &normalized) {
             owned_paths.push(normalized);
         }
