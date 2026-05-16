@@ -69,19 +69,21 @@ Canonical entrypoints:
    - canonical project operator procedure for external CLI carrier auth repair, model fixation, and smoke validation
 28. `docs/process/github-issues-triage-guide.md`
    - project-owned process for GitHub Issues label taxonomy, triage, diagnostic publication, and issue-form alignment
-29. `docs/product/spec/feature-design-and-adr-model.md`
+29. `docs/process/github-pr-processing-protocol.md`
+   - project-owned process for validating, merging or closing PRs, manually integrating useful stale fixes, deleting branches, and returning to `main`
+30. `docs/product/spec/feature-design-and-adr-model.md`
    - product-law owner for the split between structured feature/change design documents and linked ADRs
-30. `docs/framework/templates/feature-design-document.template.md`
+31. `docs/framework/templates/feature-design-document.template.md`
    - framework-owned reusable feature/change design template with stable sections and bounded variable fields
 
 -----
 artifact_path: process/readme
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-05-06
+artifact_revision: 2026-05-16
 schema_version: '1'
 status: canonical
 source_path: docs/process/README.md
 created_at: '2026-03-10T00:00:00+02:00'
-updated_at: 2026-05-06T11:52:00+03:00
+updated_at: 2026-05-16T14:07:00.305686Z
 changelog_ref: README.changelog.jsonl
