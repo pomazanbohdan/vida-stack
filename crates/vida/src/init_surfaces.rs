@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::OnceLock;
 
 use crate::host_runtime_registry::looks_like_host_runtime_source_root;
 use crate::state_store::StateStore;
@@ -17,6 +18,7 @@ const COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS: u64 = 30;
 const BOOT_RELEASE_VERIFICATION_RETRY_DELAY_MS: u64 = 25;
 const INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS: u64 = 45;
 const LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS: u64 = 30;
+static AGENT_INIT_READ_SURFACE_GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 fn orchestrator_init_bundle_timeout_payload(state_dir: &Path) -> serde_json::Value {
     let blocker_codes = vec!["taskflow_consume_bundle_timeout"];
@@ -3042,6 +3044,17 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
         .await;
     }
 
+    let _read_surface_guard = if args.execute_dispatch {
+        None
+    } else {
+        Some(
+            AGENT_INIT_READ_SURFACE_GUARD
+                .get_or_init(|| tokio::sync::Mutex::new(()))
+                .lock()
+                .await,
+        )
+    };
+
     match tokio::time::timeout(
         std::time::Duration::from_secs(COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS),
         async {
@@ -5385,17 +5398,16 @@ mod agent_init_surface_tests {
         wait_for_state_unlock(harness.path());
 
         let results = runtime.block_on(async {
-            tokio::join!(
-                run(cli(&["agent-init", "--role", "worker", "--json"])),
-                run(cli(&["agent-init", "--role", "worker", "--json"])),
-                run(cli(&["agent-init", "--role", "worker", "--json"])),
-                run(cli(&["agent-init", "--role", "worker", "--json"]))
-            )
+            let handles = (0..4)
+                .map(|_| tokio::spawn(run(cli(&["agent-init", "--role", "worker", "--json"]))))
+                .collect::<Vec<_>>();
+            let mut results = Vec::with_capacity(handles.len());
+            for handle in handles {
+                results.push(handle.await.expect("agent-init task should not panic"));
+            }
+            results
         });
 
-        assert_eq!(results.0, ExitCode::SUCCESS);
-        assert_eq!(results.1, ExitCode::SUCCESS);
-        assert_eq!(results.2, ExitCode::SUCCESS);
-        assert_eq!(results.3, ExitCode::SUCCESS);
+        assert_eq!(results, vec![ExitCode::SUCCESS; 4]);
     }
 }
