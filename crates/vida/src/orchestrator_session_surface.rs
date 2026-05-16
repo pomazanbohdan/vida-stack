@@ -61,7 +61,19 @@ fn current_session_id(state_dir: &Path) -> String {
     sanitized_env("VIDA_ORCHESTRATOR_SESSION_ID")
         .or_else(|| sanitized_env("CODEX_SESSION_ID"))
         .or_else(|| sanitized_env("CODEX_THREAD_ID"))
-        .unwrap_or_else(|| stable_local_session_id(state_dir))
+        .unwrap_or_else(|| {
+            let stable_fallback_id = stable_local_session_id(state_dir);
+            let legacy_synthesized_prefix =
+                stable_fallback_id.replacen("local-worktree-", "local-session-", 1);
+            format!(
+                "{legacy_synthesized_prefix}-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|duration| duration.as_nanos())
+                    .unwrap_or(0)
+            )
+        })
 }
 
 fn current_session_identity_source() -> String {
@@ -72,7 +84,7 @@ fn current_session_identity_source() -> String {
     } else if sanitized_env("CODEX_THREAD_ID").is_some() {
         "CODEX_THREAD_ID".to_string()
     } else {
-        "stable_local_worktree_session_id".to_string()
+        "synthesized_local_session_token".to_string()
     }
 }
 
@@ -649,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_orchestrator_session_identity_uses_stable_worktree_session_id() {
+    fn fallback_orchestrator_session_identity_uses_synthesized_local_session_token() {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved = saved_session_env();
         clear_session_env();
@@ -666,14 +678,15 @@ mod tests {
         let second_id = second["current_session"]["session_id"]
             .as_str()
             .expect("second session id should be present");
-        assert_eq!(first_id, second_id);
-        assert!(first_id.starts_with("local-worktree-"));
+        assert_ne!(first_id, second_id);
+        assert!(first_id.starts_with("local-session-"));
+        assert!(second_id.starts_with("local-session-"));
         assert_eq!(
             second["current_session"]["identity_source"],
-            "stable_local_worktree_session_id"
+            "synthesized_local_session_token"
         );
-        assert!(second["live_other_sessions"].as_array().unwrap().is_empty());
-        assert!(!second["blocker_codes"]
+        assert!(!second["live_other_sessions"].as_array().unwrap().is_empty());
+        assert!(second["blocker_codes"]
             .as_array()
             .unwrap()
             .iter()
@@ -716,7 +729,7 @@ mod tests {
         );
 
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0]["session_id"], stable_id);
+        assert_eq!(merged[0]["identity_source"], "synthesized_local_session_token");
 
         restore_session_env(saved);
     }
