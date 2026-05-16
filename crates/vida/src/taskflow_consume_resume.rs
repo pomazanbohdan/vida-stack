@@ -3771,21 +3771,32 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
     run_id: &str,
     strict_blocked_receipts: bool,
 ) -> Result<ResumeInputs, String> {
-    if let Some(bound_run_id) = explicit_bound_task_graph_resume_run_id(store, run_id).await? {
-        return Box::pin(
-            resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
-                store,
-                &bound_run_id,
-                strict_blocked_receipts,
-            ),
-        )
-        .await;
+    const MAX_BOUND_TASK_RESUME_REDIRECTS: usize = 64;
+    let mut resolved_run_id = run_id.to_string();
+    let mut visited_run_ids = std::collections::HashSet::from([resolved_run_id.clone()]);
+    let mut redirects = 0usize;
+    while let Some(bound_run_id) =
+        explicit_bound_task_graph_resume_run_id(store, &resolved_run_id).await?
+    {
+        if !visited_run_ids.insert(bound_run_id.clone()) {
+            return Err(format!(
+                "Detected cyclic explicit continuation binding while resolving resume inputs for `{run_id}`: run `{}` was visited more than once.",
+                bound_run_id
+            ));
+        }
+        redirects += 1;
+        if redirects > MAX_BOUND_TASK_RESUME_REDIRECTS {
+            return Err(format!(
+                "Explicit continuation binding redirect limit exceeded while resolving resume inputs for `{run_id}` (limit: {MAX_BOUND_TASK_RESUME_REDIRECTS})."
+            ));
+        }
+        resolved_run_id = bound_run_id;
     }
-    let mut receipt = match store.run_graph_dispatch_receipt(run_id).await {
+    let mut receipt = match store.run_graph_dispatch_receipt(&resolved_run_id).await {
         Ok(Some(receipt)) => receipt,
-        Ok(None) => match recover_missing_first_dispatch_receipt(store, run_id).await? {
+        Ok(None) => match recover_missing_first_dispatch_receipt(store, &resolved_run_id).await? {
             Some(inputs) => return Ok(inputs),
-            None => return Err(missing_dispatch_receipt_error(run_id)),
+            None => return Err(missing_dispatch_receipt_error(&resolved_run_id)),
         },
         Err(error) => {
             return Err(format!(
@@ -3805,7 +3816,8 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
                 )
             })?;
     }
-    validate_explicit_task_graph_binding_lineage_for_resume(store, run_id, &receipt).await?;
+    validate_explicit_task_graph_binding_lineage_for_resume(store, &resolved_run_id, &receipt)
+        .await?;
     let project_root =
         super::taskflow_task_bridge::infer_project_root_from_state_root(store.root());
     let preloaded_role_selection = receipt
@@ -3813,7 +3825,9 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         .as_deref()
         .and_then(|path| read_dispatch_packet(path).ok())
         .and_then(|packet| decode_role_selection_from_packet(&packet, "dispatch packet").ok());
-    if strict_blocked_receipts && receipt_has_active_exception_takeover(&receipt, run_id) {
+    if strict_blocked_receipts
+        && receipt_has_active_exception_takeover(&receipt, &resolved_run_id)
+    {
         if let Some(packet_path) = receipt.dispatch_packet_path.as_deref() {
             if read_dispatch_packet(packet_path)
                 .ok()
@@ -3823,8 +3837,12 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
                 })
                 .is_some()
             {
-                let resume =
-                    resume_inputs_from_downstream_packet(store, Some(run_id), packet_path).await?;
+                let resume = resume_inputs_from_downstream_packet(
+                    store,
+                    Some(&resolved_run_id),
+                    packet_path,
+                )
+                .await?;
                 record_run_graph_replay_lineage_receipt_for_resume(
                     store,
                     &receipt,
@@ -3838,7 +3856,12 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
     }
     if !strict_blocked_receipts {
         if let Some(resume) =
-            maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt).await?
+            maybe_resume_inputs_from_ready_downstream_packet(
+                store,
+                Some(&resolved_run_id),
+                &receipt,
+            )
+            .await?
         {
             record_run_graph_replay_lineage_receipt_for_resume(
                 store,
@@ -3856,11 +3879,11 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         &receipt,
     );
     let explicit_downstream_target =
-        completed_run_explicit_downstream_target_for_resume(store, run_id).await?;
+        completed_run_explicit_downstream_target_for_resume(store, &resolved_run_id).await?;
     if explicit_downstream_target.is_none()
         && receipt.supersedes_receipt_id.is_some()
         && receipt.exception_path_receipt_id.is_some()
-        && completed_task_close_reconcile_resume_target(store, run_id)
+        && completed_task_close_reconcile_resume_target(store, &resolved_run_id)
             .await?
             .as_deref()
             == Some("closure")
