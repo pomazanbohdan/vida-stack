@@ -263,10 +263,12 @@ pub(crate) fn build_continuation_binding_summary_with_idle_policy(
                 "Do not stop on commentary, status output, or intermediate reporting while the delegated cycle is still open."
                     .to_string(),
                 format!(
-                    "Continue the active bounded unit with `vida taskflow consume continue --run-id {run_id} --json`."
+                    "Continue the active bounded unit with `vida taskflow consume continue --run-id {} --json`.",
+                    crate::shell_quote(run_id)
                 ),
                 format!(
-                    "Inspect the live delegated-cycle recovery state with `vida taskflow recovery status {run_id} --json` if routing context is needed before the next step."
+                    "Inspect the live delegated-cycle recovery state with `vida taskflow recovery status {} --json` if routing context is needed before the next step.",
+                    crate::shell_quote(run_id)
                 ),
             ]
         })
