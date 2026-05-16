@@ -767,6 +767,7 @@ fn recovery_projection_resolves_persisted_open_cycle(
         .as_ref()
         .is_some_and(|receipt| {
             receipt.dispatch_status == "executed"
+                && receipt.lane_status == "lane_completed"
                 && receipt.blocker_code.is_none()
                 && receipt.downstream_dispatch_blockers.is_empty()
         })
@@ -5431,7 +5432,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_surface_contract_suppresses_stale_open_cycle_after_lane_completion_receipt() {
+    fn recovery_surface_contract_keeps_open_cycle_blocker_for_lane_running_receipt() {
         let summary = crate::state_store::RunGraphRecoverySummary {
             run_id: "run-lane-complete".to_string(),
             task_id: "run-lane-complete".to_string(),
@@ -5479,11 +5480,23 @@ mod tests {
         let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
             recovery_surface_contract(&summary, &projection_truth);
 
-        assert!(blocker_codes.is_empty());
-        assert!(why_not_now.is_none());
-        assert!(next_action.is_none());
-        assert!(recommended_command.is_none());
-        assert!(recommended_surface.is_none());
+        assert_eq!(blocker_codes, vec!["open_delegated_cycle".to_string()]);
+        assert_eq!(
+            why_not_now.as_ref().map(|value| value.category.as_str()),
+            Some("delegated_cycle_runtime_gate")
+        );
+        assert_eq!(
+            next_action.as_ref().map(|value| value.surface.as_str()),
+            Some("vida taskflow run-graph status")
+        );
+        assert_eq!(
+            recommended_command.as_deref(),
+            Some("vida taskflow run-graph status run-lane-complete --json")
+        );
+        assert_eq!(
+            recommended_surface.as_deref(),
+            Some("vida taskflow run-graph status")
+        );
     }
 
     #[test]
