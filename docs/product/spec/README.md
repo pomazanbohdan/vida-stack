@@ -77,3 +77,4 @@ source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
 updated_at: 2026-05-15T09:14:47.5191228Z
 changelog_ref: README.changelog.jsonl
+- `docs/product/spec/fix-status-surface-external-cli-readiness-design.md`

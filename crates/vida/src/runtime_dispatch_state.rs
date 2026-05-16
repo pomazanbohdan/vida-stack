@@ -523,13 +523,16 @@ pub(crate) fn build_runtime_closure_admission(
             blockers.push(code);
         }
     }
-    let design_first_pending = role_selection.execution_plan["status"] == "design_first";
-    if role_selection.execution_plan["status"] == "design_first" {
+    let design_first_flow = role_selection.execution_plan["status"] == "design_first";
+    let design_packet_ready = !design_first_flow || tracked_design_doc_finalized(role_selection);
+    if design_first_flow && !design_packet_ready {
         if let Some(code) = crate::release_contract_adapters::blocker_code(
             crate::release1_contracts::BlockerCode::PendingDesignPacket,
         ) {
             blockers.push(code);
         }
+    }
+    if design_first_flow {
         if let Some(code) = crate::release_contract_adapters::blocker_code(
             crate::release1_contracts::BlockerCode::PendingDeveloperHandoffPacket,
         ) {
@@ -538,13 +541,15 @@ pub(crate) fn build_runtime_closure_admission(
     }
     let mut design_blockers = Vec::new();
     let mut handoff_blockers = Vec::new();
-    if design_first_pending {
+    if !design_packet_ready {
         design_blockers.push(
             crate::release_contract_adapters::blocker_code(
                 crate::release1_contracts::BlockerCode::PendingDesignPacket,
             )
             .unwrap_or_else(|| "pending_design_packet".to_string()),
         );
+    }
+    if design_first_flow {
         handoff_blockers.push(
             crate::release_contract_adapters::blocker_code(
                 crate::release1_contracts::BlockerCode::PendingDeveloperHandoffPacket,

@@ -508,14 +508,14 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             );
                             return ExitCode::from(1);
                         }
-                        let ctx = crate::RuntimeDispatchPacketContext::new(
-                            store.root(),
-                            &role_selection,
-                            &dispatch_receipt,
-                            &taskflow_handoff_plan,
-                            &run_graph_bootstrap,
-                        );
-                        let dispatch_packet_preview =
+                        let dispatch_packet_preview = {
+                            let ctx = crate::RuntimeDispatchPacketContext::new(
+                                store.root(),
+                                &role_selection,
+                                &dispatch_receipt,
+                                &taskflow_handoff_plan,
+                                &run_graph_bootstrap,
+                            );
                             match super::runtime_dispatch_packet_preview(&ctx) {
                                 Ok(preview) => Some(preview),
                                 Err(error) => {
@@ -524,7 +524,8 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     );
                                     return ExitCode::from(1);
                                 }
-                            };
+                            }
+                        };
                         let pending_design_packet =
                             super::blocker_code_str(super::BlockerCode::PendingDesignPacket);
                         let pending_execution_preparation_evidence = super::blocker_code_str(
@@ -541,7 +542,46 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 .and_then(|preview| preview.get("status"))
                                 .and_then(serde_json::Value::as_str)
                                 != Some("blocked");
+                        let consume_final_blocker_code = if !direct_consumption_ready {
+                            dispatch_packet_preview
+                                .as_ref()
+                                .and_then(|preview| preview.get("status"))
+                                .and_then(serde_json::Value::as_str)
+                                .filter(|status| *status == "blocked")
+                                .map(|_| {
+                                    super::blocker_code_str(
+                                        super::BlockerCode::MissingExecutionPreparationContract,
+                                    )
+                                    .to_string()
+                                })
+                                .or_else(|| closure_admission.blockers.first().cloned())
+                                .or_else(|| docflow_verdict.blockers.first().cloned())
+                                .or_else(|| bundle_check.blockers.first().cloned())
+                                .or_else(|| {
+                                    Some(
+                                        super::blocker_code_str(
+                                            super::BlockerCode::PendingExecutionPreparationEvidence,
+                                        )
+                                        .to_string(),
+                                    )
+                                })
+                        } else {
+                            None
+                        };
+                        if let Some(blocker_code) = consume_final_blocker_code.clone() {
+                            dispatch_receipt.dispatch_status = "blocked".to_string();
+                            dispatch_receipt.lane_status =
+                                super::LaneStatus::LaneBlocked.as_str().to_string();
+                            dispatch_receipt.blocker_code = Some(blocker_code);
+                        }
                         if !consume_final_mode.is_read_only() {
+                            let ctx = crate::RuntimeDispatchPacketContext::new(
+                                store.root(),
+                                &role_selection,
+                                &dispatch_receipt,
+                                &taskflow_handoff_plan,
+                                &run_graph_bootstrap,
+                            );
                             let dispatch_packet_path =
                                 match super::write_runtime_dispatch_packet(&ctx) {
                                     Ok(path) => path,
@@ -553,32 +593,6 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     }
                                 };
                             dispatch_receipt.dispatch_packet_path = Some(dispatch_packet_path);
-                            if !direct_consumption_ready {
-                                let blocker_code = dispatch_packet_preview
-                                    .as_ref()
-                                    .and_then(|preview| preview.get("status"))
-                                    .and_then(serde_json::Value::as_str)
-                                    .filter(|status| *status == "blocked")
-                                    .map(|_| {
-                                        super::blocker_code_str(
-                                            super::BlockerCode::MissingExecutionPreparationContract,
-                                        )
-                                        .to_string()
-                                    })
-                                    .or_else(|| closure_admission.blockers.first().cloned())
-                                    .or_else(|| docflow_verdict.blockers.first().cloned())
-                                    .or_else(|| bundle_check.blockers.first().cloned())
-                                    .unwrap_or_else(|| {
-                                        super::blocker_code_str(
-                                            super::BlockerCode::PendingExecutionPreparationEvidence,
-                                        )
-                                        .to_string()
-                                    });
-                                dispatch_receipt.dispatch_status = "blocked".to_string();
-                                dispatch_receipt.lane_status =
-                                    super::LaneStatus::LaneBlocked.as_str().to_string();
-                                dispatch_receipt.blocker_code = Some(blocker_code);
-                            }
                         }
                         if let Some(project_root) =
                             super::taskflow_task_bridge::infer_project_root_from_state_root(

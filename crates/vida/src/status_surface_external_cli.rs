@@ -844,6 +844,36 @@ pub(crate) fn external_cli_preflight_summary(
     selected_cli_system: &str,
     selected_cli_entry: Option<&serde_yaml::Value>,
 ) -> serde_json::Value {
+    external_cli_preflight_summary_with_probe(
+        overlay,
+        selected_cli_system,
+        selected_cli_entry,
+        None,
+    )
+}
+
+#[cfg(test)]
+fn external_cli_preflight_summary_with_probe_override(
+    overlay: &serde_yaml::Value,
+    selected_cli_system: &str,
+    selected_cli_entry: Option<&serde_yaml::Value>,
+    sandbox_active: bool,
+    network_reachable: bool,
+) -> serde_json::Value {
+    external_cli_preflight_summary_with_probe(
+        overlay,
+        selected_cli_system,
+        selected_cli_entry,
+        Some((sandbox_active, network_reachable)),
+    )
+}
+
+fn external_cli_preflight_summary_with_probe(
+    overlay: &serde_yaml::Value,
+    selected_cli_system: &str,
+    selected_cli_entry: Option<&serde_yaml::Value>,
+    probe_override: Option<(bool, bool)>,
+) -> serde_json::Value {
     let selected_execution_class = selected_cli_entry
         .map(|entry| {
             crate::project_activator_surface::host_cli_system_execution_class(
@@ -883,8 +913,8 @@ pub(crate) fn external_cli_preflight_summary(
     } else {
         "unknown"
     };
-    let sandbox_active = is_sandbox_active_from_env();
-    let network_reachable = can_resolve_public_network();
+    let (sandbox_active, network_reachable) = probe_override
+        .unwrap_or_else(|| (is_sandbox_active_from_env(), can_resolve_public_network()));
     let tool_contract = external_cli_tool_contract_summary(
         selected_execution_class.as_str(),
         requires_external_cli,
@@ -1085,6 +1115,7 @@ pub(crate) fn external_cli_preflight_summary(
 mod tests {
     use super::{
         external_cli_backend_readiness_verdict_for_profile, external_cli_preflight_summary,
+        external_cli_preflight_summary_with_probe_override,
     };
     use std::fs;
 
@@ -1333,7 +1364,9 @@ host_environment:
         .expect("overlay yaml should parse");
 
         let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "opencode"]);
-        let summary = external_cli_preflight_summary(&overlay, "opencode", entry);
+        let summary = external_cli_preflight_summary_with_probe_override(
+            &overlay, "opencode", entry, false, true,
+        );
         assert_eq!(summary["status"], "pass");
         assert_eq!(summary["requires_external_cli"], true);
         assert_eq!(summary["hybrid_external_cli_relevant"], false);
@@ -1421,8 +1454,6 @@ agent_system:
 
     #[test]
     fn external_cli_preflight_sets_blocked_baselines_for_sandbox_network_gate() {
-        std::env::set_var("CODEX_SANDBOX_MODE", "workspace-write");
-        std::env::set_var("VIDA_NETWORK_PROBE_OVERRIDE", "offline");
         let overlay: serde_yaml::Value = serde_yaml::from_str(
             r#"
 host_environment:
@@ -1437,7 +1468,9 @@ host_environment:
         .expect("overlay yaml should parse");
 
         let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "opencode"]);
-        let summary = external_cli_preflight_summary(&overlay, "opencode", entry);
+        let summary = external_cli_preflight_summary_with_probe_override(
+            &overlay, "opencode", entry, true, false,
+        );
         assert_eq!(summary["status"], "blocked");
         assert_eq!(
             summary["blocker_code"],
@@ -1449,9 +1482,6 @@ host_environment:
             summary["incident_baseline"]["recovery_outcome"],
             "pending_remediation"
         );
-
-        std::env::remove_var("CODEX_SANDBOX_MODE");
-        std::env::remove_var("VIDA_NETWORK_PROBE_OVERRIDE");
     }
 
     #[test]
