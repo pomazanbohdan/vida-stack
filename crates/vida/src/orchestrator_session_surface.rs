@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Mutex, OnceLock};
@@ -164,10 +165,45 @@ fn read_sessions(path: &Path) -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
+fn create_dir_all_without_symlinks(path: &Path) -> Result<(), String> {
+    let mut cursor = PathBuf::new();
+    for component in path.components() {
+        cursor.push(component.as_os_str());
+        if cursor.exists() {
+            let metadata = std::fs::symlink_metadata(&cursor)
+                .map_err(|error| format!("inspect path {}: {error}", cursor.display()))?;
+            if metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "refusing to use symlinked orchestrator session dir segment: {}",
+                    cursor.display()
+                ));
+            }
+            if !metadata.is_dir() {
+                return Err(format!(
+                    "orchestrator session dir segment is not a directory: {}",
+                    cursor.display()
+                ));
+            }
+            continue;
+        }
+        std::fs::create_dir(&cursor)
+            .map_err(|error| format!("create orchestrator session dir {}: {error}", cursor.display()))?;
+    }
+    Ok(())
+}
+
 fn write_sessions(path: &Path, sessions: &[serde_json::Value]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("create orchestrator session dir: {error}"))?;
+        create_dir_all_without_symlinks(parent)?;
+    }
+    if std::fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(format!(
+            "refusing to write orchestrator sessions through symlink: {}",
+            path.display()
+        ));
     }
     let payload = serde_json::json!({
         "schema_version": "runtime-owner-evidence-v1",
@@ -176,7 +212,14 @@ fn write_sessions(path: &Path, sessions: &[serde_json::Value]) -> Result<(), Str
     });
     let body = serde_json::to_string_pretty(&payload)
         .map_err(|error| format!("serialize orchestrator sessions: {error}"))?;
-    std::fs::write(path, body).map_err(|error| format!("write orchestrator sessions: {error}"))
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| format!("open orchestrator sessions for write: {error}"))?;
+    std::io::Write::write_all(&mut file, body.as_bytes())
+        .map_err(|error| format!("write orchestrator sessions: {error}"))
 }
 
 fn current_session_record(state_dir: &Path) -> serde_json::Value {
