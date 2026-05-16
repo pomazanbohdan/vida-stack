@@ -81,8 +81,7 @@ pub(crate) async fn open_read_only_task_store(
 }
 
 fn is_authoritative_state_lock_error(error: &state_store::StateStoreError) -> bool {
-    let message = error.to_string();
-    message.contains("LOCK") || message.contains("lock")
+    StateStore::error_is_lock_contention(error)
 }
 
 fn load_task_snapshot_rows(
@@ -109,30 +108,56 @@ async fn load_task_snapshot_rows_with_retry(
     load_task_snapshot_rows(state_dir)
 }
 
-async fn load_task_snapshot_rows_snapshot_first(
+async fn load_task_snapshot_rows_fallback_with_metadata(
+    state_dir: &std::path::Path,
+    snapshot_path: &std::path::Path,
+    detail: &'static str,
+    authoritative_error: state_store::StateStoreError,
+) -> Result<(Vec<state_store::TaskRecord>, TaskReadMetadata), state_store::StateStoreError> {
+    match load_task_snapshot_rows_with_retry(state_dir).await {
+        Ok(rows) => Ok((rows, TaskReadMetadata::snapshot(snapshot_path, detail))),
+        Err(state_store::StateStoreError::Io(_)) => Err(authoritative_error),
+        Err(snapshot_error) => Err(snapshot_error),
+    }
+}
+
+async fn load_task_snapshot_rows_authoritative_first(
     state_dir: &std::path::Path,
 ) -> Result<(Vec<state_store::TaskRecord>, TaskReadMetadata), state_store::StateStoreError> {
     let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
-    match StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path) {
-        Ok(rows) => Ok((
-            rows,
-            TaskReadMetadata::snapshot(
-                &snapshot_path,
-                "served from canonical task snapshot evidence",
-            ),
-        )),
-        Err(snapshot_error) => match open_read_only_task_store(state_dir.to_path_buf()).await {
-            Ok(store) => store
-                .list_tasks(None, true)
+    match open_read_only_task_store(state_dir.to_path_buf()).await {
+        Ok(store) => match store.list_tasks(None, true).await {
+            Ok(rows) => Ok((rows, TaskReadMetadata::authoritative_live())),
+            Err(error) if is_authoritative_state_lock_error(&error) => {
+                load_task_snapshot_rows_fallback_with_metadata(
+                    state_dir,
+                    &snapshot_path,
+                    "served from canonical task snapshot evidence after authoritative state lock contention",
+                    error,
+                )
                 .await
-                .map(|rows| (rows, TaskReadMetadata::authoritative_live())),
-            Err(live_error) if is_authoritative_state_lock_error(&live_error) => Err(live_error),
-            Err(live_error) => Err(live_error),
+            }
+            Err(error) => Err(error),
+        },
+        Err(error @ state_store::StateStoreError::MissingStateDir(_)) => {
+            load_task_snapshot_rows_fallback_with_metadata(
+                state_dir,
+                &snapshot_path,
+                "served from canonical task snapshot evidence because authoritative state store is missing",
+                error,
+            )
+            .await
         }
-        .map_err(|live_error| match snapshot_error {
-            state_store::StateStoreError::Io(_) => live_error,
-            other => other,
-        }),
+        Err(error) if is_authoritative_state_lock_error(&error) => {
+            load_task_snapshot_rows_fallback_with_metadata(
+                state_dir,
+                &snapshot_path,
+                "served from canonical task snapshot evidence after authoritative state lock contention",
+                error,
+            )
+            .await
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -196,12 +221,12 @@ pub(crate) async fn task_dependency_tree_read_only(
     }
 }
 
-async fn task_list_snapshot_first(
+async fn task_list_authoritative_first(
     state_dir: std::path::PathBuf,
     status: Option<&str>,
     include_all: bool,
 ) -> Result<(Vec<state_store::TaskRecord>, TaskReadMetadata), state_store::StateStoreError> {
-    let (rows, metadata) = load_task_snapshot_rows_snapshot_first(&state_dir).await?;
+    let (rows, metadata) = load_task_snapshot_rows_authoritative_first(&state_dir).await?;
     let filtered = rows
         .into_iter()
         .filter(|task| include_all || task.status != "closed")
@@ -210,20 +235,20 @@ async fn task_list_snapshot_first(
     Ok((filtered, metadata))
 }
 
-async fn task_show_snapshot_first(
+async fn task_show_authoritative_first(
     state_dir: std::path::PathBuf,
     task_id: &str,
 ) -> Result<(state_store::TaskRecord, TaskReadMetadata), state_store::StateStoreError> {
-    let (rows, metadata) = load_task_snapshot_rows_snapshot_first(&state_dir).await?;
+    let (rows, metadata) = load_task_snapshot_rows_authoritative_first(&state_dir).await?;
     let task = resolve_task_from_rows(&rows, task_id)?;
     Ok((task, metadata))
 }
 
-async fn task_ready_snapshot_first(
+async fn task_ready_authoritative_first(
     state_dir: std::path::PathBuf,
     scope_task_id: Option<&str>,
 ) -> Result<(Vec<state_store::TaskRecord>, TaskReadMetadata), state_store::StateStoreError> {
-    let (rows, metadata) = load_task_snapshot_rows_snapshot_first(&state_dir).await?;
+    let (rows, metadata) = load_task_snapshot_rows_authoritative_first(&state_dir).await?;
     let tasks = StateStore::ready_tasks_scoped_from_rows(&rows, scope_task_id)?;
     Ok((tasks, metadata))
 }
@@ -3395,7 +3420,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match task_list_snapshot_first(state_dir, command.status.as_deref(), command.all).await
+            match task_list_authoritative_first(state_dir, command.status.as_deref(), command.all)
+                .await
             {
                 Ok((tasks, metadata)) => {
                     print_task_list(
@@ -3417,7 +3443,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match task_show_snapshot_first(state_dir, &command.task_id).await {
+            match task_show_authoritative_first(state_dir, &command.task_id).await {
                 Ok((task, metadata)) => {
                     print_task_show(command.render, &task, command.json, Some(&metadata));
                     ExitCode::SUCCESS
@@ -3436,7 +3462,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let repo_root = project_root_for_task_state(&state_dir)
                 .or_else(|| std::env::current_dir().ok())
                 .unwrap_or_else(|| std::path::PathBuf::from("."));
-            match task_show_snapshot_first(state_dir, &command.task_id).await {
+            match task_show_authoritative_first(state_dir, &command.task_id).await {
                 Ok((task, _metadata)) => {
                     let dirty_files = match dirty_paths_for_repo(&repo_root) {
                         Ok(paths) => paths,
@@ -3530,7 +3556,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     isolation,
                     accepted_at,
                 );
-                match task_show_snapshot_first(state_dir, &command.task_id).await {
+                match task_show_authoritative_first(state_dir, &command.task_id).await {
                     Ok((_task, _metadata)) => {}
                     Err(error) => {
                         receipt = blocked_task_handoff_accept_receipt(
@@ -3648,7 +3674,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match task_ready_snapshot_first(state_dir, command.scope.as_deref()).await {
+            match task_ready_authoritative_first(state_dir, command.scope.as_deref()).await {
                 Ok((tasks, metadata)) => {
                     print_task_ready(
                         command.render,
