@@ -12,7 +12,6 @@ const CONSUME_RESUME_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const CONSUME_RESUME_LOCK_MARKER_RECLAIM_TIMEOUT: Duration = Duration::from_secs(30);
 const CONSUME_RESUME_LOCK_MARKER_RECLAIM_RETRY_DELAY: Duration = Duration::from_millis(25);
 const CONSUME_RESUME_PREPARATION_GATE_TIMEOUT: Duration = Duration::from_secs(10);
-const CONSUME_RESUME_HANDOFF_TIMEOUT: Duration = Duration::from_secs(25);
 
 fn state_store_lock_marker_error(state_root: &Path, label: &str) -> Option<String> {
     state_store_lock_marker_error_with_timeout(
@@ -58,23 +57,6 @@ fn state_store_lock_marker_error_with_timeout(
             }
             _ => return None,
         }
-    }
-}
-
-async fn consume_continue_handoff_with_timeout<F>(
-    label: &str,
-    timeout: Duration,
-    future: F,
-) -> Result<(), String>
-where
-    F: std::future::Future<Output = Result<(), String>>,
-{
-    match tokio::time::timeout(timeout, future).await {
-        Ok(result) => result,
-        Err(_) => Err(format!(
-            "Timed out executing runtime dispatch handoff during {label} after {}s",
-            timeout.as_secs()
-        )),
     }
 }
 
@@ -4768,15 +4750,11 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         .is_some();
                 if allow_taskflow_pack_execution {
                     drop(store);
-                    if let Err(error) = consume_continue_handoff_with_timeout(
-                        "resumed runtime dispatch handoff",
-                        CONSUME_RESUME_HANDOFF_TIMEOUT,
-                        super::execute_and_record_dispatch_receipt(
-                            &state_root,
-                            &role_selection,
-                            &run_graph_bootstrap,
-                            &mut dispatch_receipt,
-                        ),
+                    if let Err(error) = super::execute_and_record_dispatch_receipt(
+                        &state_root,
+                        &role_selection,
+                        &run_graph_bootstrap,
+                        &mut dispatch_receipt,
                     )
                     .await
                     {
@@ -4853,15 +4831,11 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 }
                 drop(store);
             }
-            if let Err(error) = consume_continue_handoff_with_timeout(
-                "downstream dispatch chain",
-                CONSUME_RESUME_HANDOFF_TIMEOUT,
-                super::execute_downstream_dispatch_chain(
-                    &state_root,
-                    &role_selection,
-                    &run_graph_bootstrap,
-                    &mut dispatch_receipt,
-                ),
+            if let Err(error) = super::execute_downstream_dispatch_chain(
+                &state_root,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut dispatch_receipt,
             )
             .await
             {
@@ -5133,7 +5107,7 @@ mod tests {
         build_failure_control_evidence, canonical_resume_dispatch_status,
         canonical_resume_lane_status, canonical_resume_string_array_entries,
         consume_advance_success_payload, consume_continue_blocking_step_with_timeout,
-        consume_continue_handoff_with_timeout, consume_continue_resume_error_blocker_code,
+        consume_continue_resume_error_blocker_code,
         consume_continue_resume_error_payload, consume_continue_state_access_blocker_code,
         consume_continue_state_access_blocker_payload, dispatch_receipt_internal_retry_eligible,
         dispatch_receipt_primary_rebind_eligible, dispatch_receipt_retry_eligible,
@@ -5155,7 +5129,7 @@ mod tests {
         should_refresh_resumed_downstream_preview, state_store_lock_marker_error,
         sync_run_graph_after_retry_artifact, validate_receipt_packet_pair, validate_run_graph_resume_state,
         validate_run_graph_resume_state_for_downstream_packet, PacketPathPlatform,
-        CONSUME_RESUME_HANDOFF_TIMEOUT, DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
+        DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
     use crate::state_store::{CreateTaskRequest, TaskExecutionSemantics};
@@ -5491,32 +5465,6 @@ mod tests {
             drop(store);
             let _ = fs::remove_dir_all(&root);
         });
-    }
-
-    #[tokio::test]
-    async fn consume_continue_handoff_timeout_returns_operator_blocker() {
-        let error = consume_continue_handoff_with_timeout(
-            "test handoff",
-            Duration::from_millis(1),
-            std::future::pending::<Result<(), String>>(),
-        )
-        .await
-        .expect_err("pending handoff should time out");
-
-        assert!(
-            error.contains("Timed out executing runtime dispatch handoff during test handoff"),
-            "unexpected error: {error}"
-        );
-        assert_eq!(
-            consume_continue_resume_error_blocker_code(&error),
-            "runtime_dispatch_handoff_timeout"
-        );
-    }
-
-    #[test]
-    fn consume_continue_handoff_timeout_stays_inside_operator_window() {
-        assert!(CONSUME_RESUME_HANDOFF_TIMEOUT <= Duration::from_secs(25));
-        assert!(CONSUME_RESUME_HANDOFF_TIMEOUT * 2 < Duration::from_secs(60));
     }
 
     #[test]
