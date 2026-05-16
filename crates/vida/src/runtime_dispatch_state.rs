@@ -17890,6 +17890,35 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
             role_selection,
             receipt,
         )?;
+        let store = reopen_authoritative_state_store_for_dispatch_phase(
+            state_root,
+            receipt,
+            "before dispatch execution",
+        )
+        .await?;
+        store
+            .record_run_graph_dispatch_receipt(receipt)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to persist activation-view-only blocked dispatch receipt before execution: {error}"
+                )
+            })?;
+        if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
+            if let Ok(status) = store.run_graph_status(&run_id).await {
+                crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                    &store,
+                    &status,
+                    "dispatch_execution_blocked",
+                )
+                .await
+                .map_err(|error| {
+                    format!(
+                        "Failed to synchronize continuation binding for activation-view-only blocked dispatch receipt: {error}"
+                    )
+                })?;
+            }
+        }
         return Ok(());
     }
     let store = reopen_authoritative_state_store_for_dispatch_phase(
