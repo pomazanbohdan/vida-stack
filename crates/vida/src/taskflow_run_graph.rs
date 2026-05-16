@@ -20,6 +20,8 @@ use std::process::ExitCode;
 use time::format_description::well_known::Rfc3339;
 
 const STALE_PROJECTION_DISPATCH_TIMEOUT_SECONDS: i64 = 10;
+const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS: u64 = 25;
+const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER: &str = "run_graph_dispatch_init_timeout";
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 struct RecoveryNextAction {
@@ -1239,7 +1241,6 @@ fn projection_truth_from_status_surface(
     receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     continuation_binding_source: Option<&str>,
 ) -> (RunGraphProjectionTruth, Vec<String>) {
-    let blocker_codes = dispatch_blocker_codes_from_status_surface(recovery, receipt);
     let status_surface_receipt = receipt.map(dispatch_receipt_from_status_surface);
     let status_surface_binding =
         continuation_binding_source.map(|binding_source| RunGraphContinuationBinding {
@@ -1284,8 +1285,15 @@ fn projection_truth_from_status_surface(
             status_surface_receipt.as_ref(),
             None,
         ),
-        dispatch_receipt: None,
+        dispatch_receipt: status_surface_receipt.clone(),
         continuation_binding: None,
+    };
+    let blocker_codes = if recovery.is_some_and(|summary| {
+        recovery_projection_resolves_persisted_open_cycle(summary, &projection_truth)
+    }) {
+        projection_truth_blocker_codes(&projection_truth)
+    } else {
+        dispatch_blocker_codes_from_status_surface(recovery, receipt)
     };
     (projection_truth, blocker_codes)
 }
@@ -1320,15 +1328,19 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
     let (recommended_command, recommended_surface) = if let Some(summary) = recovery {
         let (_codes, _why_not_now, _next_action, command, surface) =
             recovery_surface_contract(summary, &projection_truth);
-        (
-            command.or_else(|| projection_truth.next_lawful_operator_action.clone()),
-            surface.or_else(|| {
-                projection_truth
-                    .next_lawful_operator_action
-                    .as_deref()
-                    .map(recommended_surface_for_command)
-            }),
-        )
+        if recovery_projection_resolves_persisted_open_cycle(summary, &projection_truth) {
+            (command, surface)
+        } else {
+            (
+                command.or_else(|| projection_truth.next_lawful_operator_action.clone()),
+                surface.or_else(|| {
+                    projection_truth
+                        .next_lawful_operator_action
+                        .as_deref()
+                        .map(recommended_surface_for_command)
+                }),
+            )
+        }
     } else {
         (
             projection_truth.next_lawful_operator_action.clone(),
@@ -2682,6 +2694,25 @@ fn print_run_graph_json_error(
         "{}",
         serde_json::to_string_pretty(&payload).expect("run-graph error should render as json")
     );
+}
+
+fn run_graph_dispatch_init_timeout_message(run_id: &str) -> String {
+    format!(
+        "Timed out preparing run-graph dispatch-init for `{run_id}` after {RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS}s; dispatch-init may have written a packet before timeout, but the surface failed closed instead of holding the state-store lock."
+    )
+}
+
+fn run_graph_dispatch_init_error_evidence(error: &str) -> Option<serde_json::Value> {
+    if !error.starts_with("Timed out preparing run-graph dispatch-init") {
+        return None;
+    }
+    Some(serde_json::json!({
+        "incident": {
+            "status": "blocked",
+            "summary": "run-graph dispatch-init timed out before returning a bounded dispatch receipt"
+        },
+        "blockers": [RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER]
+    }))
 }
 
 fn run_graph_blocker_code(status: &str) -> Option<&'static str> {
@@ -4190,9 +4221,15 @@ async fn run_graph_dispatch_init(
     store: &StateStore,
     run_id: &str,
 ) -> Result<serde_json::Value, String> {
-    prepare_run_graph_dispatch_init_artifacts(store, run_id)
-        .await
-        .map(RunGraphDispatchInitArtifacts::into_json_payload)
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS),
+        prepare_run_graph_dispatch_init_artifacts(store, run_id),
+    )
+    .await
+    {
+        Ok(result) => result.map(RunGraphDispatchInitArtifacts::into_json_payload),
+        Err(_) => Err(run_graph_dispatch_init_timeout_message(run_id)),
+    }
 }
 
 pub(crate) async fn derive_advanced_run_graph_status(
@@ -4869,7 +4906,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                         "vida taskflow run-graph dispatch-init",
                         run_id,
                         &error,
-                        None,
+                        run_graph_dispatch_init_error_evidence(&error),
                     );
                     eprintln!("{error}");
                     ExitCode::from(1)
@@ -5124,6 +5161,22 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dispatch_init_timeout_error_surfaces_blocker_evidence() {
+        let message = run_graph_dispatch_init_timeout_message("run-timeout");
+        let evidence = run_graph_dispatch_init_error_evidence(&message)
+            .expect("dispatch-init timeout should expose blocker evidence");
+
+        assert_eq!(evidence["incident"]["status"], "blocked");
+        assert_eq!(
+            evidence["blockers"],
+            serde_json::json!([RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER])
+        );
+        assert!(
+            run_graph_dispatch_init_error_evidence("unrelated dispatch-init error").is_none()
+        );
+    }
 
     fn packet_gate_status(task_id: &str) -> RunGraphStatus {
         let mut status = default_run_graph_status(task_id, "implementation", "implementation");
@@ -6643,6 +6696,110 @@ mod tests {
             summary.recommended_surface.as_deref(),
             Some("vida taskflow consume continue")
         );
+    }
+
+    #[test]
+    fn compact_dispatch_summary_suppresses_stale_open_cycle_after_completed_lane_receipt() {
+        let status = RunGraphStatus {
+            run_id: "run-completed-cycle".to_string(),
+            task_id: "task-completed-cycle".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "coach".to_string(),
+            next_node: Some("coach".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "opencode_cli".to_string(),
+            lane_id: "lane-completed-cycle".to_string(),
+            lifecycle_stage: "coach_active".to_string(),
+            policy_gate: "single_task_scope_required".to_string(),
+            handoff_state: "awaiting_coach".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach".to_string(),
+            recovery_ready: true,
+        };
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-completed-cycle".to_string(),
+            task_id: "task-completed-cycle".to_string(),
+            active_node: "coach".to_string(),
+            lifecycle_stage: "coach_active".to_string(),
+            resume_node: Some("coach".to_string()),
+            resume_status: "ready".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach".to_string(),
+            policy_gate: "single_task_scope_required".to_string(),
+            handoff_state: "awaiting_coach".to_string(),
+            recovery_ready: true,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "coach".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "handoff_pending".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                lifecycle_stage: "coach_active".to_string(),
+            },
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: "run-completed-cycle".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("coach".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("proof".to_string()),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: Some("/tmp/downstream-packet.json".to_string()),
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("/tmp/downstream-result.json".to_string()),
+            downstream_dispatch_trace_path: Some("/tmp/downstream-trace.json".to_string()),
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: Some("coach".to_string()),
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("opencode_cli".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::json!({
+                "activation_kind": "execution_receipt",
+                "evidence_state": "receipt_backed_execution",
+                "receipt_backed": true,
+            }),
+            recorded_at: "2026-05-16T00:00:00Z".to_string(),
+        };
+        let continuation_binding = serde_json::json!({
+            "status": "bound",
+            "primary_path": "dispatch.coach",
+        });
+
+        let summary = build_run_graph_dispatch_compact_summary(
+            std::path::Path::new("."),
+            Some(&status),
+            Some(&recovery),
+            Some(&receipt),
+            Some(&continuation_binding),
+            None,
+        )
+        .expect("compact summary should exist");
+
+        assert_eq!(
+            summary.route_truth.projection_vs_receipt_parity,
+            "reconciled_from_receipt"
+        );
+        assert_eq!(summary.blocker_codes, Vec::<String>::new());
+        assert_eq!(summary.recommended_command, None);
+        assert_eq!(summary.recommended_surface, None);
     }
 
     #[test]
