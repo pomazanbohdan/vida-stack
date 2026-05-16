@@ -3915,7 +3915,11 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
             == Some(bound_target);
         if allow_downstream_lineage && !active_target_matches_bound {
             if let Some(resume) =
-                maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt)
+                maybe_resume_inputs_from_ready_downstream_packet(
+                    store,
+                    Some(&resolved_run_id),
+                    &receipt,
+                )
                     .await?
             {
                 if resume.dispatch_receipt.dispatch_target == bound_target {
@@ -3936,7 +3940,11 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         }
         if allow_downstream_lineage {
             if let Some(resume) =
-                maybe_resume_inputs_from_active_downstream_result(store, Some(run_id), &receipt)
+                maybe_resume_inputs_from_active_downstream_result(
+                    store,
+                    Some(&resolved_run_id),
+                    &receipt,
+                )
                     .await?
             {
                 if resume.dispatch_receipt.dispatch_target == bound_target {
@@ -3957,7 +3965,8 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         }
         if bound_target == "closure" {
             if let Some(resume) =
-                terminal_closure_complete_resume_candidate(store, run_id, &receipt).await?
+                terminal_closure_complete_resume_candidate(store, &resolved_run_id, &receipt)
+                    .await?
             {
                 record_run_graph_replay_lineage_receipt_for_resume(
                     store,
@@ -3976,7 +3985,11 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
     } else {
         if allow_downstream_lineage && prefer_ready_downstream_packet_over_active_result(&receipt) {
             if let Some(resume) =
-                maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt)
+                maybe_resume_inputs_from_ready_downstream_packet(
+                    store,
+                    Some(&resolved_run_id),
+                    &receipt,
+                )
                     .await?
             {
                 record_run_graph_replay_lineage_receipt_for_resume(
@@ -3991,7 +4004,11 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         }
         if allow_downstream_lineage {
             if let Some(resume) =
-                maybe_resume_inputs_from_active_downstream_result(store, Some(run_id), &receipt)
+                maybe_resume_inputs_from_active_downstream_result(
+                    store,
+                    Some(&resolved_run_id),
+                    &receipt,
+                )
                     .await?
             {
                 record_run_graph_replay_lineage_receipt_for_resume(
@@ -4006,7 +4023,11 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         }
         if allow_downstream_lineage {
             if let Some(resume) =
-                maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt)
+                maybe_resume_inputs_from_ready_downstream_packet(
+                    store,
+                    Some(&resolved_run_id),
+                    &receipt,
+                )
                     .await?
             {
                 record_run_graph_replay_lineage_receipt_for_resume(
@@ -4027,7 +4048,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         && receipt.dispatch_target != "specification"
         && !active_executable_receipt
     {
-        validate_run_graph_resume_state_strict(store, run_id).await?;
+        validate_run_graph_resume_state_strict(store, &resolved_run_id).await?;
     }
     let packet_path = receipt
         .dispatch_packet_path
@@ -4036,7 +4057,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
     let packet = read_dispatch_packet(&packet_path)?;
     let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
     let terminal_closure_complete = store
-        .run_graph_status(run_id)
+        .run_graph_status(&resolved_run_id)
         .await
         .map(|status| status.status == "completed" && status.lifecycle_stage == "closure_complete")
         .unwrap_or(false);
@@ -4044,12 +4065,15 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         receipt.downstream_dispatch_target.as_deref().map(str::trim) == Some("closure")
             && receipt.downstream_dispatch_ready
             && receipt.downstream_dispatch_blockers.is_empty()
-            && resume_from_persisted_final_snapshot(store, run_id)?;
+            && resume_from_persisted_final_snapshot(store, &resolved_run_id)?;
     let explicit_task_graph_task_binding = store
-        .run_graph_continuation_binding(run_id)
+        .run_graph_continuation_binding(&resolved_run_id)
         .await
         .map_err(|error| {
-            format!("Failed to read explicit continuation binding for `{run_id}`: {error}")
+            format!(
+                "Failed to read explicit continuation binding for `{}`: {error}",
+                resolved_run_id
+            )
         })?
         .is_some_and(|binding| {
             binding.status == "bound"
@@ -4099,7 +4123,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         }
     }
     if strict_blocked_receipts && receipt.dispatch_target == "specification" {
-        validate_run_graph_resume_state_strict(store, run_id).await?;
+        validate_run_graph_resume_state_strict(store, &resolved_run_id).await?;
     }
     validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet")?;
     let resume = build_resume_inputs(receipt.clone(), packet_path, packet, role_selection);
