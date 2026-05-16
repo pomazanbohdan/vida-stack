@@ -29,7 +29,8 @@ Fill in project-local rules that agents must follow in this repository.
    - Every progress update, handoff, and status note for the selected defect before the code fix must name exactly one active cadence marker from that set.
    - Keep all further reading inside `Крок 1/3: дослідження`; do not add extra repair-step labels or unnumbered pre-fix phases after defect selection.
    - `Крок 3/3: code fix` must apply the bounded code fix or close the cycle as `no-code-fix-required` with current runtime evidence that the defect no longer reproduces.
-   - Test authoring, proof execution, release build/install, diagnostics, TaskFlow closure, commit, and push are mandatory post-fix gates, but they are not counted as repair steps.
+   - Test authoring, proof execution, diagnostics, and TaskFlow closure are mandatory post-fix gates and are not counted as repair steps.
+   - Release build/install, commit, and push are sensitive post-fix actions and must run only when the user explicitly requests them for the active bounded task/session.
 
 ## Project Canonical Maps
 
