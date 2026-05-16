@@ -387,14 +387,23 @@ pub(crate) fn build_runtime_owner_evidence(
         write_sessions(&path, &sessions)?;
     }
     let (live_other_sessions, stale_sessions) = classify_sessions(&sessions, &current_id);
-    let mutation_gate = "current_session_allowed";
-    let blocker_codes = Vec::<String>::new();
-    let next_actions = if live_other_sessions.is_empty() {
-        Vec::<String>::new()
+    let has_live_other = !live_other_sessions.is_empty();
+    let mutation_gate = if has_live_other {
+        "blocked_live_other_orchestrator"
     } else {
+        "current_session_allowed"
+    };
+    let blocker_codes = if has_live_other {
+        vec!["live_other_orchestrator_owner".to_string()]
+    } else {
+        Vec::<String>::new()
+    };
+    let next_actions = if has_live_other {
         vec![
-            "Inspect `vida orchestrator-session show --json`; foreign live sessions are visibility until a same task, owned-path, exclusive conflict-domain, or global state-integrity conflict is recorded.".to_string(),
+            "Stop or age out foreign orchestrator sessions, then retry run-graph mutation surfaces.".to_string(),
         ]
+    } else {
+        Vec::<String>::new()
     };
     Ok(serde_json::json!({
         "schema_version": "runtime-owner-evidence-v1",
@@ -687,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn live_other_orchestrator_is_visibility_not_global_mutation_blocker() {
+    fn live_other_orchestrator_blocks_mutation_gate() {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved = saved_session_env();
         clear_session_env();
@@ -706,8 +715,14 @@ mod tests {
             .expect("second owner evidence should build");
 
         assert_eq!(second["current_session"]["session_id"], "session-b");
-        assert_eq!(second["mutation_gate"], "current_session_allowed");
-        assert!(second["blocker_codes"].as_array().unwrap().is_empty());
+        assert_eq!(second["mutation_gate"], "blocked_live_other_orchestrator");
+        assert!(
+            second["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|code| code == "live_other_orchestrator_owner")
+        );
         assert!(
             second["live_other_sessions"]
                 .as_array()
@@ -719,7 +734,7 @@ mod tests {
             second["next_actions"][0]
                 .as_str()
                 .expect("next action should be text")
-                .contains("foreign live sessions are visibility")
+                .contains("Stop or age out foreign orchestrator sessions")
         );
 
         restore_session_env(saved);
