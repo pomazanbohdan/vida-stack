@@ -705,7 +705,8 @@ fn derive_lane_show_truth(
 
     let completed_has_blocked_downstream =
         summary.lane_status == crate::LaneStatus::LaneCompleted.as_str()
-            && (!summary.downstream_dispatch_blockers.is_empty()
+            && (lane_summary_dispatch_is_blocked(summary)
+                || !summary.downstream_dispatch_blockers.is_empty()
                 || recovery_delegated_cycle_open(recovery));
     if summary.lane_status == crate::LaneStatus::LaneCompleted.as_str()
         && !completed_has_blocked_downstream
