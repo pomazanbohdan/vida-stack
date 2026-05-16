@@ -348,24 +348,6 @@ fn reconcile_run_graph_status_with_closed_task(
     if task.status != "closed" {
         return status;
     }
-    if status.status == "blocked"
-        && status.active_node == "closure"
-        && matches!(
-            status.lifecycle_stage.as_str(),
-            "closure_blocked" | "closure_complete"
-        )
-        && status.next_node.is_none()
-        && status.handoff_state == "none"
-        && status.resume_target == "none"
-    {
-        status.status = "completed".to_string();
-        status.lifecycle_stage = "closure_complete".to_string();
-        status.policy_gate = "not_required".to_string();
-        status.context_state = "sealed".to_string();
-        status.checkpoint_kind = "none".to_string();
-        status.recovery_ready = false;
-        return status;
-    }
     if !StateStore::run_graph_status_allows_task_close_closure_binding(&status) {
         return status;
     }
