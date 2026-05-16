@@ -333,13 +333,13 @@ fn classify_sessions_with_liveness(
         let state = session["state"]
             .as_str()
             .unwrap_or("legacy_global_owner_unknown");
-        let recent_live = state == "live" && now.saturating_sub(heartbeat) <= SESSION_TTL_SECONDS;
-        let process_is_dead = recent_live
-            && session["process_id"]
-                .as_u64()
-                .and_then(|value| u32::try_from(value).ok())
-                .is_some_and(|process_id| process_liveness(process_id) == ProcessLiveness::Dead);
-        if recent_live && !process_is_dead {
+        let process_id = session["process_id"]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok());
+        let process_is_dead = process_id
+            .is_some_and(|value| process_liveness(value) == ProcessLiveness::Dead);
+        let heartbeat_fresh = heartbeat <= now && (now - heartbeat) <= SESSION_TTL_SECONDS;
+        if state == "live" && heartbeat_fresh && process_id.is_some() && !process_is_dead {
             live_other.push(session.clone());
         } else {
             let mut cloned = session.clone();
@@ -802,6 +802,41 @@ mod tests {
         assert_eq!(stale[0]["state"], "stale");
     }
 
+
+    #[test]
+    fn live_session_without_process_id_is_stale_not_live_other() {
+        let now = now_epoch_seconds();
+        let sessions = vec![serde_json::json!({
+            "session_id": "missing-pid",
+            "state": "live",
+            "last_heartbeat_epoch_seconds": now,
+        })];
+
+        let (live_other, stale) =
+            classify_sessions_with_liveness(&sessions, "current-session", |_| ProcessLiveness::Alive);
+
+        assert!(live_other.is_empty());
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0]["state"], "stale");
+    }
+
+    #[test]
+    fn live_session_with_future_heartbeat_is_stale_not_live_other() {
+        let now = now_epoch_seconds();
+        let sessions = vec![serde_json::json!({
+            "session_id": "future-heartbeat",
+            "state": "live",
+            "process_id": 12345,
+            "last_heartbeat_epoch_seconds": now + 60,
+        })];
+
+        let (live_other, stale) =
+            classify_sessions_with_liveness(&sessions, "current-session", |_| ProcessLiveness::Unknown);
+
+        assert!(live_other.is_empty());
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0]["state"], "stale");
+    }
     #[test]
     fn stale_or_expired_sessions_do_not_run_liveness_probe() {
         let now = now_epoch_seconds();
