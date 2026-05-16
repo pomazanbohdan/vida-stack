@@ -1700,7 +1700,7 @@ impl StateStore {
         let mut query = self
             .db
             .query(
-                "SELECT run_id, updated_at FROM execution_plan_state ORDER BY updated_at DESC, run_id DESC LIMIT 25;",
+                "SELECT run_id, updated_at FROM execution_plan_state ORDER BY updated_at DESC, run_id DESC;",
             )
             .await?;
         let rows: Vec<RunGraphLatestRow> = query.take(0)?;
