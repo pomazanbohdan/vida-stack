@@ -1156,6 +1156,8 @@ impl StateStore {
         status: &RunGraphStatus,
     ) -> Result<(), StateStoreError> {
         status.validate_memory_governance()?;
+        let evidence = self.current_runtime_owner_evidence()?;
+        Self::ensure_runtime_owner_mutation_allowed(&evidence)?;
         let updated_at = unix_timestamp_nanos().to_string();
         let receipt_recorded_at = updated_at.clone();
         let checkpoint_record_updated_at = updated_at.clone();
