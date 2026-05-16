@@ -211,18 +211,19 @@ fn dispatch_receipt_resolves_recovery_bound_run(
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
 ) -> bool {
     dispatch.is_some_and(|dispatch| {
-        dispatch.dispatch_status == "executed"
+        let clean_completed_receipt = dispatch.dispatch_status == "executed"
             && dispatch.lane_status == "lane_completed"
             && dispatch.blocker_code.is_none()
-            && !dispatch.downstream_dispatch_ready
-            && !dispatch
-                .downstream_dispatch_status
-                .as_deref()
-                .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"))
             && dispatch
                 .downstream_dispatch_blockers
                 .iter()
-                .all(|value| value.trim().is_empty())
+                .all(|value| value.trim().is_empty());
+        let downstream_has_no_blocking_state = !dispatch.downstream_dispatch_ready
+            || dispatch
+                .downstream_dispatch_status
+                .as_deref()
+                .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"));
+        clean_completed_receipt && downstream_has_no_blocking_state
     })
 }
 

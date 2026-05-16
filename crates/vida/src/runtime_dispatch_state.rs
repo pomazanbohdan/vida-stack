@@ -251,12 +251,28 @@ fn dispatch_handoff_uses_internal_host(
     let Some(dispatch_packet_path) = receipt.dispatch_packet_path.as_deref() else {
         return false;
     };
-    let host_runtime = runtime_host_execution_contract_for_root(project_root);
-    let host_execution_class =
-        json_string(host_runtime.get("selected_cli_execution_class")).unwrap_or_default();
-    let selected_cli_system =
-        json_string(host_runtime.get("selected_cli_system")).unwrap_or_default();
     let overlay = load_project_overlay_yaml_for_root(project_root).ok();
+    let overlay_host_selection = overlay
+        .as_ref()
+        .map(|overlay| selected_host_cli_system_for_runtime_dispatch(overlay));
+    let host_runtime = runtime_host_execution_contract_for_root(project_root);
+    let host_execution_class = json_string(host_runtime.get("selected_cli_execution_class"))
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            overlay_host_selection
+                .as_ref()
+                .and_then(|(_, entry)| entry.as_ref())
+                .and_then(|entry| yaml_string(yaml_lookup(entry, &["execution_class"])))
+        })
+        .unwrap_or_default();
+    let selected_cli_system = json_string(host_runtime.get("selected_cli_system"))
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            overlay_host_selection
+                .as_ref()
+                .map(|(system, _)| system.clone())
+        })
+        .unwrap_or_default();
     let preferred_backend = preferred_selected_backend_for_receipt(role_selection, receipt);
     let preferred_model_profile_id = preferred_selected_model_profile_for_dispatch_target(
         role_selection,
@@ -270,6 +286,8 @@ fn dispatch_handoff_uses_internal_host(
         preferred_model_profile_id.as_deref(),
     );
     let lane_dispatch_backend_class = lane_dispatch.backend_dispatch["backend_class"].as_str();
+    let lane_dispatch_execution_class =
+        lane_dispatch.backend_dispatch["selected_execution_class"].as_str();
     let selected_backend_class = preferred_backend
         .as_deref()
         .or(receipt.selected_backend.as_deref())
@@ -289,7 +307,8 @@ fn dispatch_handoff_uses_internal_host(
             });
     let internal_agent_backend = internal_host_carrier_backend
         || backend_class_is_internal(selected_backend_class.as_deref())
-        || backend_class_is_internal(lane_dispatch_backend_class);
+        || backend_class_is_internal(lane_dispatch_backend_class)
+        || lane_dispatch_execution_class == Some("internal");
     lane_dispatch.surface == "vida agent-init"
         && host_execution_class == "internal"
         && internal_agent_backend
@@ -321,6 +340,27 @@ pub(crate) fn internal_host_activation_view_only_blocker_code(
         INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
     } else {
         "internal_activation_view_only"
+    }
+}
+
+fn normalize_internal_host_timeout_result_blocker(
+    project_root: &Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    execution_result: &mut serde_json::Value,
+) {
+    if json_string(execution_result.get("blocker_code")).as_deref()
+        != Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
+    {
+        return;
+    }
+    if !dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
+        return;
+    }
+    let blocker_code =
+        internal_host_activation_view_only_blocker_code(project_root, role_selection, receipt);
+    if blocker_code != INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT {
+        execution_result["blocker_code"] = serde_json::Value::String(blocker_code.to_string());
     }
 }
 
@@ -1067,8 +1107,14 @@ fn admissible_backend_candidates_for_dispatch_target(
         .chain(route_fallback.iter())
         .chain(route_fanout.iter())
         .any(|backend_id| backend_policy_from_execution_plan(execution_plan, backend_id).is_some());
-    let prefer_route_backends_first = !route_is_backend_agnostic && route_backends_have_policy;
+    let prefer_route_backends_first =
+        !route_is_backend_agnostic && (!strict_required || route_backends_have_policy);
     if !strict_required {
+        if let Some(inherited) = inherited.as_ref() {
+            candidates.push(inherited.clone());
+        }
+    }
+    if !strict_required && !prefer_route_backends_first {
         if let Some(runtime_assignment_backend) = runtime_assignment_backend.as_ref() {
             candidates.push(runtime_assignment_backend.clone());
         }
@@ -1082,6 +1128,11 @@ fn admissible_backend_candidates_for_dispatch_target(
         }
         candidates.extend(route_fanout.iter().cloned());
     }
+    if !strict_required && prefer_route_backends_first {
+        if let Some(runtime_assignment_backend) = runtime_assignment_backend.as_ref() {
+            candidates.push(runtime_assignment_backend.clone());
+        }
+    }
     if strict_required {
         if let Some(activation) = activation.as_ref() {
             candidates.push(activation.clone());
@@ -1092,8 +1143,10 @@ fn admissible_backend_candidates_for_dispatch_target(
             candidates.push(runtime_assignment_backend.clone());
         }
     }
-    if let Some(inherited) = inherited {
-        candidates.push(inherited);
+    if strict_required {
+        if let Some(inherited) = inherited {
+            candidates.push(inherited);
+        }
     }
     if !prefer_route_backends_first && !route_is_backend_agnostic {
         if let Some(primary) = route_primary.as_ref() {
@@ -2326,12 +2379,11 @@ fn configured_internal_host_carrier_exists(
     carriers
         .iter()
         .any(|row| row["role_id"].as_str() == Some(backend_id))
-        || (!carriers.is_empty()
-            && overlay
-                .and_then(|overlay| configured_subagent_entry(overlay, backend_id))
-                .and_then(|entry| yaml_string(yaml_lookup(entry, &["subagent_backend_class"])))
-                .as_deref()
-                .is_some_and(|backend_class| backend_class_is_internal(Some(backend_class))))
+        || overlay
+            .and_then(|overlay| configured_subagent_entry(overlay, backend_id))
+            .and_then(|entry| yaml_string(yaml_lookup(entry, &["subagent_backend_class"])))
+            .as_deref()
+            .is_some_and(|backend_class| backend_class_is_internal(Some(backend_class)))
 }
 
 pub(crate) fn configured_external_backend_entry<'a>(
@@ -3446,14 +3498,30 @@ pub(crate) fn runtime_agent_lane_dispatch_for_root(
     preferred_model_profile_id: Option<&str>,
 ) -> RuntimeAgentLaneDispatch {
     let host_runtime = runtime_host_execution_contract_for_root(project_root);
+    let overlay = load_project_overlay_yaml_for_root(project_root).ok();
+    let overlay_host_selection = overlay
+        .as_ref()
+        .map(|config| selected_host_cli_system_for_runtime_dispatch(config));
     let selected_cli_system = json_string(host_runtime.get("selected_cli_system"))
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            overlay_host_selection
+                .as_ref()
+                .map(|(system, _)| system.clone())
+        })
         .unwrap_or_else(|| "unknown".to_string());
     let selected_execution_class = json_string(host_runtime.get("selected_cli_execution_class"))
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            overlay_host_selection
+                .as_ref()
+                .and_then(|(_, entry)| entry.as_ref())
+                .and_then(|entry| yaml_string(yaml_lookup(entry, &["execution_class"])))
+        })
         .unwrap_or_else(|| "unknown".to_string());
-    let overlay = load_project_overlay_yaml_for_root(project_root).ok();
-    let effective_system = overlay
+    let effective_system = overlay_host_selection
         .as_ref()
-        .map(|config| selected_host_cli_system_for_runtime_dispatch(config).0)
+        .map(|(system, _)| system.clone())
         .unwrap_or_else(|| selected_cli_system.clone());
     runtime_agent_lane_dispatch_from_overlay(
         overlay.as_ref(),
@@ -7038,73 +7106,79 @@ mod tests {
 
     #[test]
     fn execute_runtime_dispatch_handoff_executes_internal_codex_carrier() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-        let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
-        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
+        run_on_large_test_stack(
+            "execute_runtime_dispatch_handoff_executes_internal_codex_carrier",
+            || {
+                let runtime =
+                    tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+                let harness =
+                    TempStateHarness::new().expect("temp state harness should initialize");
+                let _cwd = guard_current_dir(harness.path());
+                let _vida_root_guard =
+                    EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
+                let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        wait_for_state_unlock(harness.path());
-        assert_eq!(
-            runtime.block_on(run(cli(&[
-                "project-activator",
-                "--project-id",
-                "test-project",
-                "--language",
-                "english",
-                "--host-cli-system",
-                "codex",
-                "--json"
-            ]))),
-            ExitCode::SUCCESS
-        );
-        wait_for_state_unlock(harness.path());
+                assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+                wait_for_state_unlock(harness.path());
+                assert_eq!(
+                    runtime.block_on(run(cli(&[
+                        "project-activator",
+                        "--project-id",
+                        "test-project",
+                        "--language",
+                        "english",
+                        "--host-cli-system",
+                        "codex",
+                        "--json"
+                    ]))),
+                    ExitCode::SUCCESS
+                );
+                wait_for_state_unlock(harness.path());
 
-        let fake_bin = harness.path().join("fake-bin");
-        fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = fake_codex_path(&fake_bin);
-        write_fake_codex_success(&fake_codex, "internal-dispatch-ok");
-        configure_fake_codex_dispatch(harness.path(), &fake_codex);
-        let patched_path = prepend_to_path(&fake_bin);
-        let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+                let fake_bin = harness.path().join("fake-bin");
+                fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
+                let fake_codex = fake_codex_path(&fake_bin);
+                write_fake_codex_success(&fake_codex, "internal-dispatch-ok");
+                configure_fake_codex_dispatch(harness.path(), &fake_codex);
+                let patched_path = prepend_to_path(&fake_bin);
+                let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
-        let state_root = harness_state_root(&harness);
-        let store = runtime
-            .block_on(StateStore::open(state_root.clone()))
-            .expect("state store should open");
-        let dispatch_packet_path = harness.path().join("agent-dispatch.json");
-        fs::write(
-            &dispatch_packet_path,
-            serde_json::to_string_pretty(&serde_json::json!({
-                "packet_kind": "runtime_dispatch_packet",
-                "packet_template_kind": "delivery_task_packet",
-                "delivery_task_packet": runtime_delivery_task_packet(
-                    "run-agent-dispatch",
-                    "implementer",
-                    "worker",
-                    "implementation",
-                    "implementation",
-                    "continue development"
-                ),
-                "dispatch_target": "implementer",
-                "request_text": "continue development",
-                "activation_runtime_role": "worker",
-                "role_selection": {
-                    "selected_role": "worker"
-                }
-            }))
-            .expect("dispatch packet json should encode"),
-        )
-        .expect("dispatch packet should write");
+                let state_root = harness_state_root(&harness);
+                let store = runtime
+                    .block_on(StateStore::open(state_root.clone()))
+                    .expect("state store should open");
+                let dispatch_packet_path = harness.path().join("agent-dispatch.json");
+                fs::write(
+                    &dispatch_packet_path,
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "packet_kind": "runtime_dispatch_packet",
+                        "packet_template_kind": "delivery_task_packet",
+                        "delivery_task_packet": runtime_delivery_task_packet(
+                            "run-agent-dispatch",
+                            "implementer",
+                            "worker",
+                            "implementation",
+                            "implementation",
+                            "continue development"
+                        ),
+                        "dispatch_target": "implementer",
+                        "request_text": "continue development",
+                        "activation_runtime_role": "worker",
+                        "role_selection": {
+                            "selected_role": "worker"
+                        }
+                    }))
+                    .expect("dispatch packet json should encode"),
+                )
+                .expect("dispatch packet should write");
 
-        let mut execution_plan = agent_lane_test_execution_plan("opencode_cli");
-        execution_plan["runtime_assignment"] = serde_json::json!({
-            "selected_model_profile_id": "opencode_codex_mini_review",
-            "selected_model_ref": "opencode/gpt-5.1-codex-mini",
-            "selected_reasoning_effort": "low"
-        });
-        let role_selection = RuntimeConsumptionLaneSelection {
+                let mut execution_plan = agent_lane_test_execution_plan("opencode_cli");
+                execution_plan["runtime_assignment"] = serde_json::json!({
+                    "selected_model_profile_id": "opencode_codex_mini_review",
+                    "selected_model_ref": "opencode/gpt-5.1-codex-mini",
+                    "selected_reasoning_effort": "low"
+                });
+                let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
             selection_mode: "fixed".to_string(),
@@ -7125,119 +7199,121 @@ mod tests {
             execution_plan: agent_lane_test_execution_plan("junior"),
             reason: "test".to_string(),
         };
-        let run_graph_bootstrap = serde_json::json!({
-            "run_id": "run-agent-dispatch"
-        });
-        let status = crate::state_store::RunGraphStatus {
-            run_id: "run-agent-dispatch".to_string(),
-            task_id: "run-agent-dispatch".to_string(),
-            task_class: "implementation".to_string(),
-            active_node: "planning".to_string(),
-            next_node: Some("worker".to_string()),
-            status: "ready".to_string(),
-            route_task_class: "implementation".to_string(),
-            selected_backend: "junior".to_string(),
-            lane_id: "worker_lane".to_string(),
-            lifecycle_stage: "dispatch_ready".to_string(),
-            policy_gate: "single_task_scope_required".to_string(),
-            handoff_state: "awaiting_worker".to_string(),
-            context_state: "sealed".to_string(),
-            checkpoint_kind: "conversation_cursor".to_string(),
-            resume_target: "dispatch.worker_lane".to_string(),
-            recovery_ready: true,
-        };
-        runtime
-            .block_on(store.record_run_graph_status(&status))
-            .expect("run graph status should record");
+                let run_graph_bootstrap = serde_json::json!({
+                    "run_id": "run-agent-dispatch"
+                });
+                let status = crate::state_store::RunGraphStatus {
+                    run_id: "run-agent-dispatch".to_string(),
+                    task_id: "run-agent-dispatch".to_string(),
+                    task_class: "implementation".to_string(),
+                    active_node: "planning".to_string(),
+                    next_node: Some("worker".to_string()),
+                    status: "ready".to_string(),
+                    route_task_class: "implementation".to_string(),
+                    selected_backend: "junior".to_string(),
+                    lane_id: "worker_lane".to_string(),
+                    lifecycle_stage: "dispatch_ready".to_string(),
+                    policy_gate: "single_task_scope_required".to_string(),
+                    handoff_state: "awaiting_worker".to_string(),
+                    context_state: "sealed".to_string(),
+                    checkpoint_kind: "conversation_cursor".to_string(),
+                    resume_target: "dispatch.worker_lane".to_string(),
+                    recovery_ready: true,
+                };
+                runtime
+                    .block_on(store.record_run_graph_status(&status))
+                    .expect("run graph status should record");
 
-        let receipt = crate::state_store::RunGraphDispatchReceipt {
-            run_id: "run-agent-dispatch".to_string(),
-            dispatch_target: "implementer".to_string(),
-            dispatch_status: "routed".to_string(),
-            lane_status: "lane_running".to_string(),
-            supersedes_receipt_id: None,
-            exception_path_receipt_id: None,
-            dispatch_kind: "agent_lane".to_string(),
-            dispatch_surface: Some("vida agent-init".to_string()),
-            dispatch_command: None,
-            dispatch_packet_path: None,
-            dispatch_result_path: None,
-            blocker_code: None,
-            downstream_dispatch_target: None,
-            downstream_dispatch_command: None,
-            downstream_dispatch_note: None,
-            downstream_dispatch_ready: false,
-            downstream_dispatch_blockers: Vec::new(),
-            downstream_dispatch_packet_path: None,
-            downstream_dispatch_status: None,
-            downstream_dispatch_result_path: None,
-            downstream_dispatch_trace_path: None,
-            downstream_dispatch_executed_count: 0,
-            downstream_dispatch_active_target: None,
-            downstream_dispatch_last_target: None,
-            activation_agent_type: Some("junior".to_string()),
-            activation_runtime_role: Some("worker".to_string()),
-            selected_backend: Some("junior".to_string()),
-            recorded_at: "2026-03-17T00:00:00Z".to_string(),
-        };
-        let handoff_plan = serde_json::json!({});
-        let ctx = RuntimeDispatchPacketContext::new(
-            &state_root,
-            &role_selection,
-            &receipt,
-            &handoff_plan,
-            &run_graph_bootstrap,
-        );
-        let dispatch_packet_path =
-            write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
-        let mut persisted_receipt = receipt.clone();
-        persisted_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
-        runtime
-            .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
-            .expect("dispatch receipt should record");
-        drop(store);
-        assert_eq!(
-            runtime.block_on(run(cli(&[
-                "agent-init",
-                "--dispatch-packet",
-                dispatch_packet_path.as_str(),
-                "--execute-dispatch",
-                "--json",
-            ]))),
-            ExitCode::SUCCESS
-        );
-        wait_for_state_unlock(harness.path());
+                let receipt = crate::state_store::RunGraphDispatchReceipt {
+                    run_id: "run-agent-dispatch".to_string(),
+                    dispatch_target: "implementer".to_string(),
+                    dispatch_status: "routed".to_string(),
+                    lane_status: "lane_running".to_string(),
+                    supersedes_receipt_id: None,
+                    exception_path_receipt_id: None,
+                    dispatch_kind: "agent_lane".to_string(),
+                    dispatch_surface: Some("vida agent-init".to_string()),
+                    dispatch_command: None,
+                    dispatch_packet_path: None,
+                    dispatch_result_path: None,
+                    blocker_code: None,
+                    downstream_dispatch_target: None,
+                    downstream_dispatch_command: None,
+                    downstream_dispatch_note: None,
+                    downstream_dispatch_ready: false,
+                    downstream_dispatch_blockers: Vec::new(),
+                    downstream_dispatch_packet_path: None,
+                    downstream_dispatch_status: None,
+                    downstream_dispatch_result_path: None,
+                    downstream_dispatch_trace_path: None,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: None,
+                    downstream_dispatch_last_target: None,
+                    activation_agent_type: Some("junior".to_string()),
+                    activation_runtime_role: Some("worker".to_string()),
+                    selected_backend: Some("junior".to_string()),
+                    recorded_at: "2026-03-17T00:00:00Z".to_string(),
+                };
+                let handoff_plan = serde_json::json!({});
+                let ctx = RuntimeDispatchPacketContext::new(
+                    &state_root,
+                    &role_selection,
+                    &receipt,
+                    &handoff_plan,
+                    &run_graph_bootstrap,
+                );
+                let dispatch_packet_path =
+                    write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
+                let mut persisted_receipt = receipt.clone();
+                persisted_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
+                runtime
+                    .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
+                    .expect("dispatch receipt should record");
+                drop(store);
+                assert_eq!(
+                    runtime.block_on(run(cli(&[
+                        "agent-init",
+                        "--dispatch-packet",
+                        dispatch_packet_path.as_str(),
+                        "--execute-dispatch",
+                        "--json",
+                    ]))),
+                    ExitCode::SUCCESS
+                );
+                wait_for_state_unlock(harness.path());
 
-        let store = runtime
-            .block_on(StateStore::open(state_root.clone()))
-            .expect("state store should reopen");
-        let recorded_receipt = runtime
-            .block_on(store.latest_run_graph_dispatch_receipt())
-            .expect("latest dispatch receipt should load")
-            .expect("latest dispatch receipt should exist");
-        let dispatch_result_path = recorded_receipt
-            .dispatch_result_path
-            .as_deref()
-            .expect("dispatch result path should record");
-        let rendered =
-            fs::read_to_string(dispatch_result_path).expect("dispatch result artifact should load");
-        let parsed: serde_json::Value =
-            serde_json::from_str(&rendered).expect("execute-dispatch json should parse");
-        assert_eq!(parsed["execution_state"], "executed");
-        assert_eq!(parsed["status"], "pass");
-        assert_eq!(
-            parsed["activation_semantics"]["activation_kind"],
-            "execution_evidence"
+                let store = runtime
+                    .block_on(StateStore::open(state_root.clone()))
+                    .expect("state store should reopen");
+                let recorded_receipt = runtime
+                    .block_on(store.latest_run_graph_dispatch_receipt())
+                    .expect("latest dispatch receipt should load")
+                    .expect("latest dispatch receipt should exist");
+                let dispatch_result_path = recorded_receipt
+                    .dispatch_result_path
+                    .as_deref()
+                    .expect("dispatch result path should record");
+                let rendered = fs::read_to_string(dispatch_result_path)
+                    .expect("dispatch result artifact should load");
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&rendered).expect("execute-dispatch json should parse");
+                assert_eq!(parsed["execution_state"], "executed");
+                assert_eq!(parsed["status"], "pass");
+                assert_eq!(
+                    parsed["activation_semantics"]["activation_kind"],
+                    "execution_evidence"
+                );
+                assert_eq!(parsed["activation_semantics"]["view_only"], false);
+                assert_eq!(parsed["activation_semantics"]["executes_packet"], true);
+                assert_eq!(parsed["execution_evidence"]["status"], "recorded");
+                assert_eq!(
+                    parsed["execution_evidence"]["evidence_kind"],
+                    "internal_carrier_completion"
+                );
+                assert_eq!(parsed["provider_result"], "internal-dispatch-ok");
+                assert_eq!(parsed["backend_dispatch"]["backend_id"], "junior");
+            },
         );
-        assert_eq!(parsed["activation_semantics"]["view_only"], false);
-        assert_eq!(parsed["activation_semantics"]["executes_packet"], true);
-        assert_eq!(parsed["execution_evidence"]["status"], "recorded");
-        assert_eq!(
-            parsed["execution_evidence"]["evidence_kind"],
-            "internal_carrier_completion"
-        );
-        assert_eq!(parsed["provider_result"], "internal-dispatch-ok");
-        assert_eq!(parsed["backend_dispatch"]["backend_id"], "junior");
     }
 
     #[test]
@@ -7409,43 +7485,48 @@ mod tests {
 
     #[test]
     fn agent_init_execute_dispatch_executes_internal_codex_carrier() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
+        run_on_large_test_stack(
+            "agent_init_execute_dispatch_executes_internal_codex_carrier",
+            || {
+                let runtime =
+                    tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+                let harness =
+                    TempStateHarness::new().expect("temp state harness should initialize");
+                let _cwd = guard_current_dir(harness.path());
+                let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        wait_for_state_unlock(harness.path());
-        assert_eq!(
-            runtime.block_on(run(cli(&[
-                "project-activator",
-                "--project-id",
-                "test-project",
-                "--language",
-                "english",
-                "--host-cli-system",
-                "codex",
-                "--json"
-            ]))),
-            ExitCode::SUCCESS
-        );
-        wait_for_state_unlock(harness.path());
-        assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
-        wait_for_state_unlock(harness.path());
+                assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+                wait_for_state_unlock(harness.path());
+                assert_eq!(
+                    runtime.block_on(run(cli(&[
+                        "project-activator",
+                        "--project-id",
+                        "test-project",
+                        "--language",
+                        "english",
+                        "--host-cli-system",
+                        "codex",
+                        "--json"
+                    ]))),
+                    ExitCode::SUCCESS
+                );
+                wait_for_state_unlock(harness.path());
+                assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
+                wait_for_state_unlock(harness.path());
 
-        let fake_bin = harness.path().join("fake-bin");
-        fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = fake_codex_path(&fake_bin);
-        write_fake_codex_success(&fake_codex, "internal-dispatch-ok");
-        configure_fake_codex_dispatch(harness.path(), &fake_codex);
-        let patched_path = prepend_to_path(&fake_bin);
-        let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+                let fake_bin = harness.path().join("fake-bin");
+                fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
+                let fake_codex = fake_codex_path(&fake_bin);
+                write_fake_codex_success(&fake_codex, "internal-dispatch-ok");
+                configure_fake_codex_dispatch(harness.path(), &fake_codex);
+                let patched_path = prepend_to_path(&fake_bin);
+                let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
-        let state_root = harness_state_root(&harness);
-        let store = runtime
-            .block_on(StateStore::open(state_root.clone()))
-            .expect("state store should open");
-        let role_selection = RuntimeConsumptionLaneSelection {
+                let state_root = harness_state_root(&harness);
+                let store = runtime
+                    .block_on(StateStore::open(state_root.clone()))
+                    .expect("state store should open");
+                let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
             selection_mode: "fixed".to_string(),
@@ -7466,119 +7547,121 @@ mod tests {
             execution_plan: agent_lane_test_execution_plan("junior"),
             reason: "test".to_string(),
         };
-        let run_graph_bootstrap = serde_json::json!({
-            "run_id": "run-agent-init-execute-dispatch"
-        });
-        let status = crate::state_store::RunGraphStatus {
-            run_id: "run-agent-init-execute-dispatch".to_string(),
-            task_id: "run-agent-init-execute-dispatch".to_string(),
-            task_class: "implementation".to_string(),
-            active_node: "planning".to_string(),
-            next_node: Some("worker".to_string()),
-            status: "ready".to_string(),
-            route_task_class: "implementation".to_string(),
-            selected_backend: "junior".to_string(),
-            lane_id: "worker_lane".to_string(),
-            lifecycle_stage: "dispatch_ready".to_string(),
-            policy_gate: "single_task_scope_required".to_string(),
-            handoff_state: "awaiting_worker".to_string(),
-            context_state: "sealed".to_string(),
-            checkpoint_kind: "conversation_cursor".to_string(),
-            resume_target: "dispatch.worker_lane".to_string(),
-            recovery_ready: true,
-        };
-        runtime
-            .block_on(store.record_run_graph_status(&status))
-            .expect("run graph status should record");
+                let run_graph_bootstrap = serde_json::json!({
+                    "run_id": "run-agent-init-execute-dispatch"
+                });
+                let status = crate::state_store::RunGraphStatus {
+                    run_id: "run-agent-init-execute-dispatch".to_string(),
+                    task_id: "run-agent-init-execute-dispatch".to_string(),
+                    task_class: "implementation".to_string(),
+                    active_node: "planning".to_string(),
+                    next_node: Some("worker".to_string()),
+                    status: "ready".to_string(),
+                    route_task_class: "implementation".to_string(),
+                    selected_backend: "junior".to_string(),
+                    lane_id: "worker_lane".to_string(),
+                    lifecycle_stage: "dispatch_ready".to_string(),
+                    policy_gate: "single_task_scope_required".to_string(),
+                    handoff_state: "awaiting_worker".to_string(),
+                    context_state: "sealed".to_string(),
+                    checkpoint_kind: "conversation_cursor".to_string(),
+                    resume_target: "dispatch.worker_lane".to_string(),
+                    recovery_ready: true,
+                };
+                runtime
+                    .block_on(store.record_run_graph_status(&status))
+                    .expect("run graph status should record");
 
-        let receipt = crate::state_store::RunGraphDispatchReceipt {
-            run_id: "run-agent-init-execute-dispatch".to_string(),
-            dispatch_target: "implementer".to_string(),
-            dispatch_status: "routed".to_string(),
-            lane_status: "lane_running".to_string(),
-            supersedes_receipt_id: None,
-            exception_path_receipt_id: None,
-            dispatch_kind: "agent_lane".to_string(),
-            dispatch_surface: Some("vida agent-init".to_string()),
-            dispatch_command: None,
-            dispatch_packet_path: None,
-            dispatch_result_path: None,
-            blocker_code: None,
-            downstream_dispatch_target: None,
-            downstream_dispatch_command: None,
-            downstream_dispatch_note: None,
-            downstream_dispatch_ready: false,
-            downstream_dispatch_blockers: Vec::new(),
-            downstream_dispatch_packet_path: None,
-            downstream_dispatch_status: None,
-            downstream_dispatch_result_path: None,
-            downstream_dispatch_trace_path: None,
-            downstream_dispatch_executed_count: 0,
-            downstream_dispatch_active_target: None,
-            downstream_dispatch_last_target: None,
-            activation_agent_type: Some("junior".to_string()),
-            activation_runtime_role: Some("worker".to_string()),
-            selected_backend: Some("junior".to_string()),
-            recorded_at: "2026-03-17T00:00:00Z".to_string(),
-        };
-        let handoff_plan = serde_json::json!({});
-        let ctx = RuntimeDispatchPacketContext::new(
-            &state_root,
-            &role_selection,
-            &receipt,
-            &handoff_plan,
-            &run_graph_bootstrap,
-        );
-        let dispatch_packet_path =
-            write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
-        let mut persisted_receipt = receipt.clone();
-        persisted_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
-        runtime
-            .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
-            .expect("dispatch receipt should record");
-        drop(store);
-        assert_eq!(
-            runtime.block_on(run(cli(&[
-                "agent-init",
-                "--dispatch-packet",
-                dispatch_packet_path.as_str(),
-                "--execute-dispatch",
-                "--json",
-            ]))),
-            ExitCode::SUCCESS
-        );
-        wait_for_state_unlock(harness.path());
+                let receipt = crate::state_store::RunGraphDispatchReceipt {
+                    run_id: "run-agent-init-execute-dispatch".to_string(),
+                    dispatch_target: "implementer".to_string(),
+                    dispatch_status: "routed".to_string(),
+                    lane_status: "lane_running".to_string(),
+                    supersedes_receipt_id: None,
+                    exception_path_receipt_id: None,
+                    dispatch_kind: "agent_lane".to_string(),
+                    dispatch_surface: Some("vida agent-init".to_string()),
+                    dispatch_command: None,
+                    dispatch_packet_path: None,
+                    dispatch_result_path: None,
+                    blocker_code: None,
+                    downstream_dispatch_target: None,
+                    downstream_dispatch_command: None,
+                    downstream_dispatch_note: None,
+                    downstream_dispatch_ready: false,
+                    downstream_dispatch_blockers: Vec::new(),
+                    downstream_dispatch_packet_path: None,
+                    downstream_dispatch_status: None,
+                    downstream_dispatch_result_path: None,
+                    downstream_dispatch_trace_path: None,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: None,
+                    downstream_dispatch_last_target: None,
+                    activation_agent_type: Some("junior".to_string()),
+                    activation_runtime_role: Some("worker".to_string()),
+                    selected_backend: Some("junior".to_string()),
+                    recorded_at: "2026-03-17T00:00:00Z".to_string(),
+                };
+                let handoff_plan = serde_json::json!({});
+                let ctx = RuntimeDispatchPacketContext::new(
+                    &state_root,
+                    &role_selection,
+                    &receipt,
+                    &handoff_plan,
+                    &run_graph_bootstrap,
+                );
+                let dispatch_packet_path =
+                    write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
+                let mut persisted_receipt = receipt.clone();
+                persisted_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
+                runtime
+                    .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
+                    .expect("dispatch receipt should record");
+                drop(store);
+                assert_eq!(
+                    runtime.block_on(run(cli(&[
+                        "agent-init",
+                        "--dispatch-packet",
+                        dispatch_packet_path.as_str(),
+                        "--execute-dispatch",
+                        "--json",
+                    ]))),
+                    ExitCode::SUCCESS
+                );
+                wait_for_state_unlock(harness.path());
 
-        let store = runtime
-            .block_on(StateStore::open(state_root.clone()))
-            .expect("state store should reopen");
-        let recorded_receipt = runtime
-            .block_on(store.latest_run_graph_dispatch_receipt())
-            .expect("latest dispatch receipt should load")
-            .expect("latest dispatch receipt should exist");
-        let dispatch_result_path = recorded_receipt
-            .dispatch_result_path
-            .as_deref()
-            .expect("dispatch result path should record");
-        let rendered =
-            fs::read_to_string(dispatch_result_path).expect("dispatch result artifact should load");
-        let parsed: serde_json::Value =
-            serde_json::from_str(&rendered).expect("execute-dispatch json should parse");
-        assert_eq!(parsed["execution_state"], "executed");
-        assert_eq!(parsed["status"], "pass");
-        assert_eq!(
-            parsed["activation_semantics"]["activation_kind"],
-            "execution_evidence"
+                let store = runtime
+                    .block_on(StateStore::open(state_root.clone()))
+                    .expect("state store should reopen");
+                let recorded_receipt = runtime
+                    .block_on(store.latest_run_graph_dispatch_receipt())
+                    .expect("latest dispatch receipt should load")
+                    .expect("latest dispatch receipt should exist");
+                let dispatch_result_path = recorded_receipt
+                    .dispatch_result_path
+                    .as_deref()
+                    .expect("dispatch result path should record");
+                let rendered = fs::read_to_string(dispatch_result_path)
+                    .expect("dispatch result artifact should load");
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&rendered).expect("execute-dispatch json should parse");
+                assert_eq!(parsed["execution_state"], "executed");
+                assert_eq!(parsed["status"], "pass");
+                assert_eq!(
+                    parsed["activation_semantics"]["activation_kind"],
+                    "execution_evidence"
+                );
+                assert_eq!(parsed["activation_semantics"]["view_only"], false);
+                assert_eq!(parsed["activation_semantics"]["executes_packet"], true);
+                assert_eq!(parsed["execution_evidence"]["status"], "recorded");
+                assert_eq!(
+                    parsed["execution_evidence"]["evidence_kind"],
+                    "internal_carrier_completion"
+                );
+                assert_eq!(parsed["provider_result"], "internal-dispatch-ok");
+                assert_eq!(parsed["backend_dispatch"]["backend_id"], "junior");
+            },
         );
-        assert_eq!(parsed["activation_semantics"]["view_only"], false);
-        assert_eq!(parsed["activation_semantics"]["executes_packet"], true);
-        assert_eq!(parsed["execution_evidence"]["status"], "recorded");
-        assert_eq!(
-            parsed["execution_evidence"]["evidence_kind"],
-            "internal_carrier_completion"
-        );
-        assert_eq!(parsed["provider_result"], "internal-dispatch-ok");
-        assert_eq!(parsed["backend_dispatch"]["backend_id"], "junior");
     }
 
     #[test]
@@ -17713,6 +17796,10 @@ fn stale_in_flight_dispatch_preserves_internal_activation_view(
         .or_else(|| result["effective_execution_posture"]["selected_backend_class"].as_str());
     backend_class_is_internal(result_selected_backend_class)
         || receipt
+            .selected_backend
+            .as_deref()
+            .is_some_and(|value| value == "internal_subagents" || value.starts_with("internal_"))
+        || receipt
             .dispatch_surface
             .as_deref()
             .is_some_and(|value| value.starts_with("internal_cli:"))
@@ -18148,7 +18235,7 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
     } else {
         Ok(execute_runtime_dispatch_handoff(state_root, role_selection, receipt).await)
     };
-    let execution_result = match execution_result {
+    let mut execution_result = match execution_result {
         Ok(result) => match result {
             Ok(execution_result) => execution_result,
             Err(execution_error) => {
@@ -18183,6 +18270,12 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
             return Err(timeout_error);
         }
     };
+    normalize_internal_host_timeout_result_blocker(
+        project_root.as_ref(),
+        role_selection,
+        receipt,
+        &mut execution_result,
+    );
     let dispatch_result_path =
         write_runtime_dispatch_result(state_root, receipt, &execution_result)?;
     receipt.dispatch_result_path = Some(dispatch_result_path);

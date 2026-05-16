@@ -348,10 +348,16 @@ fn classify_sessions_with_liveness(
         let process_id = session["process_id"]
             .as_u64()
             .and_then(|value| u32::try_from(value).ok());
-        let process_is_dead =
-            process_id.is_some_and(|value| process_liveness(value) == ProcessLiveness::Dead);
         let heartbeat_fresh = heartbeat <= now && (now - heartbeat) <= SESSION_TTL_SECONDS;
-        if state == "live" && heartbeat_fresh && process_id.is_some() && !process_is_dead {
+        if state == "live" && heartbeat_fresh && process_id.is_some() {
+            let process_is_dead =
+                process_id.is_some_and(|value| process_liveness(value) == ProcessLiveness::Dead);
+            if process_is_dead {
+                let mut cloned = session.clone();
+                cloned["state"] = serde_json::Value::String("stale".to_string());
+                stale.push(cloned);
+                continue;
+            }
             live_other.push(session.clone());
         } else {
             let mut cloned = session.clone();

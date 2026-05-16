@@ -704,6 +704,12 @@ fn derive_lane_show_truth(
         };
     }
 
+    let completed_resolves_recovery_open_cycle = summary.lane_status
+        == crate::LaneStatus::LaneCompleted.as_str()
+        && summary.dispatch_status == "executed"
+        && summary.blocker_code.is_none();
+    let recovery_open_blocks_completed =
+        recovery_delegated_cycle_open(recovery) && !completed_resolves_recovery_open_cycle;
     let completed_has_blocked_downstream = summary.lane_status
         == crate::LaneStatus::LaneCompleted.as_str()
         && (lane_summary_dispatch_is_blocked(summary)
@@ -711,7 +717,7 @@ fn derive_lane_show_truth(
                 .downstream_dispatch_blockers
                 .iter()
                 .any(|value| !value.trim().is_empty())
-            || recovery_delegated_cycle_open(recovery));
+            || recovery_open_blocks_completed);
     if summary.lane_status == crate::LaneStatus::LaneCompleted.as_str()
         && !completed_has_blocked_downstream
     {
