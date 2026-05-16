@@ -2231,28 +2231,6 @@ fn active_exception_takeover_evidence_matches_status(
             .is_some_and(|value| !value.trim().is_empty())
 }
 
-fn downstream_dispatch_continuation_evidence_matches_status(
-    status: Option<&crate::state_store::RunGraphStatus>,
-    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
-) -> bool {
-    let Some(status) = status else {
-        return false;
-    };
-    let Some(dispatch) = dispatch else {
-        return false;
-    };
-    dispatch.run_id == status.run_id
-        && dispatch.downstream_dispatch_ready
-        && dispatch
-            .downstream_dispatch_status
-            .as_deref()
-            .is_some_and(|value| matches!(value, "packet_ready" | "executed"))
-        && dispatch
-            .downstream_dispatch_target
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-}
-
 fn active_exception_takeover_binding_matches_status(
     binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     status: Option<&crate::state_store::RunGraphStatus>,
@@ -2311,20 +2289,16 @@ fn build_taskflow_next_decision(
         latest_run_graph_status,
         ready_head.as_ref(),
     );
-    let downstream_dispatch_continuation_evidence =
-        downstream_dispatch_continuation_evidence_matches_status(latest_run_graph_status, dispatch);
     let terminal_consume_continue_without_next_unit = latest_run_graph_status
         .zip(terminal_consume_continue_run_id)
         .is_some_and(|(status, run_id)| status.run_id == run_id)
-        && !explicit_next_task_binding
-        && !downstream_dispatch_continuation_evidence;
+        && !explicit_next_task_binding;
     let latest_run_graph_status_blocks_admission = latest_run_graph_status_blocked
         && !active_exception_takeover_evidence
         && !terminal_consume_continue_without_next_unit;
     let completed_without_explicit_next_unit =
         terminal_completed_without_next_unit(latest_run_graph_status)
-            && !explicit_next_task_binding
-            && !downstream_dispatch_continuation_evidence;
+            && !explicit_next_task_binding;
     let admissibility_gate = if recovery_holds_active_bound_run {
         "delegated_cycle_runtime_gate".to_string()
     } else if active_exception_takeover_continuation {
@@ -7981,7 +7955,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_closure_with_downstream_receipt_and_bundle_check_admits_ready_head() {
+    fn terminal_closure_with_downstream_receipt_still_blocks_without_explicit_binding() {
         let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
             "closed-run",
             "closed-task",
@@ -8041,27 +8015,17 @@ mod tests {
             Some("closed-run"),
         );
 
-        assert_eq!(decision.status, "pass");
+        assert_eq!(decision.status, "blocked");
         assert_eq!(
             decision.candidate_task_context.admissibility_gate,
-            "ready_now"
+            "terminal_continue_snapshot_without_next_bounded_unit"
         );
-        assert!(decision.candidate_task_context.admissible_now);
-        assert_eq!(
-            decision
-                .primary_ready_task
-                .as_ref()
-                .map(|task| task.id.as_str()),
-            Some("ready-head")
-        );
-        assert!(!decision
+        assert!(!decision.candidate_task_context.admissible_now);
+        assert!(decision.primary_ready_task.is_none());
+        assert!(decision
             .blocker_codes
             .iter()
-            .any(|code| code == "completed_without_explicit_next_bounded_unit"));
-        assert!(!decision
-            .blocker_codes
-            .iter()
-            .any(|code| code == "execution_preparation_gate_blocked"));
+            .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit"));
     }
 
     #[test]
