@@ -20,6 +20,8 @@ use std::process::ExitCode;
 use time::format_description::well_known::Rfc3339;
 
 const STALE_PROJECTION_DISPATCH_TIMEOUT_SECONDS: i64 = 10;
+const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS: u64 = 25;
+const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER: &str = "run_graph_dispatch_init_timeout";
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 struct RecoveryNextAction {
@@ -2684,6 +2686,25 @@ fn print_run_graph_json_error(
     );
 }
 
+fn run_graph_dispatch_init_timeout_message(run_id: &str) -> String {
+    format!(
+        "Timed out preparing run-graph dispatch-init for `{run_id}` after {RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS}s; dispatch-init may have written a packet before timeout, but the surface failed closed instead of holding the state-store lock."
+    )
+}
+
+fn run_graph_dispatch_init_error_evidence(error: &str) -> Option<serde_json::Value> {
+    if !error.starts_with("Timed out preparing run-graph dispatch-init") {
+        return None;
+    }
+    Some(serde_json::json!({
+        "incident": {
+            "status": "blocked",
+            "summary": "run-graph dispatch-init timed out before returning a bounded dispatch receipt"
+        },
+        "blockers": [RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER]
+    }))
+}
+
 fn run_graph_blocker_code(status: &str) -> Option<&'static str> {
     match status {
         "denied" => Some(crate::release1_contracts::blocker_code_str(
@@ -4190,9 +4211,15 @@ async fn run_graph_dispatch_init(
     store: &StateStore,
     run_id: &str,
 ) -> Result<serde_json::Value, String> {
-    prepare_run_graph_dispatch_init_artifacts(store, run_id)
-        .await
-        .map(RunGraphDispatchInitArtifacts::into_json_payload)
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS),
+        prepare_run_graph_dispatch_init_artifacts(store, run_id),
+    )
+    .await
+    {
+        Ok(result) => result.map(RunGraphDispatchInitArtifacts::into_json_payload),
+        Err(_) => Err(run_graph_dispatch_init_timeout_message(run_id)),
+    }
 }
 
 pub(crate) async fn derive_advanced_run_graph_status(
@@ -4869,7 +4896,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                         "vida taskflow run-graph dispatch-init",
                         run_id,
                         &error,
-                        None,
+                        run_graph_dispatch_init_error_evidence(&error),
                     );
                     eprintln!("{error}");
                     ExitCode::from(1)
@@ -5124,6 +5151,22 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dispatch_init_timeout_error_surfaces_blocker_evidence() {
+        let message = run_graph_dispatch_init_timeout_message("run-timeout");
+        let evidence = run_graph_dispatch_init_error_evidence(&message)
+            .expect("dispatch-init timeout should expose blocker evidence");
+
+        assert_eq!(evidence["incident"]["status"], "blocked");
+        assert_eq!(
+            evidence["blockers"],
+            serde_json::json!([RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER])
+        );
+        assert!(
+            run_graph_dispatch_init_error_evidence("unrelated dispatch-init error").is_none()
+        );
+    }
 
     fn packet_gate_status(task_id: &str) -> RunGraphStatus {
         let mut status = default_run_graph_status(task_id, "implementation", "implementation");
