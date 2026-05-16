@@ -990,9 +990,6 @@ pub(crate) fn normalize_run_graph_lane_status(
     match value {
         Some(raw) if !raw.trim().is_empty() => {
             let canonical_lane_status = canonical_lane_status_str(raw).unwrap_or(raw).trim();
-            if dispatch_status.trim() == "executed" && canonical_lane_status == "lane_completed" {
-                return canonical_lane_status.to_string();
-            }
             if canonical_lane_status == derived_lane_status {
                 return canonical_lane_status.to_string();
             }
@@ -2397,6 +2394,78 @@ mod tests {
         assert!(!latest_run_graph_dispatch_receipt_signal_is_ambiguous(
             &summary
         ));
+    }
+
+    #[test]
+    fn executed_lane_completed_with_exception_evidence_is_ambiguous() {
+        let summary = RunGraphDispatchReceiptSummary::from_receipt(RunGraphDispatchReceipt {
+            run_id: "run-lane-complete-exception".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("exception-1".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: None,
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: None,
+            recorded_at: "2026-05-15T08:00:00Z".to_string(),
+        });
+
+        assert!(latest_run_graph_dispatch_receipt_signal_is_ambiguous(&summary));
+    }
+
+    #[test]
+    fn executed_lane_completed_with_supersede_evidence_is_ambiguous() {
+        let summary = RunGraphDispatchReceiptSummary::from_receipt(RunGraphDispatchReceipt {
+            run_id: "run-lane-complete-supersede".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: Some("supersede-1".to_string()),
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: None,
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: None,
+            recorded_at: "2026-05-15T08:00:00Z".to_string(),
+        });
+
+        assert!(latest_run_graph_dispatch_receipt_signal_is_ambiguous(&summary));
     }
 
     #[tokio::test]
