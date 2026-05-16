@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
@@ -24,12 +23,6 @@ fn session_store_path(state_dir: &Path) -> PathBuf {
     state_dir
         .join("orchestrator-sessions")
         .join("sessions.json")
-}
-
-fn session_token_store_dir(state_dir: &Path) -> PathBuf {
-    state_dir
-        .join("orchestrator-sessions")
-        .join("session-tokens")
 }
 
 fn sanitized_env(name: &str) -> Option<String> {
@@ -64,63 +57,11 @@ fn stable_local_session_id(state_dir: &Path) -> String {
     )
 }
 
-fn fallback_session_token_cache() -> &'static Mutex<BTreeMap<String, String>> {
-    static CACHE: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
-}
-
-fn synthesized_local_session_id(state_dir: &Path) -> String {
-    let state_dir_key = canonicalized_path_string(state_dir);
-    if let Some(token) = fallback_session_token_cache()
-        .lock()
-        .expect("fallback session token cache should not be poisoned")
-        .get(&state_dir_key)
-        .cloned()
-    {
-        return token;
-    }
-
-    let worktree = canonicalized_current_dir();
-    let generated_at_nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let session_id = format!(
-        "local-session-{}-{}-{}",
-        stable_hash_hex(&format!("{worktree}\n{state_dir_key}")),
-        std::process::id(),
-        generated_at_nanos
-    );
-    let token_record = serde_json::json!({
-        "schema_version": "runtime-owner-fallback-session-token-v1",
-        "session_id": session_id,
-        "identity_source": "synthesized_local_session_token",
-        "fallback_replaces_legacy_stable_worktree_state_hash": stable_local_session_id(state_dir),
-        "project_root": worktree,
-        "state_dir": state_dir.display().to_string(),
-        "process_id": std::process::id(),
-        "generated_at_epoch_seconds": now_epoch_seconds(),
-    });
-    let token_path = session_token_store_dir(state_dir).join(format!("{session_id}.json"));
-    if let Some(parent) = token_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(body) = serde_json::to_string_pretty(&token_record) {
-        let _ = std::fs::write(token_path, body);
-    }
-
-    fallback_session_token_cache()
-        .lock()
-        .expect("fallback session token cache should not be poisoned")
-        .insert(state_dir_key, session_id.clone());
-    session_id
-}
-
 fn current_session_id(state_dir: &Path) -> String {
     sanitized_env("VIDA_ORCHESTRATOR_SESSION_ID")
         .or_else(|| sanitized_env("CODEX_SESSION_ID"))
         .or_else(|| sanitized_env("CODEX_THREAD_ID"))
-        .unwrap_or_else(|| synthesized_local_session_id(state_dir))
+        .unwrap_or_else(|| stable_local_session_id(state_dir))
 }
 
 fn current_session_identity_source() -> String {
@@ -131,7 +72,7 @@ fn current_session_identity_source() -> String {
     } else if sanitized_env("CODEX_THREAD_ID").is_some() {
         "CODEX_THREAD_ID".to_string()
     } else {
-        "synthesized_local_session_token".to_string()
+        "stable_local_worktree_session_id".to_string()
     }
 }
 
@@ -249,11 +190,23 @@ fn current_session_record(state_dir: &Path) -> serde_json::Value {
 fn merge_current_session(
     mut sessions: Vec<serde_json::Value>,
     current: serde_json::Value,
+    state_dir: &Path,
 ) -> Vec<serde_json::Value> {
     let current_id = current["session_id"]
         .as_str()
         .unwrap_or_default()
         .to_string();
+    let stable_fallback_id = stable_local_session_id(state_dir);
+    let legacy_synthesized_prefix =
+        stable_fallback_id.replacen("local-worktree-", "local-session-", 1);
+    sessions.retain(|session| {
+        !(session["identity_source"].as_str() == Some("synthesized_local_session_token")
+            && (session["fallback_replaces_legacy_stable_worktree_state_hash"].as_str()
+                == Some(stable_fallback_id.as_str())
+                || session["session_id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with(&format!("{legacy_synthesized_prefix}-")))))
+    });
     let mut replaced = false;
     for session in &mut sessions {
         if session["session_id"].as_str() == Some(current_id.as_str()) {
@@ -283,26 +236,53 @@ fn local_process_liveness(process_id: u32) -> ProcessLiveness {
     if process_id == std::process::id() {
         return ProcessLiveness::Alive;
     }
-    let Ok(output) = std::process::Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {process_id}"), "/FO", "CSV", "/NH"])
-        .output()
-    else {
-        return ProcessLiveness::Unknown;
-    };
-    if !output.status.success() {
-        return ProcessLiveness::Unknown;
+
+    static TASKLIST_CACHE: std::sync::OnceLock<
+        std::sync::Mutex<Option<(std::time::Instant, std::collections::BTreeSet<u32>)>>,
+    > = std::sync::OnceLock::new();
+
+    let cache = TASKLIST_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((cached_at, pids)) = guard.as_ref() {
+            if cached_at.elapsed() < std::time::Duration::from_secs(5) {
+                return if pids.contains(&process_id) {
+                    ProcessLiveness::Alive
+                } else {
+                    ProcessLiveness::Dead
+                };
+            }
+        }
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let needle = format!(",\"{process_id}\",");
-    if stdout.contains(&needle) {
-        ProcessLiveness::Alive
-    } else if !stdout
-        .lines()
-        .any(|line| line.trim_start().starts_with('"'))
+
+    let snapshot = match std::process::Command::new("tasklist")
+        .args(["/FO", "CSV", "/NH"])
+        .output()
     {
-        ProcessLiveness::Dead
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            stdout
+                .lines()
+                .filter_map(|line| {
+                    let fields = line
+                        .trim()
+                        .trim_matches('"')
+                        .split("\",\"")
+                        .collect::<Vec<_>>();
+                    fields.get(1).and_then(|value| value.parse::<u32>().ok())
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+        }
+        _ => return ProcessLiveness::Unknown,
+    };
+
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((std::time::Instant::now(), snapshot.clone()));
+    }
+
+    if snapshot.contains(&process_id) {
+        ProcessLiveness::Alive
     } else {
-        ProcessLiveness::Unknown
+        ProcessLiveness::Dead
     }
 }
 
@@ -353,14 +333,13 @@ fn classify_sessions_with_liveness(
         let state = session["state"]
             .as_str()
             .unwrap_or("legacy_global_owner_unknown");
-        let process_is_dead = session["process_id"]
-            .as_u64()
-            .and_then(|value| u32::try_from(value).ok())
-            .is_some_and(|process_id| process_liveness(process_id) == ProcessLiveness::Dead);
-        if state == "live"
-            && now.saturating_sub(heartbeat) <= SESSION_TTL_SECONDS
-            && !process_is_dead
-        {
+        let recent_live = state == "live" && now.saturating_sub(heartbeat) <= SESSION_TTL_SECONDS;
+        let process_is_dead = recent_live
+            && session["process_id"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .is_some_and(|process_id| process_liveness(process_id) == ProcessLiveness::Dead);
+        if recent_live && !process_is_dead {
             live_other.push(session.clone());
         } else {
             let mut cloned = session.clone();
@@ -386,11 +365,21 @@ pub(crate) fn build_runtime_owner_evidence(
         .unwrap_or_default()
         .to_string();
     let mut sessions = read_sessions(&path);
-    sessions = merge_current_session(sessions, current.clone());
-    if persist_current {
-        write_sessions(&path, &sessions)?;
-    }
+    sessions = merge_current_session(sessions, current.clone(), state_dir);
+    let current = sessions
+        .iter()
+        .find(|session| session["session_id"].as_str() == Some(current_id.as_str()))
+        .cloned()
+        .unwrap_or(current);
     let (live_other_sessions, stale_sessions) = classify_sessions(&sessions, &current_id);
+    if persist_current {
+        let mut normalized_sessions =
+            Vec::with_capacity(1 + live_other_sessions.len() + stale_sessions.len());
+        normalized_sessions.push(current.clone());
+        normalized_sessions.extend(live_other_sessions.iter().cloned());
+        normalized_sessions.extend(stale_sessions.iter().cloned());
+        write_sessions(&path, &normalized_sessions)?;
+    }
     let has_live_other = !live_other_sessions.is_empty();
     let mutation_gate = if has_live_other {
         "blocked_live_other_orchestrator"
@@ -490,8 +479,11 @@ fn mutate_session(
     mutation: &str,
 ) -> Result<serde_json::Value, String> {
     let path = session_store_path(&state_dir);
-    let mut sessions =
-        merge_current_session(read_sessions(&path), current_session_record(&state_dir));
+    let mut sessions = merge_current_session(
+        read_sessions(&path),
+        current_session_record(&state_dir),
+        &state_dir,
+    );
     let mut found = false;
     for session in &mut sessions {
         if session["session_id"].as_str() == Some(session_id) {
@@ -589,7 +581,8 @@ pub(crate) fn context_summary_map(state_dir: &Path) -> BTreeMap<String, String> 
 mod tests {
     use super::{
         build_runtime_owner_evidence, classify_sessions_with_liveness, context_summary_map,
-        current_session_id, now_epoch_seconds, ProcessLiveness,
+        current_session_id, current_session_record, merge_current_session, now_epoch_seconds,
+        stable_local_session_id, ProcessLiveness,
     };
     use crate::temp_state::TempStateHarness;
     use std::sync::{Mutex, OnceLock};
@@ -656,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_orchestrator_session_identity_uses_synthesized_session_token() {
+    fn fallback_orchestrator_session_identity_uses_stable_worktree_session_id() {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved = saved_session_env();
         clear_session_env();
@@ -674,23 +667,56 @@ mod tests {
             .as_str()
             .expect("second session id should be present");
         assert_eq!(first_id, second_id);
-        assert!(first_id.starts_with("local-session-"));
+        assert!(first_id.starts_with("local-worktree-"));
         assert_eq!(
             second["current_session"]["identity_source"],
-            "synthesized_local_session_token"
+            "stable_local_worktree_session_id"
         );
-        assert!(harness
-            .path()
-            .join("orchestrator-sessions")
-            .join("session-tokens")
-            .join(format!("{second_id}.json"))
-            .exists());
         assert!(second["live_other_sessions"].as_array().unwrap().is_empty());
         assert!(!second["blocker_codes"]
             .as_array()
             .unwrap()
             .iter()
             .any(|code| code == "live_other_orchestrator_owner"));
+
+        restore_session_env(saved);
+    }
+
+    #[test]
+    fn stable_fallback_prunes_legacy_synthesized_session_tokens_for_same_worktree() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved = saved_session_env();
+        clear_session_env();
+
+        let harness = TempStateHarness::new().expect("temp state should initialize");
+        let stable_id = stable_local_session_id(harness.path());
+        let stale_synthesized_with_companion = serde_json::json!({
+            "session_id": "local-session-old-process",
+            "identity_source": "synthesized_local_session_token",
+            "fallback_replaces_legacy_stable_worktree_state_hash": stable_id,
+            "state": "live",
+            "process_id": 12345,
+            "last_heartbeat_epoch_seconds": now_epoch_seconds(),
+        });
+        let legacy_synthesized_without_companion = serde_json::json!({
+            "session_id": stable_id.replacen("local-worktree-", "local-session-", 1) + "-67890-123",
+            "identity_source": "synthesized_local_session_token",
+            "state": "live",
+            "process_id": 67890,
+            "last_heartbeat_epoch_seconds": now_epoch_seconds(),
+        });
+        let current = current_session_record(harness.path());
+        let merged = merge_current_session(
+            vec![
+                stale_synthesized_with_companion,
+                legacy_synthesized_without_companion,
+            ],
+            current,
+            harness.path(),
+        );
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0]["session_id"], stable_id);
 
         restore_session_env(saved);
     }
@@ -774,6 +800,33 @@ mod tests {
         assert!(live_other.is_empty());
         assert_eq!(stale.len(), 1);
         assert_eq!(stale[0]["state"], "stale");
+    }
+
+    #[test]
+    fn stale_or_expired_sessions_do_not_run_liveness_probe() {
+        let now = now_epoch_seconds();
+        let sessions = vec![
+            serde_json::json!({
+                "session_id": "stale-state",
+                "state": "stale",
+                "process_id": 12345,
+                "last_heartbeat_epoch_seconds": now,
+            }),
+            serde_json::json!({
+                "session_id": "expired-live",
+                "state": "live",
+                "process_id": 23456,
+                "last_heartbeat_epoch_seconds": now.saturating_sub(super::SESSION_TTL_SECONDS + 1),
+            }),
+        ];
+
+        let (live_other, stale) =
+            classify_sessions_with_liveness(&sessions, "current-session", |_| {
+                panic!("stale or expired sessions must not run process liveness probes")
+            });
+
+        assert!(live_other.is_empty());
+        assert_eq!(stale.len(), 2);
     }
 
     #[test]

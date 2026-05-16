@@ -256,6 +256,42 @@ fn assert_json_status_pass(output: &str) {
     assert_eq!(parsed["status"], "pass");
 }
 
+fn write_single_task_snapshot(path: &str, task_id: &str, title: &str, status: &str, priority: u32) {
+    let row = serde_json::json!({
+        "id": task_id,
+        "title": title,
+        "description": "snapshot evidence",
+        "status": status,
+        "priority": priority,
+        "issue_type": "task",
+        "created_at": "2026-03-08T00:00:00Z",
+        "created_by": "tester",
+        "updated_at": "2026-03-08T00:00:00Z",
+        "source_repo": ".",
+        "compaction_level": 0,
+        "original_size": 0,
+        "labels": [],
+        "dependencies": [],
+    });
+    let snapshot_path = std::path::Path::new(path);
+    fs::create_dir_all(
+        snapshot_path
+            .parent()
+            .expect("snapshot path should have a parent"),
+    )
+    .expect("create snapshot parent");
+    fs::write(path, format!("{row}\n")).expect("write task snapshot");
+}
+
+fn task_row_by_id<'a>(payload: &'a Value, task_id: &str) -> &'a Value {
+    payload["tasks"]
+        .as_array()
+        .expect("task payload should include task array")
+        .iter()
+        .find(|task| task["id"] == task_id)
+        .unwrap_or_else(|| panic!("task payload should include {task_id}"))
+}
+
 #[test]
 fn taskflow_model_profile_readiness_cli_smoke_matches_config_census_embedding() {
     let state_dir = unique_state_dir();
@@ -1206,6 +1242,111 @@ fn run_graph_update_canonicalizes_conflicting_resume_meta() {
     assert_eq!(handoff_state.as_deref(), Some("awaiting_coach"));
 
     let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_list_show_ready_prefer_authoritative_state_over_stale_snapshot() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            "vida-authoritative",
+            "Original snapshot title",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--priority",
+            "3",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+
+    let updated = run_command_json(
+        &[
+            "task",
+            "update",
+            "vida-authoritative",
+            "--title",
+            "Live authoritative title",
+            "--priority",
+            "7",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(updated["status"], "pass");
+
+    let snapshot_path = format!("{state_dir}/exports/tasks.snapshot.jsonl");
+    write_single_task_snapshot(
+        &snapshot_path,
+        "vida-authoritative",
+        "Original snapshot title",
+        "open",
+        3,
+    );
+
+    let shown = run_command_json(
+        &["task", "show", "vida-authoritative", "--json"],
+        &state_dir,
+    );
+    assert_eq!(shown["task"]["title"], "Live authoritative title");
+    assert_eq!(shown["task"]["priority"], 7);
+    assert_eq!(shown["state_access"]["mode"], "authoritative_live");
+    assert_eq!(shown["state_access"]["degraded"], false);
+
+    let listed = run_command_json(&["task", "list", "--json"], &state_dir);
+    let listed_task = task_row_by_id(&listed, "vida-authoritative");
+    assert_eq!(listed_task["title"], "Live authoritative title");
+    assert_eq!(listed_task["priority"], 7);
+    assert_eq!(listed["state_access"]["mode"], "authoritative_live");
+    assert_eq!(listed["state_access"]["degraded"], false);
+
+    let ready = run_command_json(&["task", "ready", "--json"], &state_dir);
+    let ready_task = task_row_by_id(&ready, "vida-authoritative");
+    assert_eq!(ready_task["title"], "Live authoritative title");
+    assert_eq!(ready_task["priority"], 7);
+    assert_eq!(ready["state_access"]["mode"], "authoritative_live");
+    assert_eq!(ready["state_access"]["degraded"], false);
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_show_falls_back_to_snapshot_when_authoritative_state_is_missing() {
+    let project_root = unique_state_dir();
+    let state_dir = format!("{project_root}/.vida/data/state");
+    let snapshot_path = format!("{project_root}/.vida/exports/tasks.snapshot.jsonl");
+    write_single_task_snapshot(
+        &snapshot_path,
+        "vida-snapshot-only",
+        "Snapshot fallback title",
+        "open",
+        2,
+    );
+
+    let shown = run_command_json(
+        &["task", "show", "vida-snapshot-only", "--json"],
+        &state_dir,
+    );
+    assert_eq!(shown["task"]["title"], "Snapshot fallback title");
+    assert_eq!(shown["task"]["priority"], 2);
+    assert_eq!(shown["state_access"]["mode"], "snapshot");
+    assert_eq!(shown["state_access"]["degraded"], true);
+    let reported_snapshot_path = shown["state_access"]["snapshot_path"]
+        .as_str()
+        .expect("snapshot path should render");
+    assert_eq!(
+        reported_snapshot_path.replace('\\', "/"),
+        snapshot_path.replace('\\', "/")
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
 }
 
 #[test]

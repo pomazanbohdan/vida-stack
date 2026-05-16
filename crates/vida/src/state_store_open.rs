@@ -16,6 +16,62 @@ struct AuthoritativeOpenGuard {
     file: std::fs::File,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessLiveness {
+    Alive,
+    Dead,
+    Unknown,
+}
+
+#[cfg(target_os = "windows")]
+fn local_process_liveness(process_id: u32) -> ProcessLiveness {
+    if process_id == std::process::id() {
+        return ProcessLiveness::Alive;
+    }
+    let Ok(output) = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {process_id}"), "/FO", "CSV", "/NH"])
+        .output()
+    else {
+        return ProcessLiveness::Unknown;
+    };
+    if !output.status.success() {
+        return ProcessLiveness::Unknown;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let needle = format!(",\"{process_id}\",");
+    if stdout.contains(&needle) {
+        ProcessLiveness::Alive
+    } else if !stdout
+        .lines()
+        .any(|line| line.trim_start().starts_with('"'))
+    {
+        ProcessLiveness::Dead
+    } else {
+        ProcessLiveness::Unknown
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn local_process_liveness(process_id: u32) -> ProcessLiveness {
+    if process_id == std::process::id() {
+        return ProcessLiveness::Alive;
+    }
+    if std::path::PathBuf::from(format!("/proc/{process_id}")).exists() {
+        ProcessLiveness::Alive
+    } else {
+        ProcessLiveness::Dead
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn local_process_liveness(process_id: u32) -> ProcessLiveness {
+    if process_id == std::process::id() {
+        ProcessLiveness::Alive
+    } else {
+        ProcessLiveness::Unknown
+    }
+}
+
 impl AuthoritativeOpenGuard {
     async fn acquire(root: &Path) -> Result<Self, StateStoreError> {
         let guard_path = root.join(".vida-authoritative-open.guard");
@@ -75,8 +131,9 @@ pub(super) fn state_schema_document() -> String {
 }
 
 impl StateStore {
-    pub(crate) fn reclaim_self_owned_failed_authoritative_datastore_lock_marker(
+    fn reclaim_recoverable_authoritative_datastore_lock_marker_with_liveness(
         root: &Path,
+        process_liveness: impl Fn(u32) -> ProcessLiveness,
     ) -> Result<bool, StateStoreError> {
         let lock_path = root.join("LOCK");
         let lock_text = match fs::read_to_string(&lock_path) {
@@ -87,14 +144,31 @@ impl StateStore {
         let Ok(pid) = lock_text.trim().parse::<u32>() else {
             return Ok(false);
         };
-        if pid != std::process::id() {
+        let recoverable =
+            pid == std::process::id() || process_liveness(pid) == ProcessLiveness::Dead;
+        if !recoverable {
             return Ok(false);
-        }
+        };
         match fs::remove_file(&lock_path) {
             Ok(()) => Ok(true),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(StateStoreError::Io(error)),
         }
+    }
+
+    pub(crate) fn reclaim_recoverable_authoritative_datastore_lock_marker(
+        root: &Path,
+    ) -> Result<bool, StateStoreError> {
+        Self::reclaim_recoverable_authoritative_datastore_lock_marker_with_liveness(
+            root,
+            local_process_liveness,
+        )
+    }
+
+    pub(crate) fn reclaim_self_owned_failed_authoritative_datastore_lock_marker(
+        root: &Path,
+    ) -> Result<bool, StateStoreError> {
+        Self::reclaim_recoverable_authoritative_datastore_lock_marker(root)
     }
 
     pub(crate) fn error_is_lock_contention(error: &StateStoreError) -> bool {
@@ -166,8 +240,7 @@ impl StateStore {
             match open_once(root.clone()).await {
                 Ok(store) => return Ok(store),
                 Err(error) if Self::error_is_lock_contention(&error) => {
-                    let _ =
-                        Self::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)?;
+                    let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(&root)?;
                     if attempt + 1 < AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT {
                         tokio::time::sleep(std::time::Duration::from_millis(
                             AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS,
@@ -207,8 +280,7 @@ impl StateStore {
             match Self::open_existing_read_only_once(root.clone()).await {
                 Ok(store) => return Ok(store),
                 Err(error) if Self::error_is_lock_contention(&error) => {
-                    let _ =
-                        Self::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)?;
+                    let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(&root)?;
                     if attempt + 1 < READ_ONLY_OPEN_RETRY_COUNT {
                         tokio::time::sleep(std::time::Duration::from_millis(
                             READ_ONLY_OPEN_RETRY_DELAY_MS,
@@ -377,9 +449,8 @@ mod tests {
         fs::create_dir_all(&root).expect("create state root");
         fs::write(root.join("LOCK"), std::process::id().to_string()).expect("write self lock");
 
-        let reclaimed =
-            StateStore::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)
-                .expect("self-owned failed lock should not error");
+        let reclaimed = StateStore::reclaim_recoverable_authoritative_datastore_lock_marker(&root)
+            .expect("self-owned failed lock should not error");
 
         assert!(reclaimed);
         assert!(!root.join("LOCK").exists());
@@ -387,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn self_owned_failed_authoritative_lock_cleanup_preserves_foreign_pid() {
+    fn recoverable_authoritative_lock_cleanup_reclaims_dead_foreign_pid() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -401,8 +472,43 @@ mod tests {
         fs::write(root.join("LOCK"), foreign_pid.to_string()).expect("write foreign lock");
 
         let reclaimed =
-            StateStore::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)
-                .expect("foreign lock should not error");
+            StateStore::reclaim_recoverable_authoritative_datastore_lock_marker_with_liveness(
+                &root,
+                |pid| {
+                    assert_eq!(pid, foreign_pid);
+                    ProcessLiveness::Dead
+                },
+            )
+            .expect("dead foreign lock should not error");
+
+        assert!(reclaimed);
+        assert!(!root.join("LOCK").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recoverable_authoritative_lock_cleanup_preserves_live_foreign_pid() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-live-foreign-authoritative-lock-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create state root");
+        let foreign_pid = std::process::id().saturating_add(1);
+        fs::write(root.join("LOCK"), foreign_pid.to_string()).expect("write foreign lock");
+
+        let reclaimed =
+            StateStore::reclaim_recoverable_authoritative_datastore_lock_marker_with_liveness(
+                &root,
+                |pid| {
+                    assert_eq!(pid, foreign_pid);
+                    ProcessLiveness::Alive
+                },
+            )
+            .expect("live foreign lock should not error");
 
         assert!(!reclaimed);
         assert_eq!(
@@ -425,9 +531,8 @@ mod tests {
         fs::create_dir_all(&root).expect("create state root");
         fs::write(root.join("LOCK"), "unknown").expect("write invalid lock");
 
-        let reclaimed =
-            StateStore::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)
-                .expect("invalid lock should not error");
+        let reclaimed = StateStore::reclaim_recoverable_authoritative_datastore_lock_marker(&root)
+            .expect("invalid lock should not error");
 
         assert!(!reclaimed);
         assert_eq!(

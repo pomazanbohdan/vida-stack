@@ -4799,6 +4799,36 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     )
                     .await
                     {
+                        if let Err(timeout_error) =
+                            super::apply_dispatch_handoff_timeout_to_receipt_for_state_root(
+                                &state_root,
+                                &role_selection,
+                                &mut dispatch_receipt,
+                                CONSUME_RESUME_HANDOFF_TIMEOUT.as_secs(),
+                            )
+                        {
+                            if emit_output {
+                                eprintln!(
+                                    "Failed to materialize resumed runtime dispatch timeout receipt: {timeout_error}"
+                                );
+                            }
+                        } else if let Ok(store) = fail_fast_state_store_open(
+                            state_root.clone(),
+                            "persisting resumed runtime dispatch timeout receipt",
+                        )
+                        .await
+                        {
+                            if let Err(timeout_error) = store
+                                .record_run_graph_dispatch_receipt(&dispatch_receipt)
+                                .await
+                            {
+                                if emit_output {
+                                    eprintln!(
+                                        "Failed to persist resumed runtime dispatch timeout receipt: {timeout_error}"
+                                    );
+                                }
+                            }
+                        }
                         if as_json && emit_output {
                             emit_consume_continue_resume_error_json(&error, surface_name);
                             return ExitCode::from(1);
@@ -4884,6 +4914,36 @@ pub(crate) async fn run_taskflow_consume_resume_command(
             )
             .await
             {
+                if let Err(timeout_error) =
+                    super::apply_dispatch_handoff_timeout_to_receipt_for_state_root(
+                        &state_root,
+                        &role_selection,
+                        &mut dispatch_receipt,
+                        CONSUME_RESUME_HANDOFF_TIMEOUT.as_secs(),
+                    )
+                {
+                    if emit_output {
+                        eprintln!(
+                            "Failed to materialize downstream dispatch timeout receipt: {timeout_error}"
+                        );
+                    }
+                } else if let Ok(store) = fail_fast_state_store_open(
+                    state_root.clone(),
+                    "persisting downstream dispatch timeout receipt",
+                )
+                .await
+                {
+                    if let Err(timeout_error) = store
+                        .record_run_graph_dispatch_receipt(&dispatch_receipt)
+                        .await
+                    {
+                        if emit_output {
+                            eprintln!(
+                                "Failed to persist downstream dispatch timeout receipt: {timeout_error}"
+                            );
+                        }
+                    }
+                }
                 if as_json && emit_output {
                     emit_consume_continue_resume_error_json(&error, surface_name);
                     return ExitCode::from(1);
@@ -8219,9 +8279,13 @@ agent_system:
             .await;
             assert_eq!(exit, ExitCode::SUCCESS);
 
-            let store = StateStore::open_existing(state_dir.clone())
-                .await
-                .expect("reopen store");
+            let store = fail_fast_state_store_open_read_only_with_timeout(
+                state_dir.clone(),
+                "reopen bridged specification receipt",
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("reopen store");
             let receipt = store
                 .run_graph_dispatch_receipt(run_id)
                 .await

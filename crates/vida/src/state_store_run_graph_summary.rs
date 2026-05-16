@@ -1,7 +1,8 @@
 use super::*;
 use crate::release1_contracts::lane_status_has_required_evidence;
 use crate::taskflow_run_graph::{
-    approval_delegation_transition_kind, is_dispatch_resume_handoff_complete,
+    approval_delegation_transition_kind, clear_run_graph_dispatch_init_fast_cache,
+    is_dispatch_resume_handoff_complete,
 };
 
 fn reconcile_run_graph_status_with_dispatch_receipt(
@@ -1066,10 +1067,31 @@ impl StateStore {
     }
 
     fn current_runtime_owner_evidence(&self) -> Result<serde_json::Value, StateStoreError> {
-        crate::orchestrator_session_surface::build_runtime_owner_evidence(self.root(), true)
-            .map_err(|reason| StateStoreError::InvalidTaskRecord {
-                reason: format!("runtime owner evidence unavailable: {reason}"),
-            })
+        static OWNER_EVIDENCE_CACHE: std::sync::OnceLock<
+            std::sync::Mutex<Option<(std::path::PathBuf, std::time::Instant, serde_json::Value)>>,
+        > = std::sync::OnceLock::new();
+
+        let root = self.root().to_path_buf();
+        let cache = OWNER_EVIDENCE_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+        if let Ok(guard) = cache.lock() {
+            if let Some((cached_root, cached_at, evidence)) = guard.as_ref() {
+                if cached_root == &root && cached_at.elapsed() < std::time::Duration::from_secs(10)
+                {
+                    return Ok(evidence.clone());
+                }
+            }
+        }
+
+        let evidence =
+            crate::orchestrator_session_surface::build_runtime_owner_evidence(self.root(), true)
+                .map_err(|reason| StateStoreError::InvalidTaskRecord {
+                    reason: format!("runtime owner evidence unavailable: {reason}"),
+                })?;
+
+        if let Ok(mut guard) = cache.lock() {
+            *guard = Some((root, std::time::Instant::now(), evidence.clone()));
+        }
+        Ok(evidence)
     }
 
     fn ensure_runtime_owner_mutation_allowed(
@@ -1216,6 +1238,9 @@ impl StateStore {
         &self,
         receipt: &RunGraphDispatchReceipt,
     ) -> Result<(), StateStoreError> {
+        if receipt.dispatch_status != "routed" {
+            clear_run_graph_dispatch_init_fast_cache(self.root(), &receipt.run_id);
+        }
         self.record_run_graph_owner_evidence(&receipt.run_id, "dispatch_receipt")
             .await?;
         let receipt: RunGraphDispatchReceiptStored = receipt.clone().into();

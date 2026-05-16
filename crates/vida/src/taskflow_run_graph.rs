@@ -1,6 +1,5 @@
 use crate::{
-    build_runtime_execution_plan_from_snapshot, build_runtime_lane_selection_with_store,
-    dispatch_contract_execution_lane_sequence,
+    build_runtime_execution_plan_from_snapshot, dispatch_contract_execution_lane_sequence,
     operator_contracts::{
         canonical_release1_blocker_code_entries, finalize_release1_operator_truth,
         shared_operator_output_contract_parity_error,
@@ -1498,9 +1497,16 @@ struct CompiledRunGraphControl {
 
 async fn compiled_run_graph_control(store: &StateStore) -> Result<CompiledRunGraphControl, String> {
     let snapshot = read_or_sync_launcher_activation_snapshot(store).await?;
+    compiled_run_graph_control_from_bundle(&snapshot.compiled_bundle, &snapshot.source)
+}
+
+fn compiled_run_graph_control_from_bundle(
+    compiled_bundle: &serde_json::Value,
+    activation_source: &str,
+) -> Result<CompiledRunGraphControl, String> {
     let selection = RuntimeConsumptionLaneSelection {
         ok: true,
-        activation_source: snapshot.source,
+        activation_source: activation_source.to_string(),
         selection_mode: "compiled".to_string(),
         fallback_role: "orchestrator".to_string(),
         request: String::new(),
@@ -1511,7 +1517,7 @@ async fn compiled_run_graph_control(store: &StateStore) -> Result<CompiledRunGra
         allow_freeform_chat: false,
         confidence: "compiled".to_string(),
         matched_terms: Vec::new(),
-        compiled_bundle: snapshot.compiled_bundle.clone(),
+        compiled_bundle: compiled_bundle.clone(),
         execution_plan: serde_json::Value::Null,
         reason: "compiled_snapshot".to_string(),
     };
@@ -2168,6 +2174,37 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         [head, flag] if head == "run-graph" && matches!(flag.as_str(), "--help" | "-h") => {
             print_taskflow_proxy_help(Some("run-graph"));
             ExitCode::SUCCESS
+        }
+        [head, subcommand, run_id, flag]
+            if head == "run-graph" && subcommand == "dispatch-init" && flag == "--json" =>
+        {
+            let state_dir = proxy_state_dir();
+            if let Some(payload) = read_run_graph_dispatch_init_fast_cache(&state_dir, run_id) {
+                crate::print_json_pretty(&payload);
+                return ExitCode::SUCCESS;
+            }
+            run_taskflow_run_graph_dispatch_init_mutation(&state_dir, run_id, true).await
+        }
+        [head, subcommand, run_id] if head == "run-graph" && subcommand == "dispatch-init" => {
+            let state_dir = proxy_state_dir();
+            if let Some(payload) = read_run_graph_dispatch_init_fast_cache(&state_dir, run_id) {
+                print_surface_header(RenderMode::Plain, "vida taskflow run-graph dispatch-init");
+                print_surface_line(RenderMode::Plain, "run", run_id);
+                print_surface_line(
+                    RenderMode::Plain,
+                    "dispatch_packet",
+                    payload["dispatch_packet_path"].as_str().unwrap_or("none"),
+                );
+                print_surface_line(
+                    RenderMode::Plain,
+                    "dispatch_target",
+                    payload["dispatch_receipt"]["dispatch_target"]
+                        .as_str()
+                        .unwrap_or("none"),
+                );
+                return ExitCode::SUCCESS;
+            }
+            run_taskflow_run_graph_dispatch_init_mutation(&state_dir, run_id, false).await
         }
         [head, subcommand] if head == "run-graph" && subcommand == "diagnose-latest" => {
             let state_dir = proxy_state_dir();
@@ -3753,7 +3790,13 @@ pub(crate) async fn derive_seeded_run_graph_status(
 ) -> Result<TaskflowRunGraphSeedPayload, String> {
     let bounded_task_id =
         resolve_seed_task_id_for_runtime_run(store, requested_run_id, request_text).await?;
-    let mut selection = build_runtime_lane_selection_with_store(store, request_text).await?;
+    let snapshot = read_or_sync_launcher_activation_snapshot(store).await?;
+    let mut selection = crate::runtime_lane_summary::build_runtime_lane_selection_from_bundle(
+        &snapshot.compiled_bundle,
+        &snapshot.source,
+        &snapshot.pack_router_keywords,
+        request_text,
+    )?;
     try_existing_design_backed_implementation_override(
         store,
         &bounded_task_id,
@@ -3762,7 +3805,8 @@ pub(crate) async fn derive_seeded_run_graph_status(
     )
     .await?;
     let execution_plan = &selection.execution_plan;
-    let compiled_control = compiled_run_graph_control(store).await?;
+    let compiled_control =
+        compiled_run_graph_control_from_bundle(&snapshot.compiled_bundle, &snapshot.source)?;
     let is_conversation = selection.conversational_mode.is_some();
     let task_class = if is_conversation {
         selection
@@ -3886,12 +3930,16 @@ pub(crate) async fn derive_seeded_run_graph_status(
 pub(crate) fn run_graph_dispatch_context_from_seed_payload(
     payload: &TaskflowRunGraphSeedPayload,
 ) -> crate::state_store::RunGraphDispatchContext {
+    let mut role_selection =
+        serde_json::to_value(&payload.role_selection).unwrap_or(serde_json::Value::Null);
+    if let Some(object) = role_selection.as_object_mut() {
+        object.insert("compiled_bundle".to_string(), serde_json::Value::Null);
+    }
     crate::state_store::RunGraphDispatchContext {
         run_id: payload.status.run_id.clone(),
         task_id: payload.status.task_id.clone(),
         request_text: payload.request_text.clone(),
-        role_selection: serde_json::to_value(&payload.role_selection)
-            .unwrap_or(serde_json::Value::Null),
+        role_selection,
         recorded_at: time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .expect("rfc3339 timestamp should render"),
@@ -3912,13 +3960,13 @@ pub(crate) async fn persist_seed_artifacts(
             )
         })?;
     store
-        .record_run_graph_status(&payload.status)
-        .await
-        .map_err(|error| format!("Failed to record seeded run-graph state: {error}"))?;
-    store
         .record_run_graph_dispatch_context(&run_graph_dispatch_context_from_seed_payload(payload))
         .await
         .map_err(|error| format!("Failed to record seeded dispatch context: {error}"))?;
+    store
+        .record_run_graph_status(&payload.status)
+        .await
+        .map_err(|error| format!("Failed to record seeded run-graph state: {error}"))?;
     crate::taskflow_continuation::sync_run_graph_continuation_binding(
         store,
         &payload.status,
@@ -3970,6 +4018,188 @@ impl RunGraphDispatchInitArtifacts {
             "run_graph_bootstrap": self.run_graph_bootstrap,
         })
     }
+}
+
+fn dispatch_init_cache_record_id(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn run_graph_dispatch_init_fast_cache_path(
+    state_root: &std::path::Path,
+    run_id: &str,
+) -> std::path::PathBuf {
+    state_root
+        .join("runtime-consumption")
+        .join("dispatch-init-cache")
+        .join(format!("{}.json", dispatch_init_cache_record_id(run_id)))
+}
+
+fn dispatch_init_fast_cache_payload_is_reusable(
+    payload: &serde_json::Value,
+    requested_run_id: &str,
+) -> bool {
+    let requested_matches = payload["requested_run_id"].as_str() == Some(requested_run_id)
+        || payload["run_id"].as_str() == Some(requested_run_id);
+    if !requested_matches
+        || payload["surface"].as_str() != Some("vida taskflow run-graph dispatch-init")
+    {
+        return false;
+    }
+    if payload["dispatch_receipt"]["dispatch_status"].as_str() != Some("routed") {
+        return false;
+    }
+    if !payload["dispatch_receipt"]["dispatch_command"]
+        .as_str()
+        .map(str::trim)
+        .is_some_and(|command| !command.is_empty())
+    {
+        return false;
+    }
+    let Some(packet_path) = payload["dispatch_packet_path"].as_str().map(str::trim) else {
+        return false;
+    };
+    !packet_path.is_empty() && std::path::Path::new(packet_path).is_file()
+}
+
+pub(crate) fn read_run_graph_dispatch_init_fast_cache(
+    state_root: &std::path::Path,
+    requested_run_id: &str,
+) -> Option<serde_json::Value> {
+    let path = run_graph_dispatch_init_fast_cache_path(state_root, requested_run_id);
+    let body = std::fs::read_to_string(path).ok()?;
+    let payload = serde_json::from_str::<serde_json::Value>(&body).ok()?;
+    dispatch_init_fast_cache_payload_is_reusable(&payload, requested_run_id).then_some(payload)
+}
+
+fn write_run_graph_dispatch_init_fast_cache(
+    state_root: &std::path::Path,
+    requested_run_id: &str,
+    run_id: &str,
+    payload: &serde_json::Value,
+) -> Result<(), String> {
+    if !dispatch_init_fast_cache_payload_is_reusable(payload, requested_run_id) {
+        return Ok(());
+    }
+    let cache_dir = state_root
+        .join("runtime-consumption")
+        .join("dispatch-init-cache");
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|error| format!("Failed to create dispatch-init fast cache dir: {error}"))?;
+    let body = serde_json::to_string_pretty(payload)
+        .map_err(|error| format!("Failed to encode dispatch-init fast cache: {error}"))?;
+    for cache_id in [requested_run_id, run_id] {
+        let path = run_graph_dispatch_init_fast_cache_path(state_root, cache_id);
+        std::fs::write(&path, &body).map_err(|error| {
+            format!(
+                "Failed to write dispatch-init fast cache `{}`: {error}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+pub(crate) fn clear_run_graph_dispatch_init_fast_cache(state_root: &std::path::Path, run_id: &str) {
+    let path = run_graph_dispatch_init_fast_cache_path(state_root, run_id);
+    let _ = std::fs::remove_file(path);
+    let cache_dir = state_root
+        .join("runtime-consumption")
+        .join("dispatch-init-cache");
+    let Ok(entries) = std::fs::read_dir(cache_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(payload) = serde_json::from_str::<serde_json::Value>(&body) else {
+            continue;
+        };
+        if payload["run_id"].as_str() == Some(run_id)
+            || payload["requested_run_id"].as_str() == Some(run_id)
+        {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn reusable_routed_dispatch_receipt(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Option<String> {
+    if receipt.dispatch_status != "routed" {
+        return None;
+    }
+    if !receipt
+        .dispatch_command
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|command| !command.is_empty())
+    {
+        return None;
+    }
+    let packet_path = receipt.dispatch_packet_path.as_deref()?.trim();
+    if packet_path.is_empty() || !std::path::Path::new(packet_path).is_file() {
+        return None;
+    }
+    Some(packet_path.to_string())
+}
+
+async fn existing_routed_dispatch_init_artifacts(
+    store: &StateStore,
+    requested_run_id: &str,
+    run_id: &str,
+) -> Result<Option<RunGraphDispatchInitArtifacts>, String> {
+    let status = match store.run_graph_status(run_id).await {
+        Ok(status) => status,
+        Err(_) => return Ok(None),
+    };
+    if !status.recovery_ready || !status.resume_target.starts_with("dispatch.") {
+        return Ok(None);
+    }
+    let Some(context) = store
+        .run_graph_dispatch_context(run_id)
+        .await
+        .map_err(|error| format!("Failed to read existing dispatch context: {error}"))?
+    else {
+        return Ok(None);
+    };
+    let Some(dispatch_receipt) = store
+        .run_graph_dispatch_receipt(run_id)
+        .await
+        .map_err(|error| format!("Failed to read existing dispatch receipt: {error}"))?
+    else {
+        return Ok(None);
+    };
+    let Some(dispatch_packet_path) = reusable_routed_dispatch_receipt(&dispatch_receipt) else {
+        return Ok(None);
+    };
+    let role_selection = context
+        .role_selection()
+        .map_err(|error| format!("Failed to decode existing seeded dispatch context: {error}"))?;
+    let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
+    let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
+    Ok(Some(RunGraphDispatchInitArtifacts {
+        requested_run_id: requested_run_id.to_string(),
+        run_id: run_id.to_string(),
+        role_selection,
+        run_graph_bootstrap,
+        taskflow_handoff_plan,
+        dispatch_receipt,
+        dispatch_packet_path,
+    }))
 }
 
 pub(crate) fn dispatch_command_from_packet_path(
@@ -4096,27 +4326,30 @@ fn task_record_dispatch_seed_request_text(task: &crate::state_store::TaskRecord)
     }
 }
 
-async fn seed_existing_task_for_dispatch_init(
+async fn seed_existing_task_payload_for_dispatch_init(
     store: &StateStore,
     task_id: &str,
-) -> Result<Option<String>, String> {
+) -> Result<Option<TaskflowRunGraphSeedPayload>, String> {
     let task = match store.show_task(task_id).await {
         Ok(task) => task,
         Err(_) => return Ok(None),
     };
     let request_text = task_record_dispatch_seed_request_text(&task);
     let payload = derive_seeded_run_graph_status(store, task_id, &request_text).await?;
-    persist_seed_artifacts(store, &payload).await?;
-    Ok(Some(task_id.to_string()))
+    Ok(Some(payload))
 }
 
 pub(crate) async fn prepare_run_graph_dispatch_init_artifacts(
     store: &StateStore,
     run_id: &str,
 ) -> Result<RunGraphDispatchInitArtifacts, String> {
+    if let Some(artifacts) = existing_routed_dispatch_init_artifacts(store, run_id, run_id).await? {
+        return Ok(artifacts);
+    }
     let mut effective_run_id = reseed_explicit_task_graph_binding_for_dispatch_init(store, run_id)
         .await?
         .unwrap_or_else(|| run_id.to_string());
+    let mut seeded_context = None;
     let status = match store.run_graph_status(&effective_run_id).await {
         Ok(status) => status,
         Err(error) => {
@@ -4124,42 +4357,86 @@ pub(crate) async fn prepare_run_graph_dispatch_init_artifacts(
                 "Failed to read run-graph state for `{}`: {error}",
                 effective_run_id
             );
-            match seed_existing_task_for_dispatch_init(store, &effective_run_id).await? {
-                Some(seeded_run_id) => {
-                    effective_run_id = seeded_run_id;
-                    store
-                        .run_graph_status(&effective_run_id)
-                        .await
-                        .map_err(|error| {
-                            format!(
-                                "Failed to read seeded run-graph state for `{}`: {error}",
-                                effective_run_id
-                            )
-                        })?
+            match seed_existing_task_payload_for_dispatch_init(store, &effective_run_id).await? {
+                Some(payload) => {
+                    persist_seed_artifacts(store, &payload).await?;
+                    effective_run_id = payload.status.run_id.clone();
+                    seeded_context = Some(run_graph_dispatch_context_from_seed_payload(&payload));
+                    payload.status
                 }
                 None => return Err(original_error),
             }
         }
     };
-    let status = reconcile_dispatch_init_status_for_active_exception(store, status).await?;
-    let context = store
-        .run_graph_dispatch_context(&effective_run_id)
-        .await
-        .map_err(|error| format!("Failed to read persisted seeded dispatch context: {error}"))?
-        .ok_or_else(|| {
-            format!(
-                "No persisted seeded dispatch context exists for run_id `{}`; reseed the run with request text before dispatch-init.",
-                effective_run_id
-            )
-        })?;
+    let mut status = reconcile_dispatch_init_status_for_active_exception(store, status).await?;
+    if seeded_context.is_none()
+        && status.active_node == "planning"
+        && status.resume_target.starts_with("dispatch.")
+    {
+        seeded_context = store
+            .run_graph_dispatch_context(&effective_run_id)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to read persisted seeded dispatch context while checking dispatch-init repair path: {error}"
+                )
+            })?;
+        if seeded_context.is_none() {
+            if let Some(payload) =
+                seed_existing_task_payload_for_dispatch_init(store, &effective_run_id).await?
+            {
+                persist_seed_artifacts(store, &payload).await?;
+                effective_run_id = payload.status.run_id.clone();
+                status = reconcile_dispatch_init_status_for_active_exception(
+                    store,
+                    payload.status.clone(),
+                )
+                .await?;
+                seeded_context = Some(run_graph_dispatch_context_from_seed_payload(&payload));
+            }
+        }
+    }
+    let context = match seeded_context {
+        Some(context) => context,
+        None => match store
+            .run_graph_dispatch_context(&effective_run_id)
+            .await
+            .map_err(|error| format!("Failed to read persisted seeded dispatch context: {error}"))?
+        {
+            Some(context) => context,
+            None => {
+                return Err(format!(
+                    "No persisted seeded dispatch context exists for run_id `{}`; reseed the run with request text before dispatch-init.",
+                    effective_run_id
+                ));
+            }
+        },
+    };
     let mut role_selection = context
         .role_selection()
         .map_err(|error| format!("Failed to decode persisted seeded dispatch context: {error}"))?;
+    let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
+    let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
+    if let Some(existing_receipt) = store
+        .run_graph_dispatch_receipt(&effective_run_id)
+        .await
+        .map_err(|error| format!("Failed to read existing dispatch receipt: {error}"))?
+    {
+        if let Some(dispatch_packet_path) = reusable_routed_dispatch_receipt(&existing_receipt) {
+            return Ok(RunGraphDispatchInitArtifacts {
+                requested_run_id: run_id.to_string(),
+                run_id: effective_run_id,
+                role_selection,
+                run_graph_bootstrap,
+                taskflow_handoff_plan,
+                dispatch_receipt: existing_receipt,
+                dispatch_packet_path,
+            });
+        }
+    }
     if let Ok(task) = store.show_task(&effective_run_id).await {
         inject_task_planner_metadata(&mut role_selection.execution_plan, &task.planner_metadata);
     }
-    let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
-    let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
     let mut dispatch_receipt = crate::taskflow_consume::build_runtime_consumption_dispatch_receipt(
         &role_selection,
         &run_graph_bootstrap,
@@ -4228,7 +4505,18 @@ async fn run_graph_dispatch_init(
     )
     .await
     {
-        Ok(result) => result.map(RunGraphDispatchInitArtifacts::into_json_payload),
+        Ok(result) => result.and_then(|artifacts| {
+            let requested_run_id = artifacts.requested_run_id.clone();
+            let run_id = artifacts.run_id.clone();
+            let payload = artifacts.into_json_payload();
+            write_run_graph_dispatch_init_fast_cache(
+                store.root(),
+                &requested_run_id,
+                &run_id,
+                &payload,
+            )?;
+            Ok(payload)
+        }),
         Err(_) => Err(run_graph_dispatch_init_timeout_message(run_id)),
     }
 }
@@ -4623,8 +4911,99 @@ pub(crate) async fn derive_advanced_run_graph_status(
     ))
 }
 
+async fn run_taskflow_run_graph_dispatch_init_mutation(
+    state_dir: &std::path::Path,
+    run_id: &str,
+    as_json: bool,
+) -> ExitCode {
+    let store = match StateStore::open(state_dir.to_path_buf()).await {
+        Ok(store) => store,
+        Err(error) => {
+            if as_json {
+                print_run_graph_json_error(
+                    "vida taskflow run-graph dispatch-init",
+                    run_id,
+                    &format!("Failed to open authoritative state store: {error}"),
+                    None,
+                );
+            } else {
+                eprintln!("Failed to open authoritative state store: {error}");
+            }
+            return ExitCode::from(1);
+        }
+    };
+    match run_graph_dispatch_init(&store, run_id).await {
+        Ok(payload) => {
+            if as_json {
+                crate::print_json_pretty(&payload);
+            } else {
+                print_surface_header(RenderMode::Plain, "vida taskflow run-graph dispatch-init");
+                print_surface_line(RenderMode::Plain, "run", run_id);
+                print_surface_line(
+                    RenderMode::Plain,
+                    "dispatch_packet",
+                    payload["dispatch_packet_path"].as_str().unwrap_or("none"),
+                );
+                print_surface_line(
+                    RenderMode::Plain,
+                    "dispatch_target",
+                    payload["dispatch_receipt"]["dispatch_target"]
+                        .as_str()
+                        .unwrap_or("none"),
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            if as_json {
+                print_run_graph_json_error(
+                    "vida taskflow run-graph dispatch-init",
+                    run_id,
+                    &error,
+                    run_graph_dispatch_init_error_evidence(&error),
+                );
+            } else {
+                eprintln!("{error}");
+            }
+            ExitCode::from(1)
+        }
+    }
+}
+
 pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode {
     let state_dir = proxy_state_dir();
+    match args {
+        [head, subcommand, run_id, flag]
+            if head == "run-graph" && subcommand == "dispatch-init" && flag == "--json" =>
+        {
+            if let Some(payload) = read_run_graph_dispatch_init_fast_cache(&state_dir, run_id) {
+                crate::print_json_pretty(&payload);
+                return ExitCode::SUCCESS;
+            }
+            return run_taskflow_run_graph_dispatch_init_mutation(&state_dir, run_id, true).await;
+        }
+        [head, subcommand, run_id] if head == "run-graph" && subcommand == "dispatch-init" => {
+            if let Some(payload) = read_run_graph_dispatch_init_fast_cache(&state_dir, run_id) {
+                print_surface_header(RenderMode::Plain, "vida taskflow run-graph dispatch-init");
+                print_surface_line(RenderMode::Plain, "run", run_id);
+                print_surface_line(
+                    RenderMode::Plain,
+                    "dispatch_packet",
+                    payload["dispatch_packet_path"].as_str().unwrap_or("none"),
+                );
+                print_surface_line(
+                    RenderMode::Plain,
+                    "dispatch_target",
+                    payload["dispatch_receipt"]["dispatch_target"]
+                        .as_str()
+                        .unwrap_or("none"),
+                );
+                return ExitCode::SUCCESS;
+            }
+            return run_taskflow_run_graph_dispatch_init_mutation(&state_dir, run_id, false).await;
+        }
+        _ => {}
+    }
     let store = match StateStore::open(state_dir).await {
         Ok(store) => store,
         Err(error) => {
@@ -8178,12 +8557,222 @@ mod tests {
             .await
             .expect("seeded dispatch context lookup should succeed")
             .expect("seeded dispatch context should exist");
+        assert_eq!(
+            context.role_selection["compiled_bundle"],
+            serde_json::Value::Null
+        );
         assert!(context
             .request_text
             .contains("Graph summary must respect open delegated cycle gate"));
         assert!(context
             .request_text
             .contains("crates/vida/src/taskflow_proxy.rs"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_repairs_seeded_status_missing_dispatch_context() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "task-dispatch-context-repair",
+                title: "Repair dispatch-init context gap",
+                display_id: None,
+                description: "dispatch-init must recover a seeded status that was persisted without context",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &["runtime-recovery".to_string()],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_repairs_seeded_status_missing_dispatch_context -- --nocapture"
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create repair task");
+
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            "task-dispatch-context-repair",
+            "Fix dispatch-init partial seed recovery. Owned paths: crates/vida/src/taskflow_run_graph.rs.",
+        )
+        .await
+        .expect("seed status should derive");
+        store
+            .record_run_graph_status(&payload.status)
+            .await
+            .expect("persist status without context");
+        assert!(store
+            .run_graph_dispatch_context("task-dispatch-context-repair")
+            .await
+            .expect("context lookup should succeed")
+            .is_none());
+
+        let dispatch_init = run_graph_dispatch_init(&store, "task-dispatch-context-repair")
+            .await
+            .expect("dispatch-init should repair missing context and succeed");
+
+        assert_eq!(dispatch_init["run_id"], "task-dispatch-context-repair");
+        assert!(dispatch_init["dispatch_packet_path"].as_str().is_some());
+        assert!(store
+            .run_graph_dispatch_context("task-dispatch-context-repair")
+            .await
+            .expect("repaired context lookup should succeed")
+            .is_some());
+        assert!(store
+            .run_graph_dispatch_receipt("task-dispatch-context-repair")
+            .await
+            .expect("receipt lookup should succeed")
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_reuses_existing_seeded_context_without_reseeding() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "task-dispatch-context-fast-path",
+                title: "Task record title should not replace seeded context",
+                display_id: None,
+                description: "Task record description should not replace seeded context",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &["runtime-recovery".to_string()],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_reuses_existing_seeded_context_without_reseeding -- --nocapture"
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create fast-path task");
+
+        let seeded_request_text = "preseeded dispatch context fast path";
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            "task-dispatch-context-fast-path",
+            seeded_request_text,
+        )
+        .await
+        .expect("seed status should derive");
+        persist_seed_artifacts(&store, &payload)
+            .await
+            .expect("seed artifacts should persist");
+
+        let dispatch_init = run_graph_dispatch_init(&store, "task-dispatch-context-fast-path")
+            .await
+            .expect("dispatch-init should reuse existing context and succeed");
+
+        assert_eq!(dispatch_init["run_id"], "task-dispatch-context-fast-path");
+        let context = store
+            .run_graph_dispatch_context("task-dispatch-context-fast-path")
+            .await
+            .expect("context lookup should succeed")
+            .expect("seeded context should remain present");
+        assert_eq!(context.request_text, seeded_request_text);
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_reuses_existing_routed_receipt_packet() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "task-dispatch-init-idempotent-fast-path",
+                title: "Dispatch init should reuse an existing routed packet",
+                display_id: None,
+                description: "Repeated dispatch-init must be read-mostly once routed packet evidence exists.",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &["runtime-recovery".to_string()],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_reuses_existing_routed_receipt_packet -- --nocapture"
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create idempotent task");
+
+        let first = run_graph_dispatch_init(&store, "task-dispatch-init-idempotent-fast-path")
+            .await
+            .expect("first dispatch-init should seed and route");
+        let second = run_graph_dispatch_init(&store, "task-dispatch-init-idempotent-fast-path")
+            .await
+            .expect("second dispatch-init should reuse existing routed packet");
+
+        assert_eq!(
+            first["dispatch_packet_path"],
+            second["dispatch_packet_path"]
+        );
+        assert_eq!(
+            first["dispatch_receipt"]["recorded_at"],
+            second["dispatch_receipt"]["recorded_at"]
+        );
+        assert!(read_run_graph_dispatch_init_fast_cache(
+            store.root(),
+            "task-dispatch-init-idempotent-fast-path"
+        )
+        .is_some());
+
+        let mut receipt = store
+            .run_graph_dispatch_receipt("task-dispatch-init-idempotent-fast-path")
+            .await
+            .expect("receipt lookup should succeed")
+            .expect("receipt should exist");
+        receipt.dispatch_status = "executing".to_string();
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("non-routed receipt should persist and invalidate fast cache");
+        assert!(read_run_graph_dispatch_init_fast_cache(
+            store.root(),
+            "task-dispatch-init-idempotent-fast-path"
+        )
+        .is_none());
     }
 
     #[tokio::test]

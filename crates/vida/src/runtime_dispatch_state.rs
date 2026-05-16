@@ -17466,6 +17466,21 @@ fn runtime_dispatch_internal_activation_view_only_result(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     blocker_code: &str,
 ) -> serde_json::Value {
+    let (provider_error, blocker_reason, note) = if blocker_code
+        == INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
+    {
+        (
+                "internal host dispatch was blocked before launching nested carrier execution because this host bridge cannot provide receipt-backed implementer completion evidence",
+                "internal Codex host bridge is activation-only for implementer lanes; timeout avoided by recording a terminal blocker before launch",
+                "internal host implementer handoff blocked before launch to avoid waiting for a known non-receipted carrier path",
+            )
+    } else {
+        (
+                "dispatch packet declares activation-view-only handoff without receipt-backed execution evidence",
+                "internal host dispatch is not launched for activation-view-only packets without execution authority",
+                "internal host activation-view-only handoff blocked before launching nested carrier execution",
+            )
+    };
     serde_json::json!({
         "surface": receipt.dispatch_surface,
         "activation_command": receipt.dispatch_command,
@@ -17474,10 +17489,47 @@ fn runtime_dispatch_internal_activation_view_only_result(
         "dispatch_target": receipt.dispatch_target,
         "selected_backend": receipt.selected_backend,
         "blocker_code": blocker_code,
-        "provider_error": "dispatch packet declares activation-view-only handoff without receipt-backed execution evidence",
-        "blocker_reason": "internal host dispatch is not launched for activation-view-only packets without execution authority",
-        "note": "internal host activation-view-only handoff blocked before launching nested carrier execution",
+        "provider_error": provider_error,
+        "blocker_reason": blocker_reason,
+        "note": note,
     })
+}
+
+fn internal_host_dispatch_requires_prelaunch_blocker(
+    project_root: &Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    if !dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
+        return false;
+    }
+    if dispatch_packet_declares_activation_view_only(receipt.dispatch_packet_path.as_deref()) {
+        return true;
+    }
+    internal_host_uses_default_codex_dispatch_command(project_root)
+        && internal_host_activation_view_only_requires_terminal_blocker(
+            project_root,
+            role_selection,
+            receipt,
+        )
+}
+
+fn internal_host_uses_default_codex_dispatch_command(project_root: &Path) -> bool {
+    load_project_overlay_yaml_for_root(project_root)
+        .ok()
+        .and_then(|overlay| {
+            let (selected_cli_system, selected_cli_entry) =
+                selected_host_cli_system_for_runtime_dispatch(&overlay);
+            (selected_cli_system == "codex").then(|| {
+                selected_cli_entry
+                    .as_ref()
+                    .and_then(|entry| yaml_lookup(entry, &["dispatch", "command"]))
+                    .and_then(serde_yaml::Value::as_str)
+                    .map(str::trim)
+                    .is_some_and(|command| command.eq_ignore_ascii_case("codex"))
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn dispatch_packet_declares_activation_view_only(dispatch_packet_path: Option<&str>) -> bool {
@@ -17962,6 +18014,49 @@ async fn coordinate_dispatch_timeout_state_best_effort(
     None
 }
 
+async fn persist_prelaunch_blocked_dispatch_state(
+    state_root: &Path,
+    run_graph_bootstrap: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<(), String> {
+    let store = reopen_authoritative_state_store_for_dispatch_phase(
+        state_root,
+        receipt,
+        "after prelaunch dispatch block",
+    )
+    .await?;
+    if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
+        if let Ok(status) = store.run_graph_status(&run_id).await {
+            let blocked_status =
+                apply_first_handoff_execution_to_run_graph_status(&status, receipt);
+            store
+                .record_run_graph_status(&blocked_status)
+                .await
+                .map_err(|error| {
+                    format!("Failed to record blocked run-graph status after prelaunch dispatch block: {error}")
+                })?;
+            crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                &store,
+                &blocked_status,
+                "dispatch_prelaunch_blocked",
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to synchronize continuation binding after prelaunch dispatch block: {error}"
+                )
+            })?;
+        }
+    }
+    store
+        .record_run_graph_dispatch_receipt(receipt)
+        .await
+        .map_err(|error| {
+            format!("Failed to persist blocked dispatch receipt after prelaunch dispatch block: {error}")
+        })?;
+    Ok(())
+}
+
 pub(crate) async fn execute_and_record_dispatch_receipt(
     state_root: &Path,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -17973,6 +18068,20 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
     }
     let project_root = runtime_dispatch_project_root_from_state_root(state_root);
     sync_receipt_dispatch_handoff_surface(project_root.as_ref(), role_selection, receipt);
+    if internal_host_dispatch_requires_prelaunch_blocker(
+        project_root.as_ref(),
+        role_selection,
+        receipt,
+    ) {
+        apply_internal_activation_view_only_to_receipt(
+            state_root,
+            project_root.as_ref(),
+            role_selection,
+            receipt,
+        )?;
+        persist_prelaunch_blocked_dispatch_state(state_root, run_graph_bootstrap, receipt).await?;
+        return Ok(());
+    }
     let handoff_timeout_seconds =
         dispatch_handoff_timeout_seconds(project_root.as_ref(), role_selection, receipt);
     let in_flight_dispatch_result_path = write_runtime_dispatch_result(
@@ -17984,17 +18093,6 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
     receipt.dispatch_status = "executing".to_string();
     receipt.lane_status = LaneStatus::LaneRunning.as_str().to_string();
     receipt.blocker_code = None;
-    if dispatch_handoff_uses_internal_host(project_root.as_ref(), role_selection, receipt)
-        && dispatch_packet_declares_activation_view_only(receipt.dispatch_packet_path.as_deref())
-    {
-        apply_internal_activation_view_only_to_receipt(
-            state_root,
-            project_root.as_ref(),
-            role_selection,
-            receipt,
-        )?;
-        return Ok(());
-    }
     let store = reopen_authoritative_state_store_for_dispatch_phase(
         state_root,
         receipt,
