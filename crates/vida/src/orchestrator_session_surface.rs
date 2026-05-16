@@ -729,7 +729,10 @@ mod tests {
         );
 
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0]["identity_source"], "synthesized_local_session_token");
+        assert_eq!(
+            merged[0]["identity_source"],
+            "synthesized_local_session_token"
+        );
 
         restore_session_env(saved);
     }
