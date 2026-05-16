@@ -1893,48 +1893,14 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                         eprintln!("Failed to ensure task: {reason}");
                         return ExitCode::from(1);
                     }
-                    let task = if task_create_semantics_requested(&command)
+                    if task_create_semantics_requested(&command)
                         && task_create_semantics_mismatch(&task.execution_semantics, &command)
                     {
-                        match store
-                            .update_task(state_store::UpdateTaskRequest {
-                                task_id: &command.task_id,
-                                title: None,
-                                status: None,
-                                priority: None,
-                                notes: None,
-                                description: None,
-                                parent_id: None,
-                                add_labels: &[],
-                                remove_labels: &[],
-                                set_labels: None,
-                                execution_mode: command.execution_mode.as_deref().map(Some),
-                                order_bucket: command.order_bucket.as_deref().map(Some),
-                                parallel_group: command.parallel_group.as_deref().map(Some),
-                                conflict_domain: command.conflict_domain.as_deref().map(Some),
-                                planner_metadata: None,
-                            })
-                            .await
-                        {
-                            Ok(updated) => {
-                                if let Err(code) =
-                                    refresh_task_snapshot_after_mutation(&store, "vida task ensure")
-                                        .await
-                                {
-                                    return code;
-                                }
-                                updated
-                            }
-                            Err(error) => {
-                                eprintln!(
-                                    "Failed to backfill task execution semantics during ensure: {error}"
-                                );
-                                return ExitCode::from(1);
-                            }
-                        }
-                    } else {
-                        task
-                    };
+                        eprintln!(
+                            "Failed to ensure task: execution semantics mismatch for existing task; use `vida task update` to modify semantics explicitly."
+                        );
+                        return ExitCode::from(1);
+                    }
                     print_task_mutation(command.render, "vida task ensure", &task, command.json);
                     return ExitCode::SUCCESS;
                 }

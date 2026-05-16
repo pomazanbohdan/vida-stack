@@ -114,11 +114,15 @@ fn should_backfill_execution_semantics(
     existing: &TaskExecutionSemantics,
     expected: &TaskExecutionSemantics,
 ) -> bool {
-    expected.execution_mode.is_some()
-        && (existing.execution_mode != expected.execution_mode
-            || existing.order_bucket != expected.order_bucket
-            || existing.parallel_group != expected.parallel_group
-            || existing.conflict_domain != expected.conflict_domain)
+    let existing_missing = existing.execution_mode.is_none()
+        && existing.order_bucket.is_none()
+        && existing.parallel_group.is_none()
+        && existing.conflict_domain.is_none();
+    let expected_present = expected.execution_mode.is_some()
+        || expected.order_bucket.is_some()
+        || expected.parallel_group.is_some()
+        || expected.conflict_domain.is_some();
+    existing_missing && expected_present
 }
 
 fn work_packet_execution_semantics(
