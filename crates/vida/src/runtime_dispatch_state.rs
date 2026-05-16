@@ -4910,10 +4910,21 @@ fn append_unique_owned_paths(target: &mut Vec<String>, source: &[String]) {
     }
 }
 
-async fn planner_metadata_owned_paths_from_task(
-    store: &StateStore,
-    task_id: &str,
-) -> Vec<String> {
+fn validated_owned_scope_path(candidate: &str) -> Option<String> {
+    let normalized = candidate.trim().trim_end_matches('/').to_string();
+    if normalized.is_empty()
+        || !normalized.contains('/')
+        || !normalized.contains('.')
+        || normalized.starts_with('/')
+        || normalized.starts_with("./")
+        || normalized.starts_with("../")
+    {
+        return None;
+    }
+    Some(normalized)
+}
+
+async fn planner_metadata_owned_paths_from_task(store: &StateStore, task_id: &str) -> Vec<String> {
     let task_id = task_id.trim();
     if task_id.is_empty() {
         return Vec::new();
@@ -4925,8 +4936,7 @@ async fn planner_metadata_owned_paths_from_task(
             task.planner_metadata
                 .owned_paths
                 .into_iter()
-                .map(|path| path.trim().to_string())
-                .filter(|path| !path.is_empty())
+                .filter_map(|path| validated_owned_scope_path(&path))
                 .collect()
         })
         .unwrap_or_default()
@@ -12756,7 +12766,10 @@ mod tests {
             .await
             .expect("preview should use task-owned paths");
 
-            assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("writer"));
+            assert_eq!(
+                receipt.downstream_dispatch_target.as_deref(),
+                Some("writer")
+            );
             assert!(receipt.downstream_dispatch_ready);
             assert!(receipt.downstream_dispatch_blockers.is_empty());
             let packet_path = receipt
@@ -12767,6 +12780,99 @@ mod tests {
             assert_eq!(
                 packet["delivery_task_packet"]["owned_paths"],
                 serde_json::json!(owned_paths)
+            );
+        });
+    }
+
+    #[test]
+    fn refresh_downstream_dispatch_preview_rejects_invalid_task_owned_paths_for_writer_handoff() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let labels = vec!["runtime-recovery".to_string()];
+            store
+                .create_task(CreateTaskRequest {
+                    task_id: "run-analysis-task-metadata-invalid-preview",
+                    title: "Runtime recovery",
+                    display_id: None,
+                    description: "runtime recovery",
+                    issue_type: "task",
+                    status: "open",
+                    priority: 1,
+                    parent_id: None,
+                    labels: &labels,
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata {
+                        owned_paths: vec![
+                            "../outside-project/file.rs".to_string(),
+                            "/home/user/.ssh/config".to_string(),
+                        ],
+                        ..Default::default()
+                    },
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("task with planner metadata should be created");
+            let mut role_selection = bridge_test_role_selection("unused-dev-task");
+            role_selection.request = "continue development".to_string();
+            role_selection.execution_plan["tracked_flow_bootstrap"] = serde_json::Value::Null;
+            role_selection.execution_plan["development_flow"]["implementation"] = json!({
+                "analysis_route_task_class": "analysis",
+                "writer_route_task_class": "writer"
+            });
+            let run_graph_bootstrap = json!({ "run_id": "run-analysis-task-metadata-invalid-preview" });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-analysis-task-metadata-invalid-preview".to_string(),
+                dispatch_target: "analysis".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/analysis-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("analysis".to_string()),
+                downstream_dispatch_last_target: Some("analysis".to_string()),
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("verifier".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-23T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            )
+            .await
+            .expect("preview should reject invalid task-owned paths");
+
+            assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("writer"));
+            assert!(!receipt.downstream_dispatch_ready);
+            assert_eq!(
+                receipt.downstream_dispatch_blockers,
+                vec!["missing_owned_write_scope".to_string()]
             );
         });
     }
