@@ -1040,10 +1040,15 @@ async fn completed_task_close_reconcile_resume_target(
         };
     };
     let unit_kind = binding.active_bounded_unit["kind"].as_str();
-    if binding.status != "bound"
-        || binding.binding_source != "task_close_reconcile"
-        || !matches!(unit_kind, Some("run_graph_task" | "task_graph_task"))
+    if binding.status != "bound" || binding.binding_source != "task_close_reconcile" {
+        return Ok(None);
+    }
+    if unit_kind == Some("downstream_dispatch_target")
+        && binding.active_bounded_unit["dispatch_target"].as_str() == Some("closure")
     {
+        return Ok(Some("closure".to_string()));
+    }
+    if !matches!(unit_kind, Some("run_graph_task" | "task_graph_task")) {
         return Ok(None);
     }
     let task_id = binding.active_bounded_unit["task_id"]
@@ -1059,6 +1064,33 @@ async fn completed_task_close_reconcile_resume_target(
     } else {
         Ok(None)
     }
+}
+
+async fn task_close_reconcile_closure_resume_candidate(
+    store: &super::StateStore,
+    run_id: &str,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<Option<ResumeInputs>, String> {
+    if completed_task_close_reconcile_resume_target(store, run_id)
+        .await?
+        .as_deref()
+        != Some("closure")
+    {
+        return Ok(None);
+    }
+    let packet_path = receipt
+        .dispatch_packet_path
+        .clone()
+        .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
+    let packet = read_dispatch_packet(&packet_path)?;
+    validate_receipt_packet_pair(receipt, &packet, &packet_path, "dispatch packet")?;
+    let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
+    Ok(Some(closure_packet_ready_resume_from_root_receipt(
+        receipt,
+        packet_path,
+        packet,
+        role_selection,
+    )))
 }
 
 fn closure_packet_ready_resume_from_root_receipt(
@@ -3774,7 +3806,16 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         .as_deref()
         .and_then(|path| read_dispatch_packet(path).ok())
         .and_then(|packet| decode_role_selection_from_packet(&packet, "dispatch packet").ok());
-    if strict_blocked_receipts && receipt_has_active_exception_takeover(&receipt, &resolved_run_id)
+    let explicit_downstream_target =
+        completed_run_explicit_downstream_target_for_resume(store, &resolved_run_id).await?;
+    let task_close_closure_reconcile = explicit_downstream_target.as_deref() == Some("closure")
+        && completed_task_close_reconcile_resume_target(store, &resolved_run_id)
+            .await?
+            .as_deref()
+            == Some("closure");
+    if strict_blocked_receipts
+        && receipt_has_active_exception_takeover(&receipt, &resolved_run_id)
+        && !task_close_closure_reconcile
     {
         if let Some(packet_path) = receipt.dispatch_packet_path.as_deref() {
             if read_dispatch_packet(packet_path)
@@ -3825,8 +3866,6 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         preloaded_role_selection.as_ref(),
         &receipt,
     );
-    let explicit_downstream_target =
-        completed_run_explicit_downstream_target_for_resume(store, &resolved_run_id).await?;
     if explicit_downstream_target.is_none()
         && receipt.supersedes_receipt_id.is_some()
         && receipt.exception_path_receipt_id.is_some()
@@ -3863,6 +3902,36 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             == Some(bound_target);
+        let terminal_closure_complete_for_binding = if bound_target == "closure" {
+            store
+                .run_graph_status(&resolved_run_id)
+                .await
+                .map(|status| {
+                    status.status == "completed" && status.lifecycle_stage == "closure_complete"
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        if bound_target == "closure" {
+            if !terminal_closure_complete_for_binding
+                && receipt.downstream_dispatch_packet_path.is_none()
+            {
+                if let Some(resume) =
+                    task_close_reconcile_closure_resume_candidate(store, &resolved_run_id, &receipt)
+                        .await?
+                {
+                    record_run_graph_replay_lineage_receipt_for_resume(
+                        store,
+                        &receipt,
+                        &resume,
+                        "task_close_reconcile_closure",
+                    )
+                    .await?;
+                    return Ok(resume);
+                }
+            }
+        }
         if allow_downstream_lineage && !active_target_matches_bound {
             if let Some(resume) = maybe_resume_inputs_from_ready_downstream_packet(
                 store,
@@ -3880,6 +3949,24 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
                     )
                     .await?;
                     return Ok(resume);
+                }
+                if bound_target == "closure" {
+                    if let Some(resume) = task_close_reconcile_closure_resume_candidate(
+                        store,
+                        &resolved_run_id,
+                        &receipt,
+                    )
+                    .await?
+                    {
+                        record_run_graph_replay_lineage_receipt_for_resume(
+                            store,
+                            &receipt,
+                            &resume,
+                            "task_close_reconcile_closure",
+                        )
+                        .await?;
+                        return Ok(resume);
+                    }
                 }
                 return Err(format!(
                     "Completed run `{run_id}` is explicitly bound to downstream target `{bound_target}`, but persisted downstream packet lineage still points to stale target `{}`. Resume must fail closed until a fresh `{bound_target}` downstream packet is recorded.",
@@ -3904,6 +3991,24 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
                     )
                     .await?;
                     return Ok(resume);
+                }
+                if bound_target == "closure" {
+                    if let Some(resume) = task_close_reconcile_closure_resume_candidate(
+                        store,
+                        &resolved_run_id,
+                        &receipt,
+                    )
+                    .await?
+                    {
+                        record_run_graph_replay_lineage_receipt_for_resume(
+                            store,
+                            &receipt,
+                            &resume,
+                            "task_close_reconcile_closure",
+                        )
+                        .await?;
+                        return Ok(resume);
+                    }
                 }
                 return Err(format!(
                     "Completed run `{run_id}` is explicitly bound to downstream target `{bound_target}`, but persisted downstream result lineage still points to stale target `{}`. Resume must fail closed until a fresh `{bound_target}` downstream packet is recorded.",
