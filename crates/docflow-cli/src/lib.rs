@@ -1552,10 +1552,15 @@ fn render_proofcheck(args: &ProofcheckArgs) -> String {
             },
         },
         "jsonl" => render_proofcheck_jsonl(args),
-        other => format!(
-            "{{\"command\":\"proofcheck\",\"verdict\":\"blocking\",\"error\":\"unsupported_format:{}\"}}",
-            other
-        ),
+        other => serde_json::to_string(&serde_json::json!({
+            "command": "proofcheck",
+            "verdict": "blocking",
+            "error": format!("unsupported_format:{other}"),
+        }))
+        .unwrap_or_else(|_| {
+            "{\"command\":\"proofcheck\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
+                .to_string()
+        }),
     }
 }
 
@@ -1564,27 +1569,46 @@ fn render_proofcheck_jsonl(args: &ProofcheckArgs) -> String {
         Some(layer) => match layer_scope_paths(layer) {
             Ok(paths) => proofcheck_layer_summary(layer, &paths),
             Err(error) => {
-                return format!(
-                    "{{\"command\":\"proofcheck\",\"layer\":{},\"files_mode\":\"layer\",\"verdict\":\"blocking\",\"error\":\"{}\"}}",
-                    layer, error
-                );
+                return serde_json::to_string(&serde_json::json!({
+                    "command": "proofcheck",
+                    "layer": layer,
+                    "files_mode": "layer",
+                    "verdict": "blocking",
+                    "error": error,
+                }))
+                .unwrap_or_else(|_| {
+                    "{\"command\":\"proofcheck\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
+                        .to_string()
+                });
             }
         },
         None => match proofcheck_profile_summary(&args.profile) {
             Ok(summary) => summary,
             Err(error) => {
-                return format!(
-                    "{{\"command\":\"proofcheck\",\"profile\":\"{}\",\"files_mode\":\"profile\",\"verdict\":\"blocking\",\"error\":\"{}\"}}",
-                    args.profile, error
-                );
+                return serde_json::to_string(&serde_json::json!({
+                    "command": "proofcheck",
+                    "profile": args.profile,
+                    "files_mode": "profile",
+                    "verdict": "blocking",
+                    "error": error,
+                }))
+                .unwrap_or_else(|_| {
+                    "{\"command\":\"proofcheck\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
+                        .to_string()
+                });
             }
         },
     };
     encode_line(&summary).unwrap_or_else(|error| {
-        format!(
-            "{{\"command\":\"proofcheck\",\"verdict\":\"blocking\",\"error\":\"encode_error:{}\"}}",
-            error
-        )
+        serde_json::to_string(&serde_json::json!({
+            "command": "proofcheck",
+            "verdict": "blocking",
+            "error": format!("encode_error:{error}"),
+        }))
+        .unwrap_or_else(|_| {
+            "{\"command\":\"proofcheck\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
+                .to_string()
+        })
     })
 }
 
@@ -4011,10 +4035,15 @@ fn render_readiness_check_rows(rows: &[ReadinessRow], format: &str) -> String {
             .collect::<Result<Vec<_>, _>>()
             .map(|lines| lines.join("\n"))
             .unwrap_or_else(|error| {
-                format!(
-                    "{{\"artifact_path\":\"\",\"verdict\":\"blocking\",\"error\":\"{}\"}}",
-                    error
-                )
+                serde_json::to_string(&serde_json::json!({
+                    "artifact_path": "",
+                    "verdict": "blocking",
+                    "error": error.to_string(),
+                }))
+                .unwrap_or_else(|_| {
+                    "{\"artifact_path\":\"\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
+                        .to_string()
+                })
             }),
         "toon" => {
             let verdict = summarize_verdict(rows);
@@ -4032,20 +4061,30 @@ fn render_readiness_check_rows(rows: &[ReadinessRow], format: &str) -> String {
             }
             lines.join("\n")
         }
-        other => format!(
-            "{{\"artifact_path\":\"\",\"verdict\":\"blocking\",\"error\":\"unsupported_format:{}\"}}",
-            other
-        ),
+        other => serde_json::to_string(&serde_json::json!({
+            "artifact_path": "",
+            "verdict": "blocking",
+            "error": format!("unsupported_format:{other}"),
+        }))
+        .unwrap_or_else(|_| {
+            "{\"artifact_path\":\"\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
+                .to_string()
+        }),
     }
 }
 
 fn render_readiness_check_error(error: &str, format: &str) -> String {
     match format {
         "toon" => format!("readiness-check\n  rows: 0\n  verdict: blocking\n  error: {error}"),
-        _ => format!(
-            "{{\"artifact_path\":\"\",\"verdict\":\"blocking\",\"error\":\"{}\"}}",
-            error
-        ),
+        _ => serde_json::to_string(&serde_json::json!({
+            "artifact_path": "",
+            "verdict": "blocking",
+            "error": error,
+        }))
+        .unwrap_or_else(|_| {
+            "{\"artifact_path\":\"\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
+                .to_string()
+        }),
     }
 }
 
