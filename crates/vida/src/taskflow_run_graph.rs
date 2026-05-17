@@ -766,11 +766,7 @@ fn recovery_projection_resolves_persisted_open_cycle(
                 && receipt.lane_status == "lane_completed"
                 && receipt.blocker_code.is_none()
                 && receipt.downstream_dispatch_blockers.is_empty();
-            let downstream_has_no_blocking_state = !receipt.downstream_dispatch_ready
-                || receipt
-                    .downstream_dispatch_status
-                    .as_deref()
-                    .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"));
+            let downstream_has_no_blocking_state = !receipt.downstream_dispatch_ready;
             clean_completed_receipt && downstream_has_no_blocking_state
         })
 }
