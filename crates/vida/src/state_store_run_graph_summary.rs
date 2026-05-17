@@ -224,6 +224,35 @@ fn terminal_closure_status(status: &RunGraphStatus) -> bool {
             .is_none()
 }
 
+fn terminal_closure_supersedes_stale_handoff_receipt(
+    status: &RunGraphStatus,
+    receipt: &mut RunGraphDispatchReceipt,
+) -> bool {
+    if !terminal_closure_status(status)
+        || receipt.dispatch_status != "blocked"
+        || receipt.blocker_code.as_deref()
+            != Some(crate::release1_contracts::blocker_code_str(
+                crate::release1_contracts::BlockerCode::PendingDeveloperHandoffPacket,
+            ))
+        || receipt.exception_path_receipt_id.is_some()
+        || receipt.supersedes_receipt_id.is_some()
+    {
+        return false;
+    }
+    receipt.dispatch_status = "executed".to_string();
+    receipt.lane_status = "lane_completed".to_string();
+    receipt.blocker_code = None;
+    receipt.downstream_dispatch_target = Some("closure".to_string());
+    receipt.downstream_dispatch_note =
+        Some("terminal closure superseded stale developer handoff blocker".to_string());
+    receipt.downstream_dispatch_ready = false;
+    receipt.downstream_dispatch_blockers.clear();
+    receipt.downstream_dispatch_status = Some("executed".to_string());
+    receipt.downstream_dispatch_active_target = Some("closure".to_string());
+    receipt.downstream_dispatch_last_target = Some("closure".to_string());
+    true
+}
+
 fn task_status_is_terminal_for_continuation(status: &str) -> bool {
     matches!(status.trim(), "closed" | "completed")
 }
@@ -1365,6 +1394,14 @@ impl StateStore {
                 let binding = self
                     .effective_exception_takeover_continuation_binding(binding)
                     .await?;
+                if self
+                    .continuation_binding_points_to_terminal_task_graph_task(&binding)
+                    .await?
+                {
+                    self.clear_run_graph_continuation_binding(&binding.run_id)
+                        .await?;
+                    return Ok(None);
+                }
                 binding.validate()?;
                 Ok(Some(binding))
             }
@@ -1574,6 +1611,28 @@ impl StateStore {
         Ok(None)
     }
 
+    async fn continuation_binding_points_to_terminal_task_graph_task(
+        &self,
+        binding: &RunGraphContinuationBinding,
+    ) -> Result<bool, StateStoreError> {
+        if binding.status != "bound"
+            || binding.active_bounded_unit["kind"].as_str() != Some("task_graph_task")
+        {
+            return Ok(false);
+        }
+        let task_id = binding.active_bounded_unit["task_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(binding.task_id.as_str());
+        let task = match self.show_task(task_id).await {
+            Ok(task) => task,
+            Err(StateStoreError::MissingTask { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        Ok(task_status_is_terminal_for_continuation(&task.status))
+    }
+
     async fn normalize_task_close_reconcile_binding(
         &self,
         mut binding: RunGraphContinuationBinding,
@@ -1766,6 +1825,12 @@ impl StateStore {
             .await?;
         let rows: Vec<RunGraphLatestRow> = query.take(0)?;
         for latest in rows {
+            if self
+                .run_graph_status_points_to_terminal_task_active(&latest.run_id)
+                .await?
+            {
+                continue;
+            }
             let receipt = self
                 .run_graph_dispatch_receipt_stored(&latest.run_id)
                 .await?;
@@ -1775,6 +1840,22 @@ impl StateStore {
             return Ok(Some(latest.run_id));
         }
         Ok(None)
+    }
+
+    async fn run_graph_status_points_to_terminal_task_active(
+        &self,
+        run_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        let status = self.run_graph_status(run_id).await?;
+        if status.status == "completed" {
+            return Ok(false);
+        }
+        let task = match self.show_task(&status.task_id).await {
+            Ok(task) => task,
+            Err(StateStoreError::MissingTask { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        Ok(task_status_is_terminal_for_continuation(&task.status))
     }
 
     pub(crate) async fn latest_run_graph_run_id_for_task(
@@ -1898,7 +1979,8 @@ impl StateStore {
             return Ok(None);
         };
         let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
-        let receipt: RunGraphDispatchReceipt = receipt.into();
+        let mut receipt: RunGraphDispatchReceipt = receipt.into();
+        terminal_closure_supersedes_stale_handoff_receipt(&status, &mut receipt);
         let host_runtime = crate::taskflow_task_bridge::infer_project_root_from_state_root(
             self.root(),
         )
@@ -1985,7 +2067,9 @@ impl StateStore {
             return Ok(None);
         };
         let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
-        Ok(Some(receipt.into()))
+        let mut receipt: RunGraphDispatchReceipt = receipt.into();
+        terminal_closure_supersedes_stale_handoff_receipt(&status, &mut receipt);
+        Ok(Some(receipt))
     }
 
     pub async fn run_graph_dispatch_receipt(
@@ -1996,7 +2080,11 @@ impl StateStore {
             return Ok(None);
         };
         let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
-        Ok(Some(receipt.into()))
+        let mut receipt: RunGraphDispatchReceipt = receipt.into();
+        if let Ok(status) = self.run_graph_status(run_id).await {
+            terminal_closure_supersedes_stale_handoff_receipt(&status, &mut receipt);
+        }
+        Ok(Some(receipt))
     }
 
     async fn run_graph_dispatch_receipt_stored(
@@ -2352,6 +2440,64 @@ mod tests {
         status.resume_target = "dispatch.implementer_lane".to_string();
         status.recovery_ready = true;
         status
+    }
+
+    #[test]
+    fn terminal_closure_supersedes_stale_pending_developer_handoff_receipt() {
+        let mut status = sample_run_graph_status();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.resume_target = "none".to_string();
+
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "closure".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: Some(
+                crate::release1_contracts::blocker_code_str(
+                    crate::release1_contracts::BlockerCode::PendingDeveloperHandoffPacket,
+                )
+                .to_string(),
+            ),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-17T00:00:00Z".to_string(),
+        };
+
+        assert!(terminal_closure_supersedes_stale_handoff_receipt(
+            &status,
+            &mut receipt
+        ));
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_completed");
+        assert_eq!(receipt.blocker_code, None);
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("executed")
+        );
     }
 
     fn sample_replay_lineage_receipt(
@@ -3179,6 +3325,71 @@ mod tests {
             .expect("latest status should load")
             .expect("non-superseded status should remain");
         assert_eq!(latest.run_id, "run-active");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_status_skips_active_run_for_closed_task() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-latest-run-graph-skips-active-closed-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "task-closed-active-run",
+                title: "Closed task with stale active run",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create closed task");
+
+        let active = crate::taskflow_run_graph::default_run_graph_status(
+            "run-active-open-task",
+            "task-active-open",
+            "implementation",
+        );
+        store
+            .record_run_graph_status(&active)
+            .await
+            .expect("persist active open status");
+
+        let mut stale = crate::taskflow_run_graph::default_run_graph_status(
+            "run-closed-active-task",
+            "task-closed-active-run",
+            "implementation",
+        );
+        stale.task_id = "task-closed-active-run".to_string();
+        stale.status = "ready".to_string();
+        stale.lifecycle_stage = "implementation_dispatch_ready".to_string();
+        store
+            .record_run_graph_status(&stale)
+            .await
+            .expect("persist stale closed-task status");
+
+        let latest = store
+            .latest_run_graph_status()
+            .await
+            .expect("latest status should load")
+            .expect("open-task run should remain latest after stale closed-task run is skipped");
+        assert_eq!(latest.run_id, "run-active-open-task");
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -4420,6 +4631,73 @@ mod tests {
         assert!(
             latest.is_none(),
             "closed explicit task binding must be skipped"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_continuation_binding_clears_closed_task_graph_binding() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-continuation-binding-clears-closed-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "task-closed-direct",
+                title: "Closed direct task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create closed direct task");
+
+        store
+            .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
+                run_id: "run-closed-direct".to_string(),
+                task_id: "task-closed-direct".to_string(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "task_graph_task",
+                    "task_id": "task-closed-direct",
+                    "run_id": "run-closed-direct",
+                    "task_status": "open",
+                    "issue_type": "task"
+                }),
+                binding_source: "explicit_continuation_bind_task".to_string(),
+                why_this_unit: "stale direct task binding".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+                request_text: Some("continue".to_string()),
+                recorded_at: "2026-04-16T10:30:00Z".to_string(),
+            })
+            .await
+            .expect("record closed direct binding");
+
+        let binding = store
+            .run_graph_continuation_binding("run-closed-direct")
+            .await
+            .expect("read direct binding");
+
+        assert!(
+            binding.is_none(),
+            "closed task_graph_task binding must not remain active"
         );
 
         let _ = fs::remove_dir_all(&root);

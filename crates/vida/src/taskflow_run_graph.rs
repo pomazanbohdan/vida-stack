@@ -4284,6 +4284,14 @@ async fn reseed_explicit_task_graph_binding_for_dispatch_init(
     if bound_task_id == requested_run_id {
         return Ok(None);
     }
+    if let Ok(task) = store.show_task(bound_task_id).await {
+        if taskflow_task_status_is_terminal_for_dispatch_init(&task.status) {
+            return Err(format!(
+                "Run `{requested_run_id}` has explicit continuation binding to terminal task_graph_task `{bound_task_id}` with status `{}`; bind a non-terminal bounded unit before dispatch-init.",
+                task.status
+            ));
+        }
+    }
 
     let request_text = if let Some(request_text) = binding
         .request_text
@@ -4362,6 +4370,10 @@ fn task_record_dispatch_seed_request_text(task: &crate::state_store::TaskRecord)
     }
 }
 
+fn taskflow_task_status_is_terminal_for_dispatch_init(status: &str) -> bool {
+    matches!(status.trim(), "closed" | "completed")
+}
+
 async fn seed_existing_task_payload_for_dispatch_init(
     store: &StateStore,
     task_id: &str,
@@ -4370,6 +4382,12 @@ async fn seed_existing_task_payload_for_dispatch_init(
         Ok(task) => task,
         Err(_) => return Ok(None),
     };
+    if taskflow_task_status_is_terminal_for_dispatch_init(&task.status) {
+        return Err(format!(
+            "Dispatch-init cannot seed terminal TaskFlow task `{task_id}` with status `{}`; bind a non-terminal bounded unit before dispatch-init.",
+            task.status
+        ));
+    }
     let request_text = task_record_dispatch_seed_request_text(&task);
     let payload = derive_seeded_run_graph_status(store, task_id, &request_text).await?;
     Ok(Some(payload))
@@ -8577,6 +8595,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_init_rejects_explicit_task_graph_binding_to_closed_task() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        let labels = vec![String::from("runtime-recovery")];
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "task-closed-bound",
+                title: "Closed bound task",
+                display_id: None,
+                description: "dispatch-init must not reseed terminal continuation targets",
+                issue_type: "task",
+                status: "closed",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create closed bound task");
+
+        let mut stale_status = default_run_graph_status("run-old-closed", "closure", "delivery");
+        stale_status.task_id = "run-old-closed".to_string();
+        stale_status.active_node = "closure".to_string();
+        stale_status.status = "completed".to_string();
+        stale_status.lifecycle_stage = "closure_complete".to_string();
+        stale_status.next_node = None;
+        stale_status.resume_target = "none".to_string();
+        stale_status.recovery_ready = false;
+        store
+            .record_run_graph_status(&stale_status)
+            .await
+            .expect("persist stale closed status");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: "run-old-closed".to_string(),
+                    task_id: "task-closed-bound".to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": "task-closed-bound",
+                        "run_id": "run-old-closed",
+                        "task_status": "closed",
+                        "issue_type": "task"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "stale closed task binding".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
+                    request_text: Some("closed task must not reseed".to_string()),
+                    recorded_at: "2026-04-16T09:30:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist closed explicit binding");
+
+        let error = run_graph_dispatch_init(&store, "run-old-closed")
+            .await
+            .expect_err("dispatch-init must reject terminal task_graph_task binding");
+
+        assert!(
+            error.contains(
+                "No persisted seeded dispatch context exists for run_id `run-old-closed`"
+            ),
+            "unexpected dispatch-init error: {error}"
+        );
+    }
+
+    #[tokio::test]
     async fn dispatch_init_seeds_existing_task_without_prior_run_graph_state() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let store = StateStore::open(harness.path().to_path_buf())
@@ -8648,6 +8745,43 @@ mod tests {
         assert!(context
             .request_text
             .contains("crates/vida/src/taskflow_proxy.rs"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_rejects_closed_existing_task_without_prior_run_graph_state() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        let labels = vec![String::from("runtime-recovery")];
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "task-closed-dispatch-init",
+                title: "Closed dispatch init task",
+                display_id: None,
+                description: "dispatch-init must fail closed for terminal tasks",
+                issue_type: "task",
+                status: "closed",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create closed dispatch-init task");
+
+        let error = run_graph_dispatch_init(&store, "task-closed-dispatch-init")
+            .await
+            .expect_err("dispatch-init must reject closed task");
+
+        assert!(error.contains("cannot seed terminal TaskFlow task `task-closed-dispatch-init`"));
     }
 
     #[tokio::test]
