@@ -533,6 +533,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         );
                         let direct_consumption_ready = bundle_check.ok
                             && docflow_verdict.ready
+                            && closure_admission.admitted
                             && !closure_admission.blockers.iter().any(|row| {
                                 row == pending_design_packet
                                     || row == pending_execution_preparation_evidence
