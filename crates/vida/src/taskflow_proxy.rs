@@ -3087,6 +3087,40 @@ fn taskflow_next_operator_contracts(
     (shared_fields, operator_contracts, artifact_refs)
 }
 
+fn taskflow_graph_summary_operator_contracts(
+    status: &str,
+    blocker_codes: &[String],
+    next_actions: &[String],
+    latest_run_graph: Option<&crate::state_store::RunGraphStatus>,
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> (serde_json::Value, serde_json::Value, serde_json::Value) {
+    let artifact_refs = serde_json::json!({
+        "surface": "vida taskflow graph-summary",
+        "latest_run_graph_run_id": latest_run_graph.map(|status| status.run_id.as_str()),
+        "recovery_run_id": recovery.map(|summary| summary.run_id.as_str()),
+        "dispatch_run_id": dispatch.map(|summary| summary.run_id.as_str()),
+    });
+    let shared_fields = serde_json::json!({
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+    });
+    let operator_contracts = serde_json::json!({
+        "contract_id": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.contract_id,
+        "schema_version": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.schema_version,
+        "status": shared_fields["status"],
+        "trace_id": serde_json::Value::Null,
+        "workflow_class": serde_json::Value::Null,
+        "risk_tier": serde_json::Value::Null,
+        "blocker_codes": shared_fields["blocker_codes"],
+        "next_actions": shared_fields["next_actions"],
+        "artifact_refs": shared_fields["artifact_refs"],
+    });
+    (shared_fields, operator_contracts, artifact_refs)
+}
+
 fn task_wave_label(
     task_id: &str,
     by_id: &BTreeMap<String, crate::state_store::TaskRecord>,
@@ -4036,9 +4070,21 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     } else {
         "blocked"
     };
+    let (shared_fields, operator_contracts, artifact_refs) =
+        taskflow_graph_summary_operator_contracts(
+            status,
+            &blocker_codes,
+            &next_actions,
+            latest_run_graph.as_ref(),
+            recovery.as_ref(),
+            dispatch.as_ref(),
+        );
     let payload = serde_json::json!({
         "surface": "vida taskflow graph-summary",
         "status": status,
+        "artifact_refs": artifact_refs,
+        "shared_fields": shared_fields,
+        "operator_contracts": operator_contracts,
         "blocker_codes": blocker_codes,
         "next_actions": next_actions,
         "why_not_now": continuation_decision.why_not_now,
@@ -6306,9 +6352,10 @@ mod tests {
         let ready = task("ready-followup", "task", "open", 1, &[], Vec::new());
         let mut blocked_status = crate::taskflow_run_graph::default_run_graph_status(
             "legacy-ownerless-run",
-            "stale-blocked-task",
+            "implementation",
             "implementation",
         );
+        blocked_status.task_id = "stale-blocked-task".to_string();
         blocked_status.status = "blocked".to_string();
         blocked_status.lifecycle_stage = "implementation_blocked".to_string();
         let explicit_binding = crate::state_store::RunGraphContinuationBinding {
@@ -6363,9 +6410,10 @@ mod tests {
         let ready = task("stale-blocked-task", "task", "open", 1, &[], Vec::new());
         let mut blocked_status = crate::taskflow_run_graph::default_run_graph_status(
             "legacy-ownerless-run",
-            "stale-blocked-task",
+            "implementation",
             "implementation",
         );
+        blocked_status.task_id = "stale-blocked-task".to_string();
         blocked_status.status = "blocked".to_string();
         blocked_status.lifecycle_stage = "implementation_blocked".to_string();
         let explicit_binding = crate::state_store::RunGraphContinuationBinding {
@@ -9350,6 +9398,45 @@ mod tests {
 
         let blocker_codes = super::graph_summary_runtime_gate_blocker_codes(&decision);
         assert_eq!(blocker_codes, vec!["open_delegated_cycle".to_string()]);
+    }
+
+    #[test]
+    fn graph_summary_operator_contracts_preserve_shared_field_parity() {
+        let mut latest_status =
+            crate::taskflow_run_graph::default_run_graph_status("run-1", "task-1", "analysis");
+        latest_status.status = "blocked".to_string();
+        let blocker_codes = vec!["open_delegated_cycle".to_string()];
+        let next_actions = vec![
+            "Inspect recovery truth with `vida taskflow recovery status run-1 --json`.".to_string(),
+        ];
+
+        let (shared_fields, operator_contracts, artifact_refs) =
+            super::taskflow_graph_summary_operator_contracts(
+                "blocked",
+                &blocker_codes,
+                &next_actions,
+                Some(&latest_status),
+                None,
+                None,
+            );
+        let payload = serde_json::json!({
+            "surface": "vida taskflow graph-summary",
+            "status": "blocked",
+            "artifact_refs": artifact_refs,
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "shared_fields": shared_fields,
+            "operator_contracts": operator_contracts,
+        });
+
+        assert_eq!(
+            crate::operator_contracts::shared_operator_output_contract_parity_error(&payload),
+            None
+        );
+        assert_eq!(
+            payload["artifact_refs"]["latest_run_graph_run_id"].as_str(),
+            Some("run-1")
+        );
     }
 
     #[test]
