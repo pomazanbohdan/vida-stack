@@ -73,7 +73,7 @@ pub enum Command {
     Touch(TouchArgs),
     ValidateTree(RegistryScanArgs),
     ReadinessTree(RegistryScanArgs),
-    ReadinessCheck(CheckArgs),
+    ReadinessCheck(ReadinessCheckArgs),
     ReadinessWrite(RegistryWriteArgs),
     ValidateFooter(ValidateFooterArgs),
     Readiness(ReadinessArgs),
@@ -171,6 +171,18 @@ pub struct CheckArgs {
     pub root: Option<String>,
     #[arg(long, default_value = "")]
     pub profile: String,
+    #[arg()]
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ReadinessCheckArgs {
+    #[arg(long)]
+    pub root: Option<String>,
+    #[arg(long, default_value = "")]
+    pub profile: String,
+    #[arg(long = "format", default_value = "jsonl")]
+    pub format: String,
     #[arg()]
     pub files: Vec<String>,
 }
@@ -418,6 +430,8 @@ pub struct ProofcheckArgs {
     pub layer: Option<usize>,
     #[arg(long, default_value = "active-canon-strict")]
     pub profile: String,
+    #[arg(long = "format", default_value = "toon")]
+    pub format: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -425,6 +439,20 @@ struct DoctorRow {
     severity: String,
     path: String,
     issues: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProofcheckSummaryRow {
+    command: String,
+    profile: String,
+    layer: Option<usize>,
+    files_mode: String,
+    fastcheck_rows: usize,
+    protocol_coverage_rows: usize,
+    readiness_rows: usize,
+    doctor_error_rows: usize,
+    doctor_warning_rows: usize,
+    verdict: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -765,22 +793,7 @@ pub fn run(cli: Cli) -> String {
             Ok(rendered) => rendered,
             Err(error) => format!("rename-artifact\n  error: {error}"),
         },
-        Command::Proofcheck(args) => match args.layer {
-            Some(layer) => match layer_scope_paths(layer) {
-                Ok(paths) => render_proofcheck_layer(layer, &paths),
-                Err(error) => format!(
-                    "proofcheck\n  layer: {}\n  files_mode: layer\n  error: {}",
-                    layer, error
-                ),
-            },
-            None => match render_proofcheck_profile(&args.profile) {
-                Ok(rendered) => rendered,
-                Err(error) => format!(
-                    "context:\n  command: proofcheck\n  root: {}\n  layer: \n  files_mode: profile\ntotals:\n  fastcheck_rows: 0\n  protocol_coverage_rows: 0\n  readiness_rows: 0\n  doctor_error_rows: 0\n  doctor_warning_rows: 0\nerror:\n  message: {}",
-                    args.profile, error
-                ),
-            },
-        },
+        Command::Proofcheck(args) => render_proofcheck(&args),
         Command::Doctor(args) => {
             let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
@@ -1034,21 +1047,8 @@ pub fn run(cli: Cli) -> String {
             }
         }
         Command::ReadinessCheck(args) => match readiness_rows(args.root.as_deref(), &args.profile, &args.files) {
-            Ok(rows) => rows
-                .iter()
-                .map(|row| encode_line(row))
-                .collect::<Result<Vec<_>, _>>()
-                .map(|lines| lines.join("\n"))
-                .unwrap_or_else(|error| {
-                    format!(
-                        "{{\"artifact_path\":\"\",\"verdict\":\"blocking\",\"error\":\"{}\"}}",
-                        error
-                    )
-                }),
-            Err(error) => format!(
-                "{{\"artifact_path\":\"\",\"verdict\":\"blocking\",\"error\":\"{}\"}}",
-                error
-            ),
+            Ok(rows) => render_readiness_check_rows(&rows, &args.format),
+            Err(error) => render_readiness_check_error(&error, &args.format),
         },
         Command::ReadinessWrite(args) => {
             let output = resolve_readiness_output(&args);
@@ -1531,6 +1531,134 @@ fn render_proofcheck_layer(layer: usize, paths: &[String]) -> String {
         lines.push(format!("  doctor: {} [{}]", row.path, row.issues));
     }
     lines.join("\n")
+}
+
+fn render_proofcheck(args: &ProofcheckArgs) -> String {
+    match args.format.as_str() {
+        "toon" => match args.layer {
+            Some(layer) => match layer_scope_paths(layer) {
+                Ok(paths) => render_proofcheck_layer(layer, &paths),
+                Err(error) => format!(
+                    "proofcheck\n  layer: {}\n  files_mode: layer\n  error: {}",
+                    layer, error
+                ),
+            },
+            None => match render_proofcheck_profile(&args.profile) {
+                Ok(rendered) => rendered,
+                Err(error) => format!(
+                    "context:\n  command: proofcheck\n  root: {}\n  layer: \n  files_mode: profile\ntotals:\n  fastcheck_rows: 0\n  protocol_coverage_rows: 0\n  readiness_rows: 0\n  doctor_error_rows: 0\n  doctor_warning_rows: 0\nerror:\n  message: {}",
+                    args.profile, error
+                ),
+            },
+        },
+        "jsonl" => render_proofcheck_jsonl(args),
+        other => format!(
+            "{{\"command\":\"proofcheck\",\"verdict\":\"blocking\",\"error\":\"unsupported_format:{}\"}}",
+            other
+        ),
+    }
+}
+
+fn render_proofcheck_jsonl(args: &ProofcheckArgs) -> String {
+    let summary = match args.layer {
+        Some(layer) => match layer_scope_paths(layer) {
+            Ok(paths) => proofcheck_layer_summary(layer, &paths),
+            Err(error) => {
+                return format!(
+                    "{{\"command\":\"proofcheck\",\"layer\":{},\"files_mode\":\"layer\",\"verdict\":\"blocking\",\"error\":\"{}\"}}",
+                    layer, error
+                );
+            }
+        },
+        None => match proofcheck_profile_summary(&args.profile) {
+            Ok(summary) => summary,
+            Err(error) => {
+                return format!(
+                    "{{\"command\":\"proofcheck\",\"profile\":\"{}\",\"files_mode\":\"profile\",\"verdict\":\"blocking\",\"error\":\"{}\"}}",
+                    args.profile, error
+                );
+            }
+        },
+    };
+    encode_line(&summary).unwrap_or_else(|error| {
+        format!(
+            "{{\"command\":\"proofcheck\",\"verdict\":\"blocking\",\"error\":\"encode_error:{}\"}}",
+            error
+        )
+    })
+}
+
+fn proofcheck_layer_summary(layer: usize, paths: &[String]) -> ProofcheckSummaryRow {
+    let fast_rows = fastcheck_rows_for_paths(paths);
+    let protocol_rows = protocol_coverage_rows_for_paths(paths);
+    let readiness_rows = issues_to_readiness_rows(&fast_rows);
+    let doctor_rows = doctor_rows_for_paths(paths, true);
+    let doctor_error_rows = doctor_rows
+        .iter()
+        .filter(|row| row.severity == "error")
+        .count();
+    let doctor_warning_rows = doctor_rows
+        .iter()
+        .filter(|row| row.severity == "warning")
+        .count();
+    let verdict = if fast_rows.is_empty()
+        && protocol_rows.is_empty()
+        && readiness_rows.is_empty()
+        && doctor_error_rows == 0
+    {
+        "ok"
+    } else {
+        "blocking"
+    };
+    ProofcheckSummaryRow {
+        command: "proofcheck".to_string(),
+        profile: String::new(),
+        layer: Some(layer),
+        files_mode: "layer".to_string(),
+        fastcheck_rows: fast_rows.len(),
+        protocol_coverage_rows: protocol_rows.len(),
+        readiness_rows: readiness_rows.len(),
+        doctor_error_rows,
+        doctor_warning_rows,
+        verdict: verdict.to_string(),
+    }
+}
+
+fn proofcheck_profile_summary(profile: &str) -> Result<ProofcheckSummaryRow, String> {
+    let targets = resolve_profile_targets(None, profile, &[])?;
+    let fast_rows = fastcheck_rows(None, profile, &[])?;
+    let protocol_rows = protocol_coverage_rows(None, profile, &[])?;
+    let readiness_rows = readiness_rows(None, profile, &[])?;
+    let doctor_rows = doctor_rows_for_targets(&targets, false);
+    let doctor_error_rows = doctor_rows
+        .iter()
+        .filter(|row| row.severity == "error")
+        .count();
+    let doctor_warning_rows = doctor_rows
+        .iter()
+        .filter(|row| row.severity == "warning")
+        .count();
+    let verdict = if fast_rows.is_empty()
+        && protocol_rows.is_empty()
+        && readiness_rows.is_empty()
+        && doctor_error_rows == 0
+    {
+        "ok"
+    } else {
+        "blocking"
+    };
+    Ok(ProofcheckSummaryRow {
+        command: "proofcheck".to_string(),
+        profile: profile.to_string(),
+        layer: None,
+        files_mode: "profile".to_string(),
+        fastcheck_rows: fast_rows.len(),
+        protocol_coverage_rows: protocol_rows.len(),
+        readiness_rows: readiness_rows.len(),
+        doctor_error_rows,
+        doctor_warning_rows,
+        verdict: verdict.to_string(),
+    })
 }
 
 fn render_proofcheck_profile(profile: &str) -> Result<String, String> {
@@ -3875,6 +4003,52 @@ fn resolve_rooted_output(root: &str, relative: &str) -> String {
         .to_string()
 }
 
+fn render_readiness_check_rows(rows: &[ReadinessRow], format: &str) -> String {
+    match format {
+        "jsonl" => rows
+            .iter()
+            .map(|row| encode_line(row))
+            .collect::<Result<Vec<_>, _>>()
+            .map(|lines| lines.join("\n"))
+            .unwrap_or_else(|error| {
+                format!(
+                    "{{\"artifact_path\":\"\",\"verdict\":\"blocking\",\"error\":\"{}\"}}",
+                    error
+                )
+            }),
+        "toon" => {
+            let verdict = summarize_verdict(rows);
+            let mut lines = vec![
+                "readiness-check".to_string(),
+                format!("  rows: {}", rows.len()),
+                format!("  verdict: {}", verdict_label(verdict)),
+            ];
+            for row in rows {
+                lines.push(format!(
+                    "  - {} [{}]",
+                    row.artifact_path.0,
+                    verdict_label(row.verdict)
+                ));
+            }
+            lines.join("\n")
+        }
+        other => format!(
+            "{{\"artifact_path\":\"\",\"verdict\":\"blocking\",\"error\":\"unsupported_format:{}\"}}",
+            other
+        ),
+    }
+}
+
+fn render_readiness_check_error(error: &str, format: &str) -> String {
+    match format {
+        "toon" => format!("readiness-check\n  rows: 0\n  verdict: blocking\n  error: {error}"),
+        _ => format!(
+            "{{\"artifact_path\":\"\",\"verdict\":\"blocking\",\"error\":\"{}\"}}",
+            error
+        ),
+    }
+}
+
 fn summarize_artifact_types(rows: &[docflow_contracts::RegistryRow]) -> Vec<(&str, usize)> {
     let mut counts = std::collections::BTreeMap::<&str, usize>::new();
     for row in rows {
@@ -4371,6 +4545,23 @@ mod tests {
     }
 
     #[test]
+    fn proofcheck_command_supports_jsonl_format() {
+        let cli = Cli::parse_from([
+            "docflow",
+            "proofcheck",
+            "--profile",
+            "active-canon-strict",
+            "--format",
+            "jsonl",
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("\"command\":\"proofcheck\""));
+        assert!(rendered.contains("\"profile\":\"active-canon-strict\""));
+        assert!(rendered.contains("\"files_mode\":\"profile\""));
+        assert!(rendered.contains("\"verdict\":"));
+    }
+
+    #[test]
     fn doctor_command_streams_error_rows_from_real_tree() {
         let root = temp_dir("doctor-root");
         fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
@@ -4741,6 +4932,29 @@ mod tests {
         let rendered = run(cli);
         assert!(!rendered.contains("inventory_error"));
         assert!(!rendered.contains("error"));
+    }
+
+    #[test]
+    fn readiness_check_command_supports_toon_format() {
+        let root = temp_dir("readiness-toon-root");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(root.join("docs/process/a.md"), "# a\n").expect("process markdown");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "readiness-check",
+            "--root",
+            root.to_string_lossy().as_ref(),
+            "--format",
+            "toon",
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("readiness-check"));
+        assert!(rendered.contains("rows:"));
+        assert!(rendered.contains("verdict: blocking"));
+        assert!(rendered.contains("docs/process/a.md [blocking]"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
     }
 
     #[test]

@@ -12483,6 +12483,28 @@ fn docflow_proxy_can_run_rust_proofcheck_surface() {
 }
 
 #[test]
+fn docflow_proxy_can_run_rust_proofcheck_jsonl_surface() {
+    let output = vida()
+        .args([
+            "docflow",
+            "proofcheck",
+            "--profile",
+            "active-canon-strict",
+            "--format",
+            "jsonl",
+        ])
+        .output()
+        .expect("docflow rust proofcheck jsonl shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"command\":\"proofcheck\""));
+    assert!(stdout.contains("\"profile\":\"active-canon-strict\""));
+    assert!(stdout.contains("\"files_mode\":\"profile\""));
+    assert!(stdout.contains("\"verdict\":"));
+}
+
+#[test]
 fn docflow_proxy_can_run_rust_validation_surface() {
     let output = vida()
         .args([
@@ -12815,6 +12837,34 @@ fn docflow_proxy_can_run_rust_readiness_check_surface() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\"artifact_path\":\"docs/process/a.md\""));
     assert!(stdout.contains("\"verdict\":\"blocking\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_readiness_check_toon_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+
+    let output = vida()
+        .args([
+            "docflow",
+            "readiness-check",
+            "--root",
+            &root,
+            "--format",
+            "toon",
+        ])
+        .output()
+        .expect("docflow rust readiness-check toon shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("readiness-check"));
+    assert!(stdout.contains("rows:"));
+    assert!(stdout.contains("verdict: blocking"));
+    assert!(stdout.contains("docs/process/a.md [blocking]"));
 
     fs::remove_dir_all(root).expect("temp root should be removed");
 }
