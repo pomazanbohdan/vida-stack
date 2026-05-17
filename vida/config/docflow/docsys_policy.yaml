@@ -31,8 +31,35 @@ scan_ignored:
     glob: ".agents/**"
     reason: skill source markdown is outside the active project documentation canon
   - scope: relative_path
+    glob: ".kilo/**"
+    reason: host-tool local instruction surfaces are outside the active project documentation canon
+  - scope: relative_path
+    glob: ".opencode/**"
+    reason: host-tool local instruction surfaces are outside the active project documentation canon
+  - scope: relative_path
+    glob: ".qwen/**"
+    reason: host-tool local instruction surfaces are outside the active project documentation canon
+  - scope: relative_path
+    glob: ".vida/data/**"
+    reason: runtime state, internal host scratch data, and generated receipts are outside the active documentation canon
+  - scope: relative_path
+    glob: ".vida/project/agent-extensions/**"
+    reason: generated project agent extension descriptors are outside the active documentation canon
+  - scope: relative_path
+    glob: ".vida/receipts/**"
+    reason: runtime receipt backups are generated evidence, not canonical project documentation
+  - scope: relative_path
+    glob: "docs/framework/templates/**"
+    reason: framework template sources are not active downstream project documentation
+  - scope: relative_path
+    glob: "docs/research/**"
+    reason: research notes are outside the active project documentation canon until promoted into active docs
+  - scope: relative_path
     glob: "target/**"
     reason: build output markdown is outside the active documentation canon
+  - scope: relative_path
+    glob: "vendor/**"
+    reason: vendored third-party documentation is not mutated by project DocFlow readiness checks
   - scope: relative_path
     glob: ".venv/**"
     reason: local project environment packages are runtime dependencies, not documentation canon
