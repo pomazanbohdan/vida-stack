@@ -203,6 +203,30 @@ fn graph_summary_task_ref(task: &crate::state_store::TaskRecord) -> GraphSummary
     }
 }
 
+fn graph_summary_parallel_contract_fields(
+    scheduling: &crate::state_store::TaskSchedulingProjection,
+) -> (bool, Vec<String>, Vec<GraphSummaryTaskRef>) {
+    let ready_parallel_safe = scheduling
+        .ready
+        .first()
+        .is_some_and(|candidate| candidate.ready_parallel_safe);
+    let parallel_blockers = scheduling
+        .ready
+        .first()
+        .map(|candidate| candidate.parallel_blockers.clone())
+        .unwrap_or_default();
+    let parallel_candidates_after_current = scheduling
+        .parallel_candidates_after_current
+        .iter()
+        .map(graph_summary_task_ref)
+        .collect();
+    (
+        ready_parallel_safe,
+        parallel_blockers,
+        parallel_candidates_after_current,
+    )
+}
+
 fn normalize_scheduler_path(path: &str) -> Option<String> {
     let mut value = path.trim().replace('\\', "/");
     while let Some(stripped) = value.strip_prefix("./") {
@@ -4031,6 +4055,8 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             "blockers": record.blockers,
         })
     });
+    let (ready_parallel_safe, parallel_blockers, parallel_candidates_after_current) =
+        graph_summary_parallel_contract_fields(&scheduling);
 
     let mut blocker_codes = continuation_decision.blocker_codes.clone();
     blocker_codes.extend(graph_summary_runtime_gate_blocker_codes(
@@ -4095,6 +4121,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         "blocked_count": blocked_tasks.len(),
         "critical_path_length": critical_path.length,
         "current_task_id": scheduling.current_task_id,
+        "ready_parallel_safe": ready_parallel_safe,
+        "parallel_blockers": parallel_blockers,
+        "parallel_candidates_after_current": parallel_candidates_after_current,
         "primary_ready_task": primary_ready_task,
         "primary_blocked_task": primary_blocked_task,
         "candidate_task_context": continuation_decision.candidate_task_context,
@@ -5953,6 +5982,44 @@ mod tests {
             active_critical_path,
             parallel_blockers: parallel_blockers.into_iter().map(str::to_string).collect(),
         }
+    }
+
+    #[test]
+    fn graph_summary_parallel_fields_expose_top_level_contract() {
+        let mut primary = task("primary", "task", "open", 1, &[], Vec::new());
+        primary.execution_semantics.conflict_domain = Some("primary".to_string());
+        let mut parallel = task("parallel", "task", "open", 2, &[], Vec::new());
+        parallel.execution_semantics.conflict_domain = Some("parallel".to_string());
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("primary".to_string()),
+            ready: vec![scheduling_candidate(
+                primary,
+                true,
+                false,
+                true,
+                Vec::new(),
+                vec!["current_task_not_parallel_safe"],
+            )],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: vec![parallel],
+        };
+
+        let (ready_parallel_safe, parallel_blockers, parallel_candidates_after_current) =
+            super::graph_summary_parallel_contract_fields(&projection);
+
+        assert!(!ready_parallel_safe);
+        assert_eq!(
+            parallel_blockers,
+            vec!["current_task_not_parallel_safe".to_string()]
+        );
+        assert_eq!(parallel_candidates_after_current.len(), 1);
+        assert_eq!(parallel_candidates_after_current[0].id, "parallel");
+        assert_eq!(
+            parallel_candidates_after_current[0]
+                .conflict_domain
+                .as_deref(),
+            Some("parallel")
+        );
     }
 
     #[test]
