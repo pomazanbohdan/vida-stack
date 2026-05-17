@@ -384,6 +384,18 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         .as_ref()
                         .and_then(|value| value.get("activation_vs_execution_evidence"));
                 if as_json {
+                    let operator_session_projection =
+                        match crate::operator_session_projection::build_operator_session_projection(
+                            &store,
+                        )
+                        .await
+                        {
+                            Ok(value) => value,
+                            Err(error) => {
+                                eprintln!("Failed to build operator session projection: {error}");
+                                return ExitCode::from(1);
+                            }
+                        };
                     let incomplete_release_admission_operator_evidence =
                         match crate::runtime_consumption_state::release_admission_operator_evidence_incomplete(
                             store.root(),
@@ -488,6 +500,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         project_activation_pending,
                         host_agents: host_agents.as_ref(),
                         root_session_write_guard: &root_session_write_guard,
+                        operator_session_projection: &operator_session_projection,
                         continuation_binding: &continuation_binding,
                         latest_run_graph_status: latest_run_graph_status.as_ref(),
                         latest_run_graph_recovery: latest_run_graph_recovery.as_ref(),
@@ -512,6 +525,18 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     return ExitCode::SUCCESS;
                 }
 
+                let operator_session_projection =
+                    match crate::operator_session_projection::build_operator_session_projection(
+                        &store,
+                    )
+                    .await
+                    {
+                        Ok(value) => value,
+                        Err(error) => {
+                            eprintln!("Failed to build operator session projection: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
                 return emit_status_text_report(StatusTextReportInputs {
                     render,
                     backend_summary: &backend_summary,
@@ -537,6 +562,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     latest_run_graph_dispatch_receipt_signal_ambiguous,
                     latest_run_graph_dispatch_receipt_summary_inconsistent,
                     latest_run_graph_dispatch_receipt_checkpoint_leakage,
+                    operator_session_projection: &operator_session_projection,
                     continuation_binding: &continuation_binding,
                     host_agents: host_agents.as_ref(),
                     latest_run_graph_dispatch_receipt: latest_run_graph_dispatch_receipt.as_ref(),

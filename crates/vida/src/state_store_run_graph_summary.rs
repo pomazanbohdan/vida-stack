@@ -1172,6 +1172,31 @@ impl StateStore {
             .map_err(StateStoreError::from)
     }
 
+    pub(crate) async fn run_graph_legacy_ownerless(
+        &self,
+        run_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        let mut owner_query = self
+            .db
+            .query(
+                "SELECT artifact_id FROM run_graph_owner_evidence WHERE run_id = $run_id LIMIT 1;",
+            )
+            .bind(("run_id", run_id.to_string()))
+            .await?;
+        let owner_rows: Vec<serde_json::Value> = owner_query.take(0)?;
+        if !owner_rows.is_empty() {
+            return Ok(false);
+        }
+
+        let mut claim_query = self
+            .db
+            .query("SELECT claim_id FROM orchestrator_claim WHERE run_id = $run_id LIMIT 1;")
+            .bind(("run_id", run_id.to_string()))
+            .await?;
+        let claim_rows: Vec<serde_json::Value> = claim_query.take(0)?;
+        Ok(claim_rows.is_empty())
+    }
+
     pub async fn run_graph_summary(&self) -> Result<RunGraphSummary, StateStoreError> {
         Ok(RunGraphSummary {
             execution_plan_count: self.count_table_rows("execution_plan_state").await?,
@@ -2613,6 +2638,77 @@ mod tests {
             .await
             .expect("read owner evidence")
             .is_none());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_legacy_ownerless_tracks_owner_evidence_and_claims() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-legacy-ownerless-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut ownerless = sample_run_graph_status();
+        ownerless.run_id = "legacy-ownerless-run".to_string();
+        ownerless.task_id = "legacy-ownerless-task".to_string();
+        store
+            .record_run_graph_status(&ownerless)
+            .await
+            .expect("persist ownerless run graph status");
+        assert!(store
+            .run_graph_legacy_ownerless("legacy-ownerless-run")
+            .await
+            .expect("classify ownerless run"));
+
+        store
+            .record_run_graph_owner_evidence("legacy-ownerless-run", "dispatch_context")
+            .await
+            .expect("record owner evidence");
+        assert!(!store
+            .run_graph_legacy_ownerless("legacy-ownerless-run")
+            .await
+            .expect("owner evidence should make run non-ownerless"));
+
+        let mut claimed = sample_run_graph_status();
+        claimed.run_id = "legacy-claimed-run".to_string();
+        claimed.task_id = "legacy-claimed-task".to_string();
+        store
+            .record_run_graph_status(&claimed)
+            .await
+            .expect("persist claim-backed run graph status");
+        assert!(store
+            .run_graph_legacy_ownerless("legacy-claimed-run")
+            .await
+            .expect("classify pre-claim run"));
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "legacy-claimed-run-write".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-a".to_string(),
+                task_id: Some("legacy-claimed-task".to_string()),
+                run_id: Some("legacy-claimed-run".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("legacy-claimed-domain".to_string()),
+                owned_paths: vec!["crates/vida/src/taskflow_proxy.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire claim");
+        assert!(!store
+            .run_graph_legacy_ownerless("legacy-claimed-run")
+            .await
+            .expect("claim should make run non-ownerless"));
 
         let _ = fs::remove_dir_all(&root);
     }

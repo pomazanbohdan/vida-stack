@@ -339,6 +339,7 @@ impl StateStore {
         store.sanitize_legacy_task_execution_semantics().await?;
         store.sanitize_legacy_task_planner_metadata().await?;
         store.expire_stale_scheduler_dispatch_reservations().await?;
+        store.expire_stale_orchestrator_claims().await?;
         store.ensure_minimal_authoritative_state_spine().await?;
         Ok(store)
     }

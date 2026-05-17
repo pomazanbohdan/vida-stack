@@ -34,6 +34,26 @@ fn explicit_binding_is_admissible_for_status(
     )
 }
 
+fn explicit_task_binding_is_admissible_without_status(
+    binding: &crate::state_store::RunGraphContinuationBinding,
+) -> bool {
+    let binding_kind = binding
+        .active_bounded_unit
+        .get("kind")
+        .and_then(serde_json::Value::as_str);
+    let task_id = binding
+        .active_bounded_unit
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    binding.status == "bound"
+        && binding.binding_source == "explicit_continuation_bind_task"
+        && binding_kind == Some("task_graph_task")
+        && task_id.is_some()
+}
+
 fn run_graph_status_is_blocked(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     normalized == "blocked" || normalized == "lane_blocked" || normalized.ends_with("_blocked")
@@ -510,6 +530,17 @@ pub(crate) fn build_continuation_binding_summary_with_idle_policy(
                     )
                 ]
         });
+    }
+
+    if let Some(binding) = explicit_binding {
+        if explicit_task_binding_is_admissible_without_status(binding) {
+            return binding_summary_json(
+                binding,
+                continuation_required_now,
+                pause_boundary_gate,
+                continuation_next_actions,
+            );
+        }
     }
 
     serde_json::json!({
@@ -1441,6 +1472,52 @@ mod tests {
             summary["sequential_vs_parallel_posture"],
             "sequential_only_explicit_task_bound"
         );
+    }
+
+    #[test]
+    fn explicit_task_graph_binding_without_latest_run_graph_status_is_bound() {
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "previous-run".to_string(),
+            task_id: "multi-orch-session-20-scoped-queries".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": "multi-orch-session-20-scoped-queries",
+                "run_id": "previous-run",
+                "task_status": "in_progress",
+                "issue_type": "task"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "operator explicitly bound the next ready TaskFlow task".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: Some("continue scoped queries".to_string()),
+            recorded_at: "2026-05-17T10:00:00Z".to_string(),
+        };
+
+        let summary =
+            build_continuation_binding_summary(Some(&binding), None, None, None, None, false);
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["continuation_allowed"], true);
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+        assert_eq!(summary["binding_source"], "explicit_continuation_bind_task");
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "multi-orch-session-20-scoped-queries"
+        );
+
+        let summary = add_taskflow_active_work_truth(
+            summary,
+            taskflow_active_candidates_from_tasks(&[task_record(
+                "multi-orch-session-20-scoped-queries",
+                "in_progress",
+            )]),
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["binding_scope"], "taskflow_explicit");
+        assert_eq!(summary["orthogonal_to_taskflow_active_work"], false);
     }
 
     #[test]

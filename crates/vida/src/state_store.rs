@@ -15,6 +15,8 @@ mod state_store_instruction_bundle;
 mod state_store_launcher_activation;
 #[path = "state_store_open.rs"]
 mod state_store_open;
+#[path = "state_store_orchestrator_claim.rs"]
+mod state_store_orchestrator_claim;
 #[path = "state_store_patching.rs"]
 mod state_store_patching;
 #[path = "state_store_protocol_binding.rs"]
@@ -69,6 +71,11 @@ pub(crate) use state_store_instruction_bundle::{
     InstructionRuntimeStateRow, SourceArtifactContent, SourceArtifactRow, SourceTreeConfigRow,
 };
 pub use state_store_launcher_activation::LauncherActivationSnapshot;
+#[allow(unused_imports)]
+pub(crate) use state_store_orchestrator_claim::{
+    AcquireOrchestratorClaimRequest, LeaseMode, OrchestratorClaim,
+    OrchestratorClaimCompatibilityConflict, OrchestratorClaimStatus,
+};
 use state_store_patching::{
     apply_patch_operation, collect_patch_ids, join_lines, split_lines, validate_patch_bindings,
     validate_patch_conflicts,
@@ -173,8 +180,10 @@ DEFINE TABLE launcher_activation_snapshot SCHEMALESS;
 DEFINE TABLE run_graph_approval_delegation_receipt SCHEMALESS;
 DEFINE TABLE run_graph_continuation_binding SCHEMALESS;
 DEFINE TABLE run_graph_dispatch_context SCHEMALESS;
+DEFINE TABLE run_graph_owner_evidence SCHEMALESS;
 DEFINE TABLE run_graph_projection_checkpoint_record SCHEMALESS;
 DEFINE TABLE run_graph_replay_lineage_receipt SCHEMALESS;
+DEFINE TABLE orchestrator_claim SCHEMALESS;
 DEFINE TABLE scheduler_dispatch_reservation SCHEMALESS;
 "#;
 

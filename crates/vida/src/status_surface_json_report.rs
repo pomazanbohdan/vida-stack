@@ -25,6 +25,7 @@ pub(crate) struct StatusJsonReportInputs<'a> {
     pub(crate) project_activation_pending: bool,
     pub(crate) host_agents: Option<&'a serde_json::Value>,
     pub(crate) root_session_write_guard: &'a serde_json::Value,
+    pub(crate) operator_session_projection: &'a serde_json::Value,
     pub(crate) continuation_binding: &'a serde_json::Value,
     pub(crate) latest_run_graph_status: Option<&'a crate::state_store::RunGraphStatus>,
     pub(crate) latest_run_graph_recovery: Option<&'a crate::state_store::RunGraphRecoverySummary>,
@@ -92,7 +93,7 @@ pub(crate) fn build_status_json_report(
             })
         });
 
-    let summary_json = if inputs.summary_only {
+    let mut summary_json = if inputs.summary_only {
         serde_json::json!({
             "surface": "vida status",
             "view": "summary",
@@ -211,6 +212,33 @@ pub(crate) fn build_status_json_report(
             "latest_run_graph_dispatch_compact_summary": latest_run_graph_dispatch_compact_summary.clone(),
         })
     };
+
+    if let Some(object) = summary_json.as_object_mut() {
+        object.insert(
+            "operator_session_projection".to_string(),
+            inputs.operator_session_projection.clone(),
+        );
+        object.insert(
+            "current_session".to_string(),
+            inputs.operator_session_projection["current_session"].clone(),
+        );
+        object.insert(
+            "project_foreign_runs".to_string(),
+            inputs.operator_session_projection["project_foreign_runs"].clone(),
+        );
+        object.insert(
+            "project_foreign_blockers".to_string(),
+            inputs.operator_session_projection["project_foreign_blockers"].clone(),
+        );
+        object.insert(
+            "global_blockers".to_string(),
+            inputs.operator_session_projection["global_blockers"].clone(),
+        );
+        object.insert(
+            "claim_conflicts".to_string(),
+            inputs.operator_session_projection["claim_conflicts"].clone(),
+        );
+    }
 
     if let Some(error) =
         crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json)
@@ -562,6 +590,13 @@ mod tests {
         });
         let root_session_write_guard = serde_json::json!({"mode": "locked"});
         let continuation_binding = serde_json::json!({"status": "bound"});
+        let operator_session_projection = serde_json::json!({
+            "current_session": {"session_id": "session-current"},
+            "project_foreign_runs": [{"run_id": "run-foreign"}],
+            "project_foreign_blockers": [{"claim_id": "claim-blocked"}],
+            "global_blockers": ["live_other_orchestrator_owner"],
+            "claim_conflicts": [{"claim_id": "claim-conflict"}],
+        });
         let launcher_runtime_paths =
             crate::doctor_launcher_summary_for_root(std::path::Path::new("/tmp/project"))
                 .expect("launcher summary should build");
@@ -588,6 +623,7 @@ mod tests {
             project_activation_pending: true,
             host_agents: None,
             root_session_write_guard: &root_session_write_guard,
+            operator_session_projection: &operator_session_projection,
             continuation_binding: &continuation_binding,
             latest_run_graph_status: Some(&run_status),
             latest_run_graph_recovery: None,
@@ -623,6 +659,7 @@ mod tests {
             project_activation_pending: true,
             host_agents: None,
             root_session_write_guard: &root_session_write_guard,
+            operator_session_projection: &operator_session_projection,
             continuation_binding: &continuation_binding,
             latest_run_graph_status: Some(&run_status),
             latest_run_graph_recovery: None,
@@ -664,6 +701,26 @@ mod tests {
             full_json["latest_run_graph_dispatch_receipt"]["activation_semantics"]
                 ["activation_kind"],
             "execution_evidence"
+        );
+        assert_eq!(
+            summary_json["current_session"]["session_id"],
+            "session-current"
+        );
+        assert_eq!(
+            full_json["project_foreign_runs"][0]["run_id"],
+            "run-foreign"
+        );
+        assert_eq!(
+            full_json["project_foreign_blockers"][0]["claim_id"],
+            "claim-blocked"
+        );
+        assert_eq!(
+            full_json["global_blockers"][0],
+            "live_other_orchestrator_owner"
+        );
+        assert_eq!(
+            full_json["claim_conflicts"][0]["claim_id"],
+            "claim-conflict"
         );
         assert_eq!(
             full_json["latest_run_graph_dispatch_compact_summary"]["route_truth"]
@@ -793,6 +850,13 @@ mod tests {
             recovery_ready: true,
         };
         let root_session_write_guard = serde_json::json!({"mode": "locked"});
+        let operator_session_projection = serde_json::json!({
+            "current_session": {"session_id": "session-current"},
+            "project_foreign_runs": [],
+            "project_foreign_blockers": [],
+            "global_blockers": [],
+            "claim_conflicts": [],
+        });
         let continuation_binding = serde_json::json!({
             "status": "bound",
             "primary_path": "dispatch.implementer"
@@ -828,6 +892,7 @@ mod tests {
             project_activation_pending: true,
             host_agents: None,
             root_session_write_guard: &root_session_write_guard,
+            operator_session_projection: &operator_session_projection,
             continuation_binding: &continuation_binding,
             latest_run_graph_status: Some(&run_status),
             latest_run_graph_recovery: None,

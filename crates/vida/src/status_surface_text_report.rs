@@ -31,6 +31,7 @@ pub(crate) struct StatusTextReportInputs<'a> {
     pub(crate) latest_run_graph_dispatch_receipt_signal_ambiguous: bool,
     pub(crate) latest_run_graph_dispatch_receipt_summary_inconsistent: bool,
     pub(crate) latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
+    pub(crate) operator_session_projection: &'a serde_json::Value,
     pub(crate) continuation_binding: &'a serde_json::Value,
     pub(crate) host_agents: Option<&'a serde_json::Value>,
     pub(crate) latest_run_graph_dispatch_receipt:
@@ -171,6 +172,13 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
             inputs.state_spine.state_schema_version,
             inputs.state_spine.entity_surface_count,
             inputs.state_spine.authoritative_mutation_root
+        ),
+    );
+    crate::surface_render::print_surface_line(
+        inputs.render,
+        "operator session projection",
+        &crate::operator_session_projection::projection_plain_summary(
+            inputs.operator_session_projection,
         ),
     );
     match inputs.effective_bundle_receipt {

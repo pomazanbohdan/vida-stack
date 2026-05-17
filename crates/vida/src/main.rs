@@ -35,6 +35,7 @@ mod launcher_task_commands;
 mod memory_surface;
 mod model_profile_contract;
 mod operator_contracts;
+mod operator_session_projection;
 mod orchestrator_session_surface;
 mod project_activator_activation_summary;
 mod project_activator_agent_extensions_summary;

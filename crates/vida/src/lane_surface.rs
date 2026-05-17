@@ -23,6 +23,7 @@ struct LaneEnvelope {
     lane_status: String,
     selected_backend: Option<String>,
     dispatch_status: String,
+    operator_session_projection: serde_json::Value,
     supersedes_receipt_id: Option<String>,
     exception_path_receipt_id: Option<String>,
     exception_path_metadata_path: Option<String>,
@@ -449,6 +450,7 @@ fn build_lane_envelope(
     status: Option<crate::state_store::RunGraphStatus>,
     exception_path_metadata_path: Option<String>,
     exception_path_metadata: Option<ExceptionTakeoverMetadata>,
+    operator_session_projection: serde_json::Value,
     blocked: bool,
     blocker_codes: Vec<String>,
     next_actions: Vec<String>,
@@ -516,6 +518,7 @@ fn build_lane_envelope(
         lane_status,
         selected_backend,
         dispatch_status,
+        operator_session_projection,
         supersedes_receipt_id,
         exception_path_receipt_id,
         exception_path_metadata_path,
@@ -852,6 +855,13 @@ fn emit_lane_envelope(envelope: &LaneEnvelope, as_json: bool) -> ExitCode {
         crate::RenderMode::Plain,
         "dispatch_status",
         &envelope.dispatch_status,
+    );
+    crate::print_surface_line(
+        crate::RenderMode::Plain,
+        "operator_session_projection",
+        &crate::operator_session_projection::projection_plain_summary(
+            &envelope.operator_session_projection,
+        ),
     );
     if !envelope.blocker_codes.is_empty() {
         crate::print_surface_line(
@@ -1266,6 +1276,14 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let operator_session_projection =
+        match crate::operator_session_projection::build_operator_session_projection(&store).await {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("Failed to build operator session projection: {error}");
+                return ExitCode::from(1);
+            }
+        };
 
     match command {
         LaneCommand::ShowLatest { as_json } => {
@@ -1308,6 +1326,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     .exists()
                     .then(|| exception_path_metadata_path.display().to_string()),
                 exception_path_metadata,
+                operator_session_projection,
                 truth.blocked,
                 truth.blocker_codes,
                 truth.next_actions,
@@ -1355,6 +1374,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     .exists()
                     .then(|| exception_path_metadata_path.display().to_string()),
                 exception_path_metadata,
+                operator_session_projection,
                 truth.blocked,
                 truth.blocker_codes,
                 truth.next_actions,
@@ -1560,6 +1580,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     .exists()
                     .then(|| exception_path_metadata_path.display().to_string()),
                 exception_path_metadata,
+                operator_session_projection.clone(),
                 truth.blocked,
                 truth.blocker_codes,
                 truth.next_actions,
@@ -1701,6 +1722,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     .exists()
                     .then(|| exception_path_metadata_path.display().to_string()),
                 exception_path_metadata,
+                operator_session_projection.clone(),
                 truth.blocked,
                 truth.blocker_codes,
                 truth.next_actions,
@@ -1753,6 +1775,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 status,
                 Some(metadata_path),
                 Some(metadata),
+                operator_session_projection.clone(),
                 truth.blocked,
                 truth.blocker_codes,
                 truth.next_actions,
@@ -1814,6 +1837,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     .exists()
                     .then(|| exception_path_metadata_path.display().to_string()),
                 exception_path_metadata,
+                operator_session_projection.clone(),
                 truth.blocked,
                 truth.blocker_codes,
                 truth.next_actions,
@@ -2292,6 +2316,7 @@ mod tests {
             None,
             Some("/tmp/exception.json".to_string()),
             Some(metadata.clone()),
+            serde_json::json!({}),
             false,
             Vec::new(),
             Vec::new(),
@@ -2318,6 +2343,7 @@ mod tests {
             None,
             Some("/tmp/exception.json".to_string()),
             Some(metadata),
+            serde_json::json!({}),
             false,
             Vec::new(),
             Vec::new(),
