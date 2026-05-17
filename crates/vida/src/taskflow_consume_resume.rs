@@ -1046,7 +1046,20 @@ async fn completed_task_close_reconcile_resume_target(
     if unit_kind == Some("downstream_dispatch_target")
         && binding.active_bounded_unit["dispatch_target"].as_str() == Some("closure")
     {
-        return Ok(Some("closure".to_string()));
+        let task_id = binding.task_id.trim();
+        let task_id = if task_id.is_empty() {
+            status.task_id.as_str()
+        } else {
+            task_id
+        };
+        let task = store.show_task(task_id).await.map_err(|error| {
+            format!("Failed to read task-close task `{task_id}`: {error}")
+        })?;
+        return if task.status == "closed" {
+            Ok(Some("closure".to_string()))
+        } else {
+            Ok(None)
+        };
     }
     if !matches!(unit_kind, Some("run_graph_task" | "task_graph_task")) {
         return Ok(None);
