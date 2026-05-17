@@ -11,6 +11,7 @@ use crate::{
 
 const SESSION_TTL_SECONDS: i64 = 2 * 60 * 60;
 const UPSTREAM_VIDA_ISSUE_OWNER: &str = "pomazanbohdan/vida-stack";
+const MAX_SESSION_STORE_BYTES: u64 = 1024 * 1024;
 
 fn now_epoch_seconds() -> i64 {
     SystemTime::now()
@@ -92,6 +93,15 @@ fn canonicalized_current_dir() -> String {
 }
 
 fn read_sessions(path: &Path) -> Vec<serde_json::Value> {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return Vec::new();
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Vec::new();
+    }
+    if metadata.len() > MAX_SESSION_STORE_BYTES {
+        return Vec::new();
+    }
     let Ok(body) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
@@ -588,7 +598,7 @@ mod tests {
     use super::{
         build_runtime_owner_evidence, classify_sessions_with_liveness, context_summary_map,
         current_session_id, current_session_record, merge_current_session, now_epoch_seconds,
-        stable_local_session_id, ProcessLiveness,
+        read_sessions, stable_local_session_id, ProcessLiveness, MAX_SESSION_STORE_BYTES,
     };
     use crate::temp_state::TempStateHarness;
     use std::sync::{Mutex, OnceLock};
@@ -890,5 +900,35 @@ mod tests {
 
         assert_eq!(live_other.len(), 1);
         assert!(stale.is_empty());
+    }
+
+    #[test]
+    fn read_sessions_rejects_oversized_files() {
+        let harness = TempStateHarness::new().expect("temp state should initialize");
+        let sessions_path = harness
+            .path()
+            .join("orchestrator-sessions")
+            .join("sessions.json");
+        std::fs::create_dir_all(sessions_path.parent().unwrap()).expect("parent should create");
+        std::fs::write(&sessions_path, vec![b'x'; (MAX_SESSION_STORE_BYTES as usize) + 1])
+            .expect("oversized file should be written");
+
+        assert!(read_sessions(&sessions_path).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_sessions_rejects_symlink_targets() {
+        use std::os::unix::fs as unix_fs;
+        let harness = TempStateHarness::new().expect("temp state should initialize");
+        let sessions_dir = harness.path().join("orchestrator-sessions");
+        std::fs::create_dir_all(&sessions_dir).expect("sessions directory should create");
+        let target = harness.path().join("external.json");
+        std::fs::write(&target, r#"{"sessions":[{"session_id":"leak"}]}"#)
+            .expect("target should write");
+        let sessions_path = sessions_dir.join("sessions.json");
+        unix_fs::symlink(&target, &sessions_path).expect("symlink should create");
+
+        assert!(read_sessions(&sessions_path).is_empty());
     }
 }
