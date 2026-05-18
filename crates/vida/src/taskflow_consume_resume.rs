@@ -2625,7 +2625,11 @@ fn dispatch_receipt_internal_retry_eligible(
 ) -> bool {
     if dispatch_receipt.dispatch_kind != "agent_lane"
         || dispatch_receipt.dispatch_status != "blocked"
-        || dispatch_receipt.blocker_code.as_deref() != Some("internal_activation_view_only")
+        || !matches!(
+            dispatch_receipt.blocker_code.as_deref(),
+            Some("internal_activation_view_only")
+                | Some(super::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
+        )
         || !dispatch_receipt
             .dispatch_packet_path
             .as_deref()
@@ -10661,6 +10665,101 @@ agent_system:
                 &receipt
             ),
             "internal activation-view retry receipts must suppress stale downstream lineage reuse"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn allow_downstream_resume_lineage_fails_closed_for_internal_dispatch_timeout_retry() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-allow-downstream-internal-timeout-retry-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("temp root");
+        fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      carriers:
+        middle:
+          model: gpt-5.4
+          sandbox_mode: workspace-write
+          model_reasoning_effort: medium
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("config");
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue coach review".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string(), "coach".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-internal-timeout-downstream-retry".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec".to_string()),
+            dispatch_packet_path: Some("/tmp/coach-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/coach-result.json".to_string()),
+            blocker_code: Some(
+                super::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
+                    .to_string(),
+            ),
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("stale verifier lineage".to_string()),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: Some("/tmp/stale-verifier-packet.json".to_string()),
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("/tmp/stale-verifier-result.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_active_target: Some("verification".to_string()),
+            downstream_dispatch_last_target: Some("verification".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-22T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            !super::allow_downstream_resume_lineage(
+                Some(root.as_path()),
+                Some(&role_selection),
+                &receipt
+            ),
+            "internal-timeout retry receipts must suppress stale downstream lineage reuse"
         );
 
         let _ = fs::remove_dir_all(&root);
