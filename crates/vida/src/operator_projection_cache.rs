@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 pub(crate) fn read_fresh_json_projection(
     state_dir: &Path,
     projection_name: &str,
@@ -48,16 +51,44 @@ pub(crate) fn write_json_projection(
 
 pub(crate) fn touch_state_mutation_marker(state_dir: &Path) {
     let path = state_dir.join(".operator-projection-cache-state-marker");
-    let _ = std::fs::write(
-        path,
-        format!(
-            "{}",
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0)
-        ),
+    let body = format!(
+        "{}",
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
     );
+    let _ = write_marker_without_following_symlinks(&path, &body);
+}
+
+fn write_marker_without_following_symlinks(path: &Path, body: &str) -> std::io::Result<()> {
+    if let Ok(metadata) = std::fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "refusing to write marker through symlink",
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        let mut options = std::fs::OpenOptions::new();
+        options
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW);
+        let mut file = options.open(path)?;
+        std::io::Write::write_all(&mut file, body.as_bytes())?;
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, body)
+    }
 }
 
 fn projection_path(state_dir: &Path, projection_name: &str) -> PathBuf {
@@ -106,6 +137,9 @@ mod tests {
         touch_state_mutation_marker, write_json_projection,
     };
     use std::{fs, time::Duration};
+
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
 
     #[test]
     fn json_projection_cache_invalidates_when_state_marker_is_newer() {
@@ -182,4 +216,33 @@ mod tests {
         assert!(read_fresh_json_projection(&root, "taskflow-graph-summary-latest").is_none());
         let _ = fs::remove_dir_all(root);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn touch_state_mutation_marker_does_not_follow_symlink() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-symlink-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+
+        let victim = root.join("victim");
+        fs::write(&victim, "victim-before").expect("victim should be writable");
+
+        let marker = root.join(".operator-projection-cache-state-marker");
+        symlink(&victim, &marker).expect("marker symlink should be creatable");
+
+        touch_state_mutation_marker(&root);
+
+        let victim_after = fs::read_to_string(&victim).expect("victim should remain readable");
+        assert_eq!(victim_after, "victim-before");
+        assert!(marker.symlink_metadata().expect("symlink metadata should exist").file_type().is_symlink());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
 }
