@@ -102,6 +102,12 @@ fn normalize_run_graph_blocker_codes(
     blocker_codes: &[String],
     blocked_evidence_present: bool,
 ) -> Vec<String> {
+    if blocker_codes
+        .iter()
+        .any(|code| code.trim() == "missing_owned_write_scope")
+    {
+        return vec!["missing_owned_write_scope".to_string()];
+    }
     let normalized = crate::operator_contracts::normalize_blocker_codes(
         blocker_codes,
         crate::release_contract_adapters::canonical_blocker_codes,
@@ -575,6 +581,16 @@ fn next_lawful_operator_action_for_projection(
         return Some(format!("vida lane show {} --json", status.run_id));
     }
     if let Some(command) = receipt.and_then(|value| {
+        if value
+            .downstream_dispatch_blockers
+            .iter()
+            .any(|blocker| blocker == "missing_owned_write_scope")
+        {
+            return Some(format!(
+                "vida taskflow packet render {} --json",
+                status.run_id
+            ));
+        }
         next_lawful_operator_action_for_dispatch_resolution(
             status,
             value,
@@ -6232,7 +6248,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_status_action_for_downstream_missing_owned_scope_points_to_lane_show() {
+    fn recovery_status_action_for_downstream_missing_owned_scope_points_to_packet_render() {
         let status = RunGraphStatus {
             run_id: "run-missing-owned-scope".to_string(),
             task_id: "task-missing-owned-scope".to_string(),
@@ -6286,12 +6302,12 @@ mod tests {
 
         assert_eq!(
             command.as_deref(),
-            Some("vida lane show run-missing-owned-scope --json")
+            Some("vida taskflow packet render run-missing-owned-scope --json")
         );
     }
 
     #[test]
-    fn run_graph_status_payload_blocks_downstream_noncanonical_blocker() {
+    fn run_graph_status_payload_preserves_missing_owned_scope_blocker() {
         let status = RunGraphStatus {
             run_id: "run-status-missing-owned-scope".to_string(),
             task_id: "task-status-missing-owned-scope".to_string(),
@@ -6367,15 +6383,13 @@ mod tests {
             .as_array()
             .expect("blocker_codes should be an array")
             .iter()
-            .any(|value| value == "tool_execution_failed"));
+            .any(|value| value == "missing_owned_write_scope"));
         assert!(payload["next_actions"]
             .as_array()
             .expect("next_actions should be an array")
             .iter()
-            .any(|value| value
-                .as_str()
-                .is_some_and(|action| action
-                    .contains("vida lane show run-status-missing-owned-scope --json"))));
+            .any(|value| value.as_str().is_some_and(|action| action
+                .contains("vida taskflow packet render run-status-missing-owned-scope --json"))));
     }
 
     #[test]

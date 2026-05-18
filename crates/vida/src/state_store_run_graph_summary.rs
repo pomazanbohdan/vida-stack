@@ -36,6 +36,17 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
     }
     let stale_downstream_blockers_are_superseded_by_ready_handoff =
         ready_dispatch_handoff_matches_downstream_receipt(&status, &receipt);
+    let executed_analysis_missing_owned_scope_handoff = receipt.dispatch_status == "executed"
+        && receipt.dispatch_target == "analysis"
+        && receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && receipt
+            .downstream_dispatch_blockers
+            .iter()
+            .any(|blocker| blocker == "missing_owned_write_scope");
     let blocked_receipt = matches!(receipt.dispatch_status.as_str(), "blocked" | "failed")
         || matches!(
             receipt.lane_status.as_deref(),
@@ -49,6 +60,7 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
         || (!stale_downstream_blockers_are_superseded_by_ready_handoff
+            && !executed_analysis_missing_owned_scope_handoff
             && !receipt.downstream_dispatch_blockers.is_empty());
     let spec_post_design_gate_blocked = receipt.dispatch_status == "executed"
         && receipt.downstream_dispatch_target.as_deref() == Some("work-pool-pack")
@@ -3931,6 +3943,89 @@ mod tests {
 
         let reconciled = store
             .run_graph_status("run-ready-handoff")
+            .await
+            .expect("load reconciled status");
+        assert_eq!(reconciled.status, "ready");
+        assert_eq!(reconciled.active_node, "analysis");
+        assert_eq!(reconciled.next_node.as_deref(), Some("writer"));
+        assert_eq!(reconciled.lifecycle_stage, "analysis_active");
+        assert_eq!(reconciled.handoff_state, "awaiting_writer");
+        assert_eq!(reconciled.resume_target, "dispatch.writer_lane");
+        assert!(reconciled.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn blocked_analysis_status_with_missing_owned_scope_reconciles_to_writer_handoff() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-missing-scope-handoff-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-missing-scope-handoff",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "task-missing-scope-handoff".to_string();
+        status.active_node = "analysis".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked analysis status");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-missing-scope-handoff".to_string(),
+                dispatch_target: "analysis".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_completed".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida lane complete".to_string()),
+                dispatch_command: Some("vida lane complete".to_string()),
+                dispatch_packet_path: Some("/tmp/analysis-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/analysis-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: Some("writer".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some("activate writer".to_string()),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["missing_owned_write_scope".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: Some("/tmp/analysis-result.json".to_string()),
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("internal_subagents".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-05-17T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist completed analysis receipt");
+
+        let reconciled = store
+            .run_graph_status("run-missing-scope-handoff")
             .await
             .expect("load reconciled status");
         assert_eq!(reconciled.status, "ready");

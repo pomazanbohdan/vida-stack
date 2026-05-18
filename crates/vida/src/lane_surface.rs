@@ -1474,6 +1474,10 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+            let missing_owned_scope_handoff = receipt
+                .downstream_dispatch_blockers
+                .iter()
+                .any(|blocker| blocker == "missing_owned_write_scope");
             receipt.downstream_dispatch_ready = true;
             receipt.downstream_dispatch_blockers.clear();
             receipt.downstream_dispatch_status = Some("packet_ready".to_string());
@@ -1488,14 +1492,19 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
             match decode_lane_completion_packet_context(&packet) {
                 Ok(Some((role_selection, run_graph_bootstrap))) => {
-                    if let Err(error) =
-                        crate::runtime_dispatch_state::refresh_downstream_dispatch_preview(
-                            &store,
-                            &role_selection,
-                            &run_graph_bootstrap,
-                            &mut receipt,
-                        )
-                        .await
+                    let owned_paths_override = exception_path_metadata
+                        .as_ref()
+                        .filter(|_| takeover_active || missing_owned_scope_handoff)
+                        .map(|metadata| metadata.owned_write_scope.as_slice())
+                        .unwrap_or(&[]);
+                    if let Err(error) = crate::runtime_dispatch_state::refresh_downstream_dispatch_preview_with_owned_paths(
+                        &store,
+                        &role_selection,
+                        &run_graph_bootstrap,
+                        &mut receipt,
+                        owned_paths_override,
+                    )
+                    .await
                     {
                         eprintln!(
                             "Failed to refresh downstream dispatch preview after lane completion: {error}"
@@ -1528,6 +1537,10 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 eprintln!("{error}");
                 return ExitCode::from(1);
             }
+            if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
+                eprintln!("Failed to persist lane completion evidence: {error}");
+                return ExitCode::from(1);
+            }
             if receipt.dispatch_status == "executed" {
                 if let Some(current_status) = status.as_ref() {
                     let executed_status = crate::runtime_dispatch_state::apply_first_handoff_execution_to_run_graph_status(
@@ -1554,10 +1567,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 }
-            }
-            if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
-                eprintln!("Failed to persist lane completion evidence: {error}");
-                return ExitCode::from(1);
             }
             status = store.run_graph_status(run_id).await.ok();
             recovery = store.run_graph_recovery_summary(run_id).await.ok();
@@ -2191,7 +2200,7 @@ mod tests {
         assert!(truth.blocked);
         assert!(truth
             .blocker_codes
-            .contains(&"tool_execution_failed".to_string()));
+            .contains(&"missing_owned_write_scope".to_string()));
     }
 
     #[test]
@@ -2209,7 +2218,7 @@ mod tests {
         assert!(truth.blocked);
         assert!(truth
             .blocker_codes
-            .contains(&"tool_execution_failed".to_string()));
+            .contains(&"missing_owned_write_scope".to_string()));
         assert!(truth
             .next_actions
             .iter()

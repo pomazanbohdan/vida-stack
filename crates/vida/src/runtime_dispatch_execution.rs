@@ -115,7 +115,6 @@ fn default_activation_view(
 
 const DEFAULT_DISPATCH_TIMEOUT_KILL_AFTER_GRACE_SECONDS: u64 = 1;
 const DEFAULT_ACTIVATION_VIEW_RENDER_TIMEOUT_SECONDS: u64 = 2;
-const DEFAULT_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_CAP_SECONDS: u64 = 60;
 
 async fn bounded_activation_view(
     state_root: &Path,
@@ -213,7 +212,6 @@ fn configured_internal_host_dispatch_wall_timeout_seconds(
         role_selection,
         receipt,
     )
-    .min(DEFAULT_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_CAP_SECONDS)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -722,7 +720,9 @@ fn parse_internal_codex_exec_output(stdout: &str) -> ParsedInternalCodexOutput {
                             .map(str::trim)
                             .filter(|value| !value.is_empty())
                         {
-                            error_messages.push(message.to_string());
+                            if !internal_codex_message_is_benign_warning(message) {
+                                error_messages.push(message.to_string());
+                            }
                         }
                     }
                     _ => {}
@@ -737,6 +737,12 @@ fn parse_internal_codex_exec_output(stdout: &str) -> ParsedInternalCodexOutput {
         result_text,
         error_messages,
     }
+}
+
+fn internal_codex_message_is_benign_warning(message: &str) -> bool {
+    let normalized = message.trim().to_ascii_lowercase();
+    normalized.starts_with("under-development features enabled:")
+        || normalized.contains("to suppress this warning")
 }
 
 fn internal_codex_stderr_is_benign_warning(stderr: &str) -> bool {
@@ -871,7 +877,9 @@ fn apply_internal_subagent_profile_overlay(
         serde_json::json!(profile_id),
     );
     for (target_key, profile_key) in [
+        ("model", "model_ref"),
         ("selected_model_ref", "model_ref"),
+        ("model_provider", "provider"),
         ("selected_model_provider", "provider"),
         ("selected_reasoning_effort", "reasoning_effort"),
         (
@@ -2266,6 +2274,19 @@ mod tests {
             true
         ));
 
+        let parsed_with_unstable_feature_warning = parse_internal_codex_exec_output(
+            r#"{"type":"item.completed","item":{"id":"1","type":"error","message":"Under-development features enabled: memories. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in config.toml."}}
+{"type":"item.completed","item":{"id":"2","type":"agent_message","text":"final"}}"#,
+        );
+        assert!(parsed_with_unstable_feature_warning
+            .error_messages
+            .is_empty());
+        assert!(internal_codex_output_confirms_execution(
+            &parsed_with_unstable_feature_warning,
+            "",
+            true
+        ));
+
         let parsed_clean = parse_internal_codex_exec_output(
             r#"{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"final"}}"#,
         );
@@ -3031,7 +3052,7 @@ agent_system:
         .expect("internal route profile should bridge through host carrier");
 
         assert_eq!(carrier["role_id"].as_str(), Some("middle"));
-        assert_eq!(carrier["model"].as_str(), Some("gpt-5.4"));
+        assert_eq!(carrier["model"].as_str(), Some("internal_review"));
         assert_eq!(
             carrier["selected_model_profile_id"].as_str(),
             Some("internal_review")
@@ -3113,22 +3134,20 @@ agent_system:
     }
 
     #[test]
-    fn internal_host_dispatch_wall_timeout_cap_stays_below_operator_timeout() {
+    fn internal_host_dispatch_wall_timeout_uses_configured_route_window() {
         let wrapped = wrap_command_with_optional_timeout(
             "codex".to_string(),
             vec!["exec".to_string()],
-            Some(super::DEFAULT_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_CAP_SECONDS + 180),
+            Some(420),
         );
 
         assert_eq!(
             wrapped.timeout_wrapper,
             Some(CommandTimeoutWrapper {
-                timeout_seconds: super::DEFAULT_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_CAP_SECONDS
-                    + 180,
+                timeout_seconds: 420,
                 kill_after_grace_seconds: 1,
             })
         );
-        assert!(super::DEFAULT_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_CAP_SECONDS < 120);
     }
 
     #[cfg(unix)]

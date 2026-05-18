@@ -650,6 +650,12 @@ async fn validate_run_graph_resume_state(
         .await
         .ok()
         .flatten();
+    if active_receipt
+        .as_ref()
+        .is_some_and(dispatch_receipt_retry_eligible)
+    {
+        return Ok(());
+    }
     match validate_run_graph_resume_gate(&status) {
         Ok(()) => Ok(()),
         Err(_error) if resume_from_persisted_final_snapshot(store, run_id)? => Ok(()),
@@ -686,6 +692,12 @@ async fn validate_run_graph_resume_state_strict(
         .await
         .ok()
         .flatten();
+    if active_receipt
+        .as_ref()
+        .is_some_and(dispatch_receipt_retry_eligible)
+    {
+        return Ok(());
+    }
     validate_run_graph_resume_gate(&status).map_err(|error| {
         active_exception_takeover_resume_blocker_error(&status, active_receipt.as_ref())
             .unwrap_or(error)
@@ -5307,8 +5319,9 @@ mod tests {
         runtime_consumption_snapshot_has_failure_control_evidence,
         should_refresh_resumed_downstream_preview, sync_run_graph_after_retry_artifact,
         validate_receipt_packet_pair, validate_run_graph_resume_state,
-        validate_run_graph_resume_state_for_downstream_packet, PacketPathPlatform,
-        CONSUME_RESUME_HANDOFF_TIMEOUT, DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
+        validate_run_graph_resume_state_for_downstream_packet,
+        validate_run_graph_resume_state_strict, PacketPathPlatform, CONSUME_RESUME_HANDOFF_TIMEOUT,
+        DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
     use crate::state_store::{CreateTaskRequest, TaskExecutionSemantics};
@@ -6732,6 +6745,115 @@ agent_system:
             activation_agent_type: Some("middle".to_string()),
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("vibe_cli".to_string()),
+            recorded_at: "2026-04-10T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            crate::runtime_dispatch_state::fallback_backend_for_blocked_primary_dispatch_receipt(
+                &root,
+                &role_selection,
+                &receipt,
+            )
+            .as_deref(),
+            Some("internal_subagents")
+        );
+
+        fs::remove_dir_all(root).expect("cleanup temp root");
+    }
+
+    #[test]
+    fn blocked_primary_dispatch_result_prefers_route_fallback_on_retry() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-blocked-primary-result-fallback-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("temp root");
+        fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+agent_system:
+  subagents:
+    review_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("config");
+        let result_path = root.join("blocked-result.json");
+        fs::write(
+            &result_path,
+            serde_json::json!({
+                "status": "blocked",
+                "selected_backend": "review_cli",
+                "blocker_code": "timeout_without_takeover_authority"
+            })
+            .to_string(),
+        )
+        .expect("result");
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "review_cli",
+                        "fallback_executor_backend": "internal_subagents"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-blocked-primary-result".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("review-cli ...".to_string()),
+            dispatch_packet_path: Some(root.join("dispatch-packet.json").display().to_string()),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("after review".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_review_clean_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("review_cli".to_string()),
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
@@ -9045,6 +9167,79 @@ agent_system:
         validate_run_graph_resume_state_for_downstream_packet(&store, run_id)
             .await
             .expect("closure-complete receipt lineage should allow downstream resume validation");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn validate_run_graph_resume_state_accepts_retry_eligible_blocked_agent_receipt() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-retry-eligible-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-retry-eligible-resume";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "coach", "delivery");
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+        status.active_node = "coach".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist status");
+        let packet_path = store.root().join("retry-packet.json");
+        fs::write(&packet_path, "{}").expect("packet");
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some(
+                "vida agent-init --dispatch-packet retry-packet.json".to_string(),
+            ),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("review_cli".to_string()),
+            recorded_at: "2026-05-18T00:00:00Z".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist receipt");
+
+        validate_run_graph_resume_state(&store, run_id)
+            .await
+            .expect("retry-eligible blocked receipt should allow resume validation");
+        validate_run_graph_resume_state_strict(&store, run_id)
+            .await
+            .expect("strict resume validation should also allow retry-eligible receipts");
 
         let _ = fs::remove_dir_all(&root);
     }
