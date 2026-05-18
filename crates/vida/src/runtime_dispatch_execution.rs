@@ -202,6 +202,8 @@ fn configured_external_dispatch_wall_timeout_seconds(
         .filter(|seconds| *seconds > 0)
 }
 
+const MAX_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_SECONDS: u64 = 60;
+
 fn configured_internal_host_dispatch_wall_timeout_seconds(
     project_root: &Path,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -212,6 +214,7 @@ fn configured_internal_host_dispatch_wall_timeout_seconds(
         role_selection,
         receipt,
     )
+    .min(MAX_INTERNAL_HOST_DISPATCH_WALL_TIMEOUT_SECONDS)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3134,7 +3137,7 @@ agent_system:
     }
 
     #[test]
-    fn internal_host_dispatch_wall_timeout_uses_configured_route_window() {
+    fn internal_host_dispatch_wall_timeout_is_capped() {
         let wrapped = wrap_command_with_optional_timeout(
             "codex".to_string(),
             vec!["exec".to_string()],
@@ -3144,7 +3147,7 @@ agent_system:
         assert_eq!(
             wrapped.timeout_wrapper,
             Some(CommandTimeoutWrapper {
-                timeout_seconds: 420,
+                timeout_seconds: 60,
                 kill_after_grace_seconds: 1,
             })
         );
