@@ -2421,6 +2421,15 @@ fn retry_backend_for_dispatch_receipt(
         &role_selection.execution_plan,
         &dispatch_receipt.dispatch_target,
     );
+    let route_fallback =
+        route.and_then(crate::taskflow_routing::fallback_executor_backend_from_route);
+    if dispatch_receipt.blocker_code.as_deref() == Some("timeout_without_takeover_authority") {
+        if let Some(fallback) = route_fallback.clone() {
+            if Some(fallback.as_str()) != current_backend {
+                return Some(fallback);
+            }
+        }
+    }
     if let Some(next_review_backend) = distinct_review_retry_backend_from_route(
         &role_selection.execution_plan,
         &dispatch_receipt.dispatch_target,
@@ -2430,8 +2439,7 @@ fn retry_backend_for_dispatch_receipt(
         return Some(next_review_backend);
     }
 
-    route
-        .and_then(crate::taskflow_routing::fallback_executor_backend_from_route)
+    route_fallback
         .or_else(|| {
             dispatch_receipt
                 .dispatch_packet_path
@@ -6069,7 +6077,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_backend_prefers_distinct_review_fanout_backend_before_fallback() {
+    fn retry_backend_prefers_route_fallback_after_handoff_timeout() {
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -6128,7 +6136,71 @@ mod tests {
 
         assert_eq!(
             retry_backend_for_dispatch_receipt(&role_selection, &receipt).as_deref(),
-            Some("opencode_cli")
+            Some("internal_subagents")
+        );
+    }
+
+    #[test]
+    fn retry_backend_uses_distinct_review_fanout_before_fallback_for_non_timeout_blocker() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue coach review".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string(), "coach".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "review_primary",
+                        "fallback_executor_backend": "internal_subagents",
+                        "fanout_executor_backends": ["review_primary", "review_secondary"]
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-review-fanout-non-timeout-retry".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:review_primary".to_string()),
+            dispatch_command: Some("review-primary".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: Some("coach".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("review_primary".to_string()),
+            recorded_at: "2026-04-18T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            retry_backend_for_dispatch_receipt(&role_selection, &receipt).as_deref(),
+            Some("review_secondary")
         );
     }
 
