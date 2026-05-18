@@ -2116,13 +2116,23 @@ impl StateStore {
         &self,
         run_id: &str,
     ) -> Result<Option<RunGraphDispatchReceipt>, StateStoreError> {
+        let status = self.run_graph_status(run_id).await.ok();
+        self.run_graph_dispatch_receipt_for_status(run_id, status.as_ref())
+            .await
+    }
+
+    pub(crate) async fn run_graph_dispatch_receipt_for_status(
+        &self,
+        run_id: &str,
+        status: Option<&RunGraphStatus>,
+    ) -> Result<Option<RunGraphDispatchReceipt>, StateStoreError> {
         let Some(receipt) = self.run_graph_dispatch_receipt_stored(run_id).await? else {
             return Ok(None);
         };
         let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
         let mut receipt: RunGraphDispatchReceipt = receipt.into();
-        if let Ok(status) = self.run_graph_status(run_id).await {
-            terminal_closure_supersedes_stale_handoff_receipt(&status, &mut receipt);
+        if let Some(status) = status {
+            terminal_closure_supersedes_stale_handoff_receipt(status, &mut receipt);
         }
         Ok(Some(receipt))
     }

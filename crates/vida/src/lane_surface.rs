@@ -1,11 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use serde::Serialize;
 
 use crate::contract_profile_adapter::render_operator_contract_envelope;
 use crate::taskflow_task_bridge::proxy_state_dir;
 use crate::{state_store::StateStore, ProxyArgs};
+
+const LANE_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Serialize)]
 struct LaneEnvelope {
@@ -1139,6 +1142,42 @@ fn emit_blocked_lane_envelope(as_json: bool) -> ExitCode {
     ExitCode::from(2)
 }
 
+fn lane_show_projection_name(run_id: &str) -> String {
+    let suffix = run_id
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() || value == '-' || value == '_' {
+                value
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    format!("lane-show-{suffix}")
+}
+
+fn write_lane_show_projection_cache(state_dir: &Path, run_id: &str, envelope: &LaneEnvelope) {
+    if let Ok(payload) = serde_json::to_value(envelope) {
+        crate::operator_projection_cache::write_json_projection(
+            state_dir,
+            &lane_show_projection_name(run_id),
+            &payload,
+        );
+    }
+}
+
+fn emit_cached_lane_show_projection(cached: String) -> ExitCode {
+    let status = serde_json::from_str::<serde_json::Value>(&cached)
+        .ok()
+        .and_then(|value| value["status"].as_str().map(ToOwned::to_owned));
+    println!("{cached}");
+    if status.as_deref() == Some("pass") {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    }
+}
+
 fn exception_takeover_metadata_dir(state_root: &Path) -> PathBuf {
     state_root.join("lane-exception-path-metadata")
 }
@@ -1410,6 +1449,188 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
         }
     };
     let state_dir = proxy_state_dir();
+
+    match &command {
+        LaneCommand::ShowLatest { as_json } => {
+            if *as_json {
+                if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+                    &state_dir,
+                    &lane_show_projection_name("latest"),
+                ) {
+                    return emit_cached_lane_show_projection(cached);
+                }
+            }
+            let store = match StateStore::open_existing_read_only_with_timeout(
+                state_dir.clone(),
+                LANE_SURFACE_LOCK_TIMEOUT,
+            )
+            .await
+            {
+                Ok(store) => store,
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    return ExitCode::from(1);
+                }
+            };
+            let operator_session_projection =
+                match crate::operator_session_projection::build_operator_session_projection(&store)
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        eprintln!("Failed to build operator session projection: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let Some(summary) = (match store.latest_run_graph_dispatch_receipt_summary().await {
+                Ok(summary) => summary,
+                Err(error) => {
+                    eprintln!("Failed to read latest lane receipt summary: {error}");
+                    return ExitCode::from(1);
+                }
+            }) else {
+                eprintln!("No lane receipt found.");
+                return ExitCode::from(2);
+            };
+            let status = match store.run_graph_status(&summary.run_id).await {
+                Ok(status) => Some(status),
+                Err(_) => None,
+            };
+            let recovery = status.as_ref().map(|status| {
+                crate::state_store::RunGraphRecoverySummary::from_status(status.clone())
+            });
+            let exception_path_metadata_path =
+                match exception_takeover_metadata_path(store.root(), &summary.run_id) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let exception_path_metadata =
+                match read_exception_takeover_metadata(store.root(), &summary.run_id) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let truth = derive_lane_show_truth(&summary, recovery.as_ref());
+            let envelope = build_lane_envelope(
+                summary,
+                status,
+                exception_path_metadata_path
+                    .exists()
+                    .then(|| exception_path_metadata_path.display().to_string()),
+                exception_path_metadata,
+                operator_session_projection,
+                truth.blocked,
+                truth.blocker_codes,
+                truth.next_actions,
+            );
+            if *as_json {
+                write_lane_show_projection_cache(&state_dir, "latest", &envelope);
+            }
+            return emit_lane_envelope(&envelope, *as_json);
+        }
+        LaneCommand::ShowRun { run_id, as_json } => {
+            if *as_json {
+                if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+                    &state_dir,
+                    &lane_show_projection_name(run_id),
+                ) {
+                    return emit_cached_lane_show_projection(cached);
+                }
+            }
+            let store = match StateStore::open_existing_read_only_with_timeout(
+                state_dir.clone(),
+                LANE_SURFACE_LOCK_TIMEOUT,
+            )
+            .await
+            {
+                Ok(store) => store,
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    return ExitCode::from(1);
+                }
+            };
+            let operator_session_projection =
+                match crate::operator_session_projection::build_operator_session_projection(&store)
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        eprintln!("Failed to build operator session projection: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let Some(receipt) = (match store
+                .run_graph_dispatch_receipt_for_status(run_id, None)
+                .await
+            {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    eprintln!("Failed to read lane receipt `{run_id}`: {error}");
+                    return ExitCode::from(1);
+                }
+            }) else {
+                eprintln!("Missing lane receipt for `{run_id}`.");
+                return ExitCode::from(2);
+            };
+            let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+            let needs_status_projection = summary.lane_status
+                != crate::LaneStatus::LaneCompleted.as_str()
+                || summary.dispatch_status != "executed"
+                || summary.blocker_code.is_some()
+                || summary
+                    .downstream_dispatch_blockers
+                    .iter()
+                    .any(|value| !value.trim().is_empty());
+            let status = if needs_status_projection {
+                store.run_graph_status(run_id).await.ok()
+            } else {
+                None
+            };
+            let recovery = status.as_ref().map(|status| {
+                crate::state_store::RunGraphRecoverySummary::from_status(status.clone())
+            });
+            let exception_path_metadata_path =
+                match exception_takeover_metadata_path(store.root(), run_id) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let exception_path_metadata =
+                match read_exception_takeover_metadata(store.root(), run_id) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let truth = derive_lane_show_truth(&summary, recovery.as_ref());
+            let envelope = build_lane_envelope(
+                summary,
+                status,
+                exception_path_metadata_path
+                    .exists()
+                    .then(|| exception_path_metadata_path.display().to_string()),
+                exception_path_metadata,
+                operator_session_projection,
+                truth.blocked,
+                truth.blocker_codes,
+                truth.next_actions,
+            );
+            if *as_json {
+                write_lane_show_projection_cache(&state_dir, run_id, &envelope);
+            }
+            return emit_lane_envelope(&envelope, *as_json);
+        }
+        _ => {}
+    }
+
     let store = match StateStore::open_existing(state_dir).await {
         Ok(store) => store,
         Err(error) => {
@@ -1475,7 +1696,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             emit_lane_envelope(&envelope, as_json)
         }
         LaneCommand::ShowRun { run_id, as_json } => {
-            let Some(receipt) = (match store.run_graph_dispatch_receipt(run_id).await {
+            let status = store.run_graph_status(run_id).await.ok();
+            let Some(receipt) = (match store
+                .run_graph_dispatch_receipt_for_status(run_id, status.as_ref())
+                .await
+            {
                 Ok(receipt) => receipt,
                 Err(error) => {
                     eprintln!("Failed to read lane receipt `{run_id}`: {error}");
@@ -1486,11 +1711,9 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 return ExitCode::from(2);
             };
             let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
-            let status = match store.run_graph_status(run_id).await {
-                Ok(status) => Some(status),
-                Err(_) => None,
-            };
-            let recovery = store.run_graph_recovery_summary(run_id).await.ok();
+            let recovery = status.as_ref().map(|status| {
+                crate::state_store::RunGraphRecoverySummary::from_status(status.clone())
+            });
             let exception_path_metadata_path =
                 match exception_takeover_metadata_path(store.root(), run_id) {
                     Ok(path) => path,
