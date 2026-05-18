@@ -37,6 +37,19 @@ fn rendered_host_runtime_agent_catalog(
     rows
 }
 
+fn selected_host_runtime_system_id(config: &serde_yaml::Value) -> Option<String> {
+    yaml_string(yaml_lookup(config, &["host_environment", "cli_system"]))
+        .filter(|system_id| {
+            !system_id.trim().is_empty()
+                && yaml_lookup(
+                    config,
+                    &["host_environment", "systems", system_id.trim()],
+                )
+                .is_some()
+        })
+        .map(|system_id| system_id.trim().to_string())
+}
+
 fn render_host_runtime_config_toml(
     runtime_label: &str,
     template_root: &Path,
@@ -680,9 +693,13 @@ pub(crate) fn read_host_runtime_agent_catalog(runtime_root: &Path) -> Vec<serde_
 pub(crate) fn overlay_host_runtime_agent_catalog(
     config: &serde_yaml::Value,
 ) -> Vec<serde_json::Value> {
-    let Some(serde_yaml::Value::Mapping(agents)) =
-        yaml_lookup(config, &["host_environment", "codex", "agents"])
-    else {
+    let Some(system_id) = selected_host_runtime_system_id(config) else {
+        return Vec::new();
+    };
+    let Some(serde_yaml::Value::Mapping(agents)) = yaml_lookup(
+        config,
+        &["host_environment", "systems", &system_id, "carriers"],
+    ) else {
         return Vec::new();
     };
     let platform_key = current_host_platform_key();
@@ -691,7 +708,7 @@ pub(crate) fn overlay_host_runtime_agent_catalog(
         &[
             "host_environment",
             "systems",
-            "codex",
+            &system_id,
             "app",
             "platform_overrides",
             platform_key,
@@ -704,7 +721,7 @@ pub(crate) fn overlay_host_runtime_agent_catalog(
             &[
                 "host_environment",
                 "systems",
-                "codex",
+                &system_id,
                 "app",
                 "agent_bootstrap_instructions",
             ],
@@ -716,7 +733,7 @@ pub(crate) fn overlay_host_runtime_agent_catalog(
         &[
             "host_environment",
             "systems",
-            "codex",
+            &system_id,
             "app",
             "platform_overrides",
             platform_key,
@@ -729,7 +746,7 @@ pub(crate) fn overlay_host_runtime_agent_catalog(
             &[
                 "host_environment",
                 "systems",
-                "codex",
+                &system_id,
                 "app",
                 "shell_environment_policy",
             ],
@@ -814,26 +831,26 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
 
-    fn configured_codex_config() -> serde_yaml::Value {
+    fn configured_host_runtime_config() -> serde_yaml::Value {
         let config_path = project_root().join("vida.config.yaml");
         let config_text =
             fs::read_to_string(&config_path).expect("project vida.config.yaml should be readable");
         serde_yaml::from_str(&config_text).expect("project vida.config.yaml should parse")
     }
 
-    fn configured_codex_agent_catalog() -> Vec<serde_json::Value> {
-        let config = configured_codex_config();
+    fn configured_host_runtime_agent_catalog() -> Vec<serde_json::Value> {
+        let config = configured_host_runtime_config();
         let agent_catalog = super::overlay_host_runtime_agent_catalog(&config);
         assert!(
             !agent_catalog.is_empty(),
-            "project config should define host_environment.codex.agents"
+            "project config should define carriers for host_environment.cli_system"
         );
         agent_catalog
     }
 
     #[test]
     fn host_runtime_agent_toml_requires_configured_model() {
-        let mut row = configured_codex_agent_catalog()
+        let mut row = configured_host_runtime_agent_catalog()
             .into_iter()
             .next()
             .expect("configured carrier should exist");
@@ -844,7 +861,7 @@ mod tests {
 
     #[test]
     fn host_runtime_agent_toml_requires_configured_reasoning_effort() {
-        let mut row = configured_codex_agent_catalog()
+        let mut row = configured_host_runtime_agent_catalog()
             .into_iter()
             .next()
             .expect("configured carrier should exist");
@@ -855,7 +872,7 @@ mod tests {
 
     #[test]
     fn host_runtime_agent_toml_renders_configured_model_without_builtin_default() {
-        let row = configured_codex_agent_catalog()
+        let row = configured_host_runtime_agent_catalog()
             .into_iter()
             .next()
             .expect("configured carrier should exist");
@@ -885,7 +902,7 @@ mod tests {
         )
         .expect("template config should write");
 
-        let agent_catalog = configured_codex_agent_catalog();
+        let agent_catalog = configured_host_runtime_agent_catalog();
 
         super::render_host_runtime_template_from_catalog(
             "Codex App",
@@ -946,7 +963,7 @@ mod tests {
         )
         .expect("template config should write");
 
-        let config = configured_codex_config();
+        let config = configured_host_runtime_config();
         let Some(platform_config) = super::yaml_lookup(
             &config,
             &[
@@ -1187,9 +1204,13 @@ pub(crate) fn overlay_host_runtime_dispatch_alias_catalog(
     config: &serde_yaml::Value,
     agent_catalog: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
-    let Some(serde_yaml::Value::Mapping(configured_aliases)) =
-        yaml_lookup(config, &["host_environment", "codex", "dispatch_aliases"])
-    else {
+    let Some(system_id) = selected_host_runtime_system_id(config) else {
+        return Vec::new();
+    };
+    let Some(serde_yaml::Value::Mapping(configured_aliases)) = yaml_lookup(
+        config,
+        &["host_environment", "systems", &system_id, "dispatch_aliases"],
+    ) else {
         return Vec::new();
     };
     let carrier_rows = agent_catalog
