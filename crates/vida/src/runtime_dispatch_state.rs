@@ -357,11 +357,8 @@ fn normalize_internal_host_timeout_result_blocker(
     if !dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
         return;
     }
-    let blocker_code =
-        internal_host_activation_view_only_blocker_code(project_root, role_selection, receipt);
-    if blocker_code != INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT {
-        execution_result["blocker_code"] = serde_json::Value::String(blocker_code.to_string());
-    }
+    execution_result["blocker_code"] =
+        serde_json::Value::String(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT.to_string());
 }
 
 fn is_internal_activation_view_without_receipt_blocker(blocker_code: Option<&str>) -> bool {
@@ -391,7 +388,7 @@ fn apply_dispatch_handoff_timeout_to_receipt(
     }
 }
 
-fn runtime_dispatch_project_root_from_state_root<'a>(
+pub(crate) fn runtime_dispatch_project_root_from_state_root<'a>(
     state_root: &'a Path,
 ) -> std::borrow::Cow<'a, Path> {
     if let Some(project_root) = crate::resolve_status_project_root(state_root) {
@@ -8574,9 +8571,9 @@ mod tests {
     }
 
     #[test]
-    fn taskflow_consume_continue_returns_prompt_blocked_receipt_for_internal_coach_timeout() {
+    fn taskflow_consume_continue_returns_timeout_receipt_for_internal_coach_timeout() {
         run_on_large_test_stack(
-            "taskflow_consume_continue_returns_prompt_blocked_receipt_for_internal_coach_timeout",
+            "taskflow_consume_continue_returns_timeout_receipt_for_internal_coach_timeout",
             || {
                 let runtime =
                     tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
@@ -8821,7 +8818,7 @@ mod tests {
                 assert_eq!(persisted.lane_status, "lane_blocked");
                 assert_eq!(
                     persisted.blocker_code.as_deref(),
-                    Some("internal_activation_view_only")
+                    Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
                 );
                 let dispatch_result_path = persisted
                     .dispatch_result_path
@@ -8833,7 +8830,10 @@ mod tests {
                     serde_json::from_str(&rendered).expect("dispatch result json should parse");
                 assert_eq!(parsed["status"], "blocked");
                 assert_eq!(parsed["execution_state"], "blocked");
-                assert_eq!(parsed["blocker_code"], "internal_activation_view_only");
+                assert_eq!(
+                    parsed["blocker_code"],
+                    INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
+                );
                 assert_eq!(parsed["timeout_wrapper"]["timed_out"], true);
                 assert!(parsed["provider_error"]
                     .as_str()
@@ -17927,13 +17927,12 @@ pub(crate) fn apply_dispatch_execution_timeout_to_receipt(
 
 pub(crate) fn apply_internal_activation_timeout_to_receipt(
     state_root: &Path,
-    project_root: &Path,
-    role_selection: &RuntimeConsumptionLaneSelection,
+    _project_root: &Path,
+    _role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     timeout_seconds: u64,
 ) -> Result<(), String> {
-    let blocker_code =
-        internal_host_activation_view_only_blocker_code(project_root, role_selection, receipt);
+    let blocker_code = INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT;
     let execution_result =
         runtime_dispatch_internal_activation_timeout_result(receipt, timeout_seconds, blocker_code);
     let dispatch_result_path =

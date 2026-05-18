@@ -650,10 +650,7 @@ async fn validate_run_graph_resume_state(
         .await
         .ok()
         .flatten();
-    if active_receipt
-        .as_ref()
-        .is_some_and(dispatch_receipt_retry_eligible)
-    {
+    if active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await {
         return Ok(());
     }
     match validate_run_graph_resume_gate(&status) {
@@ -692,16 +689,39 @@ async fn validate_run_graph_resume_state_strict(
         .await
         .ok()
         .flatten();
-    if active_receipt
-        .as_ref()
-        .is_some_and(dispatch_receipt_retry_eligible)
-    {
+    if active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await {
         return Ok(());
     }
     validate_run_graph_resume_gate(&status).map_err(|error| {
         active_exception_takeover_resume_blocker_error(&status, active_receipt.as_ref())
             .unwrap_or(error)
     })
+}
+
+async fn active_receipt_allows_resume_gate(
+    store: &super::StateStore,
+    run_id: &str,
+    active_receipt: Option<&crate::state_store::RunGraphDispatchReceipt>,
+) -> bool {
+    let Some(active_receipt) = active_receipt else {
+        return false;
+    };
+    if dispatch_receipt_retry_eligible(active_receipt) {
+        return true;
+    }
+    let Ok(Some(context)) = store.run_graph_dispatch_context(run_id).await else {
+        return false;
+    };
+    let Ok(role_selection) = context.role_selection() else {
+        return false;
+    };
+    let project_root =
+        super::runtime_dispatch_state::runtime_dispatch_project_root_from_state_root(store.root());
+    dispatch_receipt_effective_retry_eligible(
+        Some(project_root.as_ref()),
+        Some(&role_selection),
+        active_receipt,
+    )
 }
 
 fn active_exception_takeover_resume_blocker_error(
