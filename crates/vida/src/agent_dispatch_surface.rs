@@ -161,31 +161,93 @@ fn build_parallelization_planner(
 fn build_carrier_selection_api_descriptor(
     activation_bundle: &serde_json::Value,
 ) -> serde_json::Value {
-    let first_class = [
-        ("junior_test_writer", "worker", "verification"),
-        ("middle_analyst", "business_analyst", "specification"),
-        ("senior_verifier", "verifier", "verification"),
-    ]
-    .into_iter()
-    .map(|(api_id, runtime_role, task_class)| {
-        let assignment = crate::build_runtime_assignment_from_resolved_constraints(
-            activation_bundle,
-            "orchestrator",
-            task_class,
-            runtime_role,
-        );
-        serde_json::json!({
-            "api_id": api_id,
-            "runtime_role": runtime_role,
-            "task_class": task_class,
-            "selection": assignment,
-            "command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class} --json")
+    let dev_team_roles = activation_bundle["dev_team_readiness"]["roles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|role| {
+            let api_id = role["role_id"].as_str()?.trim();
+            let runtime_role = role["runtime_role"].as_str()?.trim();
+            let task_class = role["task_classes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .find(|value| !value.is_empty())?;
+            if api_id.is_empty() || runtime_role.is_empty() {
+                return None;
+            }
+            let assignment = crate::build_runtime_assignment_from_resolved_constraints(
+                activation_bundle,
+                "orchestrator",
+                task_class,
+                runtime_role,
+            );
+            Some(serde_json::json!({
+                "api_id": api_id,
+                "runtime_role": runtime_role,
+                "task_class": task_class,
+                "selection": assignment,
+                "command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class} --json")
+            }))
         })
-    })
-    .collect::<Vec<_>>();
+        .collect::<Vec<_>>();
+    let first_class = if dev_team_roles.is_empty() {
+        activation_bundle["carrier_runtime"]["roles"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|role| {
+                let api_id = role["role_id"].as_str()?.trim();
+                let runtime_role = role["default_runtime_role"]
+                    .as_str()
+                    .or_else(|| {
+                        role["runtime_roles"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(serde_json::Value::as_str)
+                            .find(|value| !value.trim().is_empty())
+                    })?
+                    .trim();
+                let task_class = role["task_classes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .find(|value| !value.trim().is_empty())?
+                    .trim();
+                if api_id.is_empty() || runtime_role.is_empty() || task_class.is_empty() {
+                    return None;
+                }
+                let assignment = crate::build_runtime_assignment_from_resolved_constraints(
+                    activation_bundle,
+                    "orchestrator",
+                    task_class,
+                    runtime_role,
+                );
+                Some(serde_json::json!({
+                    "api_id": api_id,
+                    "runtime_role": runtime_role,
+                    "task_class": task_class,
+                    "selection": assignment,
+                    "command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class} --json")
+                }))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        dev_team_roles
+    };
     serde_json::json!({
         "surface": "vida agent select",
         "mode": "config_driven_runtime_assignment",
+        "status": if first_class.is_empty() { "blocked" } else { "pass" },
+        "blocker_codes": if first_class.is_empty() {
+            vec!["carrier_selection_api_requires_configured_dev_team_roles"]
+        } else {
+            Vec::<&str>::new()
+        },
         "first_class_carriers": first_class,
         "manual_host_tool_choice_required": false,
     })
@@ -197,34 +259,6 @@ struct DevTeamSequenceStep {
     runtime_role: String,
     task_class: String,
     requires_task: bool,
-}
-
-fn fallback_runtime_role_for_dispatch_target(dispatch_target: &str) -> String {
-    match dispatch_target {
-        "specification" | "analysis" => "business_analyst".to_string(),
-        "implementer" => "worker".to_string(),
-        "coach" => "coach".to_string(),
-        "verification" => "verifier".to_string(),
-        "execution_preparation" => "solution_architect".to_string(),
-        _ => "worker".to_string(),
-    }
-}
-
-fn role_label_from_runtime_role(runtime_role: &str, dispatch_target: &str) -> String {
-    match runtime_role {
-        "business_analyst" => "analyst".to_string(),
-        "worker" => "developer".to_string(),
-        "coach" => "coach".to_string(),
-        "verifier" | "prover" => "tester/prover".to_string(),
-        _ => match dispatch_target {
-            "specification" | "analysis" => "analyst".to_string(),
-            "implementer" => "developer".to_string(),
-            "verification" => "tester/prover".to_string(),
-            "execution_preparation" => "execution_preparation".to_string(),
-            "release" | "closure" | "release/closure" => "release/closure".to_string(),
-            _ => runtime_role.to_string(),
-        },
-    }
 }
 
 fn dev_team_sequence_from_readiness(readiness: &serde_json::Value) -> Vec<DevTeamSequenceStep> {
@@ -253,16 +287,14 @@ fn dev_team_sequence_from_readiness(readiness: &serde_json::Value) -> Vec<DevTea
             let runtime_role = role["runtime_role"]
                 .as_str()
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or("worker")
-                .to_string();
+                .map(str::to_string)?;
             let task_class = role["task_classes"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter_map(serde_json::Value::as_str)
                 .find(|value| !value.trim().is_empty())
-                .unwrap_or("implementation")
-                .to_string();
+                .map(str::to_string)?;
             Some(DevTeamSequenceStep {
                 role_label: role_id.to_string(),
                 runtime_role,
@@ -273,39 +305,46 @@ fn dev_team_sequence_from_readiness(readiness: &serde_json::Value) -> Vec<DevTea
         .collect()
 }
 
-fn default_dev_team_sequence() -> Vec<DevTeamSequenceStep> {
-    vec![
-        DevTeamSequenceStep {
-            role_label: "analyst".to_string(),
-            runtime_role: "business_analyst".to_string(),
-            task_class: "specification".to_string(),
-            requires_task: true,
-        },
-        DevTeamSequenceStep {
-            role_label: "developer".to_string(),
-            runtime_role: "worker".to_string(),
-            task_class: "implementation".to_string(),
-            requires_task: true,
-        },
-        DevTeamSequenceStep {
-            role_label: "coach".to_string(),
-            runtime_role: "coach".to_string(),
-            task_class: "coach".to_string(),
-            requires_task: true,
-        },
-        DevTeamSequenceStep {
-            role_label: "tester/prover".to_string(),
-            runtime_role: "verifier".to_string(),
-            task_class: "verification".to_string(),
-            requires_task: true,
-        },
-        DevTeamSequenceStep {
-            role_label: "release/closure".to_string(),
-            runtime_role: "verifier".to_string(),
-            task_class: "verification".to_string(),
-            requires_task: false,
-        },
-    ]
+fn dev_team_sequence_from_carrier_runtime(
+    activation_bundle: &serde_json::Value,
+) -> Vec<DevTeamSequenceStep> {
+    activation_bundle["carrier_runtime"]["roles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|role| {
+            let role_id = role["role_id"].as_str()?.trim();
+            if role_id.is_empty() {
+                return None;
+            }
+            let runtime_role = role["default_runtime_role"]
+                .as_str()
+                .or_else(|| {
+                    role["runtime_roles"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(serde_json::Value::as_str)
+                        .find(|value| !value.trim().is_empty())
+                })?
+                .trim()
+                .to_string();
+            let task_class = role["task_classes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .find(|value| !value.trim().is_empty())?
+                .trim()
+                .to_string();
+            Some(DevTeamSequenceStep {
+                role_label: role_id.to_string(),
+                runtime_role,
+                task_class,
+                requires_task: true,
+            })
+        })
+        .collect()
 }
 
 fn dev_team_sequence(activation_bundle: &serde_json::Value) -> Vec<DevTeamSequenceStep> {
@@ -314,52 +353,47 @@ fn dev_team_sequence(activation_bundle: &serde_json::Value) -> Vec<DevTeamSequen
     if !readiness_sequence.is_empty() {
         return readiness_sequence;
     }
+    let carrier_sequence = dev_team_sequence_from_carrier_runtime(activation_bundle);
+    if !carrier_sequence.is_empty() {
+        return carrier_sequence;
+    }
     let Some(development_flow) = activation_bundle.get("development_flow") else {
-        return default_dev_team_sequence();
+        return Vec::new();
     };
     let Some(dispatch_contract) = development_flow.get("dispatch_contract") else {
-        return default_dev_team_sequence();
+        return Vec::new();
     };
     let execution_lane_sequence =
         crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
     if execution_lane_sequence.is_empty() {
-        return default_dev_team_sequence();
+        return Vec::new();
     }
 
-    let mut steps = execution_lane_sequence
+    let steps = execution_lane_sequence
         .into_iter()
-        .map(|dispatch_target| {
-            let lane = crate::dispatch_contract_lane(activation_bundle, &dispatch_target);
-            let route = lane.unwrap_or(&serde_json::Value::Null);
+        .filter_map(|dispatch_target| {
+            let route = crate::dispatch_contract_lane(activation_bundle, &dispatch_target)?;
             let activation = crate::dispatch_contract_lane_activation(route);
             let runtime_role = activation
                 .get("activation_runtime_role")
                 .or_else(|| route.get("runtime_role"))
                 .and_then(|value| value.as_str())
                 .filter(|value| !value.trim().is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| fallback_runtime_role_for_dispatch_target(&dispatch_target));
+                .map(str::to_string)?;
             let task_class = activation
                 .get("task_class")
                 .or_else(|| route.get("task_class"))
                 .and_then(|value| value.as_str())
-                .unwrap_or("implementation")
-                .to_string();
-            let role_label = role_label_from_runtime_role(&runtime_role, &dispatch_target);
-            DevTeamSequenceStep {
-                role_label,
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)?;
+            Some(DevTeamSequenceStep {
+                role_label: dispatch_target,
                 runtime_role,
                 task_class,
                 requires_task: true,
-            }
+            })
         })
         .collect::<Vec<_>>();
-    steps.push(DevTeamSequenceStep {
-        role_label: "release/closure".to_string(),
-        runtime_role: "verifier".to_string(),
-        task_class: "verification".to_string(),
-        requires_task: false,
-    });
     steps
 }
 
@@ -728,6 +762,13 @@ fn build_agent_dispatch_next_preview_dev_team(
     if lanes_requested == 0 {
         blocker_codes.push("invalid_lanes_requested".to_string());
         next_actions.push("Pass `--lanes <n>` with n >= 1.".to_string());
+    }
+    if sequence.is_empty() {
+        blocker_codes.push("configured_dev_team_sequence_required".to_string());
+        next_actions.push(
+            "Configure dev_team_readiness roles/sequence or dispatch_contract lanes before previewing dev-team dispatch."
+                .to_string(),
+        );
     }
 
     let configured_max_parallel_agents = configured_max_parallel_agents.max(1);
@@ -1879,9 +1920,10 @@ mod tests {
             preview.carrier_selection_api["surface"],
             "vida agent select"
         );
+        assert_eq!(preview.carrier_selection_api["status"], "pass");
         assert!(preview.carrier_selection_api["first_class_carriers"]
             .as_array()
-            .is_some_and(|rows| rows.iter().any(|row| row["api_id"] == "senior_verifier")));
+            .is_some_and(|rows| rows.iter().any(|row| row["api_id"] == "junior")));
     }
 
     #[test]
@@ -2071,10 +2113,10 @@ mod tests {
         assert_eq!(preview.status, "pass");
         assert_eq!(preview.mode, "preview-dev-team");
         assert_eq!(preview.lanes_selected, 4);
-        assert_eq!(preview.selected_lanes[0].role_label, "analyst");
-        assert_eq!(preview.selected_lanes[1].role_label, "developer");
-        assert_eq!(preview.selected_lanes[2].role_label, "coach");
-        assert_eq!(preview.selected_lanes[3].role_label, "tester/prover");
+        assert_eq!(preview.selected_lanes[0].role_label, "analyst-seat");
+        assert_eq!(preview.selected_lanes[1].role_label, "developer-seat");
+        assert_eq!(preview.selected_lanes[2].role_label, "coach-seat");
+        assert_eq!(preview.selected_lanes[3].role_label, "verifier-seat");
         assert_eq!(preview.selected_lanes[0].task_id, "task-analyst");
         assert_eq!(preview.selected_lanes[1].task_id, "task-developer");
         assert_eq!(preview.selected_lanes[2].task_id, "task-coach");
@@ -2167,8 +2209,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_dispatch_next_preview_dev_team_reports_no_task_lane_for_release_closure_and_still_selects_roles(
-    ) {
+    fn agent_dispatch_next_preview_dev_team_uses_only_configured_registry_roles() {
         let projection = TaskSchedulingProjection {
             current_task_id: Some("task-analyst".to_string()),
             ready: vec![
@@ -2200,7 +2241,7 @@ mod tests {
         assert_eq!(preview.status, "pass");
         assert_eq!(preview.mode, "preview-dev-team");
         assert_eq!(preview.lanes_selected, 4);
-        assert!(preview
+        assert!(!preview
             .next_actions
             .iter()
             .any(|action| action.contains("closure-oriented")));
