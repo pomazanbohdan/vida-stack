@@ -1,7 +1,25 @@
 use super::*;
 
-const CODEX_RUNTIME_LABEL: &str = "Codex";
-const HOST_RUNTIME_LABEL: &str = CODEX_RUNTIME_LABEL;
+fn host_runtime_label(cli_system: &str) -> String {
+    let trimmed = cli_system.trim();
+    if trimmed.is_empty() {
+        return "Host runtime".to_string();
+    }
+    trimmed
+        .split(['-', '_', ' '])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => {
+                    format!("{}{}", first.to_uppercase(), chars.as_str().to_ascii_lowercase())
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
 fn resolve_runtime_surface_within_project(
     project_root: &Path,
@@ -29,6 +47,7 @@ fn resolve_runtime_surface_within_project(
 }
 
 pub(crate) fn render_host_cli_template_from_catalog(
+    cli_system: &str,
     project_root: &Path,
     runtime_root: &Path,
     template_root: &Path,
@@ -36,7 +55,7 @@ pub(crate) fn render_host_cli_template_from_catalog(
     named_lane_catalog: &[serde_json::Value],
 ) -> Result<(), String> {
     crate::host_runtime_materialization::render_host_runtime_template_from_catalog(
-        HOST_RUNTIME_LABEL,
+        &host_runtime_label(cli_system),
         project_root,
         runtime_root,
         template_root,
@@ -121,6 +140,7 @@ pub(crate) fn materialize_host_cli_template_with_catalog_render(
         host_cli_dispatch_alias_catalog_for_root(&overlay, project_root, &carrier_roles)?;
     if !carrier_roles.is_empty() {
         render_host_cli_template_from_catalog(
+            cli_system,
             project_root,
             &runtime_root,
             &source,
