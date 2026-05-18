@@ -189,7 +189,11 @@ fn build_carrier_selection_api_descriptor(
                 "runtime_role": runtime_role,
                 "task_class": task_class,
                 "selection": assignment,
-                "command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class} --json")
+                "command": format!(
+                    "vida agent select --runtime-role {} --task-class {} --json",
+                    crate::launcher_task_commands::shell_quote(runtime_role),
+                    crate::launcher_task_commands::shell_quote(task_class),
+                )
             }))
         })
         .collect::<Vec<_>>();
@@ -232,7 +236,11 @@ fn build_carrier_selection_api_descriptor(
                     "runtime_role": runtime_role,
                     "task_class": task_class,
                     "selection": assignment,
-                    "command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class} --json")
+                    "command": format!(
+                    "vida agent select --runtime-role {} --task-class {} --json",
+                    crate::launcher_task_commands::shell_quote(runtime_role),
+                    crate::launcher_task_commands::shell_quote(task_class),
+                )
                 }))
             })
             .collect::<Vec<_>>()
