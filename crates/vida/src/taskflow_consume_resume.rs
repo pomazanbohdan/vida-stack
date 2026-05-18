@@ -11506,7 +11506,10 @@ agent_system:
         let prepared =
             super::prepare_explicit_resume_retry_artifact(None, &role_selection, &mut receipt);
         assert!(prepared);
-        assert_eq!(receipt.selected_backend.as_deref(), Some("opencode_cli"));
+        assert_eq!(
+            receipt.selected_backend.as_deref(),
+            Some("internal_subagents")
+        );
 
         let rewritten = super::rewrite_retry_dispatch_packet_if_downstream_carrier(
             &store,
@@ -11534,7 +11537,7 @@ agent_system:
         );
         assert_eq!(
             rewritten_packet["selected_backend"].as_str(),
-            Some("opencode_cli")
+            Some("internal_subagents")
         );
 
         let _ = fs::remove_dir_all(&root);
