@@ -2449,6 +2449,11 @@ fn retry_backend_for_dispatch_receipt(
             | Some(super::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
     );
     if dispatch_receipt.blocker_code.as_deref() == Some("timeout_without_takeover_authority") {
+        if let Some(fallback) = route_fallback.clone() {
+            if Some(fallback.as_str()) != current_backend {
+                return Some(fallback);
+            }
+        }
         if let Some(next_review_backend) = distinct_review_retry_backend_from_route(
             &role_selection.execution_plan,
             &dispatch_receipt.dispatch_target,
@@ -2456,11 +2461,6 @@ fn retry_backend_for_dispatch_receipt(
             current_backend,
         ) {
             return Some(next_review_backend);
-        }
-        if let Some(fallback) = route_fallback.clone() {
-            if Some(fallback.as_str()) != current_backend {
-                return Some(fallback);
-            }
         }
     }
     if internal_timeout_like_blocker {
