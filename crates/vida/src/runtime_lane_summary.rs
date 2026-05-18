@@ -602,7 +602,8 @@ pub(crate) fn summarize_agent_route_from_snapshot(
     route_id: &str,
 ) -> serde_json::Value {
     let Some(route) = json_lookup(agent_system, &["routing", route_id]) else {
-        return serde_json::Value::Null;
+        return summarize_development_flow_route_from_catalog(compiled_bundle, route_id)
+            .unwrap_or(serde_json::Value::Null);
     };
     let (runtime_role, task_class) = match route_id {
         "implementation" | "small_patch" | "small_patch_write" | "ui_patch" => {
@@ -678,6 +679,129 @@ pub(crate) fn summarize_agent_route_from_snapshot(
         summary.extend(crate::runtime_assignment_alias_fields(&runtime_assignment));
     }
     route_summary
+}
+
+fn default_development_flow(compiled_bundle: &serde_json::Value) -> Option<&serde_json::Value> {
+    let flow_id = compiled_bundle["default_flow_set"].as_str()?;
+    compiled_bundle["all_project_flow_catalog"]
+        .get(flow_id)
+        .or_else(|| compiled_bundle["project_flow_catalog"].get(flow_id))
+        .filter(|flow| flow["flow_class"].as_str() == Some("development"))
+}
+
+fn default_development_flow_has_lane(compiled_bundle: &serde_json::Value, lane_id: &str) -> bool {
+    default_development_flow(compiled_bundle)
+        .and_then(|flow| flow["lane_templates"].as_array())
+        .into_iter()
+        .flatten()
+        .any(|lane| lane["lane_id"].as_str() == Some(lane_id))
+}
+
+fn runtime_assignment_for_standard_dispatch_alias(
+    compiled_bundle: &serde_json::Value,
+    preferred_alias_id: &str,
+    task_class: &str,
+) -> serde_json::Value {
+    let dispatch_alias =
+        crate::resolve_dispatch_alias_id(compiled_bundle, preferred_alias_id, task_class)
+            .unwrap_or_default();
+    if dispatch_alias.is_empty() {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "dispatch_alias_missing_from_standard_development_flow",
+            "task_class": task_class,
+        });
+    }
+    crate::build_runtime_assignment_from_dispatch_alias(
+        compiled_bundle,
+        &dispatch_alias,
+        task_class,
+    )
+}
+
+fn summarize_development_flow_route_from_catalog(
+    compiled_bundle: &serde_json::Value,
+    route_id: &str,
+) -> Option<serde_json::Value> {
+    default_development_flow(compiled_bundle)?;
+    let (task_class, runtime_role, preferred_alias_id, route) = match route_id {
+        "implementation" => {
+            let coach_required = default_development_flow_has_lane(compiled_bundle, "coach");
+            let verification_required =
+                default_development_flow_has_lane(compiled_bundle, "verification");
+            (
+                "implementation",
+                "worker",
+                "development_implementer",
+                serde_json::json!({
+                    "route_id": route_id,
+                    "write_scope": "scoped_only",
+                    "dispatch_required": "compiled_development_flow",
+                    "verification_gate": "targeted_verification",
+                    "analysis_required": true,
+                    "analysis_route_task_class": "implementer",
+                    "coach_required": coach_required,
+                    "coach_route_task_class": if coach_required { "coach" } else { "" },
+                    "verification_route_task_class": if verification_required { "verification" } else { "" },
+                    "independent_verification_required": verification_required,
+                    "graph_strategy": "compiled_development_flow",
+                    "writer_route_task_class": "implementer",
+                }),
+            )
+        }
+        "coach" if default_development_flow_has_lane(compiled_bundle, "coach") => (
+            "coach",
+            "coach",
+            "development_coach",
+            serde_json::json!({
+                "route_id": route_id,
+                "write_scope": "none",
+                "dispatch_required": "compiled_development_flow",
+                "verification_gate": "coach_review",
+                "graph_strategy": "compiled_development_flow",
+            }),
+        ),
+        "verification" if default_development_flow_has_lane(compiled_bundle, "verification") => (
+            "verification",
+            "verifier",
+            "development_verifier",
+            serde_json::json!({
+                "route_id": route_id,
+                "write_scope": "none",
+                "dispatch_required": "compiled_development_flow",
+                "verification_gate": "verification_summary",
+                "graph_strategy": "compiled_development_flow",
+            }),
+        ),
+        _ => return None,
+    };
+    let runtime_assignment = runtime_assignment_for_standard_dispatch_alias(
+        compiled_bundle,
+        preferred_alias_id,
+        task_class,
+    );
+    let executor_backend = runtime_assignment["selected_backend"]
+        .as_str()
+        .or_else(|| runtime_assignment["selected_carrier_id"].as_str())
+        .unwrap_or_default()
+        .to_string();
+    let mut route = route;
+    if let Some(summary) = route.as_object_mut() {
+        summary.insert(
+            "executor_backend".to_string(),
+            serde_json::Value::String(executor_backend.clone()),
+        );
+        summary.insert(
+            "carrier_backend_hint".to_string(),
+            serde_json::Value::String(executor_backend),
+        );
+        summary.insert(
+            "preferred_runtime_role".to_string(),
+            serde_json::Value::String(runtime_role.to_string()),
+        );
+        summary.extend(crate::runtime_assignment_alias_fields(&runtime_assignment));
+    }
+    Some(route)
 }
 
 #[cfg(test)]

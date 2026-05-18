@@ -883,7 +883,7 @@ where
     F: FnMut() -> std::process::Output,
 {
     retry_with_backoff(&mut op, MAX_BOOT_RETRY_ATTEMPTS, |output, _| {
-        !output.status.success()
+        is_retryable_temporary_failure(output)
     })
 }
 
@@ -3526,6 +3526,166 @@ fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
 }
 
 #[test]
+fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_and_doctor() {
+    let (project_root, state_dir) =
+        bootstrap_project_runtime("taskflow-golden-route-h11", "TaskFlow Golden Route H11");
+
+    let initial = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "clarify the scope and write the specification before implementation",
+    );
+    assert!(
+        !initial.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+
+    let initial_json: serde_json::Value =
+        serde_json::from_slice(&initial.stdout).expect("initial consume final json should parse");
+    assert_eq!(initial_json["surface"], "vida taskflow consume final");
+    assert_eq!(
+        initial_json["payload"]["dispatch_receipt"]["dispatch_surface"],
+        "vida agent-init"
+    );
+    let dispatch_packet_path = initial_json["payload"]["dispatch_receipt"]["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch packet path should be present");
+    let dispatch_packet_json: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dispatch_packet_path).expect("dispatch packet should read"),
+    )
+    .expect("dispatch packet should parse");
+    assert_eq!(
+        dispatch_packet_json["packet_template_kind"],
+        "delivery_task_packet"
+    );
+    let run_id = dispatch_packet_json["run_id"]
+        .as_str()
+        .expect("dispatch packet run id should be present");
+    let initial_dispatch_target = initial_json["payload"]["dispatch_receipt"]["dispatch_target"]
+        .as_str()
+        .expect("initial dispatch target should be present");
+    assert_eq!(initial_dispatch_target, "specification");
+
+    let agent_view = vida()
+        .args([
+            "agent-init",
+            "--dispatch-packet",
+            dispatch_packet_path,
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("agent-init dispatch packet should run");
+    assert!(
+        agent_view.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&agent_view.stdout),
+        String::from_utf8_lossy(&agent_view.stderr)
+    );
+    let agent_view_json: serde_json::Value =
+        serde_json::from_slice(&agent_view.stdout).expect("agent-init json should parse");
+    assert_eq!(
+        agent_view_json["dispatch_mode"]["activation_view_only"],
+        true
+    );
+    assert_eq!(
+        agent_view_json["activation_semantics"]["executes_packet"],
+        false
+    );
+
+    let downstream_dispatch_packet_path = initial_json["payload"]["dispatch_receipt"]
+        ["downstream_dispatch_packet_path"]
+        .as_str()
+        .or_else(|| initial_json["payload"]["dispatch_receipt"]["dispatch_packet_path"].as_str())
+        .expect("downstream dispatch packet path should be present");
+    let mut downstream_packet_body: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(downstream_dispatch_packet_path)
+            .expect("downstream dispatch packet should read"),
+    )
+    .expect("downstream dispatch packet should parse");
+    let completion_result_path = format!("{project_root}/runtime-completion-result-h11.json");
+    write_runtime_lane_completion_result_fixture(&completion_result_path, run_id, "implementer");
+    mark_project_run_graph_closure_complete(&project_root, &state_dir, run_id);
+    downstream_packet_body["downstream_dispatch_ready"] = serde_json::json!(true);
+    downstream_packet_body["downstream_dispatch_blockers"] = serde_json::json!([]);
+    downstream_packet_body["downstream_dispatch_status"] = serde_json::json!("packet_ready");
+    downstream_packet_body["downstream_dispatch_result_path"] =
+        serde_json::json!(completion_result_path);
+    downstream_packet_body["downstream_lane_status"] = serde_json::json!("packet_ready");
+    downstream_packet_body["dispatch_status"] = serde_json::json!("packet_ready");
+    downstream_packet_body["lane_status"] = serde_json::json!("packet_ready");
+    atomic_write_file(
+        downstream_dispatch_packet_path,
+        &serde_json::to_string_pretty(&downstream_packet_body)
+            .expect("mutated downstream packet should render"),
+    );
+
+    let resumed = project_bound_taskflow_consume_continue_with_timeout(
+        &project_root,
+        &state_dir,
+        &["--json"],
+    );
+    assert!(
+        resumed.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&resumed.stdout),
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let resumed_json: serde_json::Value =
+        serde_json::from_slice(&resumed.stdout).expect("consume continue json should parse");
+    assert_eq!(resumed_json["surface"], "vida taskflow consume continue");
+    assert_eq!(resumed_json["source_run_id"], run_id);
+    assert_eq!(
+        resumed_json["source_dispatch_packet_path"],
+        downstream_dispatch_packet_path
+    );
+    assert_eq!(
+        resumed_json["dispatch_receipt"]["dispatch_target"],
+        "closure"
+    );
+
+    let run_graph_latest = taskflow_run_graph_latest_with_timeout(&state_dir, true);
+    assert!(run_graph_latest.status.success());
+    let run_graph_latest_json: serde_json::Value =
+        serde_json::from_slice(&run_graph_latest.stdout).expect("run-graph latest should parse");
+    assert_eq!(run_graph_latest_json["run_graph_status"]["run_id"], run_id);
+    assert_eq!(
+        run_graph_latest_json["run_graph_status"]["active_node"],
+        "closure"
+    );
+
+    let recovery_status = taskflow_recovery_status_with_timeout(&state_dir, run_id, true);
+    assert!(recovery_status.status.success());
+    let recovery_status_json: serde_json::Value =
+        serde_json::from_slice(&recovery_status.stdout).expect("recovery status should parse");
+    assert_eq!(recovery_status_json["recovery"]["run_id"], run_id);
+    assert_eq!(
+        recovery_status_json["recovery"]["lifecycle_stage"],
+        "closure_complete"
+    );
+
+    let status = status_or_doctor_with_timeout(&state_dir, &["status", "--json"]);
+    assert!(status.status.success());
+    let status_json: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status json should parse");
+    assert_eq!(status_json["latest_run_graph_status"]["run_id"], run_id);
+    assert_eq!(status_json["runtime_consumption"]["latest_kind"], "final");
+
+    let doctor = status_or_doctor_with_timeout(&state_dir, &["doctor", "--json"]);
+    assert!(doctor.status.success());
+    let doctor_json: serde_json::Value =
+        serde_json::from_slice(&doctor.stdout).expect("doctor json should parse");
+    assert_eq!(doctor_json["latest_run_graph_status"]["run_id"], run_id);
+    assert_eq!(doctor_json["runtime_consumption"]["latest_kind"], "final");
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
 fn agent_init_parallel_role_views_do_not_surface_eagain_lock_failures() {
     let (project_root, state_dir) = bootstrap_project_runtime(
         "agent-init-parallel-read-lock",
@@ -4552,7 +4712,7 @@ fn taskflow_consume_final_executes_ready_downstream_closure_step() {
     );
     assert_eq!(
         status_json["latest_run_graph_status"]["active_node"],
-        "orchestrator"
+        "implementer"
     );
     assert_eq!(status_json["latest_run_graph_status"]["status"], "blocked");
 
@@ -7513,11 +7673,11 @@ fn taskflow_consume_final_selects_pbi_discussion_role_for_backlog_queries() {
     assert_eq!(parsed["payload"]["closure_admission"]["status"], "blocked");
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_target"],
-        "specification"
+        "work-pool-pack"
     );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_kind"],
-        "agent_lane"
+        "taskflow_pack"
     );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_status"],
@@ -7525,7 +7685,7 @@ fn taskflow_consume_final_selects_pbi_discussion_role_for_backlog_queries() {
     );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_surface"],
-        "vida agent-init"
+        "vida task ensure"
     );
     let dispatch_packet_path = parsed["payload"]["dispatch_receipt"]["dispatch_packet_path"]
         .as_str()
@@ -7834,6 +7994,122 @@ fn taskflow_run_graph_latest_reports_none_on_empty_booted_state() {
         serde_json::from_str(&json_stdout).expect("run-graph latest json should parse");
     assert_eq!(parsed["surface"], "vida taskflow run-graph latest");
     assert!(parsed["status"].is_null());
+}
+
+#[test]
+fn taskflow_packet_latest_happy_path_selects_latest_run_graph_dispatch_packet() {
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "packet-latest-happy-path-project",
+        "Packet Latest Happy Path Project",
+    );
+    create_scheduler_smoke_task(
+        &state_dir,
+        "packet-latest-happy-path",
+        "Packet latest happy path",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
+    let metadata = vida()
+        .args([
+            "task",
+            "update",
+            "packet-latest-happy-path",
+            "--owned-path",
+            "crates/vida/src/taskflow_run_graph.rs",
+            "--proof-target",
+            "cargo test -p vida taskflow_packet_latest_happy_path_selects_latest_run_graph_dispatch_packet --test boot_smoke -- --nocapture",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("task planner metadata update should run");
+    assert!(
+        metadata.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&metadata.stdout),
+        String::from_utf8_lossy(&metadata.stderr)
+    );
+
+    let dispatch_init = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "run-graph dispatch-init should run",
+        |command| {
+            command.args([
+                "taskflow",
+                "run-graph",
+                "dispatch-init",
+                "packet-latest-happy-path",
+                "--json",
+            ]);
+            command.current_dir(&project_root);
+            command.env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    assert!(
+        dispatch_init.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&dispatch_init.stdout),
+        String::from_utf8_lossy(&dispatch_init.stderr)
+    );
+    let dispatch: serde_json::Value =
+        serde_json::from_slice(&dispatch_init.stdout).expect("dispatch-init json should parse");
+    let dispatch_packet_path = dispatch["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch packet path should render");
+    assert!(Path::new(dispatch_packet_path).exists());
+
+    let packet_latest = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command.args(["taskflow", "packet", "latest", "--json"]);
+        command.env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        packet_latest.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&packet_latest.stdout),
+        String::from_utf8_lossy(&packet_latest.stderr)
+    );
+    let latest_packet: serde_json::Value =
+        serde_json::from_slice(&packet_latest.stdout).expect("packet latest json should parse");
+    assert_eq!(latest_packet["requested_run_id"], "latest");
+    assert_eq!(latest_packet["run_id"], dispatch["run_id"]);
+    assert_eq!(
+        latest_packet["dispatch_receipt"]["run_id"],
+        dispatch["dispatch_receipt"]["run_id"]
+    );
+    assert_eq!(
+        latest_packet["dispatch_packet"]["path"],
+        dispatch["dispatch_packet_path"]
+    );
+    assert_eq!(
+        latest_packet["lawful_resume_inputs"]["dispatch_packet_path"],
+        dispatch["dispatch_packet_path"]
+    );
+
+    let run_graph_latest = taskflow_run_graph_latest_with_timeout(&state_dir, true);
+    assert!(
+        run_graph_latest.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&run_graph_latest.stdout),
+        String::from_utf8_lossy(&run_graph_latest.stderr)
+    );
+    let latest_run_graph: serde_json::Value = serde_json::from_slice(&run_graph_latest.stdout)
+        .expect("run-graph latest json should parse");
+    assert_eq!(
+        latest_run_graph["run_graph_status"]["run_id"],
+        latest_packet["run_id"]
+    );
+    assert_eq!(
+        latest_run_graph["projection_truth"]["dispatch_receipt"]["dispatch_packet_path"],
+        latest_packet["dispatch_packet"]["path"]
+    );
+
+    fs::remove_dir_all(project_root).expect("temp project root should be removed");
 }
 
 #[test]

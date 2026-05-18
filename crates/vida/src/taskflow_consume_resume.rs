@@ -1367,6 +1367,55 @@ fn latest_runtime_consumption_snapshot_for_resume_gate(
     })
 }
 
+fn latest_runtime_consumption_snapshot_after_recorded_final_is_bundle_check(
+    state_root: &std::path::Path,
+) -> Result<bool, String> {
+    let snapshot_dir = state_root.join("runtime-consumption");
+    if !snapshot_dir.exists() {
+        return Ok(false);
+    }
+
+    let mut latest_any: Option<(std::time::SystemTime, String)> = None;
+    let mut latest_final: Option<std::time::SystemTime> = None;
+    for entry in std::fs::read_dir(&snapshot_dir)
+        .map_err(|error| format!("Failed to read runtime-consumption directory: {error}"))?
+    {
+        let entry = entry
+            .map_err(|error| format!("Failed to inspect runtime-consumption entry: {error}"))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        if latest_any
+            .as_ref()
+            .is_none_or(|(latest_modified, _)| modified > *latest_modified)
+        {
+            latest_any = Some((modified, file_name.clone()));
+        }
+        if file_name.starts_with("final-")
+            && latest_final.is_none_or(|latest_modified| modified > latest_modified)
+        {
+            latest_final = Some(modified);
+        }
+    }
+
+    Ok(matches!(
+        (latest_any, latest_final),
+        (Some((latest_modified, latest_name)), Some(final_modified))
+            if latest_modified > final_modified && latest_name.starts_with("bundle-check-")
+    ))
+}
+
 fn runtime_consumption_snapshot_has_execution_preparation_blocker(
     snapshot: &serde_json::Value,
 ) -> bool {
@@ -1604,9 +1653,16 @@ async fn emit_runtime_consumption_resume_json(
         "source_run_id": dispatch_receipt.run_id,
         "failure_control_evidence": failure_control_evidence.clone(),
     });
+    let run_graph_status = store.run_graph_status(&dispatch_receipt.run_id).await;
+    let blocker_run_id = explicit_run_id.or_else(|| {
+        run_graph_status
+            .as_ref()
+            .ok()
+            .map(|_| dispatch_receipt.run_id.as_str())
+    });
     let runtime_dispatch_receipt_blocker_code =
-        runtime_consumption_resume_blocker_code(store, &payload_json, explicit_run_id).await?;
-    let projection_truth = match store.run_graph_status(&dispatch_receipt.run_id).await {
+        runtime_consumption_resume_blocker_code(store, &payload_json, blocker_run_id).await?;
+    let projection_truth = match run_graph_status {
         Ok(status) => Some(
             crate::taskflow_run_graph::run_graph_projection_truth(store, &status)
                 .await
@@ -2136,6 +2192,101 @@ fn build_resume_inputs(
     }
 }
 
+async fn reconcile_terminal_closure_lineage_for_resume(
+    store: &super::StateStore,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    dispatch_receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) -> Result<bool, String> {
+    if dispatch_receipt.dispatch_target == "closure" {
+        return Ok(false);
+    }
+    let terminal_closure_complete = store
+        .run_graph_status(&dispatch_receipt.run_id)
+        .await
+        .map(|status| status.status == "completed" && status.lifecycle_stage == "closure_complete")
+        .unwrap_or(false);
+    let final_lineage_closure_ready = dispatch_receipt
+        .downstream_dispatch_target
+        .as_deref()
+        .map(str::trim)
+        == Some("closure")
+        && dispatch_receipt.downstream_dispatch_ready
+        && dispatch_receipt.downstream_dispatch_blockers.is_empty()
+        && resume_from_persisted_final_snapshot(store, &dispatch_receipt.run_id)?;
+    let packet_lineage_closure_ready = dispatch_receipt
+        .dispatch_packet_path
+        .as_deref()
+        .map(read_dispatch_packet)
+        .transpose()?
+        .is_some_and(|packet| {
+            packet
+                .get("downstream_dispatch_ready")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                && matches!(
+                    packet
+                        .get("downstream_dispatch_status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("packet_ready") | Some("executed")
+                )
+                && packet
+                    .get("downstream_dispatch_result_path")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty())
+        });
+    if !terminal_closure_complete && !final_lineage_closure_ready && !packet_lineage_closure_ready {
+        return Ok(false);
+    }
+
+    let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
+        super::downstream_activation_fields(role_selection, "closure");
+    dispatch_receipt.dispatch_target = "closure".to_string();
+    dispatch_receipt.dispatch_status = if terminal_closure_complete || packet_lineage_closure_ready
+    {
+        "executed".to_string()
+    } else {
+        "packet_ready".to_string()
+    };
+    dispatch_receipt.lane_status = if terminal_closure_complete || packet_lineage_closure_ready {
+        super::LaneStatus::LaneCompleted.as_str().to_string()
+    } else {
+        "packet_ready".to_string()
+    };
+    dispatch_receipt.dispatch_kind = dispatch_kind;
+    dispatch_receipt.dispatch_surface = dispatch_surface;
+    dispatch_receipt.dispatch_command =
+        super::runtime_dispatch_command_for_target(role_selection, "closure");
+    dispatch_receipt.dispatch_result_path = dispatch_receipt
+        .downstream_dispatch_result_path
+        .clone()
+        .or_else(|| dispatch_receipt.dispatch_result_path.clone());
+    dispatch_receipt.blocker_code = None;
+    dispatch_receipt.downstream_dispatch_target = None;
+    dispatch_receipt.downstream_dispatch_command = None;
+    dispatch_receipt.downstream_dispatch_note = Some(
+        "authoritative terminal/final lineage resolved closure as the next resume target"
+            .to_string(),
+    );
+    dispatch_receipt.downstream_dispatch_ready = false;
+    dispatch_receipt.downstream_dispatch_blockers = Vec::new();
+    dispatch_receipt.downstream_dispatch_packet_path = None;
+    dispatch_receipt.downstream_dispatch_status = None;
+    dispatch_receipt.downstream_dispatch_result_path = None;
+    dispatch_receipt.downstream_dispatch_trace_path = None;
+    dispatch_receipt.downstream_dispatch_active_target = None;
+    dispatch_receipt.downstream_dispatch_last_target = Some("closure".to_string());
+    dispatch_receipt.activation_agent_type = activation_agent_type;
+    dispatch_receipt.activation_runtime_role = activation_runtime_role;
+    dispatch_receipt.selected_backend = super::downstream_selected_backend(
+        role_selection,
+        "closure",
+        dispatch_receipt.activation_agent_type.as_deref(),
+        dispatch_receipt.selected_backend.as_deref(),
+    )
+    .or_else(|| dispatch_receipt.selected_backend.clone());
+    Ok(true)
+}
+
 fn build_run_graph_replay_lineage_receipt(
     status: &crate::state_store::RunGraphStatus,
     source_receipt: &crate::state_store::RunGraphDispatchReceipt,
@@ -2449,6 +2600,21 @@ fn retry_backend_for_dispatch_receipt(
             | Some(super::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
     );
     if dispatch_receipt.blocker_code.as_deref() == Some("timeout_without_takeover_authority") {
+        if let Some(packet_retry_backend) = dispatch_receipt
+            .dispatch_packet_path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .and_then(|path| {
+                retry_backend_from_dispatch_packet(
+                    path,
+                    &dispatch_receipt.dispatch_target,
+                    current_backend,
+                )
+            })
+            .filter(|fallback| Some(fallback.as_str()) != current_backend)
+        {
+            return Some(packet_retry_backend);
+        }
         if let Some(fallback) = route_fallback.clone() {
             if Some(fallback.as_str()) != current_backend {
                 return Some(fallback);
@@ -2457,6 +2623,21 @@ fn retry_backend_for_dispatch_receipt(
         return None;
     }
     if internal_timeout_like_blocker {
+        if let Some(packet_retry_backend) = dispatch_receipt
+            .dispatch_packet_path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .and_then(|path| {
+                retry_backend_from_dispatch_packet(
+                    path,
+                    &dispatch_receipt.dispatch_target,
+                    current_backend,
+                )
+            })
+            .filter(|fallback| Some(fallback.as_str()) != current_backend)
+        {
+            return Some(packet_retry_backend);
+        }
         if let Some(fallback) = route_fallback.clone() {
             if Some(fallback.as_str()) != current_backend {
                 return Some(fallback);
@@ -3798,34 +3979,38 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
     store: &super::StateStore,
     run_id: &str,
 ) -> Result<ResumeInputs, String> {
-    resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(store, run_id, true).await
+    resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(store, run_id, true, false)
+        .await
 }
 
 async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
     store: &super::StateStore,
     run_id: &str,
     strict_blocked_receipts: bool,
+    allow_explicit_binding_redirect: bool,
 ) -> Result<ResumeInputs, String> {
     const MAX_BOUND_TASK_RESUME_REDIRECTS: usize = 64;
     let mut resolved_run_id = run_id.to_string();
     let mut visited_run_ids = std::collections::HashSet::from([resolved_run_id.clone()]);
     let mut redirects = 0usize;
-    while let Some(bound_run_id) =
-        explicit_bound_task_graph_resume_run_id(store, &resolved_run_id).await?
-    {
-        if !visited_run_ids.insert(bound_run_id.clone()) {
-            return Err(format!(
-                "Detected cyclic explicit continuation binding while resolving resume inputs for `{run_id}`: run `{}` was visited more than once.",
-                bound_run_id
-            ));
+    if allow_explicit_binding_redirect {
+        while let Some(bound_run_id) =
+            explicit_bound_task_graph_resume_run_id(store, &resolved_run_id).await?
+        {
+            if !visited_run_ids.insert(bound_run_id.clone()) {
+                return Err(format!(
+                    "Detected cyclic explicit continuation binding while resolving resume inputs for `{run_id}`: run `{}` was visited more than once.",
+                    bound_run_id
+                ));
+            }
+            redirects += 1;
+            if redirects > MAX_BOUND_TASK_RESUME_REDIRECTS {
+                return Err(format!(
+                    "Explicit continuation binding redirect limit exceeded while resolving resume inputs for `{run_id}` (limit: {MAX_BOUND_TASK_RESUME_REDIRECTS})."
+                ));
+            }
+            resolved_run_id = bound_run_id;
         }
-        redirects += 1;
-        if redirects > MAX_BOUND_TASK_RESUME_REDIRECTS {
-            return Err(format!(
-                "Explicit continuation binding redirect limit exceeded while resolving resume inputs for `{run_id}` (limit: {MAX_BOUND_TASK_RESUME_REDIRECTS})."
-            ));
-        }
-        resolved_run_id = bound_run_id;
     }
     let mut receipt = match store.run_graph_dispatch_receipt(&resolved_run_id).await {
         Ok(Some(receipt)) => receipt,
@@ -3897,6 +4082,40 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
             }
         }
     }
+    let allow_downstream_lineage = allow_downstream_resume_lineage(
+        project_root.as_deref(),
+        preloaded_role_selection.as_ref(),
+        &receipt,
+    );
+    let terminal_closure_complete = store
+        .run_graph_status(&resolved_run_id)
+        .await
+        .map(|status| status.status == "completed" && status.lifecycle_stage == "closure_complete")
+        .unwrap_or(false);
+    let final_lineage_closure_preview_ready =
+        receipt.downstream_dispatch_target.as_deref().map(str::trim) == Some("closure")
+            && receipt.downstream_dispatch_ready
+            && receipt.downstream_dispatch_blockers.is_empty()
+            && resume_from_persisted_final_snapshot(store, &resolved_run_id)?;
+    let recorded_final_hidden_by_bundle_check = !strict_blocked_receipts
+        && !terminal_closure_complete
+        && receipt.downstream_dispatch_target.as_deref().map(str::trim) == Some("closure")
+        && receipt.downstream_dispatch_ready
+        && resume_from_persisted_final_snapshot(store, &resolved_run_id)?
+        && latest_runtime_consumption_snapshot_after_recorded_final_is_bundle_check(store.root())?;
+    let explicit_task_graph_task_binding = store
+        .run_graph_continuation_binding(&resolved_run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read explicit continuation binding for `{}`: {error}",
+                resolved_run_id
+            )
+        })?
+        .is_some_and(|binding| {
+            binding.status == "bound"
+                && binding.active_bounded_unit["kind"].as_str() == Some("task_graph_task")
+        });
     if !strict_blocked_receipts {
         if let Some(resume) = maybe_resume_inputs_from_ready_downstream_packet(
             store,
@@ -3915,11 +4134,6 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
             return Ok(resume);
         }
     }
-    let allow_downstream_lineage = allow_downstream_resume_lineage(
-        project_root.as_deref(),
-        preloaded_role_selection.as_ref(),
-        &receipt,
-    );
     if explicit_downstream_target.is_none()
         && receipt.supersedes_receipt_id.is_some()
         && receipt.exception_path_receipt_id.is_some()
@@ -4145,6 +4359,29 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
             }
         }
     }
+    if recorded_final_hidden_by_bundle_check && !explicit_task_graph_task_binding {
+        let packet_path = receipt
+            .dispatch_packet_path
+            .clone()
+            .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
+        let packet = read_dispatch_packet(&packet_path)?;
+        validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet")?;
+        let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
+        let resume = terminal_closure_complete_resume_from_root_receipt(
+            &receipt,
+            packet_path,
+            packet,
+            role_selection,
+        );
+        record_run_graph_replay_lineage_receipt_for_resume(
+            store,
+            &receipt,
+            &resume,
+            "recorded_final_after_bundle_check",
+        )
+        .await?;
+        return Ok(resume);
+    }
     let active_executable_receipt =
         matches!(receipt.dispatch_status.as_str(), "routed" | "packet_ready")
             && receipt.blocker_code.is_none();
@@ -4160,31 +4397,8 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
     let packet = read_dispatch_packet(&packet_path)?;
     let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
-    let terminal_closure_complete = store
-        .run_graph_status(&resolved_run_id)
-        .await
-        .map(|status| status.status == "completed" && status.lifecycle_stage == "closure_complete")
-        .unwrap_or(false);
-    let final_lineage_closure_preview_ready =
-        receipt.downstream_dispatch_target.as_deref().map(str::trim) == Some("closure")
-            && receipt.downstream_dispatch_ready
-            && receipt.downstream_dispatch_blockers.is_empty()
-            && resume_from_persisted_final_snapshot(store, &resolved_run_id)?;
-    let explicit_task_graph_task_binding = store
-        .run_graph_continuation_binding(&resolved_run_id)
-        .await
-        .map_err(|error| {
-            format!(
-                "Failed to read explicit continuation binding for `{}`: {error}",
-                resolved_run_id
-            )
-        })?
-        .is_some_and(|binding| {
-            binding.status == "bound"
-                && binding.active_bounded_unit["kind"].as_str() == Some("task_graph_task")
-        });
-    if (terminal_closure_complete || final_lineage_closure_preview_ready)
-        && !explicit_task_graph_task_binding
+    if (terminal_closure_complete && !explicit_task_graph_task_binding)
+        || (final_lineage_closure_preview_ready && !explicit_task_graph_task_binding)
     {
         validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet")?;
         let resume = terminal_closure_complete_resume_from_root_receipt(
@@ -4332,7 +4546,7 @@ pub(crate) async fn resolve_runtime_consumption_resume_inputs(
         }
         let run_id = resolve_default_resume_run_id(store).await?;
         return resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
-            store, &run_id, false,
+            store, &run_id, false, true,
         )
         .await;
     };
@@ -4677,6 +4891,18 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     dispatch_packet_path = packet_path;
                     role_selection = selection;
                     run_graph_bootstrap = bootstrap;
+                    if let Err(error) = reconcile_terminal_closure_lineage_for_resume(
+                        &store,
+                        &role_selection,
+                        &mut dispatch_receipt,
+                    )
+                    .await
+                    {
+                        eprintln!(
+                            "Failed to reconcile terminal closure lineage for resumed dispatch: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
                 }
                 Err(error) => {
                     if emit_output {
@@ -14114,7 +14340,7 @@ agent_system:
         old_status.status = "completed".to_string();
         old_status.lifecycle_stage = "closure_complete".to_string();
         old_status.resume_target = "none".to_string();
-        old_status.recovery_ready = true;
+        old_status.recovery_ready = false;
         store
             .record_run_graph_status(&old_status)
             .await
@@ -14287,16 +14513,15 @@ agent_system:
             packet_path.display().to_string()
         );
 
-        let resolved =
-            resolve_runtime_consumption_resume_inputs(&store, Some(old_run_id), None, None)
+        let explicit_error =
+            match resolve_runtime_consumption_resume_inputs(&store, Some(old_run_id), None, None)
                 .await
-                .expect("explicit binding should switch resume to fresh bound-task run");
-        assert_eq!(resolved.dispatch_receipt.run_id, bound_task_id);
-        assert_eq!(resolved.dispatch_receipt.dispatch_target, "implementer");
-        assert_eq!(
-            resolved.dispatch_packet_path,
-            packet_path.display().to_string()
-        );
+            {
+                Ok(_) => panic!("explicit run id should remain a hard resume target"),
+                Err(error) => error,
+            };
+        assert!(explicit_error.contains("No persisted run-graph dispatch receipt"));
+        assert!(explicit_error.contains(old_run_id));
 
         let _ = fs::remove_dir_all(&root);
     }

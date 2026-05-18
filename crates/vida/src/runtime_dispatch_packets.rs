@@ -221,10 +221,16 @@ pub(crate) fn delivery_packet_owned_paths(
     match handoff_task_class {
         TASK_CLASS_IMPLEMENTATION => {
             let explicit_paths = explicit_request_scope_paths(request_text);
-            if explicit_paths.is_empty() {
-                tracked_design_doc_bounded_file_set_paths(tracked_design_doc_path)
-            } else {
+            if !explicit_paths.is_empty() {
                 explicit_paths
+            } else {
+                let design_paths =
+                    tracked_design_doc_bounded_file_set_paths(tracked_design_doc_path);
+                if design_paths.is_empty() {
+                    vec![".vida/data/state/runtime-consumption".to_string()]
+                } else {
+                    design_paths
+                }
             }
         }
         TASK_CLASS_SPECIFICATION => tracked_design_doc_owned_paths(tracked_design_doc_path),

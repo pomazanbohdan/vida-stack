@@ -665,17 +665,19 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
     assert!(
         tree_stdout.contains("\"id\": \"vida-b\"") || tree_stdout.contains("\"id\":\"vida-b\"")
     );
-    assert!(
-        tree_stdout.contains("\"depends_on_id\": \"vida-a\"")
-            || tree_stdout.contains("\"depends_on_id\":\"vida-a\"")
-    );
-    assert!(
-        tree_stdout.contains("\"edge_type\": \"blocks\"")
-            || tree_stdout.contains("\"edge_type\":\"blocks\"")
-    );
+    let tree_json: Value = serde_json::from_str(&tree_stdout).expect("task tree json should parse");
+    let tree_dependencies = tree_json["dependencies"]
+        .as_array()
+        .expect("task tree dependencies should be an array");
+    assert_eq!(tree_dependencies[0]["id"], "vida-a");
+    assert_eq!(tree_dependencies[0]["edge_type"], "blocks");
 
     let validate_stdout = run_and_assert_success(&["task", "validate-graph", "--json"], &state_dir);
-    assert_eq!(validate_stdout.trim(), "[]");
+    let validate_graph: Value =
+        serde_json::from_str(&validate_stdout).expect("validate-graph json should parse");
+    assert_eq!(validate_graph["status"], "pass");
+    assert_eq!(validate_graph["valid"], true);
+    assert_eq!(validate_graph["issue_count"], 0);
 
     let critical_path: serde_json::Value = serde_json::from_str(&run_and_assert_success(
         &["task", "critical-path", "--json"],

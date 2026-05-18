@@ -4557,6 +4557,9 @@ fn apply_downstream_dispatch_preview_to_receipt(
     preview_result_path: Option<String>,
 ) {
     let preview_result_path = receipt_backed_downstream_preview_result_path(preview_result_path);
+    let closure_lineage_ready =
+        downstream_dispatch_target.as_deref().map(str::trim) == Some("closure");
+    let downstream_dispatch_ready = downstream_dispatch_ready || closure_lineage_ready;
     let packet_ready = downstream_dispatch_ready
         && downstream_dispatch_blockers.is_empty()
         && preview_result_path.is_some();
@@ -4751,7 +4754,109 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                 },
             )
         }
+        "closure" => (
+            None,
+            None,
+            Some("terminal closure is the active bounded runtime target".to_string()),
+            false,
+            Vec::new(),
+        ),
         _ if receipt.dispatch_kind == "agent_lane" => {
+            let current_index = execution_lane_sequence
+                .iter()
+                .position(|target| target == &receipt.dispatch_target);
+            if current_index.is_some_and(|index| execution_lane_sequence.get(index + 1).is_none()) {
+                if dispatch_contract_lane(&role_selection.execution_plan, &receipt.dispatch_target)
+                    .is_some_and(|lane| {
+                        lane["stage"].as_str() == Some("execution")
+                            && lane["closure_class"].as_str() == Some("implementation")
+                    })
+                {
+                    let has_lane_evidence = dispatch_receipt_has_execution_evidence(receipt)
+                        || dispatch_receipt_allows_synthetic_lane_completion(receipt)
+                        || tracked_implementer_task_closed(store, role_selection, receipt).await;
+                    let blocker = dispatch_contract_lane(
+                        &role_selection.execution_plan,
+                        &receipt.dispatch_target,
+                    )
+                    .and_then(|lane| lane["completion_blocker"].as_str())
+                    .unwrap_or(blocker_code_str(BlockerCode::PendingLaneEvidence));
+                    return (
+                        Some("closure".to_string()),
+                        None,
+                        Some(
+                            "no additional downstream lane is required by the current execution plan after this handoff"
+                                .to_string(),
+                        ),
+                        has_lane_evidence,
+                        if has_lane_evidence {
+                            Vec::new()
+                        } else {
+                            downstream_preview_blockers_for_missing_lane_evidence(receipt, blocker)
+                        },
+                    );
+                }
+            }
+            let current_lane =
+                dispatch_contract_lane(&role_selection.execution_plan, &receipt.dispatch_target);
+            if current_lane.and_then(|lane| lane["stage"].as_str()) == Some("design_gate")
+                || (receipt.dispatch_target == "specification"
+                    && current_lane.and_then(|lane| lane["stage"].as_str()).is_none()
+                    && (dispatch_contract.get("specification_activation").is_some()
+                        || role_selection.tracked_flow_entry.as_deref() == Some("spec-pack")))
+            {
+                let has_specification_evidence = dispatch_receipt_has_execution_evidence(receipt)
+                    || tracked_specification_gate_completion_ready(store, role_selection, receipt)
+                        .await;
+                let spec_task_closed =
+                    tracked_specification_task_closed(store, role_selection, receipt).await;
+                let design_doc_finalized = tracked_design_doc_finalized(role_selection);
+                let evidence_blocker = current_lane
+                    .and_then(|lane| lane["completion_blocker"].as_str())
+                    .unwrap_or(blocker_code_str(BlockerCode::PendingSpecificationEvidence));
+                return (
+                    Some("work-pool-pack".to_string()),
+                    json_string(
+                        role_selection.execution_plan["tracked_flow_bootstrap"]["work_pool_task"]
+                        .get("ensure_command"),
+                    ),
+                    Some(
+                        if receipt.dispatch_status == "executed"
+                            && has_specification_evidence
+                            && spec_task_closed
+                            && design_doc_finalized
+                        {
+                            "specification/planning evidence is recorded and the spec-pack is closed; ensure or reuse the tracked work-pool packet"
+                        } else if receipt.dispatch_status == "executed" {
+                            "after specification/planning evidence is recorded, finalize the design doc and close spec-pack before work-pool shaping via tracked work-pool ensure/reuse"
+                        } else {
+                            "specification/planning lane is active; wait for bounded evidence return before design finalization, spec-pack closure, and tracked work-pool ensure/reuse"
+                        }
+                        .to_string(),
+                    ),
+                    has_specification_evidence && spec_task_closed && design_doc_finalized,
+                    {
+                        let mut blockers = Vec::new();
+                        if !has_specification_evidence {
+                            blockers.push(evidence_blocker.to_string());
+                        }
+                        if !spec_task_closed {
+                            blockers.push(
+                                blocker_code_value(BlockerCode::PendingSpecTaskClose)
+                                    .expect("pending spec task close should stay registry-backed"),
+                            );
+                        }
+                        if !design_doc_finalized {
+                            blockers.push(
+                                blocker_code_value(BlockerCode::PendingDesignFinalize).expect(
+                                    "pending design finalize should stay registry-backed",
+                                ),
+                            );
+                        }
+                        blockers
+                    },
+                );
+            }
             if matches!(
                 receipt.dispatch_status.as_str(),
                 "routed" | "executing"
@@ -4767,8 +4872,6 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     Vec::new(),
                 );
             }
-            let current_lane =
-                dispatch_contract_lane(&role_selection.execution_plan, &receipt.dispatch_target);
             let implementation = &role_selection.execution_plan["development_flow"]["implementation"];
             let analysis_target = implementation
                 .get("analysis_route_task_class")
@@ -4809,65 +4912,6 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     },
                 );
             }
-            if current_lane.and_then(|lane| lane["stage"].as_str()) == Some("design_gate")
-                || (receipt.dispatch_target == "specification"
-                    && current_lane.and_then(|lane| lane["stage"].as_str()).is_none()
-                    && dispatch_contract.get("specification_activation").is_some())
-            {
-                let has_specification_evidence = dispatch_receipt_has_execution_evidence(receipt)
-                    || tracked_specification_gate_completion_ready(store, role_selection, receipt)
-                        .await;
-                let spec_task_closed =
-                    tracked_specification_task_closed(store, role_selection, receipt).await;
-                let design_doc_finalized = tracked_design_doc_finalized(role_selection);
-                let evidence_blocker = current_lane
-                    .and_then(|lane| lane["completion_blocker"].as_str())
-                    .unwrap_or(blocker_code_str(BlockerCode::PendingSpecificationEvidence));
-                return (
-                    Some("work-pool-pack".to_string()),
-                    json_string(
-                        role_selection.execution_plan["tracked_flow_bootstrap"]["work_pool_task"]
-                        .get("ensure_command"),
-                    ),
-                    Some(
-                        if receipt.dispatch_status == "executed"
-                            && has_specification_evidence
-                            && spec_task_closed
-                            && design_doc_finalized
-                        {
-                            "specification/planning evidence is recorded and the spec-pack is closed; ensure or reuse the tracked work-pool packet"
-                        } else if receipt.dispatch_status == "executed" {
-                            "after specification/planning evidence is recorded, finalize the design doc and close spec-pack before work-pool shaping via tracked work-pool ensure/reuse"
-                        } else {
-                            "specification/planning lane is active; wait for bounded evidence return before design finalization, spec-pack closure, and tracked work-pool ensure/reuse"
-                        }
-                        .to_string(),
-                    ),
-                    has_specification_evidence && spec_task_closed && design_doc_finalized,
-                    {
-                        let mut blockers = Vec::new();
-                        if !has_specification_evidence {
-                            blockers.push(evidence_blocker.to_string());
-                        }
-                        if !design_doc_finalized {
-                            blockers.push(
-                                blocker_code_value(BlockerCode::PendingDesignFinalize)
-                                    .expect("pending design finalize should stay registry-backed"),
-                            );
-                        }
-                        if !spec_task_closed {
-                            blockers.push(
-                                blocker_code_value(BlockerCode::PendingSpecTaskClose)
-                                    .expect("pending spec task close should stay registry-backed"),
-                            );
-                        }
-                        blockers
-                    },
-                );
-            }
-            let current_index = execution_lane_sequence
-                .iter()
-                .position(|target| target == &receipt.dispatch_target);
             let effective_current_target = current_index
                 .map(|_| receipt.dispatch_target.clone())
                 .or_else(|| {
@@ -4943,6 +4987,14 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     },
                 )
             } else {
+                let blocker = effective_current_target
+                    .as_deref()
+                    .and_then(|target| dispatch_contract_lane(&role_selection.execution_plan, target))
+                    .and_then(|lane| lane["completion_blocker"].as_str())
+                    .unwrap_or(blocker_code_str(BlockerCode::PendingLaneEvidence));
+                let has_lane_evidence = dispatch_receipt_has_execution_evidence(receipt)
+                    || dispatch_receipt_allows_synthetic_lane_completion(receipt)
+                    || tracked_implementer_task_closed(store, role_selection, receipt).await;
                 (
                     Some("closure".to_string()),
                     None,
@@ -4950,8 +5002,12 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                         "no additional downstream lane is required by the current execution plan after this handoff"
                             .to_string(),
                     ),
-                    true,
-                    Vec::new(),
+                    has_lane_evidence,
+                    if has_lane_evidence {
+                        Vec::new()
+                    } else {
+                        downstream_preview_blockers_for_missing_lane_evidence(receipt, &blocker)
+                    },
                 )
             }
         }
@@ -18237,7 +18293,7 @@ pub(crate) fn apply_internal_activation_timeout_to_receipt(
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     timeout_seconds: u64,
 ) -> Result<(), String> {
-    let blocker_code = INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT;
+    let blocker_code = "internal_activation_view_only";
     let execution_result =
         runtime_dispatch_internal_activation_timeout_result(receipt, timeout_seconds, blocker_code);
     let dispatch_result_path =

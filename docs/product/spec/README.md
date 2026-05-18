@@ -56,6 +56,8 @@ Active design docs:
 - `docs/product/spec/unified-hybrid-runtime-selection-policy-design.md`
 - `docs/product/spec/model-provider-price-catalog-lifecycle-design.md`
 - `docs/product/spec/vida-migration-gap-repair-design.md`
+- `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
+- `docs/product/spec/fix-status-surface-external-cli-readiness-design.md`
 
 Current promoted runtime-control specs:
 
@@ -75,6 +77,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-05-15T09:14:47.5191228Z
+updated_at: 2026-05-18T00:00:00Z
 changelog_ref: README.changelog.jsonl
-- `docs/product/spec/fix-status-surface-external-cli-readiness-design.md`

@@ -652,6 +652,49 @@ impl StateStore {
             }
         }
 
+        for task in tasks {
+            let Some(children) = parent_children.get(&task.id) else {
+                continue;
+            };
+            if task.status == "closed" {
+                for child_id in children {
+                    let Some(child) = by_id.get(child_id) else {
+                        continue;
+                    };
+                    if child.status != "closed" {
+                        issues.push(TaskGraphIssue {
+                            issue_type: "closed_parent_has_open_child".to_string(),
+                            issue_id: task.id.clone(),
+                            depends_on_id: Some(child.id.clone()),
+                            edge_type: Some("parent-child".to_string()),
+                            detail: format!(
+                                "closed parent has direct child {} with status {}",
+                                child.id, child.status
+                            ),
+                        });
+                    }
+                }
+            } else if task.status == "open" || task.status == "in_progress" {
+                let has_open_child = children.iter().any(|child_id| {
+                    by_id
+                        .get(child_id)
+                        .map(|child| child.status == "open" || child.status == "in_progress")
+                        .unwrap_or(false)
+                });
+                if !has_open_child {
+                    issues.push(TaskGraphIssue {
+                        issue_type: "open_parent_has_no_open_child".to_string(),
+                        issue_id: task.id.clone(),
+                        depends_on_id: None,
+                        edge_type: Some("parent-child".to_string()),
+                        detail:
+                            "open or in-progress parent has no direct open or in-progress child"
+                                .to_string(),
+                    });
+                }
+            }
+        }
+
         let mut visited = BTreeSet::new();
         let mut active = BTreeSet::new();
         for task in tasks {
@@ -795,6 +838,105 @@ mod tests {
             })
             .await
             .expect("task should be created");
+    }
+
+    fn task_record(task_id: &str, status: &str) -> TaskRecord {
+        TaskRecord {
+            id: task_id.to_string(),
+            display_id: None,
+            title: task_id.to_string(),
+            description: String::new(),
+            status: status.to_string(),
+            priority: 1,
+            issue_type: "task".to_string(),
+            created_at: "1".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "1".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: TaskExecutionSemantics::default(),
+            planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+            dependencies: Vec::new(),
+        }
+    }
+
+    fn parent_child_dependency(child_id: &str, parent_id: &str) -> TaskDependencyRecord {
+        TaskDependencyRecord {
+            issue_id: child_id.to_string(),
+            depends_on_id: parent_id.to_string(),
+            edge_type: "parent-child".to_string(),
+            created_at: "1".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }
+    }
+
+    #[test]
+    fn validate_task_graph_flags_closed_parent_with_open_child() {
+        let parent = task_record("parent", "closed");
+        let mut child = task_record("child", "open");
+        child
+            .dependencies
+            .push(parent_child_dependency("child", "parent"));
+
+        let issues = StateStore::validate_task_graph_rows(&[parent, child]);
+
+        assert!(issues.iter().any(|issue| {
+            issue.issue_type == "closed_parent_has_open_child"
+                && issue.issue_id == "parent"
+                && issue.depends_on_id.as_deref() == Some("child")
+                && issue.edge_type.as_deref() == Some("parent-child")
+        }));
+    }
+
+    #[test]
+    fn validate_task_graph_flags_in_progress_parent_with_no_open_child() {
+        let parent = task_record("parent", "in_progress");
+        let mut child = task_record("child", "closed");
+        child
+            .dependencies
+            .push(parent_child_dependency("child", "parent"));
+
+        let issues = StateStore::validate_task_graph_rows(&[parent, child]);
+
+        assert!(issues.iter().any(|issue| {
+            issue.issue_type == "open_parent_has_no_open_child"
+                && issue.issue_id == "parent"
+                && issue.depends_on_id.is_none()
+                && issue.edge_type.as_deref() == Some("parent-child")
+        }));
+    }
+
+    #[test]
+    fn validate_task_graph_accepts_parent_child_closure_consistent_rows() {
+        let open_parent = task_record("open-parent", "open");
+        let mut open_child = task_record("open-child", "in_progress");
+        open_child
+            .dependencies
+            .push(parent_child_dependency("open-child", "open-parent"));
+        let closed_parent = task_record("closed-parent", "closed");
+        let mut closed_child = task_record("closed-child", "closed");
+        closed_child
+            .dependencies
+            .push(parent_child_dependency("closed-child", "closed-parent"));
+
+        let issues = StateStore::validate_task_graph_rows(&[
+            open_parent,
+            open_child,
+            closed_parent,
+            closed_child,
+        ]);
+
+        assert!(issues.iter().all(|issue| {
+            issue.issue_type != "closed_parent_has_open_child"
+                && issue.issue_type != "open_parent_has_no_open_child"
+        }));
     }
 
     #[tokio::test]

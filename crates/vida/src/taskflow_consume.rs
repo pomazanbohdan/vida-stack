@@ -1573,6 +1573,18 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
             .unwrap_or_else(|| role_selection.selected_role.clone());
     let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
         super::downstream_activation_fields(role_selection, &dispatch_target);
+    let dispatch_kind = if dispatch_surface.as_deref() == Some("vida taskflow bootstrap-spec") {
+        "agent_lane".to_string()
+    } else {
+        dispatch_kind
+    };
+    let dispatch_surface = if dispatch_kind == "agent_lane"
+        || dispatch_surface.as_deref() == Some("vida taskflow bootstrap-spec")
+    {
+        Some("vida agent-init".to_string())
+    } else {
+        dispatch_surface
+    };
     let activation_agent_type = activation_agent_type.or_else(|| {
         if role_selection.conversational_mode.is_some() {
             role_selection.execution_plan["default_route"]["activation_agent_type"]
@@ -1623,6 +1635,8 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
         latest_status.get("dispatch_ready"),
         super::json_bool(run_graph_bootstrap.get("handoff_ready"), false),
     );
+    let downstream_dispatch_ready =
+        dispatch_ready || (dispatch_target == "closure" && dispatch_blockers.is_empty());
     crate::state_store::RunGraphDispatchReceipt {
         run_id: run_id.clone(),
         dispatch_target: dispatch_target.clone(),
@@ -1650,7 +1664,7 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
         downstream_dispatch_target: Some(dispatch_target),
         downstream_dispatch_command: dispatch_command.clone(),
         downstream_dispatch_note: None,
-        downstream_dispatch_ready: dispatch_ready,
+        downstream_dispatch_ready,
         downstream_dispatch_blockers: dispatch_blockers,
         downstream_dispatch_packet_path: None,
         downstream_dispatch_status: None,
@@ -1672,6 +1686,16 @@ fn canonical_dispatch_target_from_latest_status(
 ) -> Option<String> {
     let next_node =
         super::json_string(latest_status.get("next_node")).filter(|value| !value.is_empty());
+    if next_node.as_deref() == Some("spec-pack")
+        && super::execution_plan_agent_only_development_required(&role_selection.execution_plan)
+    {
+        let lane_sequence = super::dispatch_contract_lane_sequence(
+            &role_selection.execution_plan["development_flow"]["dispatch_contract"],
+        );
+        if let Some(first_lane) = lane_sequence.first().filter(|lane| !lane.trim().is_empty()) {
+            return Some(first_lane.clone());
+        }
+    }
     next_node
         .as_deref()
         .and_then(|next_node| {

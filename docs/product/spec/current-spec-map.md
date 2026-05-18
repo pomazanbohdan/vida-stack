@@ -321,6 +321,9 @@ Companion rule:
 52. [closure-admission-evidence-table-design.md](closure-admission-evidence-table-design.md)
    Config families: bounded closure-admission evidence crosswalk, canonical evidence-family minimums, operator blocker parity, and closure-bundle fail-closed semantics
    Registered path: `docs/product/spec/closure-admission-evidence-table-design.md`
+53. [taskflow-happy-path-test-catalog-design.md](taskflow-happy-path-test-catalog-design.md)
+   Config families: bounded ordered TaskFlow happy-path test catalog, proof-target mapping, parent/child closure consistency gate, and immediate defect-epic repair through agent mode
+   Registered path: `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
 
 ### Support
 
@@ -376,5 +379,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-05-15T09:14:47.3489947Z
+updated_at: 2026-05-18T00:00:00Z
 changelog_ref: current-spec-map.changelog.jsonl
