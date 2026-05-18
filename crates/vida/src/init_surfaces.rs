@@ -658,6 +658,17 @@ mod tests {
         }
     }
 
+    fn run_on_cli_runtime_stack(name: &str, test: impl FnOnce() + Send + 'static) {
+        let handle = std::thread::Builder::new()
+            .name(name.to_string())
+            .stack_size(32 * 1024 * 1024)
+            .spawn(test)
+            .expect("cli-stack test thread should spawn");
+        if let Err(panic) = handle.join() {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
     fn agent_lane_test_execution_plan(executor_backend: &str) -> serde_json::Value {
         json!({
             "backend_admissibility_matrix": [
@@ -1130,98 +1141,104 @@ mod tests {
 
     #[test]
     fn agent_init_execute_dispatch_timeout_materializes_internal_timeout_receipt() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
+        run_on_cli_runtime_stack(
+            "agent_init_execute_dispatch_timeout_materializes_internal_timeout_receipt",
+            || {
+                let runtime =
+                    tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+                let harness =
+                    TempStateHarness::new().expect("temp state harness should initialize");
+                let _cwd = guard_current_dir(harness.path());
 
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        wait_for_state_unlock(harness.path());
-        assert_eq!(
-            runtime.block_on(run(cli(&[
-                "project-activator",
-                "--project-id",
-                "test-project",
-                "--language",
-                "english",
-                "--host-cli-system",
-                "codex",
-                "--json"
-            ]))),
-            ExitCode::SUCCESS
-        );
-        wait_for_state_unlock(harness.path());
-        assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
-        wait_for_state_unlock(harness.path());
+                assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+                wait_for_state_unlock(harness.path());
+                assert_eq!(
+                    runtime.block_on(run(cli(&[
+                        "project-activator",
+                        "--project-id",
+                        "test-project",
+                        "--language",
+                        "english",
+                        "--host-cli-system",
+                        "codex",
+                        "--json"
+                    ]))),
+                    ExitCode::SUCCESS
+                );
+                wait_for_state_unlock(harness.path());
+                assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
+                wait_for_state_unlock(harness.path());
 
-        let config_path = harness.path().join("vida.config.yaml");
-        let config = fs::read_to_string(&config_path).expect("config should exist");
-        let updated = config.replace(
-            "      execution_class: internal\n",
-            "      execution_class: internal\n      max_runtime_seconds: 1\n",
-        );
-        fs::write(&config_path, updated).expect("config should update");
+                let config_path = harness.path().join("vida.config.yaml");
+                let config = fs::read_to_string(&config_path).expect("config should exist");
+                let updated = config.replace(
+                    "      execution_class: internal\n",
+                    "      execution_class: internal\n      max_runtime_seconds: 1\n",
+                );
+                fs::write(&config_path, updated).expect("config should update");
 
-        let fake_bin = harness.path().join("fake-bin");
-        fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let fake_codex = if cfg!(windows) {
-            let fake_codex = fake_bin.join("codex.cmd");
-            fs::write(
+                let fake_bin = harness.path().join("fake-bin");
+                fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
+                let fake_codex = if cfg!(windows) {
+                    let fake_codex = fake_bin.join("codex.cmd");
+                    fs::write(
                 &fake_codex,
                 "@echo off\r\nping -n 12 127.0.0.1 >nul\r\necho {\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"too-late\"}}\r\n",
             )
             .expect("fake codex should write");
-            fake_codex
-        } else {
-            let fake_codex = fake_bin.join("codex");
-            fs::write(
+                    fake_codex
+                } else {
+                    let fake_codex = fake_bin.join("codex");
+                    fs::write(
                 &fake_codex,
                 "#!/bin/sh\nsleep 11\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"too-late\"}}'\n",
             )
             .expect("fake codex should write");
-            fake_codex
-        };
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake_codex)
-                .expect("fake codex metadata should load")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
-        }
-        let config = fs::read_to_string(&config_path).expect("config should reload");
-        let fake_codex_command = fake_codex.to_string_lossy().replace('\\', "/");
-        let updated = if cfg!(windows) {
-            config.replacen(
+                    fake_codex
+                };
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mut perms = fs::metadata(&fake_codex)
+                        .expect("fake codex metadata should load")
+                        .permissions();
+                    perms.set_mode(0o755);
+                    fs::set_permissions(&fake_codex, perms)
+                        .expect("fake codex should be executable");
+                }
+                let config = fs::read_to_string(&config_path).expect("config should reload");
+                let fake_codex_command = fake_codex.to_string_lossy().replace('\\', "/");
+                let updated = if cfg!(windows) {
+                    config.replacen(
                 "        command: codex\n        static_args:\n          - exec\n          - --json\n",
                 &format!(
                     "        command: cmd\n        static_args:\n          - /C\n          - '{fake_codex_command}'\n"
                 ),
                 1,
             )
-        } else {
-            config.replacen(
-                "        command: codex\n",
-                &format!("        command: '{fake_codex_command}'\n"),
-                1,
-            )
-        };
-        fs::write(&config_path, updated).expect("config should point at fake codex");
+                } else {
+                    config.replacen(
+                        "        command: codex\n",
+                        &format!("        command: '{fake_codex_command}'\n"),
+                        1,
+                    )
+                };
+                fs::write(&config_path, updated).expect("config should point at fake codex");
 
-        let original_path = std::env::var("PATH").ok();
-        let mut path_entries = vec![fake_bin.clone()];
-        if let Some(original_path) = original_path.as_deref() {
-            path_entries.extend(std::env::split_paths(original_path));
-        }
-        let patched_path =
-            std::env::join_paths(path_entries).expect("test PATH should join for platform");
-        std::env::set_var("PATH", &patched_path);
+                let original_path = std::env::var("PATH").ok();
+                let mut path_entries = vec![fake_bin.clone()];
+                if let Some(original_path) = original_path.as_deref() {
+                    path_entries.extend(std::env::split_paths(original_path));
+                }
+                let patched_path =
+                    std::env::join_paths(path_entries).expect("test PATH should join for platform");
+                std::env::set_var("PATH", &patched_path);
 
-        let state_root = harness.path().join(".vida").join("data").join("state");
-        let store = runtime
-            .block_on(StateStore::open(state_root.clone()))
-            .expect("state store should open");
-        let role_selection = crate::RuntimeConsumptionLaneSelection {
+                let state_root = harness.path().join(".vida").join("data").join("state");
+                let store = runtime
+                    .block_on(StateStore::open(state_root.clone()))
+                    .expect("state store should open");
+                let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
             selection_mode: "fixed".to_string(),
@@ -1242,125 +1259,127 @@ mod tests {
             execution_plan: agent_lane_test_execution_plan("junior"),
             reason: "test".to_string(),
         };
-        let run_graph_bootstrap = json!({
-            "run_id": "run-agent-init-timeout"
-        });
-        let status = RunGraphStatus {
-            run_id: "run-agent-init-timeout".to_string(),
-            task_id: "run-agent-init-timeout".to_string(),
-            task_class: "implementation".to_string(),
-            active_node: "planning".to_string(),
-            next_node: Some("worker".to_string()),
-            status: "ready".to_string(),
-            route_task_class: "implementation".to_string(),
-            selected_backend: "junior".to_string(),
-            lane_id: "worker_lane".to_string(),
-            lifecycle_stage: "dispatch_ready".to_string(),
-            policy_gate: "single_task_scope_required".to_string(),
-            handoff_state: "awaiting_worker".to_string(),
-            context_state: "sealed".to_string(),
-            checkpoint_kind: "conversation_cursor".to_string(),
-            resume_target: "dispatch.worker_lane".to_string(),
-            recovery_ready: true,
-        };
-        runtime
-            .block_on(store.record_run_graph_status(&status))
-            .expect("run graph status should record");
-        let receipt = RunGraphDispatchReceipt {
-            run_id: "run-agent-init-timeout".to_string(),
-            dispatch_target: "implementer".to_string(),
-            dispatch_status: "routed".to_string(),
-            lane_status: "lane_running".to_string(),
-            supersedes_receipt_id: None,
-            exception_path_receipt_id: None,
-            dispatch_kind: "agent_lane".to_string(),
-            dispatch_surface: Some("vida agent-init".to_string()),
-            dispatch_command: None,
-            dispatch_packet_path: None,
-            dispatch_result_path: None,
-            blocker_code: None,
-            downstream_dispatch_target: None,
-            downstream_dispatch_command: None,
-            downstream_dispatch_note: None,
-            downstream_dispatch_ready: false,
-            downstream_dispatch_blockers: Vec::new(),
-            downstream_dispatch_packet_path: None,
-            downstream_dispatch_status: None,
-            downstream_dispatch_result_path: None,
-            downstream_dispatch_trace_path: None,
-            downstream_dispatch_executed_count: 0,
-            downstream_dispatch_active_target: None,
-            downstream_dispatch_last_target: None,
-            activation_agent_type: Some("junior".to_string()),
-            activation_runtime_role: Some("worker".to_string()),
-            selected_backend: Some("junior".to_string()),
-            recorded_at: "2026-04-17T00:00:00Z".to_string(),
-        };
-        let handoff_plan = json!({});
-        let ctx = RuntimeDispatchPacketContext::new(
-            &state_root,
-            &role_selection,
-            &receipt,
-            &handoff_plan,
-            &run_graph_bootstrap,
-        );
-        let dispatch_packet_path =
-            write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
-        let mut persisted_receipt = receipt.clone();
-        persisted_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
-        runtime
-            .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
-            .expect("dispatch receipt should record");
-        drop(store);
+                let run_graph_bootstrap = json!({
+                    "run_id": "run-agent-init-timeout"
+                });
+                let status = RunGraphStatus {
+                    run_id: "run-agent-init-timeout".to_string(),
+                    task_id: "run-agent-init-timeout".to_string(),
+                    task_class: "implementation".to_string(),
+                    active_node: "planning".to_string(),
+                    next_node: Some("worker".to_string()),
+                    status: "ready".to_string(),
+                    route_task_class: "implementation".to_string(),
+                    selected_backend: "junior".to_string(),
+                    lane_id: "worker_lane".to_string(),
+                    lifecycle_stage: "dispatch_ready".to_string(),
+                    policy_gate: "single_task_scope_required".to_string(),
+                    handoff_state: "awaiting_worker".to_string(),
+                    context_state: "sealed".to_string(),
+                    checkpoint_kind: "conversation_cursor".to_string(),
+                    resume_target: "dispatch.worker_lane".to_string(),
+                    recovery_ready: true,
+                };
+                runtime
+                    .block_on(store.record_run_graph_status(&status))
+                    .expect("run graph status should record");
+                let receipt = RunGraphDispatchReceipt {
+                    run_id: "run-agent-init-timeout".to_string(),
+                    dispatch_target: "implementer".to_string(),
+                    dispatch_status: "routed".to_string(),
+                    lane_status: "lane_running".to_string(),
+                    supersedes_receipt_id: None,
+                    exception_path_receipt_id: None,
+                    dispatch_kind: "agent_lane".to_string(),
+                    dispatch_surface: Some("vida agent-init".to_string()),
+                    dispatch_command: None,
+                    dispatch_packet_path: None,
+                    dispatch_result_path: None,
+                    blocker_code: None,
+                    downstream_dispatch_target: None,
+                    downstream_dispatch_command: None,
+                    downstream_dispatch_note: None,
+                    downstream_dispatch_ready: false,
+                    downstream_dispatch_blockers: Vec::new(),
+                    downstream_dispatch_packet_path: None,
+                    downstream_dispatch_status: None,
+                    downstream_dispatch_result_path: None,
+                    downstream_dispatch_trace_path: None,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: None,
+                    downstream_dispatch_last_target: None,
+                    activation_agent_type: Some("junior".to_string()),
+                    activation_runtime_role: Some("worker".to_string()),
+                    selected_backend: Some("junior".to_string()),
+                    recorded_at: "2026-04-17T00:00:00Z".to_string(),
+                };
+                let handoff_plan = json!({});
+                let ctx = RuntimeDispatchPacketContext::new(
+                    &state_root,
+                    &role_selection,
+                    &receipt,
+                    &handoff_plan,
+                    &run_graph_bootstrap,
+                );
+                let dispatch_packet_path =
+                    write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
+                let mut persisted_receipt = receipt.clone();
+                persisted_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
+                runtime
+                    .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
+                    .expect("dispatch receipt should record");
+                drop(store);
 
-        assert_eq!(
-            runtime.block_on(run(cli(&[
-                "agent-init",
-                "--dispatch-packet",
-                dispatch_packet_path.as_str(),
-                "--execute-dispatch",
-                "--json",
-            ]))),
-            ExitCode::from(1)
-        );
-        wait_for_state_unlock(harness.path());
+                assert_eq!(
+                    runtime.block_on(run(cli(&[
+                        "agent-init",
+                        "--dispatch-packet",
+                        dispatch_packet_path.as_str(),
+                        "--execute-dispatch",
+                        "--json",
+                    ]))),
+                    ExitCode::from(1)
+                );
+                wait_for_state_unlock(harness.path());
 
-        let store = runtime
-            .block_on(StateStore::open(state_root.clone()))
-            .expect("state store should reopen");
-        let recorded_receipt = runtime
-            .block_on(store.latest_run_graph_dispatch_receipt())
-            .expect("latest dispatch receipt should load")
-            .expect("latest dispatch receipt should exist");
-        assert_eq!(recorded_receipt.dispatch_status, "blocked");
-        assert_eq!(
-            recorded_receipt.blocker_code.as_deref(),
-            Some("internal_dispatch_timeout_without_receipt")
-        );
-        let dispatch_result_path = recorded_receipt
-            .dispatch_result_path
-            .as_deref()
-            .expect("dispatch result path should record");
-        let rendered =
-            fs::read_to_string(dispatch_result_path).expect("dispatch result artifact should load");
-        let parsed: serde_json::Value =
-            serde_json::from_str(&rendered).expect("execute-dispatch json should parse");
-        assert_eq!(parsed["status"], "blocked");
-        assert_eq!(parsed["execution_state"], "blocked");
-        assert_eq!(
-            parsed["blocker_code"],
-            "internal_dispatch_timeout_without_receipt"
-        );
-        assert!(parsed["provider_error"]
-            .as_str()
-            .expect("provider error should render")
-            .contains("timed out after 1s"));
+                let store = runtime
+                    .block_on(StateStore::open(state_root.clone()))
+                    .expect("state store should reopen");
+                let recorded_receipt = runtime
+                    .block_on(store.latest_run_graph_dispatch_receipt())
+                    .expect("latest dispatch receipt should load")
+                    .expect("latest dispatch receipt should exist");
+                assert_eq!(recorded_receipt.dispatch_status, "blocked");
+                assert_eq!(
+                    recorded_receipt.blocker_code.as_deref(),
+                    Some("internal_dispatch_timeout_without_receipt")
+                );
+                let dispatch_result_path = recorded_receipt
+                    .dispatch_result_path
+                    .as_deref()
+                    .expect("dispatch result path should record");
+                let rendered = fs::read_to_string(dispatch_result_path)
+                    .expect("dispatch result artifact should load");
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&rendered).expect("execute-dispatch json should parse");
+                assert_eq!(parsed["status"], "blocked");
+                assert_eq!(parsed["execution_state"], "blocked");
+                assert_eq!(
+                    parsed["blocker_code"],
+                    "internal_dispatch_timeout_without_receipt"
+                );
+                assert!(parsed["provider_error"]
+                    .as_str()
+                    .expect("provider error should render")
+                    .contains("timed out after 1s"));
 
-        if let Some(original_path) = original_path {
-            std::env::set_var("PATH", original_path);
-        } else {
-            std::env::remove_var("PATH");
-        }
+                if let Some(original_path) = original_path {
+                    std::env::set_var("PATH", original_path);
+                } else {
+                    std::env::remove_var("PATH");
+                }
+            },
+        );
     }
 }
 
