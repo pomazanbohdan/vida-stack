@@ -126,6 +126,7 @@ Project-routing rule:
 29. After any bounded result, green test, successful build, or delegated handoff, immediately bind the next already-evidenced lawful continuation item and continue in the same execution cycle rather than pausing at summary/reporting.
 30. Agent carriers, visible host-agent templates, carrier topology, and default lane-to-carrier assumptions must not be hardcoded in owner/runtime code paths; the source of truth is the active configuration and registries, primarily `vida.config.yaml` plus the enabled agent-extension registries.
 31. File-system template layouts such as `.codex/agents/*.toml` are materialization outputs, not authority surfaces; when code or runtime summaries need the available carriers/templates, resolve them from the configured carrier catalog first and treat on-disk templates as projection/evidence only.
+32. Active runtime/project code must not keep legacy code paths or legacy functionality as current behavior. The current implementation must be owned by canonical config, templates, registries, runtime contracts, and state-store truth. Historical artifact support is allowed only as bounded, explicit migration or normalization with recorded evidence and must not become an active routing, retry, dispatch, closure, materialization, or operator-output branch. When legacy code or functionality is found, create or update a TaskFlow defect under the current defect epic, then replace it with current canonical behavior rather than extending compatibility.
 
 ## Defective Runtime Emulation Mode
 
