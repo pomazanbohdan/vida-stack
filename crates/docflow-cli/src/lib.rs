@@ -4601,6 +4601,28 @@ mod tests {
     }
 
     #[test]
+    fn proofcheck_unsupported_format_escapes_json_error_fields() {
+        let injected_format = "jsonl\",\"extra\":\"field";
+        let cli = Cli::parse_from([
+            "docflow",
+            "proofcheck",
+            "--profile",
+            "active-canon-strict",
+            "--format",
+            injected_format,
+        ]);
+        let rendered = run(cli);
+        let value: Value = serde_json::from_str(&rendered)
+            .expect("unsupported proofcheck format should render valid JSON");
+
+        assert_eq!(
+            value["error"].as_str(),
+            Some(format!("unsupported_format:{injected_format}").as_str())
+        );
+        assert!(value.get("extra").is_none());
+    }
+
+    #[test]
     fn doctor_command_streams_error_rows_from_real_tree() {
         let root = temp_dir("doctor-root");
         fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
@@ -4971,6 +4993,23 @@ mod tests {
         let rendered = run(cli);
         assert!(!rendered.contains("inventory_error"));
         assert!(!rendered.contains("error"));
+    }
+
+    #[test]
+    fn readiness_check_profile_error_escapes_json_error_fields() {
+        let injected_profile = "missing\",\"extra\":\"field";
+        let cli = Cli::parse_from(["docflow", "readiness-check", "--profile", injected_profile]);
+        let rendered = run(cli);
+        let value: Value = serde_json::from_str(&rendered)
+            .expect("readiness profile error should render valid JSON");
+
+        assert_eq!(value["verdict"].as_str(), Some("blocking"));
+        assert!(
+            value["error"]
+                .as_str()
+                .is_some_and(|error| error.contains(injected_profile))
+        );
+        assert!(value.get("extra").is_none());
     }
 
     #[test]

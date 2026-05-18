@@ -910,8 +910,11 @@ mod tests {
             .join("orchestrator-sessions")
             .join("sessions.json");
         std::fs::create_dir_all(sessions_path.parent().unwrap()).expect("parent should create");
-        std::fs::write(&sessions_path, vec![b'x'; (MAX_SESSION_STORE_BYTES as usize) + 1])
-            .expect("oversized file should be written");
+        std::fs::write(
+            &sessions_path,
+            vec![b'x'; (MAX_SESSION_STORE_BYTES as usize) + 1],
+        )
+        .expect("oversized file should be written");
 
         assert!(read_sessions(&sessions_path).is_empty());
     }
