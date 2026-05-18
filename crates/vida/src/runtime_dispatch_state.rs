@@ -2660,6 +2660,9 @@ fn configured_external_activation_command(
     packet_path: &str,
     preferred_profile_id: Option<&str>,
 ) -> Option<String> {
+    if external_backend_dispatch_blocker(backend_id, backend_entry).is_some() {
+        return None;
+    }
     let dispatch = yaml_lookup(backend_entry, &["dispatch"])?;
     let command = yaml_string(yaml_lookup(dispatch, &["command"]))?;
     let mut parts = Vec::new();
@@ -2719,6 +2722,9 @@ pub(crate) fn configured_external_activation_parts(
     packet_path: &str,
     preferred_profile_id: Option<&str>,
 ) -> Result<(String, Vec<String>), String> {
+    if let Some(blocker) = external_backend_dispatch_blocker(backend_id, backend_entry) {
+        return Err(blocker);
+    }
     let dispatch = yaml_lookup(backend_entry, &["dispatch"])
         .ok_or_else(|| "Configured external backend is missing `dispatch`".to_string())?;
     let command = yaml_string(yaml_lookup(dispatch, &["command"]))
@@ -2755,6 +2761,31 @@ pub(crate) fn configured_external_activation_parts(
         }
     }
     Ok((command, args))
+}
+
+fn external_backend_dispatch_blocker(
+    backend_id: &str,
+    backend_entry: &serde_yaml::Value,
+) -> Option<String> {
+    if yaml_lookup(backend_entry, &["enabled"]).is_some()
+        && !yaml_bool(yaml_lookup(backend_entry, &["enabled"]), false)
+    {
+        return Some(format!(
+            "external backend `{backend_id}` is disabled; external CLI execution path is forbidden"
+        ));
+    }
+    if let Some(backend_class) =
+        yaml_string(yaml_lookup(backend_entry, &["subagent_backend_class"]))
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty())
+    {
+        if backend_class != "external_cli" {
+            return Some(format!(
+                "backend `{backend_id}` has subagent_backend_class `{backend_class}` and cannot be dispatched through external CLI bridge"
+            ));
+        }
+    }
+    None
 }
 
 fn external_dispatch_command_is_allowlisted(command: &str) -> bool {
@@ -2891,6 +2922,88 @@ dispatch:
 
         assert!(error.contains("non-allowlisted"));
         assert!(error.contains("./tools/codex"));
+    }
+
+    #[test]
+    fn configured_external_activation_parts_rejects_disabled_codex_cli_before_command_generation() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+enabled: false
+subagent_backend_class: external_cli
+default_model: gpt-5.5
+dispatch:
+  command: codex
+  static_args: ["exec", "--ephemeral", "-s", "workspace-write"]
+  model_flag: -m
+  workdir_flag: -C
+  prompt_mode: positional
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let error = configured_external_activation_parts(
+            "codex_cli",
+            &backend_entry,
+            Path::new("C:/project/vida_mobile"),
+            "C:/project/vida_mobile/.vida/dispatch.json",
+            None,
+        )
+        .expect_err("disabled codex_cli must not render codex exec");
+
+        assert!(error.contains("disabled"));
+        assert!(error.contains("external CLI execution path is forbidden"));
+        assert!(
+            configured_external_activation_command(
+                "codex_cli",
+                &backend_entry,
+                Path::new("C:/project/vida_mobile"),
+                "C:/project/vida_mobile/.vida/dispatch.json",
+                None,
+            )
+            .is_none(),
+            "disabled codex_cli must not produce a preview command"
+        );
+    }
+
+    #[test]
+    fn configured_external_activation_parts_rejects_internal_backend_before_codex_exec() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+enabled: true
+subagent_backend_class: internal
+default_model: gpt-5.5
+dispatch:
+  command: codex
+  static_args: ["exec", "--ephemeral", "-s", "workspace-write"]
+  model_flag: -m
+  workdir_flag: -C
+  prompt_mode: positional
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let error = configured_external_activation_parts(
+            "internal_subagents",
+            &backend_entry,
+            Path::new("C:/project/vida_mobile"),
+            "C:/project/vida_mobile/.vida/dispatch.json",
+            None,
+        )
+        .expect_err("internal backend must not render external codex exec");
+
+        assert!(error.contains("subagent_backend_class `internal`"));
+        assert!(error.contains("external CLI bridge"));
+        assert!(
+            configured_external_activation_command(
+                "internal_subagents",
+                &backend_entry,
+                Path::new("C:/project/vida_mobile"),
+                "C:/project/vida_mobile/.vida/dispatch.json",
+                None,
+            )
+            .is_none(),
+            "internal backend must not produce a preview command"
+        );
     }
 
     #[test]
