@@ -2443,12 +2443,33 @@ fn retry_backend_for_dispatch_receipt(
     );
     let route_fallback =
         route.and_then(crate::taskflow_routing::fallback_executor_backend_from_route);
+    let internal_timeout_like_blocker = matches!(
+        dispatch_receipt.blocker_code.as_deref(),
+        Some("internal_activation_view_only")
+            | Some(super::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
+    );
     if dispatch_receipt.blocker_code.as_deref() == Some("timeout_without_takeover_authority") {
+        if let Some(next_review_backend) = distinct_review_retry_backend_from_route(
+            &role_selection.execution_plan,
+            &dispatch_receipt.dispatch_target,
+            route,
+            current_backend,
+        ) {
+            return Some(next_review_backend);
+        }
         if let Some(fallback) = route_fallback.clone() {
             if Some(fallback.as_str()) != current_backend {
                 return Some(fallback);
             }
         }
+    }
+    if internal_timeout_like_blocker {
+        if let Some(fallback) = route_fallback.clone() {
+            if Some(fallback.as_str()) != current_backend {
+                return Some(fallback);
+            }
+        }
+        return None;
     }
     if let Some(next_review_backend) = distinct_review_retry_backend_from_route(
         &role_selection.execution_plan,
@@ -6221,6 +6242,70 @@ mod tests {
         assert_eq!(
             retry_backend_for_dispatch_receipt(&role_selection, &receipt).as_deref(),
             Some("review_secondary")
+        );
+    }
+
+    #[test]
+    fn retry_backend_does_not_rotate_internal_timeout_back_to_external_fanout() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue coach review".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string(), "coach".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "hermes_cli",
+                        "fallback_executor_backend": "internal_subagents",
+                        "fanout_executor_backends": ["hermes_cli", "opencode_cli"]
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-review-internal-timeout-retry".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: Some("coach".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-18T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            retry_backend_for_dispatch_receipt(&role_selection, &receipt).is_none(),
+            "internal fallback timeout must not rotate back to external review fanout"
         );
     }
 
