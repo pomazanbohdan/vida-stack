@@ -3870,6 +3870,16 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         }
     };
 
+    if as_json {
+        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+            &proxy_state_dir(),
+            "taskflow-graph-summary-latest",
+        ) {
+            println!("{cached}");
+            return ExitCode::SUCCESS;
+        }
+    }
+
     let store = match crate::state_store::StateStore::open_existing(proxy_state_dir()).await {
         Ok(store) => store,
         Err(error) => {
@@ -3878,20 +3888,6 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         }
     };
 
-    let ready_tasks = match store.ready_tasks_scoped(None).await {
-        Ok(tasks) => tasks,
-        Err(error) => {
-            eprintln!("Failed to compute ready tasks: {error}");
-            return ExitCode::from(1);
-        }
-    };
-    let blocked_tasks = match store.blocked_tasks().await {
-        Ok(tasks) => tasks,
-        Err(error) => {
-            eprintln!("Failed to compute blocked tasks: {error}");
-            return ExitCode::from(1);
-        }
-    };
     let all_tasks = match store.list_tasks(None, true).await {
         Ok(tasks) => tasks,
         Err(error) => {
@@ -3899,14 +3895,33 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let critical_path = match store.critical_path().await {
+    let ready_tasks =
+        match crate::state_store::StateStore::ready_tasks_scoped_from_rows(&all_tasks, None) {
+            Ok(tasks) => tasks,
+            Err(error) => {
+                eprintln!("Failed to compute ready tasks: {error}");
+                return ExitCode::from(1);
+            }
+        };
+    let blocked_tasks = crate::state_store::StateStore::blocked_tasks_from_rows(&all_tasks);
+    let critical_path = match crate::state_store::StateStore::critical_path_from_rows(&all_tasks) {
         Ok(path) => path,
         Err(error) => {
             eprintln!("Failed to compute critical path: {error}");
             return ExitCode::from(1);
         }
     };
-    let scheduling = match store.scheduling_projection_scoped(None, None).await {
+    let critical_path_ids = critical_path
+        .nodes
+        .iter()
+        .map(|node| node.id.clone())
+        .collect::<BTreeSet<_>>();
+    let scheduling = match crate::state_store::StateStore::scheduling_projection_scoped_from_rows(
+        &all_tasks,
+        None,
+        None,
+        &critical_path_ids,
+    ) {
         Ok(projection) => projection,
         Err(error) => {
             eprintln!("Failed to compute scheduling projection: {error}");
@@ -4152,6 +4167,11 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
 
     if as_json {
         crate::print_json_pretty(&payload);
+        crate::operator_projection_cache::write_json_projection(
+            &proxy_state_root,
+            "taskflow-graph-summary-latest",
+            &payload,
+        );
     } else {
         crate::print_surface_header(RenderMode::Plain, "vida taskflow graph-summary");
         crate::print_surface_line(RenderMode::Plain, "status", status);
