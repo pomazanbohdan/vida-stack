@@ -1975,7 +1975,7 @@ fn task_close_json_surfaces_canonical_feedback_blockers_without_masking_successf
     let blocked_json: serde_json::Value =
         serde_json::from_slice(&blocked_close.stdout).expect("blocked close json should parse");
     assert_eq!(blocked_json["status"], "blocked");
-    assert_eq!(blocked_json["task"]["status"], "closed");
+    assert_eq!(blocked_json["task"]["status"], "in_progress");
     assert_eq!(blocked_json["host_agent_telemetry"]["status"], "skipped");
     assert_eq!(
         blocked_json["host_agent_telemetry"]["reason"],

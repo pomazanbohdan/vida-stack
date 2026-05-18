@@ -384,7 +384,9 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         .collect()
 }
 
-fn canonical_close_status_from_reason(reason: &str) -> Option<(&'static str, &'static str)> {
+pub(crate) fn canonical_close_status_from_reason(
+    reason: &str,
+) -> Option<(&'static str, &'static str)> {
     let mut normalized = reason.to_ascii_lowercase();
     for phrase in ignored_canonical_close_meta_language(reason) {
         normalized = normalized.replace(&phrase, " canonical_close_context_language ");

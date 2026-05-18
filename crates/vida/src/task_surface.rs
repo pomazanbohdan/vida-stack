@@ -4072,22 +4072,20 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let project_root = project_root_for_task_state(&state_dir);
             let feedback_source = command.source.as_deref().unwrap_or("vida task close");
             match StateStore::open_existing(state_dir.clone()).await {
-                Ok(store) => match store.close_task(&command.task_id, &command.reason).await {
-                    Ok(task) => {
-                        if let Err(code) =
-                            refresh_task_snapshot_after_mutation(&store, "vida task close").await
-                        {
-                            return code;
-                        }
-                        if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_specification_task_into_latest_receipt(&store, &command.task_id).await {
-                            eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
-                            return ExitCode::from(1);
-                        }
-                        if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_implementer_task_into_latest_receipt(&store, &command.task_id).await {
-                            eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
-                            return ExitCode::from(1);
-                        }
-                        let task_value = serde_json::to_value(&task)
+                Ok(store) => {
+                    if crate::agent_feedback_surface::canonical_close_status_from_reason(
+                        &command.reason,
+                    )
+                    .is_some()
+                    {
+                        let preclose_task = match store.show_task(&command.task_id).await {
+                            Ok(task) => task,
+                            Err(error) => {
+                                eprintln!("Failed to close task: {error}");
+                                return ExitCode::from(1);
+                            }
+                        };
+                        let task_value = serde_json::to_value(&preclose_task)
                             .expect("task close payload should serialize");
                         let telemetry = task_close_host_agent_telemetry(
                             &state_dir,
@@ -4097,102 +4095,162 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             &command.reason,
                             feedback_source,
                         );
-                        let automation = if task_close_automation_requested(&command) {
-                            Some(task_close_automation_receipt(
-                                &command,
-                                project_root.as_deref(),
-                                Some(&task),
-                            ))
-                        } else {
-                            None
-                        };
-                        let telemetry_feedback_blocker =
-                            task_close_feedback_blocker_summary(&telemetry);
-                        let automation_blocked = automation
-                            .as_ref()
-                            .map(|receipt| receipt.status != "pass")
-                            .unwrap_or(false);
-                        let feedback_blocked = telemetry_feedback_blocker.is_some();
-                        if command.json {
-                            let blocker_codes =
-                                if let Some((blocker_codes, _)) = &telemetry_feedback_blocker {
-                                    blocker_codes.clone()
-                                } else {
-                                    automation
-                                        .as_ref()
-                                        .map(|receipt| receipt.blocker_codes.clone())
-                                        .unwrap_or_default()
-                                };
-                            let next_actions =
-                                if let Some((_, next_actions)) = &telemetry_feedback_blocker {
-                                    next_actions.clone()
-                                } else {
-                                    automation
-                                        .as_ref()
-                                        .map(|receipt| receipt.next_actions.clone())
-                                        .unwrap_or_default()
-                                };
-                            crate::print_json_pretty(&serde_json::json!({
-                                "status": if automation_blocked || feedback_blocked { "blocked" } else { "pass" },
-                                "blocker_codes": blocker_codes,
-                                "next_actions": next_actions,
-                                "task": task,
-                                "host_agent_telemetry": telemetry,
-                                "automation": automation,
-                            }));
-                        } else {
-                            print_task_mutation(command.render, "vida task close", &task, false);
-                            let telemetry_status = telemetry
-                                .get("status")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("unknown");
-                            let telemetry_reason = telemetry
-                                .get("reason")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("");
-                            let telemetry_summary = if telemetry_reason.is_empty() {
-                                telemetry_status.to_string()
+                        if let Some((blocker_codes, next_actions)) =
+                            task_close_feedback_blocker_summary(&telemetry)
+                        {
+                            if command.json {
+                                crate::print_json_pretty(&serde_json::json!({
+                                    "status": "blocked",
+                                    "blocker_codes": blocker_codes,
+                                    "next_actions": next_actions,
+                                    "task": preclose_task,
+                                    "host_agent_telemetry": telemetry,
+                                    "automation": null,
+                                }));
                             } else {
-                                format!("{telemetry_status}: {telemetry_reason}")
-                            };
-                            print_surface_line(
-                                command.render,
-                                "host agent telemetry",
-                                &telemetry_summary,
-                            );
-                            if let Some((blocker_codes, _)) = &telemetry_feedback_blocker {
+                                print_task_mutation(
+                                    command.render,
+                                    "vida task close",
+                                    &preclose_task,
+                                    false,
+                                );
                                 print_surface_line(
                                     command.render,
                                     "telemetry blockers",
                                     &blocker_codes.join(", "),
                                 );
                             }
-                            if let Some(automation) = &automation {
+                            return ExitCode::from(1);
+                        }
+                    }
+                    match store.close_task(&command.task_id, &command.reason).await {
+                        Ok(task) => {
+                            if let Err(code) =
+                                refresh_task_snapshot_after_mutation(&store, "vida task close")
+                                    .await
+                            {
+                                return code;
+                            }
+                            if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_specification_task_into_latest_receipt(&store, &command.task_id).await {
+                            eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
+                            return ExitCode::from(1);
+                        }
+                            if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_implementer_task_into_latest_receipt(&store, &command.task_id).await {
+                            eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
+                            return ExitCode::from(1);
+                        }
+                            let task_value = serde_json::to_value(&task)
+                                .expect("task close payload should serialize");
+                            let telemetry = task_close_host_agent_telemetry(
+                                &state_dir,
+                                explicit_state_dir,
+                                project_root.as_deref(),
+                                &task_value,
+                                &command.reason,
+                                feedback_source,
+                            );
+                            let automation = if task_close_automation_requested(&command) {
+                                Some(task_close_automation_receipt(
+                                    &command,
+                                    project_root.as_deref(),
+                                    Some(&task),
+                                ))
+                            } else {
+                                None
+                            };
+                            let telemetry_feedback_blocker =
+                                task_close_feedback_blocker_summary(&telemetry);
+                            let automation_blocked = automation
+                                .as_ref()
+                                .map(|receipt| receipt.status != "pass")
+                                .unwrap_or(false);
+                            let feedback_blocked = telemetry_feedback_blocker.is_some();
+                            if command.json {
+                                let blocker_codes =
+                                    if let Some((blocker_codes, _)) = &telemetry_feedback_blocker {
+                                        blocker_codes.clone()
+                                    } else {
+                                        automation
+                                            .as_ref()
+                                            .map(|receipt| receipt.blocker_codes.clone())
+                                            .unwrap_or_default()
+                                    };
+                                let next_actions =
+                                    if let Some((_, next_actions)) = &telemetry_feedback_blocker {
+                                        next_actions.clone()
+                                    } else {
+                                        automation
+                                            .as_ref()
+                                            .map(|receipt| receipt.next_actions.clone())
+                                            .unwrap_or_default()
+                                    };
+                                crate::print_json_pretty(&serde_json::json!({
+                                    "status": if automation_blocked || feedback_blocked { "blocked" } else { "pass" },
+                                    "blocker_codes": blocker_codes,
+                                    "next_actions": next_actions,
+                                    "task": task,
+                                    "host_agent_telemetry": telemetry,
+                                    "automation": automation,
+                                }));
+                            } else {
+                                print_task_mutation(
+                                    command.render,
+                                    "vida task close",
+                                    &task,
+                                    false,
+                                );
+                                let telemetry_status = telemetry
+                                    .get("status")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("unknown");
+                                let telemetry_reason = telemetry
+                                    .get("reason")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("");
+                                let telemetry_summary = if telemetry_reason.is_empty() {
+                                    telemetry_status.to_string()
+                                } else {
+                                    format!("{telemetry_status}: {telemetry_reason}")
+                                };
                                 print_surface_line(
                                     command.render,
-                                    "automation",
-                                    &automation.status,
+                                    "host agent telemetry",
+                                    &telemetry_summary,
                                 );
-                                if !automation.blocker_codes.is_empty() {
+                                if let Some((blocker_codes, _)) = &telemetry_feedback_blocker {
                                     print_surface_line(
                                         command.render,
-                                        "automation blockers",
-                                        &automation.blocker_codes.join(", "),
+                                        "telemetry blockers",
+                                        &blocker_codes.join(", "),
                                     );
                                 }
+                                if let Some(automation) = &automation {
+                                    print_surface_line(
+                                        command.render,
+                                        "automation",
+                                        &automation.status,
+                                    );
+                                    if !automation.blocker_codes.is_empty() {
+                                        print_surface_line(
+                                            command.render,
+                                            "automation blockers",
+                                            &automation.blocker_codes.join(", "),
+                                        );
+                                    }
+                                }
+                            }
+                            if automation_blocked || feedback_blocked {
+                                ExitCode::from(1)
+                            } else {
+                                ExitCode::SUCCESS
                             }
                         }
-                        if automation_blocked || feedback_blocked {
+                        Err(error) => {
+                            eprintln!("Failed to close task: {error}");
                             ExitCode::from(1)
-                        } else {
-                            ExitCode::SUCCESS
                         }
                     }
-                    Err(error) => {
-                        eprintln!("Failed to close task: {error}");
-                        ExitCode::from(1)
-                    }
-                },
+                }
                 Err(error) => {
                     eprintln!("Failed to open authoritative state store: {error}");
                     ExitCode::from(1)
