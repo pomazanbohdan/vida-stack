@@ -2314,12 +2314,9 @@ fn taskflow_scheduler_dispatch_execute_smoke_persists_receipt_and_reservation_ar
 
 #[test]
 fn agent_dispatch_next_preview_aligns_scheduler_preview_selected_lanes_and_unsafe_rejections() {
-    let state_dir = unique_state_dir();
-    let boot = boot_with_retry(&state_dir);
-    assert!(
-        boot.status.success(),
-        "{}",
-        String::from_utf8_lossy(&boot.stderr)
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "agent-dispatch-next-preview-alignment",
+        "Agent Dispatch Next Preview Alignment",
     );
     seed_scheduler_execute_smoke_tasks(&state_dir);
 
@@ -2327,6 +2324,7 @@ fn agent_dispatch_next_preview_aligns_scheduler_preview_selected_lanes_and_unsaf
         &["-k", "5s", "20s"],
         "scheduler preview should run",
         |command| {
+            command.current_dir(&project_root);
             command.args([
                 "taskflow",
                 "scheduler",
@@ -2354,6 +2352,7 @@ fn agent_dispatch_next_preview_aligns_scheduler_preview_selected_lanes_and_unsaf
         &["-k", "5s", "20s"],
         "agent dispatch-next preview should run",
         |command| {
+            command.current_dir(&project_root);
             command.args([
                 "agent",
                 "dispatch-next",
