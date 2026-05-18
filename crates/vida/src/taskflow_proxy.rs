@@ -3131,12 +3131,6 @@ fn taskflow_graph_summary_operator_contracts(
         "next_actions": next_actions,
         "artifact_refs": artifact_refs,
     });
-    let operator_next_actions =
-        if status == crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status {
-            serde_json::json!([])
-        } else {
-            shared_fields["next_actions"].clone()
-        };
     let operator_contracts = serde_json::json!({
         "contract_id": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.contract_id,
         "schema_version": crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.schema_version,
@@ -3145,7 +3139,7 @@ fn taskflow_graph_summary_operator_contracts(
         "workflow_class": serde_json::Value::Null,
         "risk_tier": serde_json::Value::Null,
         "blocker_codes": shared_fields["blocker_codes"],
-        "next_actions": operator_next_actions,
+        "next_actions": shared_fields["next_actions"],
         "artifact_refs": shared_fields["artifact_refs"],
     });
     (shared_fields, operator_contracts, artifact_refs)
