@@ -41,11 +41,7 @@ fn selected_host_runtime_system_id(config: &serde_yaml::Value) -> Option<String>
     yaml_string(yaml_lookup(config, &["host_environment", "cli_system"]))
         .filter(|system_id| {
             !system_id.trim().is_empty()
-                && yaml_lookup(
-                    config,
-                    &["host_environment", "systems", system_id.trim()],
-                )
-                .is_some()
+                && yaml_lookup(config, &["host_environment", "systems", system_id.trim()]).is_some()
         })
         .map(|system_id| system_id.trim().to_string())
 }
@@ -1209,7 +1205,12 @@ pub(crate) fn overlay_host_runtime_dispatch_alias_catalog(
     };
     let Some(serde_yaml::Value::Mapping(configured_aliases)) = yaml_lookup(
         config,
-        &["host_environment", "systems", &system_id, "dispatch_aliases"],
+        &[
+            "host_environment",
+            "systems",
+            &system_id,
+            "dispatch_aliases",
+        ],
     ) else {
         return Vec::new();
     };

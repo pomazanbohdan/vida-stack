@@ -43,6 +43,19 @@ fn recovery_projected_task_id(
         .and_then(|summary| (!summary.task_id.trim().is_empty()).then(|| summary.task_id.clone()))
 }
 
+fn recovery_is_terminal_retired_runtime_run(
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+) -> bool {
+    recovery.is_some_and(|summary| {
+        summary.resume_status == "completed"
+            && summary.lifecycle_stage == "closure_complete"
+            && !summary.delegation_gate.delegated_cycle_open
+            && summary.delegation_gate.blocker_code.is_none()
+            && summary.resume_target == "none"
+            && summary.task_id == summary.run_id
+    })
+}
+
 fn binding_projected_task_id(
     binding: Option<&crate::state_store::RunGraphContinuationBinding>,
 ) -> Option<String> {
@@ -94,6 +107,16 @@ fn missing_task_actionability(
             "checked_source": null,
         });
     };
+    if source == "run_graph_recovery" && recovery_is_terminal_retired_runtime_run(recovery) {
+        return serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "checked_task_id": task_id,
+            "checked_source": source,
+            "terminal_runtime_run_without_task": true,
+        });
+    }
     if task_ids.iter().any(|id| id == &task_id) {
         return serde_json::json!({
             "status": "pass",
@@ -402,5 +425,39 @@ mod tests {
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["checked_task_id"], "bound-task");
         assert_eq!(payload["checked_source"], "explicit_continuation_binding");
+    }
+
+    #[test]
+    fn diagnostics_allows_terminal_retired_runtime_run_without_task_row() {
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "runtime-vida-taskflow-codex".to_string(),
+            task_id: "runtime-vida-taskflow-codex".to_string(),
+            active_node: "closure".to_string(),
+            lifecycle_stage: "closure_complete".to_string(),
+            handoff_state: "none".to_string(),
+            checkpoint_kind: "none".to_string(),
+            policy_gate: "closed_task_stale_run_retired".to_string(),
+            resume_status: "completed".to_string(),
+            resume_target: "none".to_string(),
+            resume_node: None,
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "closure".to_string(),
+                lifecycle_stage: "closure_complete".to_string(),
+                delegated_cycle_open: false,
+                delegated_cycle_state: "clear".to_string(),
+                local_exception_takeover_gate: "delegated_cycle_clear".to_string(),
+                blocker_code: None,
+                reporting_pause_gate: "closure_candidate".to_string(),
+                continuation_signal: "continue_after_reports".to_string(),
+            },
+        };
+
+        let payload = missing_task_actionability(Some(&recovery), None, &[]);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["checked_task_id"], "runtime-vida-taskflow-codex");
+        assert_eq!(payload["checked_source"], "run_graph_recovery");
+        assert_eq!(payload["terminal_runtime_run_without_task"], true);
     }
 }

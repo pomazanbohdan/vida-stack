@@ -3397,6 +3397,7 @@ fn runtime_agent_lane_dispatch_from_overlay(
                     "selected_execution_class": selected_execution_class,
                     "backend_class": "internal",
                     "backend_id": backend_id,
+                    "executor_backend": "internal",
                     "selected_model_profile_id": preferred_model_profile_id,
                     "policy_selected_internal_backend": true,
                 }),
@@ -3438,6 +3439,7 @@ fn runtime_agent_lane_dispatch_from_overlay(
                     "selected_execution_class": selected_execution_class,
                     "backend_class": "internal",
                     "backend_id": backend_id,
+                    "executor_backend": "internal",
                     "selected_model_profile_id": preferred_model_profile_id,
                     "policy_selected_internal_backend": true,
                 }),
@@ -3460,6 +3462,7 @@ fn runtime_agent_lane_dispatch_from_overlay(
                         "selected_execution_class": selected_execution_class,
                         "backend_class": backend_class,
                         "backend_id": backend_id,
+                        "executor_backend": "internal",
                         "selected_model_profile_id": preferred_model_profile_id,
                         "policy_selected_internal_backend": true,
                     }),
@@ -3493,6 +3496,7 @@ fn runtime_agent_lane_dispatch_from_overlay(
                     "selected_execution_class": selected_execution_class,
                     "backend_class": backend_class,
                     "backend_id": backend_id,
+                    "executor_backend": "internal",
                     "selected_model_profile_id": preferred_model_profile_id,
                     "policy_selected_internal_backend": true,
                 }),
@@ -10083,6 +10087,76 @@ mod tests {
         assert_eq!(
             dispatch.backend_dispatch["policy_selected_internal_backend"],
             true
+        );
+    }
+
+    #[test]
+    fn runtime_agent_lane_dispatch_does_not_project_internal_codex_carrier_to_codex_exec() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+        let config_path = harness.path().join("vida.config.yaml");
+        install_external_cli_test_subagents(&config_path);
+        let config = fs::read_to_string(&config_path).expect("config should exist");
+        let updated = config.replace(
+            "    internal_subagents:\n      enabled: true\n      subagent_backend_class: internal\n",
+            concat!(
+                "    internal_subagents:\n",
+                "      enabled: true\n",
+                "      subagent_backend_class: internal\n",
+                "      role: codex_internal_primary\n",
+                "      default_model: gpt-5.5\n",
+                "    codex_cli:\n",
+                "      enabled: false\n",
+                "      subagent_backend_class: external_cli\n",
+                "      role: bridge_fallback\n",
+            ),
+        );
+        fs::write(&config_path, updated).expect("config should update");
+
+        let dispatch_packet_path = harness.path().join("runtime-dispatch-packet.json");
+        let dispatch = runtime_agent_lane_dispatch_for_root(
+            harness.path(),
+            dispatch_packet_path.to_string_lossy().as_ref(),
+            Some("internal_subagents"),
+            Some("gpt-5.5"),
+        );
+
+        assert_eq!(dispatch.surface, "vida agent-init");
+        assert_eq!(dispatch.backend_dispatch["backend_class"], "internal");
+        assert_eq!(
+            dispatch.backend_dispatch["backend_id"],
+            "internal_subagents"
+        );
+        assert_eq!(dispatch.backend_dispatch["executor_backend"], "internal");
+        assert!(
+            !dispatch.activation_command.contains("codex exec"),
+            "internal Codex carrier must not be rendered as external codex exec: {}",
+            dispatch.activation_command
+        );
+        assert!(
+            !dispatch.activation_command.contains("gpt-5.5"),
+            "internal Codex App model id must not be passed to host codex CLI: {}",
+            dispatch.activation_command
         );
     }
 

@@ -46,6 +46,20 @@ pub(crate) fn write_json_projection(
     let _ = std::fs::write(path, body);
 }
 
+pub(crate) fn touch_state_mutation_marker(state_dir: &Path) {
+    let path = state_dir.join(".operator-projection-cache-state-marker");
+    let _ = std::fs::write(
+        path,
+        format!(
+            "{}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ),
+    );
+}
+
 fn projection_path(state_dir: &Path, projection_name: &str) -> PathBuf {
     state_dir
         .join("operator-projections")
@@ -89,7 +103,7 @@ fn current_launcher_mutation_marker() -> Option<SystemTime> {
 mod tests {
     use super::{
         read_fresh_json_projection, read_fresh_json_projection_with_dependency_marker,
-        write_json_projection,
+        touch_state_mutation_marker, write_json_projection,
     };
     use std::{fs, time::Duration};
 
@@ -145,6 +159,27 @@ mod tests {
             Some(dependency_modified)
         )
         .is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn json_projection_cache_invalidates_when_state_marker_is_touched() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-marker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let payload = serde_json::json!({"status": "blocked", "cached": true});
+        write_json_projection(&root, "taskflow-graph-summary-latest", &payload);
+        assert!(read_fresh_json_projection(&root, "taskflow-graph-summary-latest").is_some());
+
+        std::thread::sleep(Duration::from_millis(10));
+        touch_state_mutation_marker(&root);
+        assert!(read_fresh_json_projection(&root, "taskflow-graph-summary-latest").is_none());
         let _ = fs::remove_dir_all(root);
     }
 }

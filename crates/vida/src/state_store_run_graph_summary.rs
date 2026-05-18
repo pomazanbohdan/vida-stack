@@ -1319,6 +1319,7 @@ impl StateStore {
             self.record_run_graph_approval_delegation_receipt(&receipt)
                 .await?;
         }
+        crate::operator_projection_cache::touch_state_mutation_marker(self.root());
         Ok(())
     }
 
@@ -1339,6 +1340,7 @@ impl StateStore {
             .upsert(("run_graph_dispatch_receipt", receipt.run_id.as_str()))
             .content(receipt)
             .await?;
+        crate::operator_projection_cache::touch_state_mutation_marker(self.root());
         Ok(())
     }
 
@@ -1350,6 +1352,7 @@ impl StateStore {
             .db
             .delete(("run_graph_dispatch_receipt", run_id))
             .await?;
+        crate::operator_projection_cache::touch_state_mutation_marker(self.root());
         Ok(())
     }
 
@@ -1365,6 +1368,7 @@ impl StateStore {
             .upsert(("run_graph_continuation_binding", binding.run_id.as_str()))
             .content(binding.clone())
             .await?;
+        crate::operator_projection_cache::touch_state_mutation_marker(self.root());
         Ok(())
     }
 
@@ -1697,6 +1701,7 @@ impl StateStore {
             .db
             .delete(("run_graph_continuation_binding", run_id))
             .await?;
+        crate::operator_projection_cache::touch_state_mutation_marker(self.root());
         Ok(())
     }
 

@@ -1146,6 +1146,45 @@ fn configured_internal_host_activation_parts(
     Ok((command, args, stdin_payload))
 }
 
+fn command_name(command: &str) -> String {
+    let trimmed = command.trim().trim_matches('"').trim_matches('\'');
+    Path::new(trimmed)
+        .file_stem()
+        .or_else(|| Path::new(trimmed).file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or(trimmed)
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn configured_codex_cli_fallback_enabled(overlay: &serde_yaml::Value) -> bool {
+    configured_subagent_backend_entry(overlay, "codex_cli").is_some_and(|entry| {
+        crate::yaml_string(yaml_lookup(entry, &["subagent_backend_class"])).as_deref()
+            == Some("external_cli")
+    })
+}
+
+fn internal_codex_app_bridge_requires_fail_closed(
+    selected_cli_system: &str,
+    overlay: &serde_yaml::Value,
+    command: &str,
+    args: &[String],
+) -> Option<&'static str> {
+    if selected_cli_system != "codex" {
+        return None;
+    }
+    if command_name(command) != "codex" {
+        return None;
+    }
+    if !args.iter().any(|arg| arg.trim() == "exec") {
+        return None;
+    }
+    if configured_codex_cli_fallback_enabled(overlay) {
+        return Some("internal Codex carrier unavailable; refusing external codex_cli bridge for internal backend");
+    }
+    Some("internal Codex carrier unavailable; external codex_cli fallback disabled")
+}
+
 pub(crate) fn agent_lane_dispatch_result(
     mut activation_view: serde_json::Value,
     dispatch_packet_path: &str,
@@ -1449,6 +1488,72 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         dispatch_packet_path,
         &carrier,
     )?;
+    if let Some(blocker_reason) = internal_codex_app_bridge_requires_fail_closed(
+        &selected_cli_system,
+        &overlay,
+        &command,
+        &args,
+    ) {
+        let activation_view = bounded_activation_view(
+            state_root,
+            project_root,
+            dispatch_packet_path,
+            receipt,
+            role_selection,
+        )
+        .await;
+        let mut result = agent_lane_dispatch_result(
+            activation_view,
+            dispatch_packet_path,
+            preferred_backend,
+            role_selection,
+            receipt,
+            host_runtime,
+        );
+        let body = result
+            .as_object_mut()
+            .expect("internal agent lane dispatch result should serialize to an object");
+        body.insert("surface".to_string(), serde_json::json!("vida agent-init"));
+        body.insert("status".to_string(), serde_json::json!("blocked"));
+        body.insert("execution_state".to_string(), serde_json::json!("blocked"));
+        body.insert(
+            "activation_command".to_string(),
+            serde_json::json!(
+                crate::runtime_dispatch_state::agent_init_command_for_packet_path(
+                    dispatch_packet_path
+                )
+            ),
+        );
+        body.insert(
+            "blocker_code".to_string(),
+            serde_json::json!("internal_codex_carrier_unavailable"),
+        );
+        body.insert(
+            "blocker_reason".to_string(),
+            serde_json::json!(blocker_reason),
+        );
+        if let Some(dispatch) = body
+            .get_mut("backend_dispatch")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            dispatch.insert("backend_class".to_string(), serde_json::json!("internal"));
+            dispatch.insert("backend_id".to_string(), serde_json::json!(backend_id));
+            dispatch.insert(
+                "carrier_id".to_string(),
+                serde_json::json!(carrier["role_id"].clone()),
+            );
+            dispatch.insert(
+                "executor_backend".to_string(),
+                serde_json::json!("internal"),
+            );
+            dispatch.insert(
+                "external_cli_fallback_enabled".to_string(),
+                serde_json::json!(configured_codex_cli_fallback_enabled(&overlay)),
+            );
+        }
+        refresh_execution_truth(body, role_selection, receipt, Some(backend_id), "missing");
+        return Ok(Some(result));
+    }
     let wall_timeout_seconds = Some(configured_internal_host_dispatch_wall_timeout_seconds(
         project_root,
         role_selection,
@@ -2129,7 +2234,8 @@ mod tests {
         agent_lane_dispatch_result, configured_internal_host_activation_parts,
         configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
         dispatch_packet_prompt, execute_external_agent_lane_dispatch,
-        external_provider_output_confirms_execution, internal_codex_output_confirms_execution,
+        external_provider_output_confirms_execution,
+        internal_codex_app_bridge_requires_fail_closed, internal_codex_output_confirms_execution,
         internal_host_activation_only_blocker_code, mark_dispatch_result_execution_evidence,
         parse_external_provider_output, parse_internal_codex_exec_output,
         should_render_store_backed_activation_view_for_internal_failure,
@@ -2498,6 +2604,45 @@ dispatch:
         assert_eq!(
             stdin_payload.as_deref(),
             Some(dispatch_packet_prompt("/tmp/project/.vida/dispatch.json").as_str())
+        );
+    }
+
+    #[test]
+    fn internal_codex_app_bridge_fail_closes_before_codex_exec_when_cli_fallback_disabled() {
+        let overlay = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+      role: codex_internal_primary
+      default_model: gpt-5.5
+    codex_cli:
+      enabled: false
+      subagent_backend_class: external_cli
+      role: bridge_fallback
+"#,
+        )
+        .expect("overlay should parse");
+        let args = vec![
+            "exec".to_string(),
+            "--json".to_string(),
+            "-m".to_string(),
+            "gpt-5.5".to_string(),
+        ];
+
+        assert_eq!(
+            internal_codex_app_bridge_requires_fail_closed("codex", &overlay, "codex", &args),
+            Some("internal Codex carrier unavailable; external codex_cli fallback disabled")
+        );
+        assert_eq!(
+            internal_codex_app_bridge_requires_fail_closed("qwen", &overlay, "codex", &args),
+            None
+        );
+        assert_eq!(
+            internal_codex_app_bridge_requires_fail_closed("codex", &overlay, "fake-codex", &args),
+            None
         );
     }
 
