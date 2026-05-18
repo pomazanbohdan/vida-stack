@@ -4,6 +4,44 @@ use serde_json::Deserializer;
 use std::os::unix::fs::OpenOptionsExt;
 
 impl StateStore {
+    fn parent_id_for_task(task: &TaskRecord) -> Option<String> {
+        task.dependencies
+            .iter()
+            .find(|dependency| dependency.edge_type == "parent-child")
+            .map(|dependency| dependency.depends_on_id.clone())
+    }
+
+    fn reopen_closed_parent_chain_for_extension(
+        tasks: &mut [TaskRecord],
+        parent_id: Option<&str>,
+        now: &str,
+    ) -> Vec<TaskRecord> {
+        let mut reopened = Vec::new();
+        let mut current_parent_id = parent_id.map(ToOwned::to_owned);
+        let mut visited = BTreeSet::new();
+
+        while let Some(parent_id) = current_parent_id {
+            if !visited.insert(parent_id.clone()) {
+                break;
+            }
+
+            let Some(parent_index) = tasks.iter().position(|task| task.id == parent_id) else {
+                break;
+            };
+            let next_parent_id = Self::parent_id_for_task(&tasks[parent_index]);
+            if tasks[parent_index].status == "closed" {
+                tasks[parent_index].status = "in_progress".to_string();
+                tasks[parent_index].updated_at = now.to_string();
+                tasks[parent_index].closed_at = None;
+                tasks[parent_index].close_reason = None;
+                reopened.push(tasks[parent_index].clone());
+            }
+            current_parent_id = next_parent_id;
+        }
+
+        reopened
+    }
+
     async fn validate_task_display_id_alias(
         &self,
         task_id: &str,
@@ -1046,10 +1084,19 @@ impl StateStore {
             dependencies,
         };
         if status == "closed" {
-            task.closed_at = Some(now);
+            task.closed_at = Some(now.clone());
         }
 
         let mut tasks = self.all_tasks().await?;
+        let reopened_parents = if task.status != "closed" {
+            Self::reopen_closed_parent_chain_for_extension(
+                &mut tasks,
+                normalized_parent_id.as_deref(),
+                &now,
+            )
+        } else {
+            Vec::new()
+        };
         tasks.push(task.clone());
         let issues = Self::validate_task_graph_rows(&tasks);
         if let Some(first) = issues.first() {
@@ -1061,6 +1108,9 @@ impl StateStore {
             });
         }
 
+        for parent in reopened_parents {
+            self.persist_task_record(parent).await?;
+        }
         self.persist_task_record(task.clone()).await?;
         Ok(task)
     }
@@ -1234,6 +1284,16 @@ impl StateStore {
             .position(|existing| existing.id == task.id)
             .expect("updated task should exist in authoritative state");
         tasks[task_index] = task.clone();
+        let parent_id = if task.status == "closed" {
+            None
+        } else {
+            Self::parent_id_for_task(&task)
+        };
+        let reopened_parents = Self::reopen_closed_parent_chain_for_extension(
+            &mut tasks,
+            parent_id.as_deref(),
+            &task.updated_at,
+        );
         let issues = Self::validate_task_graph_rows(&tasks);
         if let Some(first) = issues.first() {
             return Err(StateStoreError::InvalidTaskRecord {
@@ -1242,6 +1302,9 @@ impl StateStore {
                     first.issue_type, first.issue_id
                 ),
             });
+        }
+        for parent in reopened_parents {
+            self.persist_task_record(parent).await?;
         }
         self.persist_task_record(task.clone()).await?;
         Ok(task)
@@ -1520,6 +1583,169 @@ mod tests {
                 .join(".vida")
                 .join("exports/tasks.snapshot.jsonl")
         );
+    }
+
+    #[tokio::test]
+    async fn create_open_child_atomically_reopens_closed_parent_chain() {
+        let root = unique_task_store_temp_root("vida-create-child-reopens-parent");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "closed-parent",
+                title: "Closed parent",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "closed-child",
+                title: "Closed child",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("closed-parent"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create child");
+        store
+            .close_task("closed-child", "done")
+            .await
+            .expect("close child");
+        store
+            .close_task("closed-parent", "done")
+            .await
+            .expect("close parent");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "new-child",
+                title: "New child",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("closed-parent"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create child under closed parent");
+
+        let parent = store.show_task("closed-parent").await.expect("load parent");
+        assert_eq!(parent.status, "in_progress");
+        assert!(parent.closed_at.is_none());
+        assert!(parent.close_reason.is_none());
+        assert!(store
+            .validate_task_graph()
+            .await
+            .expect("validate")
+            .is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn update_closed_child_to_open_atomically_reopens_closed_parent() {
+        let root = unique_task_store_temp_root("vida-update-child-reopens-parent");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "closed-parent",
+                title: "Closed parent",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "closed-child",
+                title: "Closed child",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("closed-parent"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create child");
+        store
+            .close_task("closed-child", "done")
+            .await
+            .expect("close child");
+        store
+            .close_task("closed-parent", "done")
+            .await
+            .expect("close parent");
+
+        store
+            .update_task(UpdateTaskRequest {
+                task_id: "closed-child",
+                title: None,
+                status: Some("open"),
+                priority: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: None,
+            })
+            .await
+            .expect("reopen child under closed parent");
+
+        let parent = store.show_task("closed-parent").await.expect("load parent");
+        assert_eq!(parent.status, "in_progress");
+        assert!(parent.closed_at.is_none());
+        assert!(store
+            .validate_task_graph()
+            .await
+            .expect("validate")
+            .is_empty());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]

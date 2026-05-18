@@ -1184,12 +1184,6 @@ fn build_split_mutation_preview(
     surface: &str,
     dry_run: bool,
 ) -> Result<(TaskMutationResult, Vec<state_store::TaskRecord>), String> {
-    if source.status == "closed" {
-        return Err(format!(
-            "Cannot split closed task `{}`; reopen it or choose another source task.",
-            source.id
-        ));
-    }
     if source.issue_type == "epic" {
         return Err(format!(
             "Cannot split epic `{}` through `vida task split`; choose a bounded non-epic task.",
@@ -1234,6 +1228,11 @@ fn build_split_mutation_preview(
                 source.id
             )
         })?;
+    if source.status == "closed" {
+        simulated_rows[source_index].status = "in_progress".to_string();
+        simulated_rows[source_index].closed_at = None;
+        simulated_rows[source_index].close_reason = None;
+    }
 
     let mut previous_child_id = None::<String>;
     for (index, spec) in child_specs.iter().enumerate() {
@@ -6304,6 +6303,77 @@ mod tests {
             assert!(second_child.dependencies.iter().any(|dependency| {
                 dependency.depends_on_id == "source-task-a" && dependency.edge_type == "depends-on"
             }));
+        });
+    }
+
+    #[test]
+    fn task_split_command_reopens_closed_source_with_new_children() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(
+                &store,
+                "source-task",
+                "Source task",
+                "task",
+                "open",
+                2,
+                None,
+            )
+            .await;
+            store
+                .close_task("source-task", "completed")
+                .await
+                .expect("source task should close");
+        });
+
+        assert_eq!(
+            runtime.block_on(super::run_task(crate::TaskArgs {
+                command: crate::TaskCommand::Split(crate::TaskSplitArgs {
+                    task_id: "source-task".to_string(),
+                    children: vec![
+                        "source-task-a:First reopened slice".to_string(),
+                        "source-task-b:Second reopened slice".to_string(),
+                    ],
+                    reason: "new work found after closure".to_string(),
+                    dry_run: false,
+                    state_dir: Some(harness.path().to_path_buf()),
+                    render: crate::RenderMode::Plain,
+                    json: true,
+                }),
+            })),
+            ExitCode::SUCCESS
+        );
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open_existing(harness.path().to_path_buf())
+                .await
+                .expect("state store should reopen");
+            let source = store
+                .show_task("source-task")
+                .await
+                .expect("source task should load");
+            assert_eq!(source.status, "in_progress");
+            assert!(source.closed_at.is_none());
+            assert!(source.close_reason.is_none());
+
+            let first_child = store
+                .show_task("source-task-a")
+                .await
+                .expect("first split child should load");
+            assert!(first_child.dependencies.iter().any(|dependency| {
+                dependency.depends_on_id == "source-task" && dependency.edge_type == "parent-child"
+            }));
+            assert!(store
+                .validate_task_graph()
+                .await
+                .expect("validate")
+                .is_empty());
         });
     }
 

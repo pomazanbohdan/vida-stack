@@ -91,7 +91,9 @@ fn run_command_json(args: &[&str], state_dir: &str) -> serde_json::Value {
     });
     assert!(
         output.status.success(),
-        "stderr: {}",
+        "args: {args:?}\nstatus: {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).expect("json output should parse")
@@ -796,6 +798,363 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
         deps_after_remove_stdout.contains("\"dependency_count\": 0")
             || deps_after_remove_stdout.contains("\"dependency_count\":0")
     );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let help = run_command_capture(&["--help"], &state_dir);
+    assert!(help.status.success());
+    let help_stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(help_stdout.contains("Usage: vida"));
+
+    let version = run_command_capture(&["--version"], &state_dir);
+    assert!(version.status.success());
+    let version_stdout = String::from_utf8_lossy(&version.stdout);
+    assert!(version_stdout.contains("vida "));
+
+    let task_help = run_command_capture(&["task", "--help"], &state_dir);
+    assert!(task_help.status.success());
+    let task_help_stdout = String::from_utf8_lossy(&task_help.stdout);
+    assert!(task_help_stdout.contains("vida task"));
+
+    let taskflow_help = run_command_capture(&["taskflow", "help"], &state_dir);
+    assert!(taskflow_help.status.success());
+
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-lifecycle",
+            "Sandbox lifecycle",
+            "--description",
+            "created through factual sandbox",
+            "--labels",
+            "taskflow-testing,happy-path-sandbox",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+    assert_eq!(created["task"]["id"], "sandbox-lifecycle");
+    assert_eq!(created["task"]["status"], "open");
+
+    let updated = run_command_json(
+        &[
+            "task",
+            "update",
+            "sandbox-lifecycle",
+            "--title",
+            "Sandbox lifecycle renamed",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(updated["status"], "pass");
+    assert_eq!(updated["task"]["title"], "Sandbox lifecycle renamed");
+    assert_eq!(updated["task"]["priority"], 1);
+
+    let shown = run_command_json(&["task", "show", "sandbox-lifecycle", "--json"], &state_dir);
+    assert_eq!(shown["status"], "pass");
+    assert_eq!(shown["task"]["title"], "Sandbox lifecycle renamed");
+
+    let closed = run_command_json(
+        &[
+            "task",
+            "close",
+            "sandbox-lifecycle",
+            "--reason",
+            "factual sandbox lifecycle complete",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed["status"], "pass");
+    assert_eq!(closed["task"]["status"], "closed");
+
+    let parent = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-parent",
+            "Sandbox parent",
+            "--type",
+            "epic",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(parent["status"], "pass");
+
+    let child = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-child",
+            "Sandbox child",
+            "--parent-id",
+            "sandbox-parent",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(child["status"], "pass");
+    assert_eq!(
+        child["task"]["dependencies"][0]["depends_on_id"],
+        "sandbox-parent"
+    );
+    assert_eq!(
+        child["task"]["dependencies"][0]["edge_type"],
+        "parent-child"
+    );
+
+    let graph = run_command_json(&["task", "validate-graph", "--json"], &state_dir);
+    assert_eq!(graph["status"], "pass");
+    assert_eq!(graph["valid"], true);
+    assert_eq!(graph["issue_count"], 0);
+
+    let close_parent = run_command_capture(
+        &[
+            "task",
+            "close",
+            "sandbox-parent",
+            "--reason",
+            "should fail while child remains open",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !close_parent.status.success(),
+        "closing parent with open child should fail closed"
+    );
+    let close_parent_stderr = String::from_utf8_lossy(&close_parent.stderr);
+    assert!(
+        close_parent_stderr.contains("open child tasks exist")
+            && close_parent_stderr.contains("sandbox-child"),
+        "{close_parent_stderr}"
+    );
+
+    let parent_after_failed_close =
+        run_command_json(&["task", "show", "sandbox-parent", "--json"], &state_dir);
+    assert_eq!(parent_after_failed_close["task"]["status"], "open");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let root = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-graph-root",
+            "Sandbox graph root",
+            "--type",
+            "epic",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    let blocker = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-graph-ready",
+            "Sandbox graph ready",
+            "--parent-id",
+            "sandbox-graph-root",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(blocker["status"], "pass");
+
+    let blocked = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-graph-blocked",
+            "Sandbox graph blocked",
+            "--parent-id",
+            "sandbox-graph-root",
+            "--priority",
+            "2",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(blocked["status"], "pass");
+
+    let dep = run_command_json(
+        &[
+            "task",
+            "dep",
+            "add",
+            "sandbox-graph-blocked",
+            "sandbox-graph-ready",
+            "blocks",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dep["issue_id"], "sandbox-graph-blocked");
+    assert_eq!(dep["depends_on_id"], "sandbox-graph-ready");
+    assert_eq!(dep["edge_type"], "blocks");
+
+    let deps = run_command_json(
+        &["task", "deps", "sandbox-graph-blocked", "--json"],
+        &state_dir,
+    );
+    assert_eq!(deps["task_id"], "sandbox-graph-blocked");
+    assert_eq!(deps["dependency_count"], 2);
+    let dependency_targets = deps["dependencies"]
+        .as_array()
+        .expect("dependencies should be an array")
+        .iter()
+        .map(|dependency| {
+            dependency["depends_on_id"]
+                .as_str()
+                .expect("depends_on_id")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert!(dependency_targets.contains(&"sandbox-graph-root".to_string()));
+    assert!(dependency_targets.contains(&"sandbox-graph-ready".to_string()));
+
+    let ready = run_and_assert_success(&["task", "ready", "--json"], &state_dir);
+    assert!(ready.contains("\"id\": \"sandbox-graph-ready\""));
+    assert!(!ready.contains("\"id\": \"sandbox-graph-blocked\""));
+
+    let blocked_list = run_command_json(&["task", "blocked", "--json"], &state_dir);
+    assert_eq!(blocked_list["surface"], "vida task blocked");
+    assert_eq!(blocked_list["blocked_count"], 1);
+    assert_eq!(
+        blocked_list["tasks"][0]["task"]["id"],
+        "sandbox-graph-blocked"
+    );
+    assert_eq!(
+        blocked_list["tasks"][0]["blockers"][0]["depends_on_id"],
+        "sandbox-graph-ready"
+    );
+    assert_eq!(
+        blocked_list["tasks"][0]["blockers"][0]["edge_type"],
+        "blocks"
+    );
+    assert_eq!(
+        blocked_list["tasks"][0]["blockers"][0]["dependency_status"],
+        "open"
+    );
+
+    let ready_explain_output = run_command_capture(
+        &[
+            "taskflow",
+            "graph",
+            "explain",
+            "sandbox-graph-ready",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !ready_explain_output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&ready_explain_output.stderr)
+    );
+    let ready_explain: serde_json::Value = serde_json::from_slice(&ready_explain_output.stdout)
+        .expect("graph explain ready json should parse");
+    assert_eq!(ready_explain["surface"], "vida taskflow graph explain");
+    assert_eq!(ready_explain["ready_now"], true);
+    if !ready_explain_output.status.success() {
+        assert_eq!(ready_explain["status"], "blocked");
+        assert!(
+            ready_explain["blocker_codes"]
+                .as_array()
+                .expect("ready explain blocker_codes should be an array")
+                .iter()
+                .any(|code| code.as_str() == Some("current_task_reference")),
+            "current task references should fail closed while still rendering explain JSON"
+        );
+    }
+
+    let blocked_explain_output = run_command_capture(
+        &[
+            "taskflow",
+            "graph",
+            "explain",
+            "sandbox-graph-blocked",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !blocked_explain_output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&blocked_explain_output.stderr)
+    );
+    let blocked_explain: serde_json::Value = serde_json::from_slice(&blocked_explain_output.stdout)
+        .expect("graph explain blocked json should parse");
+    assert_eq!(blocked_explain["surface"], "vida taskflow graph explain");
+    assert_eq!(blocked_explain["ready_now"], false);
+    assert_eq!(
+        blocked_explain["blocked_by"][0]["depends_on_id"],
+        "sandbox-graph-ready"
+    );
+    if !blocked_explain_output.status.success() {
+        assert_eq!(blocked_explain["status"], "blocked");
+    }
+
+    let tree = run_command_json(
+        &["task", "tree", "sandbox-graph-root", "--json"],
+        &state_dir,
+    );
+    assert_eq!(tree["surface"], "vida task tree");
+    assert_eq!(tree["root_task_id"], "sandbox-graph-root");
+    assert!(tree.to_string().contains("sandbox-graph-ready"));
+    assert!(tree.to_string().contains("sandbox-graph-blocked"));
+
+    let critical_path = run_command_json(&["task", "critical-path", "--json"], &state_dir);
+    assert_eq!(critical_path["surface"], "vida task critical-path");
+    assert_eq!(critical_path["status"], "pass");
+    assert_eq!(critical_path["length"], 2);
+    assert_eq!(critical_path["root_task_id"], "sandbox-graph-ready");
+    assert_eq!(critical_path["terminal_task_id"], "sandbox-graph-blocked");
+
+    let validate = run_command_json(&["task", "validate-graph", "--json"], &state_dir);
+    assert_eq!(validate["surface"], "vida task validate-graph");
+    assert_eq!(validate["valid"], true);
+    assert_eq!(validate["issue_count"], 0);
+
+    let closed_blocker = run_command_json(
+        &[
+            "task",
+            "close",
+            "sandbox-graph-ready",
+            "--reason",
+            "factual graph dependency satisfied",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed_blocker["status"], "pass");
+
+    let ready_after_close = run_and_assert_success(&["task", "ready", "--json"], &state_dir);
+    assert!(ready_after_close.contains("\"id\": \"sandbox-graph-blocked\""));
 
     let _ = fs::remove_dir_all(&state_dir);
 }

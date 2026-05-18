@@ -1310,6 +1310,19 @@ fn retired_closed_task_run_graph_status(
     status
 }
 
+fn missing_task_stale_blocked_run_can_retire(
+    status: &crate::state_store::RunGraphStatus,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    status.status == "blocked"
+        && receipt.dispatch_status == "blocked"
+        && matches!(
+            receipt.lane_status.as_str(),
+            value if value == crate::LaneStatus::LaneRunning.as_str()
+                || value == crate::LaneStatus::LaneBlocked.as_str()
+        )
+}
+
 fn read_lane_packet(path: &str) -> Result<serde_json::Value, String> {
     let normalized_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(path);
     let raw = std::fs::read_to_string(&normalized_path)
@@ -2004,40 +2017,47 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(2);
                 }
                 Err(error) => {
-                    let metadata_task_id = if receipt.lane_status
-                        == crate::LaneStatus::LaneExceptionTakeover.as_str()
-                    {
-                        exception_path_metadata
-                            .as_ref()
-                            .map(|metadata| metadata.active_bounded_unit.trim())
-                            .filter(|task_id| !task_id.is_empty())
-                    } else {
-                        None
-                    };
-                    match metadata_task_id {
-                        Some(task_id) => match store.show_task(task_id).await {
-                            Ok(task) if task.status == "closed" => {}
-                            Ok(task) => {
-                                eprintln!(
+                    let missing_task_stale_blocked_run = matches!(
+                        error,
+                        crate::state_store::StateStoreError::MissingTask { .. }
+                    )
+                        && missing_task_stale_blocked_run_can_retire(&status, &receipt);
+                    if !missing_task_stale_blocked_run {
+                        let metadata_task_id = if receipt.lane_status
+                            == crate::LaneStatus::LaneExceptionTakeover.as_str()
+                        {
+                            exception_path_metadata
+                                .as_ref()
+                                .map(|metadata| metadata.active_bounded_unit.trim())
+                                .filter(|task_id| !task_id.is_empty())
+                        } else {
+                            None
+                        };
+                        match metadata_task_id {
+                            Some(task_id) => match store.show_task(task_id).await {
+                                Ok(task) if task.status == "closed" => {}
+                                Ok(task) => {
+                                    eprintln!(
                                     "Lane `{run_id}` can only be retired after exception bounded unit `{}` is closed; current task status is `{}`.",
                                     task.id, task.status
                                 );
-                                return ExitCode::from(2);
-                            }
-                            Err(metadata_error) => {
-                                eprintln!(
+                                    return ExitCode::from(2);
+                                }
+                                Err(metadata_error) => {
+                                    eprintln!(
                                     "Failed to verify exception bounded unit `{task_id}` before retiring lane `{run_id}` after run task `{}` lookup failed: {metadata_error}",
                                     status.task_id
                                 );
-                                return ExitCode::from(2);
-                            }
-                        },
-                        None => {
-                            eprintln!(
+                                    return ExitCode::from(2);
+                                }
+                            },
+                            None => {
+                                eprintln!(
                                 "Failed to verify closed task `{}` before retiring lane `{run_id}`: {error}",
                                 status.task_id
                             );
-                            return ExitCode::from(1);
+                                return ExitCode::from(1);
+                            }
                         }
                     }
                 }
@@ -3267,6 +3287,129 @@ mod tests {
         assert!(receipt.downstream_dispatch_target.is_none());
         assert!(receipt.downstream_dispatch_command.is_none());
         assert!(receipt.downstream_dispatch_packet_path.is_none());
+        assert!(store
+            .run_graph_continuation_binding(run_id)
+            .await
+            .expect("read continuation binding")
+            .is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_retire_allows_missing_task_stale_blocked_run() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-retire-missing-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-lane-retire-missing-task";
+        let task_id = "task-lane-retire-missing";
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            task_id,
+            "implementation",
+            "implementation",
+        );
+        status.run_id = run_id.to_string();
+        status.active_node = "analysis".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "awaiting_analysis".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked run graph status");
+
+        let packet_dir = root.join("runtime-consumption").join("dispatch-packets");
+        std::fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path = packet_dir.join("run-lane-retire-missing-task.json");
+        std::fs::write(
+            &packet_path,
+            "{\"run_id\":\"run-lane-retire-missing-task\"}",
+        )
+        .expect("write dispatch packet");
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.lane_status = crate::LaneStatus::LaneRunning.as_str().to_string();
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist blocked receipt");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: run_id.to_string(),
+                    task_id: task_id.to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "run_graph_task",
+                        "task_id": task_id,
+                        "run_id": run_id,
+                        "active_node": "analysis"
+                    }),
+                    binding_source: "test".to_string(),
+                    why_this_unit: "test binding".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+                    request_text: None,
+                    recorded_at: "2026-05-18T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist continuation binding");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec![
+                "retire".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "retire-missing-task-1".to_string(),
+                "--reason".to_string(),
+                "missing task stale run".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after retire");
+        let retired = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read retired status");
+        assert_eq!(retired.status, "completed");
+        assert_eq!(retired.lifecycle_stage, "closure_complete");
+        let receipt = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read retired receipt")
+            .expect("receipt should exist");
+        assert_eq!(
+            receipt.lane_status,
+            crate::LaneStatus::LaneCompleted.as_str()
+        );
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("retired_closed_task_run")
+        );
         assert!(store
             .run_graph_continuation_binding(run_id)
             .await

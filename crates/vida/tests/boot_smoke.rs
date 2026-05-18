@@ -8113,6 +8113,251 @@ fn taskflow_packet_latest_happy_path_selects_latest_run_graph_dispatch_packet() 
 }
 
 #[test]
+fn taskflow_factual_sandbox_h6_h8_runtime_packet_runner() {
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "taskflow-sandbox-h6-h8-runtime-packet",
+        "TaskFlow Sandbox H6 H8 Runtime Packet",
+    );
+
+    let bootstrap = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "taskflow",
+                "bootstrap-spec",
+                "Create a small CLI planning tool with one bounded specification before implementation.",
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        bootstrap.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&bootstrap.stdout),
+        String::from_utf8_lossy(&bootstrap.stderr)
+    );
+    let bootstrap_json: serde_json::Value =
+        serde_json::from_slice(&bootstrap.stdout).expect("bootstrap-spec json should parse");
+    assert_eq!(bootstrap_json["surface"], "vida taskflow bootstrap-spec");
+    assert_eq!(bootstrap_json["admission"]["admitted"], true);
+    assert!(bootstrap_json["admission"]["consumed_evidence"]
+        .as_array()
+        .expect("bootstrap consumed evidence should render")
+        .iter()
+        .any(|value| value == "tracked_flow_bootstrap.spec_task.task_id"));
+    let design_doc_rel = bootstrap_json["design_doc"]["path"]
+        .as_str()
+        .expect("bootstrap design doc path should render");
+    assert!(std::path::Path::new(&project_root)
+        .join(design_doc_rel)
+        .is_file());
+    assert!(bootstrap_json["epic"]["task_id"]
+        .as_str()
+        .expect("bootstrap epic task id should render")
+        .starts_with("feature-"));
+    assert!(bootstrap_json["spec_task"]["task_id"]
+        .as_str()
+        .expect("bootstrap spec task id should render")
+        .ends_with("-spec"));
+
+    create_scheduler_smoke_task(
+        &state_dir,
+        "sandbox-h7-current",
+        "Sandbox H7 current",
+        "1",
+        "parallel_safe",
+        Some("sandbox-wave"),
+        Some("sandbox-docs"),
+        Some("sandbox-current"),
+    );
+    create_scheduler_smoke_task(
+        &state_dir,
+        "sandbox-h7-parallel",
+        "Sandbox H7 parallel",
+        "2",
+        "parallel_safe",
+        Some("sandbox-wave"),
+        Some("sandbox-docs"),
+        Some("sandbox-parallel"),
+    );
+    create_scheduler_smoke_task(
+        &state_dir,
+        "sandbox-h7-unsafe",
+        "Sandbox H7 unsafe",
+        "3",
+        "sequential",
+        None,
+        None,
+        None,
+    );
+    let scheduler = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "sandbox H7 scheduler dispatch should run",
+        |command| {
+            command
+                .args([
+                    "taskflow",
+                    "scheduler",
+                    "dispatch",
+                    "--current-task-id",
+                    "sandbox-h7-current",
+                    "--state-dir",
+                    &state_dir,
+                    "--limit",
+                    "2",
+                    "--json",
+                ])
+                .current_dir(&project_root);
+        },
+    );
+    assert!(
+        scheduler.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&scheduler.stdout),
+        String::from_utf8_lossy(&scheduler.stderr)
+    );
+    let scheduler_json: serde_json::Value =
+        serde_json::from_slice(&scheduler.stdout).expect("scheduler dispatch json should parse");
+    assert_eq!(
+        scheduler_json["surface"],
+        "vida taskflow scheduler dispatch"
+    );
+    assert_eq!(scheduler_json["max_parallel_agents"], 2);
+    assert!(scheduler_json["selected_task_ids"]
+        .as_array()
+        .expect("selected task ids should render")
+        .iter()
+        .any(|task_id| task_id == "sandbox-h7-current"));
+    assert!(
+        scheduler_json["selected_parallel_tasks"]
+            .as_array()
+            .expect("selected parallel tasks should render")
+            .iter()
+            .any(|entry| entry["id"] == "sandbox-h7-parallel"),
+        "{scheduler_json}"
+    );
+    assert!(
+        scheduler_json["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|entry| entry["task"]["id"] == "sandbox-h7-unsafe"),
+        "{scheduler_json}"
+    );
+
+    create_scheduler_smoke_task(
+        &state_dir,
+        "sandbox-h8-packet",
+        "Sandbox H8 packet",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
+    let dispatch_init = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "sandbox H8 dispatch-init should run",
+        |command| {
+            command
+                .args([
+                    "taskflow",
+                    "run-graph",
+                    "dispatch-init",
+                    "sandbox-h8-packet",
+                    "--json",
+                ])
+                .current_dir(&project_root)
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+    assert!(
+        dispatch_init.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&dispatch_init.stdout),
+        String::from_utf8_lossy(&dispatch_init.stderr)
+    );
+    let dispatch_json: serde_json::Value =
+        serde_json::from_slice(&dispatch_init.stdout).expect("dispatch-init json should parse");
+    let dispatch_packet_path = dispatch_json["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch packet path should render");
+    assert!(Path::new(dispatch_packet_path).exists());
+
+    let packet_latest = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args(["taskflow", "packet", "latest", "--json"])
+            .current_dir(&project_root)
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        packet_latest.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&packet_latest.stdout),
+        String::from_utf8_lossy(&packet_latest.stderr)
+    );
+    let packet_latest_json: serde_json::Value =
+        serde_json::from_slice(&packet_latest.stdout).expect("packet latest json should parse");
+    assert_eq!(packet_latest_json["requested_run_id"], "latest");
+    assert_eq!(packet_latest_json["run_id"], dispatch_json["run_id"]);
+    assert_eq!(
+        packet_latest_json["dispatch_packet"]["path"],
+        dispatch_json["dispatch_packet_path"]
+    );
+    assert_eq!(
+        packet_latest_json["lawful_resume_inputs"]["dispatch_packet_path"],
+        dispatch_json["dispatch_packet_path"]
+    );
+
+    let run_graph_latest = taskflow_run_graph_latest_with_timeout(&state_dir, true);
+    assert!(
+        run_graph_latest.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&run_graph_latest.stdout),
+        String::from_utf8_lossy(&run_graph_latest.stderr)
+    );
+    let run_graph_latest_json: serde_json::Value = serde_json::from_slice(&run_graph_latest.stdout)
+        .expect("run-graph latest json should parse");
+    assert_eq!(
+        run_graph_latest_json["run_graph_status"]["run_id"],
+        packet_latest_json["run_id"]
+    );
+    assert_eq!(
+        run_graph_latest_json["projection_truth"]["dispatch_receipt"]["dispatch_packet_path"],
+        packet_latest_json["dispatch_packet"]["path"]
+    );
+
+    let recovery_status = taskflow_recovery_status_with_timeout(
+        &state_dir,
+        dispatch_json["run_id"]
+            .as_str()
+            .expect("run id should render"),
+        true,
+    );
+    assert!(
+        recovery_status.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&recovery_status.stdout),
+        String::from_utf8_lossy(&recovery_status.stderr)
+    );
+    let recovery_json: serde_json::Value =
+        serde_json::from_slice(&recovery_status.stdout).expect("recovery status json should parse");
+    assert_eq!(recovery_json["surface"], "vida taskflow recovery status");
+    assert_eq!(
+        recovery_json["recovery"]["run_id"],
+        packet_latest_json["run_id"]
+    );
+
+    fs::remove_dir_all(project_root).expect("temp project root should be removed");
+}
+
+#[test]
 fn taskflow_run_graph_bridge_syncs_non_empty_latest_flow_surfaces() {
     let state_dir = unique_state_dir();
 
