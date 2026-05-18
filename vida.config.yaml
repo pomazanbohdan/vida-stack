@@ -245,6 +245,7 @@ host_environment:
         multi_agent_feature_required: true
       dispatch:
         command: codex
+        receipt_backed_completion_supported: false
         static_args:
           - exec
           - --json

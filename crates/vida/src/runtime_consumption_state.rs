@@ -10,6 +10,12 @@ pub(crate) fn runtime_consumption_snapshot_path_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+struct RuntimeConsumptionSnapshotEntry {
+    path: std::path::PathBuf,
+    file_name: String,
+    modified: SystemTime,
+}
+
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct RuntimeConsumptionSummary {
     pub(crate) total_snapshots: usize,
@@ -425,6 +431,37 @@ pub(crate) fn release_admission_operator_evidence_incomplete(
     Ok(!runtime_consumption_snapshot_has_release_admission_evidence(&summary_json))
 }
 
+pub(crate) fn release_admission_operator_evidence_incomplete_from_latest_snapshot(
+    latest_snapshot_path: Option<&str>,
+) -> Result<bool, String> {
+    let Some(snapshot_path) = latest_snapshot_path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return Ok(true);
+    };
+    let payload = std::fs::read_to_string(snapshot_path).map_err(|error| {
+        format!("Failed to read runtime-consumption snapshot `{snapshot_path}`: {error}")
+    })?;
+    let summary_json = serde_json::from_str::<serde_json::Value>(&payload).map_err(|error| {
+        format!("Failed to parse runtime-consumption snapshot `{snapshot_path}`: {error}")
+    })?;
+    if summary_json
+        .get("surface")
+        .and_then(serde_json::Value::as_str)
+        != Some("vida taskflow consume final")
+        && summary_json.get("kind").and_then(serde_json::Value::as_str) != Some("final")
+    {
+        return Ok(true);
+    }
+    if crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json)
+        .is_some()
+    {
+        return Ok(true);
+    }
+    Ok(!runtime_consumption_snapshot_has_release_admission_evidence(&summary_json))
+}
+
 pub(crate) fn latest_terminal_consume_continue_snapshot_run_id(
     state_root: &Path,
 ) -> Result<Option<String>, String> {
@@ -492,11 +529,59 @@ fn latest_runtime_consumption_snapshot_matching<F, T>(
 where
     F: FnMut(&str, &serde_json::Value) -> Option<T>,
 {
-    if !snapshot_dir.exists() {
-        return Ok(None);
+    for entry in runtime_consumption_snapshot_entries_newest_first(snapshot_dir)? {
+        let payload = match std::fs::read_to_string(&entry.path) {
+            Ok(payload) => payload,
+            Err(_) => continue,
+        };
+        let snapshot = match serde_json::from_str::<serde_json::Value>(&payload) {
+            Ok(snapshot) => snapshot,
+            Err(_) => continue,
+        };
+        let Some(value) = include(&entry.file_name, &snapshot) else {
+            continue;
+        };
+
+        return Ok(Some(value));
     }
 
-    let mut latest_valid: Option<(SystemTime, T)> = None;
+    Ok(None)
+}
+
+fn latest_runtime_consumption_snapshot_path_matching<F>(
+    snapshot_dir: &Path,
+    mut include: F,
+) -> Result<Option<String>, String>
+where
+    F: FnMut(&str, &serde_json::Value) -> bool,
+{
+    for entry in runtime_consumption_snapshot_entries_newest_first(snapshot_dir)? {
+        let payload = match std::fs::read_to_string(&entry.path) {
+            Ok(payload) => payload,
+            Err(_) => continue,
+        };
+        let snapshot = match serde_json::from_str::<serde_json::Value>(&payload) {
+            Ok(snapshot) => snapshot,
+            Err(_) => continue,
+        };
+        if !include(&entry.file_name, &snapshot) {
+            continue;
+        }
+
+        return Ok(Some(runtime_consumption_snapshot_path_string(&entry.path)));
+    }
+
+    Ok(None)
+}
+
+fn runtime_consumption_snapshot_entries_newest_first(
+    snapshot_dir: &Path,
+) -> Result<Vec<RuntimeConsumptionSnapshotEntry>, String> {
+    if !snapshot_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = Vec::new();
     for entry in std::fs::read_dir(snapshot_dir)
         .map_err(|error| format!("Failed to read runtime-consumption directory: {error}"))?
     {
@@ -509,91 +594,30 @@ where
         let file_name = path
             .file_name()
             .and_then(|value| value.to_str())
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .to_string();
         if !file_name.starts_with("final-") {
             continue;
         }
-
-        let payload = match std::fs::read_to_string(&path) {
-            Ok(payload) => payload,
-            Err(_) => continue,
-        };
-        let snapshot = match serde_json::from_str::<serde_json::Value>(&payload) {
-            Ok(snapshot) => snapshot,
-            Err(_) => continue,
-        };
-        let Some(value) = include(file_name, &snapshot) else {
-            continue;
-        };
-
         let modified = entry
             .metadata()
             .ok()
             .and_then(|meta| meta.modified().ok())
             .unwrap_or(SystemTime::UNIX_EPOCH);
-        match &latest_valid {
-            Some((latest_modified, _)) if modified <= *latest_modified => {}
-            _ => latest_valid = Some((modified, value)),
-        }
+        entries.push(RuntimeConsumptionSnapshotEntry {
+            path,
+            file_name,
+            modified,
+        });
     }
 
-    Ok(latest_valid.map(|(_, value)| value))
-}
-
-fn latest_runtime_consumption_snapshot_path_matching<F>(
-    snapshot_dir: &Path,
-    mut include: F,
-) -> Result<Option<String>, String>
-where
-    F: FnMut(&str, &serde_json::Value) -> bool,
-{
-    if !snapshot_dir.exists() {
-        return Ok(None);
-    }
-
-    let mut latest_valid: Option<(SystemTime, String)> = None;
-    for entry in std::fs::read_dir(&snapshot_dir)
-        .map_err(|error| format!("Failed to read runtime-consumption directory: {error}"))?
-    {
-        let entry = entry
-            .map_err(|error| format!("Failed to inspect runtime-consumption entry: {error}"))?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let file_name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default();
-        if !file_name.starts_with("final-") {
-            continue;
-        }
-
-        let payload = match std::fs::read_to_string(&path) {
-            Ok(payload) => payload,
-            Err(_) => continue,
-        };
-        let snapshot = match serde_json::from_str::<serde_json::Value>(&payload) {
-            Ok(snapshot) => snapshot,
-            Err(_) => continue,
-        };
-        if !include(file_name, &snapshot) {
-            continue;
-        }
-
-        let modified = entry
-            .metadata()
-            .ok()
-            .and_then(|meta| meta.modified().ok())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        let path_display = runtime_consumption_snapshot_path_string(&path);
-        match &latest_valid {
-            Some((latest_modified, _)) if modified <= *latest_modified => {}
-            _ => latest_valid = Some((modified, path_display)),
-        }
-    }
-
-    Ok(latest_valid.map(|(_, path)| path))
+    entries.sort_by(|left, right| {
+        right
+            .modified
+            .cmp(&left.modified)
+            .then_with(|| right.file_name.cmp(&left.file_name))
+    });
+    Ok(entries)
 }
 
 #[cfg(test)]

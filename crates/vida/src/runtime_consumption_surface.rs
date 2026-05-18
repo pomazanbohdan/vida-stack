@@ -90,6 +90,9 @@ pub(crate) fn doctor_launcher_summary_for_root(
 }
 
 fn launcher_binary_fingerprint(path: &Path) -> Result<String, String> {
+    if let Some(fingerprint) = cached_launcher_binary_fingerprint(path) {
+        return Ok(fingerprint);
+    }
     let file = std::fs::File::open(path).map_err(|error| {
         format!(
             "failed to open launcher binary `{}`: {error}",
@@ -121,6 +124,38 @@ fn launcher_binary_fingerprint(path: &Path) -> Result<String, String> {
         hasher.update(&chunk[..read]);
     }
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn cached_launcher_binary_fingerprint(path: &Path) -> Option<String> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified_unix_ms = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    let cache_path = launcher_binary_fingerprint_metadata_path(path);
+    let payload: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(cache_path).ok()?).ok()?;
+    if payload["schema_version"].as_str()? != "vida-binary-fingerprint-v1" {
+        return None;
+    }
+    if payload["len"].as_u64()? != metadata.len() {
+        return None;
+    }
+    if payload["modified_unix_ms"].as_u64()? as u128 != modified_unix_ms {
+        return None;
+    }
+    payload["fingerprint"].as_str().map(ToOwned::to_owned)
+}
+
+fn launcher_binary_fingerprint_metadata_path(path: &Path) -> PathBuf {
+    path.with_file_name(format!(
+        "{}.fingerprint.json",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("binary")
+    ))
 }
 
 fn launcher_binary_fingerprint_skipped(size: u64) -> String {

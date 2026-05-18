@@ -502,6 +502,16 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
+    if as_json {
+        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+            &state_dir,
+            doctor_json_projection_name(summary_only),
+        ) {
+            println!("{cached}");
+            return ExitCode::SUCCESS;
+        }
+    }
+
     match super::StateStore::open_existing_read_only_with_timeout(
         state_dir.clone(),
         DOCTOR_SURFACE_LOCK_TIMEOUT,
@@ -968,6 +978,11 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     serde_json::to_string_pretty(&summary_json)
                         .expect("doctor summary should render as json")
                 );
+                crate::operator_projection_cache::write_json_projection(
+                    store.root(),
+                    doctor_json_projection_name(summary_only),
+                    &summary_json,
+                );
                 return ExitCode::SUCCESS;
             }
 
@@ -1152,6 +1167,14 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
         }
+    }
+}
+
+fn doctor_json_projection_name(summary_only: bool) -> &'static str {
+    if summary_only {
+        "doctor-summary-latest"
+    } else {
+        "doctor-full-latest"
     }
 }
 

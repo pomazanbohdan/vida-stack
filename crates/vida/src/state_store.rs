@@ -84,8 +84,9 @@ pub use state_store_protocol_binding::{ProtocolBindingState, ProtocolBindingSumm
 #[allow(unused_imports)]
 pub(crate) use state_store_run_graph_state::{
     ExecutionPlanStateRow, GovernanceStateRow, ResumabilityCapsuleRow, RoutedRunStateRow,
-    RunGraphDispatchReceiptStored, RunGraphLatestRow, RunGraphOwnerEvidenceRecord,
-    RunGraphProjectionCheckpointRecord, RunGraphReplayLineageReceipt,
+    RunGraphDispatchReceiptStored, RunGraphLatestReceiptRow, RunGraphLatestRow,
+    RunGraphLatestStateRow, RunGraphOwnerEvidenceRecord, RunGraphProjectionCheckpointRecord,
+    RunGraphReplayLineageReceipt,
 };
 #[allow(unused_imports)]
 pub use state_store_run_graph_state::{

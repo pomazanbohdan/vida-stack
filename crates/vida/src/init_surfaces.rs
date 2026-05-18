@@ -678,6 +678,71 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_packet_execute_resume_inputs_decode_without_store() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("dispatch-packet.json");
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "packet".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "coach review".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: agent_lane_test_execution_plan("internal_subagents"),
+            reason: "test".to_string(),
+        };
+        fs::write(
+            &packet_path,
+            serde_json::to_string_pretty(&json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "coach_review_packet",
+                "coach_review_packet": {},
+                "run_id": "run-fast-dispatch",
+                "dispatch_target": "coach",
+                "dispatch_status": "packet_ready",
+                "lane_status": "packet_ready",
+                "dispatch_kind": "agent_lane",
+                "dispatch_surface": "vida agent-init",
+                "dispatch_command": "vida agent-init --dispatch-packet packet --execute-dispatch --json",
+                "activation_agent_type": "middle",
+                "activation_runtime_role": "coach",
+                "selected_backend": "internal_subagents",
+                "role_selection_full": role_selection,
+                "run_graph_bootstrap": {
+                    "run_id": "run-fast-dispatch"
+                }
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("packet should write");
+
+        let inputs = resume_inputs_from_dispatch_packet_without_store(
+            packet_path.to_str().expect("packet path should render"),
+        )
+        .expect("dispatch packet should decode without state store");
+
+        assert_eq!(inputs.dispatch_receipt.run_id, "run-fast-dispatch");
+        assert_eq!(inputs.dispatch_receipt.dispatch_target, "coach");
+        assert_eq!(
+            inputs.dispatch_receipt.selected_backend.as_deref(),
+            Some("internal_subagents")
+        );
+        assert_eq!(
+            inputs.dispatch_receipt.dispatch_packet_path.as_deref(),
+            packet_path.to_str()
+        );
+        assert_eq!(inputs.role_selection.selected_role, "coach");
+        assert_eq!(inputs.run_graph_bootstrap["run_id"], "run-fast-dispatch");
+    }
+
+    #[test]
     fn boot_command_succeeds() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -2499,6 +2564,16 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
     let framework_memory_source_root =
         PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
 
+    if args.json {
+        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+            &state_dir,
+            "orchestrator-init-latest",
+        ) {
+            println!("{cached}");
+            return ExitCode::SUCCESS;
+        }
+    }
+
     match tokio::time::timeout(
         std::time::Duration::from_secs(COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS),
         StateStore::open(state_dir.clone()),
@@ -2506,25 +2581,34 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
     .await
     {
         Ok(Ok(store)) => {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS),
-                ensure_launcher_bootstrap(
-                    &store,
-                    &instruction_source_root,
-                    &framework_memory_source_root,
-                ),
-            )
-            .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    eprintln!("{error}");
-                    return ExitCode::from(1);
+            match store.read_launcher_activation_snapshot().await {
+                Ok(_) => {}
+                Err(crate::state_store::StateStoreError::MissingLauncherActivationSnapshot) => {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS),
+                        ensure_launcher_bootstrap(
+                            &store,
+                            &instruction_source_root,
+                            &framework_memory_source_root,
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => {
+                            eprintln!("{error}");
+                            return ExitCode::from(1);
+                        }
+                        Err(_) => {
+                            eprintln!(
+                                "Timed out ensuring launcher bootstrap for `vida orchestrator-init` after {LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS}s"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    }
                 }
-                Err(_) => {
-                    eprintln!(
-                        "Timed out ensuring launcher bootstrap for `vida orchestrator-init` after {LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS}s"
-                    );
+                Err(error) => {
+                    eprintln!("Failed to read launcher activation snapshot: {error}");
                     return ExitCode::from(1);
                 }
             }
@@ -2557,28 +2641,34 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                     let orchestrator_runtime_contract =
                         build_orchestrator_runtime_contract(&init_view, &dev_team_readiness);
                     if args.json {
+                        let payload = serde_json::json!({
+                            "surface": "vida orchestrator-init",
+                            "state_read": {
+                                "mode": "authoritative_open",
+                                "lock_resilient": true,
+                                "fallback": "degraded_lock_contention_surface"
+                            },
+                            "init": init_view,
+                            "dev_team_readiness": dev_team_readiness,
+                            "orchestrator_runtime_contract": orchestrator_runtime_contract,
+                            "runtime_bundle_summary": {
+                                "bundle_id": bundle.metadata["bundle_id"],
+                                "root_artifact_id": bundle.control_core["root_artifact_id"],
+                                "activation_source": bundle.activation_source,
+                                "vida_root": bundle.vida_root,
+                                "state_dir": store.root().display().to_string(),
+                                "launcher_runtime_paths": bundle.launcher_runtime_paths,
+                            },
+                        });
                         println!(
                             "{}",
-                            serde_json::to_string_pretty(&serde_json::json!({
-                                "surface": "vida orchestrator-init",
-                                "state_read": {
-                                    "mode": "authoritative_open",
-                                    "lock_resilient": true,
-                                    "fallback": "degraded_lock_contention_surface"
-                                },
-                                "init": init_view,
-                                "dev_team_readiness": dev_team_readiness,
-                                "orchestrator_runtime_contract": orchestrator_runtime_contract,
-                                "runtime_bundle_summary": {
-                                    "bundle_id": bundle.metadata["bundle_id"],
-                                    "root_artifact_id": bundle.control_core["root_artifact_id"],
-                                    "activation_source": bundle.activation_source,
-                                    "vida_root": bundle.vida_root,
-                                    "state_dir": store.root().display().to_string(),
-                                    "launcher_runtime_paths": bundle.launcher_runtime_paths,
-                                },
-                            }))
+                            serde_json::to_string_pretty(&payload)
                             .expect("orchestrator-init json should render")
+                        );
+                        crate::operator_projection_cache::write_json_projection(
+                            store.root(),
+                            "orchestrator-init-latest",
+                            &payload,
                         );
                     } else {
                         print_surface_header(RenderMode::Plain, "vida orchestrator-init");
@@ -2771,6 +2861,15 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
     state_root: std::path::PathBuf,
     mut resume_inputs: super::taskflow_consume_resume::ResumeInputs,
 ) -> ExitCode {
+    if let Some(exit_code) = execute_agent_init_prelaunch_blocker_without_store_reopen(
+        json_output,
+        dispatch_mode,
+        &state_root,
+        &mut resume_inputs,
+    ) {
+        return exit_code;
+    }
+
     let dispatch_handoff_timeout_seconds = super::dispatch_handoff_timeout_seconds_for_state_root(
         &state_root,
         &resume_inputs.role_selection,
@@ -2913,6 +3012,85 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
     }
 }
 
+fn execute_agent_init_prelaunch_blocker_without_store_reopen(
+    json_output: bool,
+    dispatch_mode: &serde_json::Value,
+    state_root: &Path,
+    resume_inputs: &mut super::taskflow_consume_resume::ResumeInputs,
+) -> Option<ExitCode> {
+    if resume_inputs.dispatch_receipt.dispatch_kind != "agent_lane" {
+        return None;
+    }
+    let project_root = super::runtime_dispatch_project_root_from_state_root(state_root);
+    resume_inputs.dispatch_receipt.selected_backend =
+        super::runtime_dispatch_state::preferred_selected_backend_for_receipt(
+            &resume_inputs.role_selection,
+            &resume_inputs.dispatch_receipt,
+        );
+    super::runtime_dispatch_state::sync_receipt_dispatch_handoff_surface(
+        project_root.as_ref(),
+        &resume_inputs.role_selection,
+        &mut resume_inputs.dispatch_receipt,
+    );
+    if !super::runtime_dispatch_state::internal_host_dispatch_requires_prelaunch_blocker(
+        project_root.as_ref(),
+        &resume_inputs.role_selection,
+        &resume_inputs.dispatch_receipt,
+    ) {
+        return None;
+    }
+    if let Err(error) =
+        super::runtime_dispatch_state::apply_internal_activation_view_only_to_receipt(
+            state_root,
+            project_root.as_ref(),
+            &resume_inputs.role_selection,
+            &mut resume_inputs.dispatch_receipt,
+        )
+    {
+        eprintln!("Failed to materialize agent-init prelaunch blocker result: {error}");
+        return Some(ExitCode::from(1));
+    }
+    let Some(dispatch_result_path) = resume_inputs
+        .dispatch_receipt
+        .dispatch_result_path
+        .as_deref()
+    else {
+        eprintln!("Agent init prelaunch blocker did not produce a dispatch result artifact.");
+        return Some(ExitCode::from(1));
+    };
+    let result_body = match std::fs::read_to_string(dispatch_result_path) {
+        Ok(body) => body,
+        Err(error) => {
+            eprintln!(
+                "Failed to read agent-init prelaunch dispatch result `{dispatch_result_path}`: {error}"
+            );
+            return Some(ExitCode::from(1));
+        }
+    };
+    let mut result_json = match serde_json::from_str::<serde_json::Value>(&result_body) {
+        Ok(json) => json,
+        Err(error) => {
+            eprintln!(
+                "Failed to parse agent-init prelaunch dispatch result `{dispatch_result_path}`: {error}"
+            );
+            return Some(ExitCode::from(1));
+        }
+    };
+    if let Some(object) = result_json.as_object_mut() {
+        object.insert("dispatch_mode".to_string(), dispatch_mode.clone());
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result_json)
+                .expect("agent-init prelaunch result json should render")
+        );
+    } else {
+        crate::print_json_pretty(&result_json);
+    }
+    Some(ExitCode::from(1))
+}
+
 fn string_field(value: &serde_json::Value, field: &str) -> Option<String> {
     value
         .get(field)
@@ -3014,11 +3192,152 @@ fn resume_inputs_from_downstream_packet_without_store(
     })
 }
 
+fn resume_inputs_from_dispatch_packet_without_store(
+    packet_path: &str,
+) -> Result<super::taskflow_consume_resume::ResumeInputs, String> {
+    let body = std::fs::read_to_string(packet_path)
+        .map_err(|error| format!("Failed to read dispatch packet `{packet_path}`: {error}"))?;
+    let packet = serde_json::from_str::<serde_json::Value>(&body)
+        .map_err(|error| format!("Failed to parse dispatch packet `{packet_path}`: {error}"))?;
+    let run_id = string_field(&packet, "run_id")
+        .ok_or_else(|| "Persisted dispatch packet is missing run_id".to_string())?;
+    let dispatch_target = string_field(&packet, "dispatch_target")
+        .ok_or_else(|| "Persisted dispatch packet is missing dispatch_target".to_string())?;
+    let role_selection: super::RuntimeConsumptionLaneSelection = serde_json::from_value(
+        packet
+            .get("role_selection_full")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+    .map_err(|error| format!("Failed to decode role_selection from dispatch packet: {error}"))?;
+    let recorded_at = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("rfc3339 timestamp should render");
+    let receipt = crate::state_store::RunGraphDispatchReceipt {
+        run_id: run_id.clone(),
+        dispatch_target: dispatch_target.clone(),
+        dispatch_status: string_field(&packet, "dispatch_status")
+            .unwrap_or_else(|| "packet_ready".to_string()),
+        lane_status: string_field(&packet, "lane_status")
+            .unwrap_or_else(|| "packet_ready".to_string()),
+        supersedes_receipt_id: string_field(&packet, "supersedes_receipt_id"),
+        exception_path_receipt_id: string_field(&packet, "exception_path_receipt_id"),
+        dispatch_kind: string_field(&packet, "dispatch_kind")
+            .unwrap_or_else(|| "agent_lane".to_string()),
+        dispatch_surface: string_field(&packet, "dispatch_surface")
+            .or_else(|| Some("vida agent-init".to_string())),
+        dispatch_command: string_field(&packet, "dispatch_command"),
+        dispatch_packet_path: Some(packet_path.to_string()),
+        dispatch_result_path: None,
+        blocker_code: string_field(&packet, "blocker_code"),
+        downstream_dispatch_target: string_field(&packet, "downstream_dispatch_target"),
+        downstream_dispatch_command: string_field(&packet, "downstream_dispatch_command"),
+        downstream_dispatch_note: string_field(&packet, "downstream_dispatch_note"),
+        downstream_dispatch_ready: packet
+            .get("downstream_dispatch_ready")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        downstream_dispatch_blockers: packet
+            .get("downstream_dispatch_blockers")
+            .and_then(serde_json::Value::as_array)
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        downstream_dispatch_packet_path: string_field(&packet, "downstream_dispatch_packet_path"),
+        downstream_dispatch_status: string_field(&packet, "downstream_dispatch_status"),
+        downstream_dispatch_result_path: string_field(&packet, "downstream_dispatch_result_path"),
+        downstream_dispatch_trace_path: string_field(&packet, "downstream_dispatch_trace_path"),
+        downstream_dispatch_executed_count: packet
+            .get("downstream_dispatch_executed_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as u32,
+        downstream_dispatch_active_target: string_field(
+            &packet,
+            "downstream_dispatch_active_target",
+        ),
+        downstream_dispatch_last_target: string_field(&packet, "downstream_dispatch_last_target"),
+        activation_agent_type: string_field(&packet, "activation_agent_type"),
+        activation_runtime_role: string_field(&packet, "activation_runtime_role"),
+        selected_backend: string_field(&packet, "selected_backend"),
+        recorded_at,
+    };
+    let run_graph_bootstrap = packet
+        .get("run_graph_bootstrap")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({ "run_id": run_id }));
+    Ok(super::taskflow_consume_resume::ResumeInputs {
+        dispatch_receipt: receipt,
+        dispatch_packet_path: packet_path.to_string(),
+        role_selection,
+        run_graph_bootstrap,
+    })
+}
+
 pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
     let state_dir = args
         .state_dir
         .clone()
         .unwrap_or_else(state_store::default_state_dir);
+    let packet_arg_count =
+        usize::from(args.dispatch_packet.is_some()) + usize::from(args.downstream_packet.is_some());
+
+    if !args.execute_dispatch && packet_arg_count > 0 {
+        if packet_arg_count > 1 {
+            eprintln!(
+                "Agent init accepts at most one packet source: use either `--dispatch-packet` or `--downstream-packet`."
+            );
+            return ExitCode::from(2);
+        }
+        if args.role.is_some() || args.request_text.is_some() {
+            eprintln!(
+                "Agent init packet activation is exclusive: do not combine packet flags with `--role` or request text."
+            );
+            return ExitCode::from(2);
+        }
+        let (packet_path, downstream) = if let Some(packet_path) = args.dispatch_packet.as_deref() {
+            (packet_path, false)
+        } else {
+            (
+                args.downstream_packet
+                    .as_deref()
+                    .expect("packet source count checked above"),
+                true,
+            )
+        };
+        let packet = match super::taskflow_consume_resume::read_dispatch_packet(packet_path) {
+            Ok(packet) => packet,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
+        };
+        let project_root = match std::env::current_dir() {
+            Ok(path) => path,
+            Err(error) => {
+                eprintln!("Failed to resolve current directory: {error}");
+                return ExitCode::from(1);
+            }
+        };
+        let surface_payload = match build_fast_agent_init_packet_activation_payload(
+            &project_root,
+            packet_path,
+            packet,
+            downstream,
+            &args,
+        ) {
+            Ok(payload) => payload,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::from(2);
+            }
+        };
+        emit_fast_agent_init_packet_activation_payload(&surface_payload, args.json);
+        return ExitCode::SUCCESS;
+    }
 
     if args.execute_dispatch && args.downstream_packet.is_some() && args.dispatch_packet.is_none() {
         let packet_path = args
@@ -3026,6 +3345,30 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
             .as_deref()
             .expect("downstream packet checked above");
         let resume_inputs = match resume_inputs_from_downstream_packet_without_store(packet_path) {
+            Ok(inputs) => inputs,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
+        };
+        let selection_value =
+            serde_json::to_value(&resume_inputs.role_selection).unwrap_or(serde_json::Value::Null);
+        let dispatch_mode = agent_init_dispatch_mode(&args, &selection_value);
+        return execute_agent_init_dispatch_from_resume_inputs(
+            args.json,
+            &dispatch_mode,
+            state_dir,
+            resume_inputs,
+        )
+        .await;
+    }
+
+    if args.execute_dispatch && args.dispatch_packet.is_some() && args.downstream_packet.is_none() {
+        let packet_path = args
+            .dispatch_packet
+            .as_deref()
+            .expect("dispatch packet checked above");
+        let resume_inputs = match resume_inputs_from_dispatch_packet_without_store(packet_path) {
             Ok(inputs) => inputs,
             Err(error) => {
                 eprintln!("{error}");
@@ -3071,8 +3414,6 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
     {
         Ok(Ok(store)) => {
             let store_state_root = store.root().to_path_buf();
-            let packet_arg_count = usize::from(args.dispatch_packet.is_some())
-                + usize::from(args.downstream_packet.is_some());
             if args.execute_dispatch {
                 if packet_arg_count == 0 {
                     eprintln!(
@@ -4263,6 +4604,78 @@ fn enrich_dev_team_readiness_with_agent_selection(
         }),
     );
     dev_team_readiness
+}
+
+fn build_fast_agent_init_packet_activation_payload(
+    project_root: &Path,
+    packet_path: &str,
+    packet: serde_json::Value,
+    downstream: bool,
+    args: &AgentInitArgs,
+) -> Result<serde_json::Value, String> {
+    let selection = agent_init_packet_selection(packet_path, packet, downstream)?;
+    let activation_semantics = agent_init_activation_semantics(&selection);
+    let dispatch_mode = agent_init_dispatch_mode(args, &selection);
+    Ok(build_agent_init_surface_payload(
+        project_root,
+        &project_root.join("vida.config.yaml").display().to_string(),
+        serde_json::json!({
+            "status": "pass",
+            "activation_source": "packet_activation_fast_path",
+            "view_only": true,
+        }),
+        selection,
+        activation_semantics,
+        dispatch_mode,
+        serde_json::json!({
+            "activation_source": "packet_activation_fast_path",
+            "state_dir": serde_json::Value::Null,
+            "launcher_runtime_paths": serde_json::Value::Null,
+        }),
+        &serde_json::Value::Null,
+        serde_json::json!({
+            "status": "not_required",
+            "reason": "packet_activation_view_only_fast_path",
+        }),
+    ))
+}
+
+fn emit_fast_agent_init_packet_activation_payload(surface_payload: &serde_json::Value, json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(surface_payload).expect("agent-init json should render")
+        );
+        return;
+    }
+    print_surface_header(RenderMode::Plain, "vida agent-init");
+    print_surface_line(
+        RenderMode::Plain,
+        "status",
+        surface_payload["init"]["status"]
+            .as_str()
+            .unwrap_or("unknown"),
+    );
+    print_surface_line(
+        RenderMode::Plain,
+        "selected role",
+        surface_payload["selection"]["selected_role"]
+            .as_str()
+            .unwrap_or("unknown"),
+    );
+    if let Some(mode) = surface_payload["selection"]["mode"].as_str() {
+        print_surface_line(RenderMode::Plain, "mode", mode);
+    }
+    if let Some(mode) = surface_payload["dispatch_mode"]["mode"].as_str() {
+        print_surface_line(RenderMode::Plain, "dispatch_mode", mode);
+    }
+    if let Some(path) = surface_payload["selection"]["dispatch_packet_path"].as_str() {
+        print_surface_line(RenderMode::Plain, "dispatch packet", path);
+    }
+    if let Some(path) = surface_payload["selection"]["downstream_packet_path"].as_str() {
+        print_surface_line(RenderMode::Plain, "downstream packet", path);
+    }
+    print_compact_command_families(RenderMode::Plain, "vida agent-init");
 }
 
 pub(crate) async fn render_agent_init_packet_activation_with_store(

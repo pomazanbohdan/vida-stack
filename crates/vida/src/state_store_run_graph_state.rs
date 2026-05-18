@@ -50,6 +50,19 @@ pub(crate) struct RunGraphLatestRow {
     pub(crate) run_id: String,
 }
 
+#[derive(Debug, serde::Deserialize, SurrealValue)]
+pub(crate) struct RunGraphLatestStateRow {
+    pub(crate) run_id: String,
+    pub(crate) task_id: String,
+    pub(crate) status: String,
+}
+
+#[derive(Debug, serde::Deserialize, SurrealValue)]
+pub(crate) struct RunGraphLatestReceiptRow {
+    pub(crate) lane_status: Option<String>,
+    pub(crate) supersedes_receipt_id: Option<String>,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
 pub(crate) struct GovernanceStateRow {

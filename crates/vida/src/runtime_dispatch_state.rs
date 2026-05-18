@@ -116,6 +116,17 @@ fn configured_internal_host_handoff_timeout_seconds(project_root: &Path) -> Opti
         .filter(|seconds| *seconds > 0)
 }
 
+fn configured_internal_host_receipt_backed_completion_supported(
+    project_root: &Path,
+) -> Option<bool> {
+    let overlay = load_project_overlay_yaml_for_root(project_root).ok()?;
+    let (_system_id, system_entry) = selected_host_cli_system_for_runtime_dispatch(&overlay);
+    system_entry.as_ref().and_then(|entry| {
+        yaml_lookup(entry, &["dispatch", "receipt_backed_completion_supported"])
+            .and_then(serde_yaml::Value::as_bool)
+    })
+}
+
 fn configured_external_backend_handoff_timeout_seconds(
     project_root: &Path,
     backend_id: &str,
@@ -208,7 +219,7 @@ fn dispatch_handoff_requires_outer_timeout(
     false
 }
 
-fn sync_receipt_dispatch_handoff_surface(
+pub(crate) fn sync_receipt_dispatch_handoff_surface(
     project_root: &Path,
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
@@ -322,9 +333,7 @@ pub(crate) fn internal_host_activation_view_only_requires_terminal_blocker(
     if !dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
         return false;
     }
-    let host_runtime = runtime_host_execution_contract_for_root(project_root);
-    host_runtime["selected_cli_system"].as_str() == Some("codex")
-        && receipt.dispatch_target == "implementer"
+    configured_internal_host_receipt_backed_completion_supported(project_root) == Some(false)
 }
 
 pub(crate) fn internal_host_activation_view_only_blocker_code(
@@ -1524,7 +1533,7 @@ fn persisted_selected_backend_override_for_packet_path(packet_path: &str) -> Opt
     })
 }
 
-fn preferred_selected_backend_for_receipt(
+pub(crate) fn preferred_selected_backend_for_receipt(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Option<String> {
@@ -14879,6 +14888,134 @@ agent_system:
     }
 
     #[test]
+    fn internal_host_prelaunch_blocker_uses_configured_receipt_backed_capability() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        std::fs::create_dir_all(harness.path().join(".vida/config")).expect("config dir");
+        std::fs::create_dir_all(harness.path().join(".vida/db")).expect("db dir");
+        std::fs::create_dir_all(harness.path().join(".vida/project")).expect("project dir");
+        std::fs::write(harness.path().join("AGENTS.md"), "test").expect("agents marker");
+        std::fs::write(
+            harness.path().join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      max_runtime_seconds: 240
+      dispatch:
+        command: configured-host-bridge
+        receipt_backed_completion_supported: false
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("config should write");
+        let dispatch_packet_path = harness.path().join("coach-delivery-packet.json");
+        std::fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "dispatch_target": "coach",
+                "delivery_task_packet": {
+                    "goal": "Execute bounded coach validation"
+                },
+                "effective_execution_posture": {
+                    "selected_execution_class": "internal"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Validate bounded coach lane.".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["coach".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "coach": true
+                        }
+                    }
+                ],
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "coach": {
+                                "backend_id": "internal_subagents",
+                                "backend_class": "internal"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-configured-internal-prelaunch-block".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-18T00:00:00Z".to_string(),
+        };
+
+        assert!(internal_host_dispatch_requires_prelaunch_blocker(
+            harness.path(),
+            &role_selection,
+            &receipt
+        ));
+        assert!(
+            internal_host_activation_view_only_requires_terminal_blocker(
+                harness.path(),
+                &role_selection,
+                &receipt
+            )
+        );
+    }
+
+    #[test]
     fn stale_in_flight_dispatch_timeout_seconds_uses_internal_host_window_for_legacy_artifact() {
         let root = std::env::temp_dir().join(format!(
             "vida-legacy-internal-stale-timeout-{}",
@@ -17766,9 +17903,9 @@ fn runtime_dispatch_internal_activation_view_only_result(
         == INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
     {
         (
-                "internal host dispatch was blocked before launching nested carrier execution because this host bridge cannot provide receipt-backed implementer completion evidence",
-                "internal Codex host bridge is activation-only for implementer lanes; timeout avoided by recording a terminal blocker before launch",
-                "internal host implementer handoff blocked before launch to avoid waiting for a known non-receipted carrier path",
+                "internal host dispatch was blocked before launching nested carrier execution because the configured host bridge cannot provide receipt-backed completion evidence",
+                "configured internal host bridge does not support receipt-backed completion; timeout avoided by recording a terminal blocker before launch",
+                "internal host handoff blocked before launch to avoid waiting for a configured non-receipted carrier path",
             )
     } else {
         (
@@ -17791,7 +17928,7 @@ fn runtime_dispatch_internal_activation_view_only_result(
     })
 }
 
-fn internal_host_dispatch_requires_prelaunch_blocker(
+pub(crate) fn internal_host_dispatch_requires_prelaunch_blocker(
     project_root: &Path,
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
@@ -17802,30 +17939,11 @@ fn internal_host_dispatch_requires_prelaunch_blocker(
     if dispatch_packet_declares_activation_view_only(receipt.dispatch_packet_path.as_deref()) {
         return true;
     }
-    internal_host_uses_default_codex_dispatch_command(project_root)
-        && internal_host_activation_view_only_requires_terminal_blocker(
-            project_root,
-            role_selection,
-            receipt,
-        )
-}
-
-fn internal_host_uses_default_codex_dispatch_command(project_root: &Path) -> bool {
-    load_project_overlay_yaml_for_root(project_root)
-        .ok()
-        .and_then(|overlay| {
-            let (selected_cli_system, selected_cli_entry) =
-                selected_host_cli_system_for_runtime_dispatch(&overlay);
-            (selected_cli_system == "codex").then(|| {
-                selected_cli_entry
-                    .as_ref()
-                    .and_then(|entry| yaml_lookup(entry, &["dispatch", "command"]))
-                    .and_then(serde_yaml::Value::as_str)
-                    .map(str::trim)
-                    .is_some_and(|command| command.eq_ignore_ascii_case("codex"))
-            })
-        })
-        .unwrap_or(false)
+    internal_host_activation_view_only_requires_terminal_blocker(
+        project_root,
+        role_selection,
+        receipt,
+    )
 }
 
 fn dispatch_packet_declares_activation_view_only(dispatch_packet_path: Option<&str>) -> bool {
@@ -17956,7 +18074,7 @@ pub(crate) fn apply_internal_activation_timeout_to_receipt(
     Ok(())
 }
 
-fn apply_internal_activation_view_only_to_receipt(
+pub(crate) fn apply_internal_activation_view_only_to_receipt(
     state_root: &Path,
     project_root: &Path,
     role_selection: &RuntimeConsumptionLaneSelection,

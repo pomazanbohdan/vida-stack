@@ -228,8 +228,9 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         installed_targets.push(ReleaseInstalledTarget {
             target,
             path: path.display().to_string(),
-            fingerprint,
+            fingerprint: fingerprint.clone(),
         });
+        let _ = write_binary_fingerprint_metadata(&path, &fingerprint);
     }
 
     let asset_update = if installed_targets
@@ -673,6 +674,46 @@ fn binary_fingerprint(path: &Path) -> Result<String, ReleaseIoErrorDetail> {
     let bytes = fs::read(path)
         .map_err(|error| io_error_detail("read_fingerprint", Some(path), None, &error))?;
     Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
+fn write_binary_fingerprint_metadata(
+    path: &Path,
+    fingerprint: &str,
+) -> Result<(), ReleaseIoErrorDetail> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| io_error_detail("metadata", Some(path), None, &error))?;
+    let modified_unix_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let payload = serde_json::json!({
+        "schema_version": "vida-binary-fingerprint-v1",
+        "path": path.display().to_string(),
+        "len": metadata.len(),
+        "modified_unix_ms": modified_unix_ms,
+        "fingerprint": fingerprint,
+    });
+    let body = serde_json::to_string_pretty(&payload).map_err(|error| {
+        synthetic_io_error_detail(
+            "serialize_fingerprint_metadata",
+            Some(path),
+            None,
+            &error.to_string(),
+        )
+    })?;
+    fs::write(binary_fingerprint_metadata_path(path), body)
+        .map_err(|error| io_error_detail("write_fingerprint_metadata", Some(path), None, &error))
+}
+
+fn binary_fingerprint_metadata_path(path: &Path) -> PathBuf {
+    path.with_file_name(format!(
+        "{}.fingerprint.json",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("binary")
+    ))
 }
 
 fn install_binary(source: &Path, destination: &Path) -> Result<(), ReleaseIoErrorDetail> {

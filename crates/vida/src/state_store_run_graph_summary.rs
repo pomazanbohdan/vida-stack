@@ -292,11 +292,6 @@ fn stored_receipt_has_active_exception_takeover(receipt: &RunGraphDispatchReceip
         && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref())
 }
 
-fn stored_receipt_supersedes_lane(receipt: &RunGraphDispatchReceiptStored) -> bool {
-    receipt.lane_status.as_deref() == Some("lane_superseded")
-        && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref())
-}
-
 fn continuation_binding_active_kind(binding: &RunGraphContinuationBinding) -> Option<&str> {
     binding
         .active_bounded_unit
@@ -1832,21 +1827,21 @@ impl StateStore {
         let mut query = self
             .db
             .query(
-                "SELECT run_id, updated_at FROM execution_plan_state ORDER BY updated_at DESC, run_id DESC LIMIT 25;",
+                "SELECT run_id, task_id, status, updated_at FROM execution_plan_state ORDER BY updated_at DESC, run_id DESC LIMIT 25;",
             )
             .await?;
-        let rows: Vec<RunGraphLatestRow> = query.take(0)?;
+        let rows: Vec<RunGraphLatestStateRow> = query.take(0)?;
         for latest in rows {
             if self
-                .run_graph_status_points_to_terminal_task_active(&latest.run_id)
+                .run_graph_latest_row_points_to_terminal_task_active(&latest)
                 .await?
             {
                 continue;
             }
-            let receipt = self
-                .run_graph_dispatch_receipt_stored(&latest.run_id)
-                .await?;
-            if receipt.as_ref().is_some_and(stored_receipt_supersedes_lane) {
+            if self
+                .run_graph_latest_receipt_row_supersedes_lane(&latest.run_id)
+                .await?
+            {
                 continue;
             }
             return Ok(Some(latest.run_id));
@@ -1854,15 +1849,35 @@ impl StateStore {
         Ok(None)
     }
 
-    async fn run_graph_status_points_to_terminal_task_active(
+    async fn run_graph_latest_receipt_row_supersedes_lane(
         &self,
         run_id: &str,
     ) -> Result<bool, StateStoreError> {
-        let status = self.run_graph_status(run_id).await?;
-        if status.status == "completed" {
+        let mut query = self
+            .db
+            .query(
+                "SELECT lane_status, supersedes_receipt_id \
+                 FROM run_graph_dispatch_receipt \
+                 WHERE run_id = $run_id \
+                 LIMIT 1;",
+            )
+            .bind(("run_id", run_id.to_string()))
+            .await?;
+        let rows: Vec<RunGraphLatestReceiptRow> = query.take(0)?;
+        Ok(rows.into_iter().next().is_some_and(|receipt| {
+            receipt.lane_status.as_deref() == Some("lane_superseded")
+                && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref())
+        }))
+    }
+
+    async fn run_graph_latest_row_points_to_terminal_task_active(
+        &self,
+        latest: &RunGraphLatestStateRow,
+    ) -> Result<bool, StateStoreError> {
+        if latest.status == "completed" {
             return Ok(false);
         }
-        let task = match self.show_task(&status.task_id).await {
+        let task = match self.show_task(&latest.task_id).await {
             Ok(task) => task,
             Err(StateStoreError::MissingTask { .. }) => return Ok(false),
             Err(error) => return Err(error),
@@ -1982,6 +1997,14 @@ impl StateStore {
         let Some(status) = self.latest_run_graph_status().await? else {
             return Ok(None);
         };
+        self.run_graph_dispatch_receipt_summary_for_status(&status)
+            .await
+    }
+
+    pub(crate) async fn run_graph_dispatch_receipt_summary_for_status(
+        &self,
+        status: &RunGraphStatus,
+    ) -> Result<Option<RunGraphDispatchReceiptSummary>, StateStoreError> {
         self.ensure_run_graph_recovery_surface_has_checkpoint_lineage(&status)
             .await?;
         let Some(receipt) = self

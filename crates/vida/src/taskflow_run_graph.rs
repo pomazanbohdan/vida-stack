@@ -519,6 +519,12 @@ fn next_lawful_operator_action_for_dispatch_resolution(
     Some(format!("vida lane show {} --json", status.run_id))
 }
 
+pub(crate) fn dispatch_receipt_can_use_terminal_continue_evidence(
+    receipt: &RunGraphDispatchReceipt,
+) -> bool {
+    receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some()
+}
+
 fn blocked_external_dispatch_artifact_mismatched_as_internal_activation(
     receipt: &RunGraphDispatchReceipt,
 ) -> bool {
@@ -1472,10 +1478,19 @@ pub(crate) async fn run_graph_projection_truth(
         dispatch_receipt.as_ref(),
         persisted_continuation_binding,
     );
-    let terminal_consume_continue_run_id =
+    let terminal_consume_continue_run_id = if dispatch_receipt.as_ref().is_some_and(|receipt| {
+        blocked_external_dispatch_artifact_mismatched_as_internal_activation(receipt)
+            || (dispatch_receipt_resolution_reason_class(receipt).is_some()
+                && dispatch_receipt_can_use_terminal_continue_evidence(receipt)
+                && status.recovery_ready
+                && status.resume_target != "none")
+    }) {
         crate::latest_terminal_consume_continue_snapshot_run_id(store.root())
             .ok()
-            .flatten();
+            .flatten()
+    } else {
+        None
+    };
     let stale_state_suspected =
         projection_stale_state_suspected(store.root(), dispatch_receipt.as_ref());
     Ok(RunGraphProjectionTruth {

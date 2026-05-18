@@ -913,8 +913,18 @@ fn external_cli_preflight_summary_with_probe(
     } else {
         "unknown"
     };
-    let (sandbox_active, network_reachable) = probe_override
-        .unwrap_or_else(|| (is_sandbox_active_from_env(), can_resolve_public_network()));
+    let (sandbox_active, network_reachable) = match probe_override {
+        Some(value) => value,
+        None => {
+            let sandbox_active = is_sandbox_active_from_env();
+            let network_reachable = if requires_external_cli && sandbox_active {
+                can_resolve_public_network()
+            } else {
+                true
+            };
+            (sandbox_active, network_reachable)
+        }
+    };
     let tool_contract = external_cli_tool_contract_summary(
         selected_execution_class.as_str(),
         requires_external_cli,

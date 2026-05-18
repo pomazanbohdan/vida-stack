@@ -67,7 +67,9 @@ It does not replace GitHub issue triage, release publication, framework bootstra
    - For PRs manually integrated, close with a comment naming the integration commit or commit range and state that the useful behavior is now present on `main`.
    - For duplicate PRs, close as duplicates after confirming the duplicate behavior is integrated or intentionally rejected.
    - For invalid PRs, close with the validation reason.
-   - Delete remote head branches for closed PRs when they are project-owned cleanup branches.
+   - Every processed PR must end in exactly one GitHub terminal action: merge when the PR is current, non-duplicate, green, and still the accepted integration path; otherwise close it after its creation reason has been analyzed and either integrated, superseded, or rejected.
+   - Closing comments are mandatory and automatic. The comment must name the reason for closure, the disposition of the PR's intended fix, any integration commit or replacement task when applicable, and the check or validation evidence that blocked merge when the PR was not mergeable.
+   - Delete remote head branches automatically for closed PRs when they are project-owned cleanup branches. Leave a branch only when GitHub permissions deny deletion or when the branch is not project-owned; record that exception in the closure comment/report.
 
 9. Final sanity checks.
    - Fetch with prune.
@@ -82,6 +84,7 @@ It does not replace GitHub issue triage, release publication, framework bootstra
 3. Close without integration only when the intended behavior is already present, invalid, obsolete, or has no logical functional value after revalidation.
 4. Never leave useful behavior stranded in a closed PR. If closing a useful PR, first integrate or recreate its functional fix on `main`.
 5. Never leave project-owned cleanup branches behind after their PRs are closed and their useful changes are integrated or rejected.
+6. Never leave a processed PR open merely because it was reviewed. After processing, automatically merge it or close it with the required comment and branch cleanup.
 
 ## Proof Contract
 

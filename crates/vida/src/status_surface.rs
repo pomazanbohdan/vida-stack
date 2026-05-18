@@ -91,6 +91,16 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
+    if as_json {
+        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+            &state_dir,
+            status_json_projection_name(summary_only),
+        ) {
+            println!("{cached}");
+            return ExitCode::SUCCESS;
+        }
+    }
+
     match StateStore::open_existing_read_only_with_timeout(
         state_dir.clone(),
         STATUS_SURFACE_LOCK_TIMEOUT,
@@ -184,34 +194,50 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-                let latest_run_graph_recovery =
-                    match store.latest_run_graph_recovery_summary().await {
+                let latest_run_graph_run_id = latest_run_graph_status
+                    .as_ref()
+                    .map(|status| status.run_id.as_str());
+                let latest_run_graph_recovery = match latest_run_graph_run_id {
+                    Some(run_id) => match store.run_graph_recovery_summary(run_id).await {
                         Ok(summary) => summary,
                         Err(error) => {
                             eprintln!("Failed to read latest run graph recovery summary: {error}");
                             return ExitCode::from(1);
                         }
-                    };
-                let latest_run_graph_checkpoint = match store
-                    .latest_run_graph_checkpoint_summary()
-                    .await
-                {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("Failed to read latest run graph checkpoint summary: {error}");
-                        return ExitCode::from(1);
                     }
+                    .into(),
+                    None => None,
                 };
-                let latest_run_graph_gate = match store.latest_run_graph_gate_summary().await {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("Failed to read latest run graph gate summary: {error}");
-                        return ExitCode::from(1);
+                let latest_run_graph_checkpoint = match latest_run_graph_run_id {
+                    Some(run_id) => match store.run_graph_checkpoint_summary(run_id).await {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to read latest run graph checkpoint summary: {error}"
+                            );
+                            return ExitCode::from(1);
+                        }
                     }
+                    .into(),
+                    None => None,
+                };
+                let latest_run_graph_gate = match latest_run_graph_run_id {
+                    Some(run_id) => match store.run_graph_gate_summary(run_id).await {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            eprintln!("Failed to read latest run graph gate summary: {error}");
+                            return ExitCode::from(1);
+                        }
+                    }
+                    .into(),
+                    None => None,
                 };
                 let mut latest_run_graph_dispatch_receipt_checkpoint_leakage = false;
-                let latest_run_graph_dispatch_receipt =
-                    match store.latest_run_graph_dispatch_receipt_summary().await {
+                let latest_run_graph_dispatch_receipt = match latest_run_graph_status.as_ref() {
+                    Some(status) => match store
+                        .run_graph_dispatch_receipt_summary_for_status(status)
+                        .await
+                    {
                         Ok(summary) => summary,
                         Err(error) => {
                             if error
@@ -227,7 +253,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         }
-                    };
+                    },
+                    None => None,
+                };
                 let latest_run_graph_dispatch_receipt_matches_status =
                     latest_run_graph_dispatch_receipt_checkpoint_leakage
                         || state_store::latest_run_graph_dispatch_receipt_matches_status(
@@ -296,11 +324,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                 };
                 let latest_run_graph_task_closed = match latest_run_graph_status.as_ref() {
-                    Some(status) => match store.list_tasks(None, true).await {
-                        Ok(tasks) => tasks
-                            .iter()
-                            .find(|task| task.id == status.task_id)
-                            .is_some_and(|task| task.status == "closed"),
+                    Some(status) => match store.show_task(&status.task_id).await {
+                        Ok(task) => task.status == "closed",
+                        Err(state_store::StateStoreError::MissingTask { .. }) => false,
                         Err(error) => {
                             eprintln!(
                                 "Failed to read tasks for latest run-graph task state: {error}"
@@ -316,10 +342,17 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         latest_run_graph_status.as_ref(),
                         latest_run_graph_recovery.as_ref(),
                         latest_run_graph_dispatch_receipt.as_ref(),
-                        crate::latest_terminal_consume_continue_snapshot_run_id(store.root())
-                            .ok()
-                            .flatten()
-                            .as_deref(),
+                        if latest_run_graph_dispatch_receipt.as_ref().is_some_and(|receipt| {
+                            receipt.supersedes_receipt_id.is_some()
+                                && receipt.exception_path_receipt_id.is_some()
+                        }) {
+                            crate::latest_terminal_consume_continue_snapshot_run_id(store.root())
+                                .ok()
+                                .flatten()
+                        } else {
+                            None
+                        }
+                        .as_deref(),
                         latest_run_graph_snapshot_inconsistent
                             || latest_run_graph_dispatch_receipt_signal_ambiguous
                             || latest_run_graph_dispatch_receipt_summary_inconsistent
@@ -332,6 +365,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let status_truth_inputs = build_status_truth_inputs(
                     store.root(),
                     runtime_consumption.latest_snapshot_path.as_deref(),
+                    summary_only,
                 );
                 let host_agents = status_truth_inputs.host_agents;
                 let latest_final_snapshot_path = status_truth_inputs.latest_final_snapshot_path;
@@ -396,16 +430,21 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         };
-                    let incomplete_release_admission_operator_evidence =
-                        match crate::runtime_consumption_state::release_admission_operator_evidence_incomplete(
-                            store.root(),
-                        ) {
-                            Ok(value) => value,
-                            Err(error) => {
-                                eprintln!("Failed to evaluate release-admission evidence: {error}");
-                                return ExitCode::from(1);
-                            }
-                        };
+                    let incomplete_release_admission_operator_evidence = match if summary_only {
+                        crate::runtime_consumption_state::release_admission_operator_evidence_incomplete_from_latest_snapshot(
+                                runtime_consumption.latest_snapshot_path.as_deref(),
+                            )
+                    } else {
+                        crate::runtime_consumption_state::release_admission_operator_evidence_incomplete(
+                                store.root(),
+                            )
+                    } {
+                        Ok(value) => value,
+                        Err(error) => {
+                            eprintln!("Failed to evaluate release-admission evidence: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
                     let operator_contracts =
                         match build_status_operator_contracts(StatusOperatorContractInputs {
                             boot_compatibility: boot_compatibility.as_ref(),
@@ -522,6 +561,11 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         serde_json::to_string_pretty(&summary_json)
                             .expect("status summary should render as json")
                     );
+                    crate::operator_projection_cache::write_json_projection(
+                        store.root(),
+                        status_json_projection_name(summary_only),
+                        &summary_json,
+                    );
                     return ExitCode::SUCCESS;
                 }
 
@@ -588,6 +632,14 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
         }
+    }
+}
+
+fn status_json_projection_name(summary_only: bool) -> &'static str {
+    if summary_only {
+        "status-summary-latest"
+    } else {
+        "status-full-latest"
     }
 }
 
