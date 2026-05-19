@@ -468,6 +468,60 @@ pub(crate) fn release_admission_operator_evidence_incomplete(
     Ok(!runtime_consumption_snapshot_has_release_admission_evidence(&summary_json))
 }
 
+fn runtime_consumption_snapshot_source_run_id(snapshot: &serde_json::Value) -> Option<&str> {
+    snapshot
+        .get("source_run_id")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            snapshot
+                .get("artifact_refs")
+                .and_then(|refs| refs.get("latest_run_graph_dispatch_receipt_id"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            snapshot
+                .get("operator_contracts")
+                .and_then(|contracts| contracts.get("artifact_refs"))
+                .and_then(|refs| refs.get("latest_run_graph_dispatch_receipt_id"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            snapshot
+                .get("dispatch_receipt")
+                .and_then(|receipt| receipt.get("run_id"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|run_id| !run_id.is_empty())
+}
+
+pub(crate) fn release_admission_operator_evidence_complete_for_run(
+    state_root: &Path,
+    run_id: &str,
+) -> Result<bool, String> {
+    let Some(snapshot_path) = latest_recorded_final_runtime_consumption_snapshot_path(state_root)?
+    else {
+        return Ok(false);
+    };
+    let payload = std::fs::read_to_string(&snapshot_path).map_err(|error| {
+        format!("Failed to read runtime-consumption snapshot `{snapshot_path}`: {error}")
+    })?;
+    let summary_json = serde_json::from_str::<serde_json::Value>(&payload).map_err(|error| {
+        format!("Failed to parse runtime-consumption snapshot `{snapshot_path}`: {error}")
+    })?;
+    if crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json)
+        .is_some()
+    {
+        return Ok(false);
+    }
+
+    if !runtime_consumption_snapshot_has_release_admission_evidence(&summary_json) {
+        return Ok(false);
+    }
+
+    Ok(runtime_consumption_snapshot_source_run_id(&summary_json) == Some(run_id))
+}
+
 pub(crate) fn release_admission_operator_evidence_incomplete_from_latest_snapshot(
     latest_snapshot_path: Option<&str>,
 ) -> Result<bool, String> {
@@ -531,31 +585,7 @@ pub(crate) fn latest_terminal_consume_continue_snapshot_run_id(
         if !(top_level_next_actions_empty && operator_next_actions_empty && blockers_empty) {
             return None;
         }
-        snapshot
-            .get("source_run_id")
-            .and_then(serde_json::Value::as_str)
-            .or_else(|| {
-                snapshot
-                    .get("artifact_refs")
-                    .and_then(|refs| refs.get("latest_run_graph_dispatch_receipt_id"))
-                    .and_then(serde_json::Value::as_str)
-            })
-            .or_else(|| {
-                snapshot
-                    .get("operator_contracts")
-                    .and_then(|contracts| contracts.get("artifact_refs"))
-                    .and_then(|refs| refs.get("latest_run_graph_dispatch_receipt_id"))
-                    .and_then(serde_json::Value::as_str)
-            })
-            .or_else(|| {
-                snapshot
-                    .get("dispatch_receipt")
-                    .and_then(|receipt| receipt.get("run_id"))
-                    .and_then(serde_json::Value::as_str)
-            })
-            .map(str::trim)
-            .filter(|run_id| !run_id.is_empty())
-            .map(str::to_string)
+        runtime_consumption_snapshot_source_run_id(snapshot).map(str::to_string)
     })
 }
 
@@ -663,6 +693,7 @@ mod tests {
         apply_runtime_consumption_final_dispatch_receipt_blocker,
         latest_admissible_retrieval_trust_signal, latest_final_runtime_consumption_snapshot_path,
         latest_terminal_consume_continue_snapshot_run_id,
+        release_admission_operator_evidence_complete_for_run,
         release_admission_operator_evidence_incomplete,
         runtime_consumption_final_dispatch_receipt_blocker_code,
         runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result,
@@ -1360,6 +1391,57 @@ mod tests {
 
         assert!(release_admission_operator_evidence_incomplete(&root)
             .expect("release-admission evidence check should succeed"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn release_admission_operator_evidence_complete_for_run_requires_matching_run_id() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-release-admission-evidence-run-match-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let runtime_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
+        let final_path = runtime_dir.join("final-recorded-with-release-admission.json");
+        fs::write(
+            &final_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "status": "pass",
+                "source_run_id": "run-allowed",
+                "operator_contracts": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {}
+                },
+                "shared_fields": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {}
+                },
+                "payload": {
+                    "closure_admission": case10_closure_admission_record()
+                }
+            })
+            .to_string(),
+        )
+        .expect("final snapshot should be writable");
+
+        assert!(
+            release_admission_operator_evidence_complete_for_run(&root, "run-allowed")
+                .expect("release-admission run match check should succeed")
+        );
+        assert!(
+            !release_admission_operator_evidence_complete_for_run(&root, "run-other")
+                .expect("release-admission run mismatch check should succeed")
+        );
 
         let _ = fs::remove_dir_all(root);
     }
