@@ -3016,11 +3016,14 @@ fn operator_json_surfaces_reuse_fresh_projection_before_store_open() {
         &next_lawful_projection,
     );
 
-    let next_lawful = run_command_json(&["task", "next-lawful", "--json"], &state_dir);
-    assert_eq!(next_lawful["cache_probe"], "task-next-lawful-reused");
-    assert_eq!(
-        next_lawful["active_bounded_unit"]["task_id"],
-        "cached-next-lawful-task"
+    let next_lawful = run_command_capture(&["task", "next-lawful", "--json"], &state_dir);
+    assert!(
+        !next_lawful.status.success(),
+        "task next-lawful must reject forged projection output before authoritative state opens"
+    );
+    assert!(
+        !String::from_utf8_lossy(&next_lawful.stdout).contains("cached-next-lawful-task"),
+        "task next-lawful must not echo forged projection task ids"
     );
 
     let _ = fs::remove_dir_all(&state_dir);
