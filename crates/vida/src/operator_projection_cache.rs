@@ -43,7 +43,20 @@ pub(crate) fn write_json_projection(
     let Ok(body) = serde_json::to_string_pretty(payload) else {
         return;
     };
-    let _ = std::fs::write(path, body);
+    let temp_path = path.with_extension(format!(
+        "json.tmp.{}.{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+    ));
+    if std::fs::write(&temp_path, body).is_err() {
+        return;
+    }
+    if std::fs::rename(&temp_path, &path).is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
 }
 
 pub(crate) fn touch_state_mutation_marker(state_dir: &Path) {
@@ -106,6 +119,8 @@ mod tests {
         touch_state_mutation_marker, write_json_projection,
     };
     use std::{fs, time::Duration};
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
 
     #[test]
     fn json_projection_cache_invalidates_when_state_marker_is_newer() {
@@ -180,6 +195,35 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         touch_state_mutation_marker(&root);
         assert!(read_fresh_json_projection(&root, "taskflow-graph-summary-latest").is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_json_projection_does_not_follow_existing_symlink() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-symlink-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("operator-projections")).expect("cache dir should be writable");
+        let victim = root.join("victim.txt");
+        fs::write(&victim, "original").expect("victim should be writable");
+        let cache_path = root
+            .join("operator-projections")
+            .join("lane-show-latest.json");
+        symlink(&victim, &cache_path).expect("symlink should be created");
+
+        let payload = serde_json::json!({"status": "pass", "cached": true});
+        write_json_projection(&root, "lane-show-latest", &payload);
+
+        let victim_body = fs::read_to_string(&victim).expect("victim should be readable");
+        assert_eq!(victim_body, "original");
+        let cache_body = fs::read_to_string(&cache_path).expect("cache should be readable");
+        assert!(cache_body.contains("\"status\": \"pass\""));
         let _ = fs::remove_dir_all(root);
     }
 }
