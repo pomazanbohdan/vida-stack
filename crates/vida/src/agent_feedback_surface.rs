@@ -235,6 +235,9 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "concrete rejected patch wording",
             "rejected outcome coverage",
             "rejection coverage",
+            "rejected parent closure while child remains open",
+            "rejected close invariant",
+            "rejected parent closure path proved",
             "rejected alternatives",
             "rejected alternative",
             "rejected candidates",
@@ -1074,6 +1077,45 @@ mod tests {
         assert!(ignored
             .iter()
             .any(|phrase| phrase == "failed subprocess status/stdout/stderr"));
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_passed_invariant_rejection_wording() {
+        for (reason, expected_ignored_phrase) in [
+            (
+                "Rejected parent closure while child remains open invariant was covered; proof commands passed.",
+                "rejected parent closure while child remains open",
+            ),
+            (
+                "Rejected close invariant proof passed.",
+                "rejected close invariant",
+            ),
+            (
+                "Rejected parent closure path proved; tests passed.",
+                "rejected parent closure path proved",
+            ),
+        ] {
+            let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+            let score = super::default_feedback_score(outcome, "verification");
+            let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+            assert_eq!(super::canonical_close_status_from_reason(reason), None);
+            assert_eq!(outcome, "success");
+            assert_eq!(score, 88);
+            assert_eq!(inference["failure_markers"], serde_json::json!([]));
+            assert!(inference["ignored_meta_language"]
+                .as_array()
+                .expect("ignored meta language should render")
+                .iter()
+                .any(|phrase| phrase == expected_ignored_phrase));
+            assert!(inference["success_markers"]
+                .as_array()
+                .expect("success markers should render")
+                .iter()
+                .any(|phrase| phrase == "proof commands passed"
+                    || phrase == "proof passed"
+                    || phrase == "tests passed"));
+        }
     }
 
     #[test]
