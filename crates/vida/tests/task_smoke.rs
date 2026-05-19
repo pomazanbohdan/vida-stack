@@ -253,6 +253,53 @@ fn require_json_string(value: &serde_json::Value, label: &str) -> String {
         .unwrap_or_else(|| panic!("{} missing or not a string", label))
 }
 
+fn require_json_string_array(value: &serde_json::Value, label: &str) -> Vec<String> {
+    value
+        .as_array()
+        .unwrap_or_else(|| panic!("{label} missing or not an array"))
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .unwrap_or_else(|| panic!("{label} entry missing or not a string"))
+                .to_string()
+        })
+        .collect()
+}
+
+fn find_scheduling_candidate<'a>(
+    candidates: &'a serde_json::Value,
+    task_id: &str,
+) -> &'a serde_json::Value {
+    candidates
+        .as_array()
+        .unwrap_or_else(|| panic!("scheduling candidates missing or not an array"))
+        .iter()
+        .find(|candidate| candidate["task"]["id"].as_str() == Some(task_id))
+        .unwrap_or_else(|| panic!("scheduling candidate `{task_id}` missing"))
+}
+
+fn find_task_ref_by_id<'a>(tasks: &'a serde_json::Value, task_id: &str) -> &'a serde_json::Value {
+    tasks
+        .as_array()
+        .unwrap_or_else(|| panic!("task refs missing or not an array"))
+        .iter()
+        .find(|task| task["id"].as_str() == Some(task_id))
+        .unwrap_or_else(|| panic!("task ref `{task_id}` missing"))
+}
+
+fn find_rejected_candidate<'a>(
+    candidates: &'a serde_json::Value,
+    task_id: &str,
+) -> &'a serde_json::Value {
+    candidates
+        .as_array()
+        .unwrap_or_else(|| panic!("rejected candidates missing or not an array"))
+        .iter()
+        .find(|candidate| candidate["task_id"].as_str() == Some(task_id))
+        .unwrap_or_else(|| panic!("rejected candidate `{task_id}` missing"))
+}
+
 fn normalize_json_fixture(value: &str) -> String {
     let parsed: serde_json::Value = serde_json::from_str(value).expect("json output should parse");
     serde_json::to_string_pretty(&parsed).expect("json output should pretty render")
@@ -1072,11 +1119,59 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
             "sandbox-graph-root",
             "--priority",
             "1",
+            "--execution-mode",
+            "parallel_safe",
+            "--order-bucket",
+            "sandbox-graph-wave",
+            "--parallel-group",
+            "sandbox-graph-pack",
+            "--conflict-domain",
+            "sandbox-graph-ready-domain",
             "--json",
         ],
         &state_dir,
     );
     assert_eq!(blocker["status"], "pass");
+
+    let serial_ready = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-graph-serial",
+            "Sandbox graph serial ready",
+            "--parent-id",
+            "sandbox-graph-root",
+            "--priority",
+            "2",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(serial_ready["status"], "pass");
+
+    let parallel_ready = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-graph-parallel",
+            "Sandbox graph parallel ready",
+            "--parent-id",
+            "sandbox-graph-root",
+            "--priority",
+            "3",
+            "--execution-mode",
+            "parallel_safe",
+            "--order-bucket",
+            "sandbox-graph-wave",
+            "--parallel-group",
+            "sandbox-graph-pack",
+            "--conflict-domain",
+            "sandbox-graph-parallel-domain",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(parallel_ready["status"], "pass");
 
     let blocked = run_command_json(
         &[
@@ -1087,7 +1182,7 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
             "--parent-id",
             "sandbox-graph-root",
             "--priority",
-            "2",
+            "4",
             "--json",
         ],
         &state_dir,
@@ -1132,6 +1227,8 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
 
     let ready = run_and_assert_success(&["task", "ready", "--json"], &state_dir);
     assert!(ready.contains("\"id\": \"sandbox-graph-ready\""));
+    assert!(ready.contains("\"id\": \"sandbox-graph-serial\""));
+    assert!(ready.contains("\"id\": \"sandbox-graph-parallel\""));
     assert!(!ready.contains("\"id\": \"sandbox-graph-blocked\""));
 
     let blocked_list = run_command_json(&["task", "blocked", "--json"], &state_dir);
@@ -1154,11 +1251,93 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
         "open"
     );
 
+    let graph_summary_output =
+        run_command_capture(&["taskflow", "graph-summary", "--json"], &state_dir);
+    assert!(
+        !graph_summary_output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&graph_summary_output.stderr)
+    );
+    let graph_summary: serde_json::Value = serde_json::from_slice(&graph_summary_output.stdout)
+        .expect("graph summary json should parse");
+    assert_eq!(graph_summary["surface"], "vida taskflow graph-summary");
+    assert_eq!(graph_summary["ready_count"], 3);
+    assert_eq!(graph_summary["blocked_count"], 1);
+    assert_eq!(graph_summary["current_task_id"], "sandbox-graph-ready");
+    assert_eq!(graph_summary["ready_parallel_safe"], false);
+    assert_eq!(
+        require_json_string_array(
+            &graph_summary["parallel_blockers"],
+            "graph summary top-level parallel_blockers"
+        ),
+        vec!["current_task_reference".to_string()]
+    );
+    find_task_ref_by_id(
+        &graph_summary["parallel_candidates_after_current"],
+        "sandbox-graph-parallel",
+    );
+
+    let summary_ready =
+        find_scheduling_candidate(&graph_summary["scheduling"]["ready"], "sandbox-graph-ready");
+    let summary_ready_blockers = require_json_string_array(
+        &summary_ready["parallel_blockers"],
+        "summary ready parallel_blockers",
+    );
+    assert_eq!(summary_ready["ready_now"], true);
+    assert_eq!(summary_ready["ready_parallel_safe"], false);
+    assert_eq!(
+        summary_ready_blockers,
+        vec!["current_task_reference".to_string()]
+    );
+
+    let summary_serial = find_scheduling_candidate(
+        &graph_summary["scheduling"]["ready"],
+        "sandbox-graph-serial",
+    );
+    let summary_serial_blockers = require_json_string_array(
+        &summary_serial["parallel_blockers"],
+        "summary serial parallel_blockers",
+    );
+    assert_eq!(summary_serial["ready_now"], true);
+    assert_eq!(summary_serial["ready_parallel_safe"], false);
+    assert!(summary_serial_blockers
+        .iter()
+        .any(|blocker| blocker == "execution_mode_not_parallel_safe"));
+
+    let summary_parallel = find_scheduling_candidate(
+        &graph_summary["scheduling"]["ready"],
+        "sandbox-graph-parallel",
+    );
+    assert_eq!(summary_parallel["ready_now"], true);
+    assert_eq!(summary_parallel["ready_parallel_safe"], true);
+    assert!(require_json_string_array(
+        &summary_parallel["parallel_blockers"],
+        "summary parallel parallel_blockers"
+    )
+    .is_empty());
+
+    let summary_blocked = find_scheduling_candidate(
+        &graph_summary["scheduling"]["blocked"],
+        "sandbox-graph-blocked",
+    );
+    let summary_blocked_blockers = require_json_string_array(
+        &summary_blocked["parallel_blockers"],
+        "summary blocked parallel_blockers",
+    );
+    assert_eq!(summary_blocked["ready_now"], false);
+    assert_eq!(
+        summary_blocked["blocked_by"][0]["depends_on_id"],
+        "sandbox-graph-ready"
+    );
+    assert_eq!(summary_blocked_blockers, vec!["graph_blocked".to_string()]);
+
     let ready_explain_output = run_command_capture(
         &[
             "taskflow",
             "graph",
             "explain",
+            "sandbox-graph-ready",
+            "--current-task-id",
             "sandbox-graph-ready",
             "--json",
         ],
@@ -1173,6 +1352,15 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
         .expect("graph explain ready json should parse");
     assert_eq!(ready_explain["surface"], "vida taskflow graph explain");
     assert_eq!(ready_explain["ready_now"], true);
+    assert_eq!(ready_explain["selected_as_current"], true);
+    assert_eq!(ready_explain["ready_parallel_safe"], false);
+    assert_eq!(
+        require_json_string_array(
+            &ready_explain["parallel_blockers"],
+            "ready explain parallel_blockers"
+        ),
+        summary_ready_blockers
+    );
     if !ready_explain_output.status.success() {
         assert_eq!(ready_explain["status"], "blocked");
         assert!(
@@ -1185,12 +1373,71 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
         );
     }
 
+    let serial_explain_output = run_command_capture(
+        &[
+            "taskflow",
+            "graph",
+            "explain",
+            "sandbox-graph-serial",
+            "--current-task-id",
+            "sandbox-graph-ready",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !serial_explain_output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&serial_explain_output.stderr)
+    );
+    let serial_explain: serde_json::Value = serde_json::from_slice(&serial_explain_output.stdout)
+        .expect("graph explain serial json should parse");
+    assert_eq!(serial_explain["surface"], "vida taskflow graph explain");
+    assert_eq!(serial_explain["ready_now"], true);
+    assert_eq!(serial_explain["ready_parallel_safe"], false);
+    assert_eq!(
+        require_json_string_array(
+            &serial_explain["parallel_blockers"],
+            "serial explain parallel_blockers"
+        ),
+        summary_serial_blockers
+    );
+    assert_eq!(serial_explain["status"], "blocked");
+
+    let parallel_explain = run_command_json(
+        &[
+            "taskflow",
+            "graph",
+            "explain",
+            "sandbox-graph-parallel",
+            "--current-task-id",
+            "sandbox-graph-ready",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(parallel_explain["surface"], "vida taskflow graph explain");
+    assert_eq!(parallel_explain["ready_now"], true);
+    assert_eq!(parallel_explain["ready_parallel_safe"], true);
+    assert_eq!(parallel_explain["selected_as_parallel_after_current"], true);
+    assert!(require_json_string_array(
+        &parallel_explain["parallel_blockers"],
+        "parallel explain parallel_blockers"
+    )
+    .is_empty());
+    find_task_ref_by_id(
+        &parallel_explain["parallel_candidates_after_current"],
+        "sandbox-graph-parallel",
+    );
+
     let blocked_explain_output = run_command_capture(
         &[
             "taskflow",
             "graph",
             "explain",
             "sandbox-graph-blocked",
+            "--current-task-id",
+            "sandbox-graph-ready",
             "--json",
         ],
         &state_dir,
@@ -1208,9 +1455,137 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
         blocked_explain["blocked_by"][0]["depends_on_id"],
         "sandbox-graph-ready"
     );
+    assert_eq!(
+        require_json_string_array(
+            &blocked_explain["parallel_blockers"],
+            "blocked explain parallel_blockers"
+        ),
+        summary_blocked_blockers
+    );
     if !blocked_explain_output.status.success() {
         assert_eq!(blocked_explain["status"], "blocked");
     }
+
+    let scheduler_preview = run_command_json(
+        &[
+            "taskflow",
+            "scheduler",
+            "dispatch",
+            "--current-task-id",
+            "sandbox-graph-ready",
+            "--limit",
+            "2",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(
+        scheduler_preview["surface"],
+        "vida taskflow scheduler dispatch"
+    );
+    assert_eq!(
+        scheduler_preview["ready_count"],
+        graph_summary["ready_count"]
+    );
+    assert_eq!(
+        scheduler_preview["blocked_count"],
+        graph_summary["blocked_count"]
+    );
+    assert_eq!(
+        scheduler_preview["scheduling"]["current_task_id"],
+        graph_summary["scheduling"]["current_task_id"]
+    );
+    assert_eq!(
+        scheduler_preview["selected_primary_task"]["id"],
+        "sandbox-graph-ready"
+    );
+    find_task_ref_by_id(
+        &scheduler_preview["selected_parallel_tasks"],
+        "sandbox-graph-parallel",
+    );
+    assert_eq!(
+        scheduler_preview["selected_task_ids"],
+        serde_json::json!(["sandbox-graph-ready", "sandbox-graph-parallel"])
+    );
+    find_task_ref_by_id(
+        &scheduler_preview["scheduling"]["parallel_candidates_after_current"],
+        "sandbox-graph-parallel",
+    );
+
+    let scheduler_ready = find_scheduling_candidate(
+        &scheduler_preview["scheduling"]["ready"],
+        "sandbox-graph-ready",
+    );
+    assert_eq!(
+        require_json_string_array(
+            &scheduler_ready["parallel_blockers"],
+            "scheduler ready parallel_blockers"
+        ),
+        summary_ready_blockers
+    );
+    let scheduler_serial = find_scheduling_candidate(
+        &scheduler_preview["scheduling"]["ready"],
+        "sandbox-graph-serial",
+    );
+    assert_eq!(
+        require_json_string_array(
+            &scheduler_serial["parallel_blockers"],
+            "scheduler serial parallel_blockers"
+        ),
+        summary_serial_blockers
+    );
+    let scheduler_parallel = find_scheduling_candidate(
+        &scheduler_preview["scheduling"]["ready"],
+        "sandbox-graph-parallel",
+    );
+    assert_eq!(scheduler_parallel["ready_parallel_safe"], true);
+    assert!(require_json_string_array(
+        &scheduler_parallel["parallel_blockers"],
+        "scheduler parallel parallel_blockers"
+    )
+    .is_empty());
+    let scheduler_blocked = find_scheduling_candidate(
+        &scheduler_preview["scheduling"]["blocked"],
+        "sandbox-graph-blocked",
+    );
+    assert_eq!(
+        require_json_string_array(
+            &scheduler_blocked["parallel_blockers"],
+            "scheduler blocked parallel_blockers"
+        ),
+        summary_blocked_blockers
+    );
+
+    let rejected_serial = find_rejected_candidate(
+        &scheduler_preview["rejected_candidates"],
+        "sandbox-graph-serial",
+    );
+    assert_eq!(rejected_serial["ready_now"], true);
+    assert_eq!(
+        require_json_string_array(
+            &rejected_serial["parallel_blockers"],
+            "rejected serial parallel_blockers"
+        ),
+        summary_serial_blockers
+    );
+    let rejected_blocked = find_rejected_candidate(
+        &scheduler_preview["rejected_candidates"],
+        "sandbox-graph-blocked",
+    );
+    assert_eq!(rejected_blocked["ready_now"], false);
+    assert_eq!(
+        rejected_blocked["blocked_by"][0]["depends_on_id"],
+        "sandbox-graph-ready"
+    );
+    assert_eq!(
+        require_json_string_array(
+            &rejected_blocked["parallel_blockers"],
+            "rejected blocked parallel_blockers"
+        ),
+        summary_blocked_blockers
+    );
 
     let tree = run_command_json(
         &["task", "tree", "sandbox-graph-root", "--json"],
@@ -1219,6 +1594,8 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
     assert_eq!(tree["surface"], "vida task tree");
     assert_eq!(tree["root_task_id"], "sandbox-graph-root");
     assert!(tree.to_string().contains("sandbox-graph-ready"));
+    assert!(tree.to_string().contains("sandbox-graph-serial"));
+    assert!(tree.to_string().contains("sandbox-graph-parallel"));
     assert!(tree.to_string().contains("sandbox-graph-blocked"));
 
     let critical_path = run_command_json(&["task", "critical-path", "--json"], &state_dir);
