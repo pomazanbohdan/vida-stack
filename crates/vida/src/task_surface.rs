@@ -2968,6 +2968,14 @@ fn continuation_binding_has_live_unit(
     task_status_for_binding(tasks, binding).is_some_and(|status| status != "closed")
 }
 
+fn continuation_binding_is_closed_downstream_marker(
+    tasks: &[state_store::TaskRecord],
+    binding: &state_store::RunGraphContinuationBinding,
+) -> bool {
+    !continuation_binding_requires_open_task(binding)
+        && task_status_for_binding(tasks, binding).is_some_and(|status| status == "closed")
+}
+
 fn task_exists_for_binding(
     tasks: &[state_store::TaskRecord],
     binding: &state_store::RunGraphContinuationBinding,
@@ -3129,66 +3137,71 @@ fn task_next_lawful_receipt(
         .collect::<Vec<_>>();
 
     if let Some(binding) = runtime_binding {
-        let binding_task = tasks.iter().find(|task| task.id == binding.task_id);
-        let conflicting_active = active_tasks
-            .iter()
-            .find(|task| task.id != binding.task_id)
-            .map(|task| task.id.clone());
-        if let Some(conflicting_task_id) = conflicting_active {
-            return blocked_task_next_lawful_receipt(
+        let closed_downstream_marker_defers_to_active =
+            continuation_binding_is_closed_downstream_marker(tasks, binding)
+                && active_tasks.iter().any(|task| task.id != binding.task_id);
+        if !closed_downstream_marker_defers_to_active {
+            let binding_task = tasks.iter().find(|task| task.id == binding.task_id);
+            let conflicting_active = active_tasks
+                .iter()
+                .find(|task| task.id != binding.task_id)
+                .map(|task| task.id.clone());
+            if let Some(conflicting_task_id) = conflicting_active {
+                return blocked_task_next_lawful_receipt(
+                    binding.active_bounded_unit.clone(),
+                    ready_task_candidates,
+                    "runtime_taskflow_active_conflict",
+                    &format!(
+                        "Runtime binding points to `{}` but TaskFlow has active `{}`; reconcile or close the stale active task before continuing.",
+                        binding.task_id, conflicting_task_id
+                    ),
+                );
+            }
+            if continuation_binding_requires_open_task(binding) {
+                let Some(task) = binding_task else {
+                    return blocked_task_next_lawful_receipt(
+                        binding.active_bounded_unit.clone(),
+                        ready_task_candidates,
+                        "runtime_binding_task_missing",
+                        &runtime_binding_task_missing_next_action(binding),
+                    );
+                };
+                if task.status == "closed" {
+                    return blocked_task_next_lawful_receipt(
+                        binding.active_bounded_unit.clone(),
+                        ready_task_candidates,
+                        "runtime_binding_task_closed",
+                        &runtime_binding_task_closed_next_action(binding),
+                    );
+                }
+            }
+            let ready_conflict = ready_task_candidates
+                .iter()
+                .any(|candidate| candidate.task_id != binding.task_id);
+            if ready_conflict
+                && !ready_task_candidates
+                    .iter()
+                    .any(|candidate| candidate.task_id == binding.task_id)
+            {
+                return blocked_task_next_lawful_receipt(
+                    binding.active_bounded_unit.clone(),
+                    ready_task_candidates,
+                    "runtime_ready_candidate_conflict",
+                    crate::status_surface_signals::continuation_binding_ambiguous_next_action(),
+                );
+            }
+            return pass_task_next_lawful_receipt(
                 binding.active_bounded_unit.clone(),
+                Some(binding.binding_source.clone()),
+                &binding.why_this_unit,
+                &binding.sequential_vs_parallel_posture,
                 ready_task_candidates,
-                "runtime_taskflow_active_conflict",
-                &format!(
-                    "Runtime binding points to `{}` but TaskFlow has active `{}`; reconcile or close the stale active task before continuing.",
-                    binding.task_id, conflicting_task_id
+                format!(
+                    "Continue `{}` via the bound runtime path: {}.",
+                    binding.task_id, binding.primary_path
                 ),
             );
         }
-        if continuation_binding_requires_open_task(binding) {
-            let Some(task) = binding_task else {
-                return blocked_task_next_lawful_receipt(
-                    binding.active_bounded_unit.clone(),
-                    ready_task_candidates,
-                    "runtime_binding_task_missing",
-                    &runtime_binding_task_missing_next_action(binding),
-                );
-            };
-            if task.status == "closed" {
-                return blocked_task_next_lawful_receipt(
-                    binding.active_bounded_unit.clone(),
-                    ready_task_candidates,
-                    "runtime_binding_task_closed",
-                    &runtime_binding_task_closed_next_action(binding),
-                );
-            }
-        }
-        let ready_conflict = ready_task_candidates
-            .iter()
-            .any(|candidate| candidate.task_id != binding.task_id);
-        if ready_conflict
-            && !ready_task_candidates
-                .iter()
-                .any(|candidate| candidate.task_id == binding.task_id)
-        {
-            return blocked_task_next_lawful_receipt(
-                binding.active_bounded_unit.clone(),
-                ready_task_candidates,
-                "runtime_ready_candidate_conflict",
-                crate::status_surface_signals::continuation_binding_ambiguous_next_action(),
-            );
-        }
-        return pass_task_next_lawful_receipt(
-            binding.active_bounded_unit.clone(),
-            Some(binding.binding_source.clone()),
-            &binding.why_this_unit,
-            &binding.sequential_vs_parallel_posture,
-            ready_task_candidates,
-            format!(
-                "Continue `{}` via the bound runtime path: {}.",
-                binding.task_id, binding.primary_path
-            ),
-        );
     }
 
     match active_tasks.as_slice() {
@@ -5572,6 +5585,31 @@ mod tests {
             receipt.binding_source.as_deref(),
             Some("consume_continue_after_downstream_chain")
         );
+    }
+
+    #[test]
+    fn task_next_lawful_allows_active_task_over_closed_downstream_dispatch_target() {
+        let mut closed_task = owned_task_record("closed-feature-task", vec![]);
+        closed_task.status = "closed".to_string();
+        let active_task = owned_task_record("live-active-task", vec![]);
+        let binding = test_continuation_binding(
+            "current-run",
+            "closed-feature-task",
+            "task_close_reconcile",
+            "downstream_dispatch_target",
+        );
+
+        let receipt =
+            task_next_lawful_receipt(&[closed_task, active_task], Vec::new(), Some(&binding));
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.active_bounded_unit["task_id"], "live-active-task");
+        assert_eq!(
+            receipt.why_this_unit,
+            "single TaskFlow in_progress task is the lawful continuation"
+        );
+        assert_eq!(receipt.binding_source, None);
+        assert!(receipt.blocker_codes.is_empty());
     }
 
     #[test]

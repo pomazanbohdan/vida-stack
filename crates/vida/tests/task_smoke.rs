@@ -2184,6 +2184,120 @@ fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_
 }
 
 #[test]
+fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let closed_task_id = "closed-downstream-reconciled-task";
+    let closed_task = run_command_json(
+        &[
+            "task",
+            "create",
+            closed_task_id,
+            "Closed downstream reconciled task",
+            "--type",
+            "task",
+            "--status",
+            "closed",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed_task["status"], "pass");
+    assert_eq!(closed_task["task"]["status"], "closed");
+
+    let active_task_id = "active-task-after-closed-downstream";
+    let active_task = run_command_json(
+        &[
+            "task",
+            "create",
+            active_task_id,
+            "Active task after closed downstream",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(active_task["status"], "pass");
+    assert_eq!(active_task["task"]["status"], "in_progress");
+
+    let closed_run_id = "closed-downstream-closure-run";
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let binding = serde_json::json!({
+            "run_id": closed_run_id,
+            "task_id": closed_task_id,
+            "status": "bound",
+            "active_bounded_unit": {
+                "kind": "downstream_dispatch_target",
+                "task_id": closed_task_id,
+                "run_id": closed_run_id,
+                "dispatch_target": "closure"
+            },
+            "binding_source": "task_close_reconcile",
+            "why_this_unit": "closed task reconciled into downstream closure before a different active task continued",
+            "primary_path": "normal_delivery_path",
+            "sequential_vs_parallel_posture": "sequential_only",
+            "recorded_at": "2026-05-19T00:00:03Z"
+        });
+        db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
+            .bind(("run", closed_run_id))
+            .bind(("binding", binding))
+            .await
+            .expect("seed closed downstream closure continuation binding");
+        drop(db);
+    });
+
+    let next_lawful_output = run_command_capture(&["task", "next-lawful", "--json"], &state_dir);
+    let next_lawful: serde_json::Value = serde_json::from_slice(&next_lawful_output.stdout)
+        .unwrap_or_else(|error| {
+            panic!(
+                "next-lawful json should parse: {error}; stdout={} stderr={}",
+                String::from_utf8_lossy(&next_lawful_output.stdout),
+                String::from_utf8_lossy(&next_lawful_output.stderr)
+            )
+        });
+    assert!(
+        !next_lawful
+            .to_string()
+            .contains("runtime_taskflow_active_conflict"),
+        "closed downstream closure binding must not conflict with active task: {next_lawful}"
+    );
+    assert!(
+        next_lawful_output.status.success(),
+        "next-lawful stdout={} stderr={}",
+        String::from_utf8_lossy(&next_lawful_output.stdout),
+        String::from_utf8_lossy(&next_lawful_output.stderr)
+    );
+    assert_eq!(next_lawful["status"], "pass");
+    assert_eq!(
+        next_lawful["active_bounded_unit"]["task_id"],
+        active_task_id
+    );
+    assert!(next_lawful["blocker_codes"]
+        .as_array()
+        .expect("next-lawful blocker_codes should render")
+        .is_empty());
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_list_show_ready_prefer_authoritative_state_over_stale_snapshot() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
