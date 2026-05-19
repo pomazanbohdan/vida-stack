@@ -99,6 +99,16 @@ fn run_command_json(args: &[&str], state_dir: &str) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("json output should parse")
 }
 
+fn write_operator_projection(state_dir: &str, projection_name: &str, payload: &serde_json::Value) {
+    let projection_dir = format!("{state_dir}/operator-projections");
+    fs::create_dir_all(&projection_dir).expect("operator projection dir should exist");
+    fs::write(
+        format!("{projection_dir}/{projection_name}.json"),
+        serde_json::to_string_pretty(payload).expect("operator projection should render"),
+    )
+    .expect("operator projection should write");
+}
+
 fn seed_model_profile_readiness_dispatch_context(state_dir: &str) {
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
@@ -1443,6 +1453,118 @@ fn taskflow_testing_h24_operator_budget_guard() {
             READ_MODEL_SURFACE_BUDGET.as_millis()
         );
     }
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn operator_json_surfaces_reuse_fresh_projection_before_store_open() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let status_projection = serde_json::json!({
+        "surface": "vida status",
+        "status": "pass",
+        "cache_probe": "status-summary-reused",
+        "shared_fields": {
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "artifact_refs": {
+                "projection": "status-summary-latest"
+            }
+        },
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "artifact_refs": {
+                "projection": "status-summary-latest"
+            }
+        },
+        "blocker_codes": [],
+        "next_actions": []
+    });
+    write_operator_projection(&state_dir, "status-summary-latest", &status_projection);
+
+    let status = run_command_json(&["status", "--summary", "--json"], &state_dir);
+    assert_eq!(status["cache_probe"], "status-summary-reused");
+    assert_eq!(
+        status["operator_contracts"]["artifact_refs"]["projection"],
+        "status-summary-latest"
+    );
+
+    let graph_projection = serde_json::json!({
+        "surface": "vida taskflow graph-summary",
+        "status": "pass",
+        "cache_probe": "graph-summary-reused",
+        "shared_fields": {
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "artifact_refs": {
+                "projection": "taskflow-graph-summary-latest"
+            }
+        },
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "artifact_refs": {
+                "projection": "taskflow-graph-summary-latest"
+            }
+        },
+        "blocker_codes": [],
+        "next_actions": []
+    });
+    write_operator_projection(
+        &state_dir,
+        "taskflow-graph-summary-latest",
+        &graph_projection,
+    );
+
+    let graph_summary = run_command_json(&["taskflow", "graph-summary", "--json"], &state_dir);
+    assert_eq!(graph_summary["cache_probe"], "graph-summary-reused");
+    assert_eq!(
+        graph_summary["operator_contracts"]["artifact_refs"]["projection"],
+        "taskflow-graph-summary-latest"
+    );
+
+    let next_lawful_projection = serde_json::json!({
+        "status": "pass",
+        "cache_probe": "task-next-lawful-reused",
+        "active_bounded_unit": {
+            "task_id": "cached-next-lawful-task",
+            "title": "Cached next lawful task",
+            "status": "open",
+            "issue_type": "task"
+        },
+        "binding_source": null,
+        "why_this_unit": "fresh task-next-lawful-latest projection",
+        "sequential_vs_parallel_posture": "sequential",
+        "ready_task_candidates": [],
+        "blocker_codes": [],
+        "next_actions": [],
+        "source_surfaces": [
+            "task-next-lawful-latest"
+        ]
+    });
+    write_operator_projection(
+        &state_dir,
+        "task-next-lawful-latest",
+        &next_lawful_projection,
+    );
+
+    let next_lawful = run_command_json(&["task", "next-lawful", "--json"], &state_dir);
+    assert_eq!(next_lawful["cache_probe"], "task-next-lawful-reused");
+    assert_eq!(
+        next_lawful["active_bounded_unit"]["task_id"],
+        "cached-next-lawful-task"
+    );
 
     let _ = fs::remove_dir_all(&state_dir);
 }
