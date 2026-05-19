@@ -1129,6 +1129,211 @@ fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
 }
 
 #[test]
+fn agent_dispatch_preview_aligns_with_scheduler_selected_tasks_and_routing_truth() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task",
+            "create",
+            "agent-dispatch-root",
+            "Agent dispatch root",
+            "--type",
+            "epic",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    let current = run_command_json(
+        &[
+            "task",
+            "create",
+            "agent-dispatch-current",
+            "Agent dispatch current",
+            "--parent-id",
+            "agent-dispatch-root",
+            "--priority",
+            "1",
+            "--execution-mode",
+            "parallel_safe",
+            "--order-bucket",
+            "agent-dispatch-wave",
+            "--parallel-group",
+            "agent-dispatch-pack",
+            "--conflict-domain",
+            "agent-dispatch-current-domain",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(current["status"], "pass");
+
+    let parallel = run_command_json(
+        &[
+            "task",
+            "create",
+            "agent-dispatch-parallel",
+            "Agent dispatch parallel",
+            "--parent-id",
+            "agent-dispatch-root",
+            "--priority",
+            "2",
+            "--execution-mode",
+            "parallel_safe",
+            "--order-bucket",
+            "agent-dispatch-wave",
+            "--parallel-group",
+            "agent-dispatch-pack",
+            "--conflict-domain",
+            "agent-dispatch-parallel-domain",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(parallel["status"], "pass");
+
+    let scheduler_preview = run_command_json(
+        &[
+            "taskflow",
+            "scheduler",
+            "dispatch",
+            "--current-task-id",
+            "agent-dispatch-current",
+            "--limit",
+            "2",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(
+        scheduler_preview["surface"],
+        "vida taskflow scheduler dispatch"
+    );
+    assert_eq!(scheduler_preview["status"], "pass");
+    let scheduler_selected_task_ids = require_json_string_array(
+        &scheduler_preview["selected_task_ids"],
+        "scheduler selected_task_ids",
+    );
+    assert_eq!(
+        scheduler_selected_task_ids,
+        vec![
+            "agent-dispatch-current".to_string(),
+            "agent-dispatch-parallel".to_string()
+        ]
+    );
+
+    let dispatch_preview = run_command_json(
+        &[
+            "agent",
+            "dispatch-next",
+            "--current-task-id",
+            "agent-dispatch-current",
+            "--lanes",
+            "2",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dispatch_preview["status"], "pass");
+    assert_eq!(dispatch_preview["mode"], "preview");
+    assert_eq!(dispatch_preview["execute_supported"], false);
+    assert_eq!(dispatch_preview["execution_attempted"], false);
+    assert_eq!(dispatch_preview["lanes_selected"], 2);
+    assert!(dispatch_preview["blocker_codes"]
+        .as_array()
+        .expect("dispatch blocker_codes should be an array")
+        .is_empty());
+
+    let selected_lanes = dispatch_preview["selected_lanes"]
+        .as_array()
+        .expect("dispatch selected_lanes should be an array");
+    let dispatch_selected_task_ids = selected_lanes
+        .iter()
+        .map(|lane| require_json_string(&lane["task_id"], "dispatch selected lane task_id"))
+        .collect::<Vec<_>>();
+    assert_eq!(dispatch_selected_task_ids, scheduler_selected_task_ids);
+
+    for lane in selected_lanes {
+        let task_id = require_json_string(&lane["task_id"], "dispatch lane task_id");
+        let runtime_role = require_json_string(&lane["runtime_role"], "dispatch lane runtime_role");
+        let task_class = require_json_string(&lane["task_class"], "dispatch lane task_class");
+        assert_eq!(runtime_role, "worker");
+        assert_eq!(task_class, "implementation");
+
+        let dispatch_command =
+            require_json_string(&lane["dispatch_command"], "dispatch lane dispatch_command");
+        assert!(
+            dispatch_command.contains("vida agent-init"),
+            "dispatch command should target agent-init: {dispatch_command}"
+        );
+        assert!(
+            dispatch_command.contains("--role worker"),
+            "dispatch command should include runtime role: {dispatch_command}"
+        );
+        assert!(
+            dispatch_command.contains(task_id.as_str()),
+            "dispatch command should include task id {task_id}: {dispatch_command}"
+        );
+        assert!(
+            dispatch_command.contains("--json"),
+            "dispatch command should request json receipt surface: {dispatch_command}"
+        );
+        assert!(
+            dispatch_command.contains("--state-dir"),
+            "dispatch command should preserve explicit state dir: {dispatch_command}"
+        );
+
+        let selection_truth = &lane["selection_truth"];
+        assert_eq!(selection_truth["runtime_role"], lane["runtime_role"]);
+        assert_eq!(selection_truth["task_class"], lane["task_class"]);
+        for key in [
+            "selected_carrier",
+            "selected_backend",
+            "selected_model_profile",
+            "selected_model_ref",
+            "selected_reasoning_effort",
+            "budget_verdict",
+        ] {
+            assert!(
+                !require_json_string(&selection_truth[key], key).is_empty(),
+                "selection truth {key} should be concrete"
+            );
+        }
+        selection_truth["rate"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("selection truth rate missing for {task_id}"));
+        selection_truth["estimated_task_price_units"]
+            .as_u64()
+            .unwrap_or_else(|| {
+                panic!("selection truth estimated_task_price_units missing for {task_id}")
+            });
+    }
+
+    let source_surfaces = require_json_string_array(
+        &dispatch_preview["source_surfaces"],
+        "dispatch source_surfaces",
+    );
+    assert!(source_surfaces
+        .iter()
+        .any(|surface| surface == "vida taskflow scheduler dispatch --json"));
+    assert!(source_surfaces
+        .iter()
+        .any(|surface| surface == "vida agent-init --role <runtime-role> <task-id> --json"));
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
 fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
