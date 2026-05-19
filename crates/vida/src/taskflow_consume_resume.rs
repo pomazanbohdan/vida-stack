@@ -245,7 +245,26 @@ fn consume_continue_resume_error_run_id(error: &str) -> Option<String> {
 fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> serde_json::Value {
     let blocker_code = consume_continue_resume_error_blocker_code(error);
     let run_id = consume_continue_resume_error_run_id(error);
-    let next_actions = if blocker_code == "continuation_binding_ambiguous" {
+    let next_actions = if blocker_code == "continuation_binding_ambiguous"
+        && error.contains("has not reached closure_complete")
+    {
+        let refresh_action = run_id.as_ref().map_or_else(
+            || {
+                "Pass `--run-id <run-id>` only when intentionally refreshing that specific active run."
+                    .to_string()
+            },
+            |run_id| {
+                format!(
+                    "Refresh the active run explicitly with `vida taskflow consume continue --run-id {run_id} --json`."
+                )
+            },
+        );
+        serde_json::json!([
+            refresh_action,
+            "Do not bind a new --task-id until the source run reaches closure_complete with no downstream target.",
+            "Inspect run-graph and task evidence if the explicit refresh remains blocked."
+        ])
+    } else if blocker_code == "continuation_binding_ambiguous" {
         serde_json::json!([
             "Bind the next bounded unit explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id> --json`.",
             "Pass `--run-id <run-id>` only when intentionally refreshing that specific run."
@@ -3923,8 +3942,8 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
     }
     if continuation_binding["status"] != "bound" {
         return Err(format!(
-            "Latest continuation binding for run `{}` is ambiguous. Either bind the next bounded unit explicitly with `vida taskflow continuation bind {} --task-id <task-id> --json` or pass `--run-id {}` to refresh that specific run.",
-            status.run_id, status.run_id, status.run_id
+            "Latest continuation binding for active run `{}` is ambiguous, but the run has not reached closure_complete. Do not bind a new --task-id for this active run; pass `--run-id {}` to refresh that specific run or inspect run-graph/task evidence if refresh remains blocked.",
+            status.run_id, status.run_id
         ));
     }
     if continuation_binding["active_bounded_unit"]["run_id"]
@@ -13574,6 +13593,29 @@ agent_system:
                 .as_str()
                 .unwrap_or_default()
                 .contains("continuation bind <run-id> --task-id <task-id> --json")));
+    }
+
+    #[test]
+    fn consume_continue_resume_error_payload_does_not_recommend_task_binding_for_active_run() {
+        let error = "Latest continuation binding for active run `run-active-blocked` is ambiguous, but the run has not reached closure_complete. Do not bind a new --task-id for this active run; pass `--run-id run-active-blocked` to refresh that specific run or inspect run-graph/task evidence if refresh remains blocked.";
+        let payload =
+            consume_continue_resume_error_payload(error, "vida taskflow consume continue");
+        let next_actions = payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be array");
+
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["continuation_binding_ambiguous"])
+        );
+        assert!(next_actions.iter().any(|action| action
+            .as_str()
+            .unwrap_or_default()
+            .contains("consume continue --run-id run-active-blocked --json")));
+        assert!(next_actions.iter().all(|action| !action
+            .as_str()
+            .unwrap_or_default()
+            .contains("continuation bind")));
     }
 
     #[tokio::test]
