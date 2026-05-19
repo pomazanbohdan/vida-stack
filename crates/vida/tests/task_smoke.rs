@@ -109,6 +109,21 @@ fn write_operator_projection(state_dir: &str, projection_name: &str, payload: &s
     .expect("operator projection should write");
 }
 
+fn stale_blocked_next_lawful_projection() -> serde_json::Value {
+    serde_json::json!({
+        "status": "blocked",
+        "cache_probe": "task-next-lawful-reused",
+        "active_bounded_unit": null,
+        "binding_source": null,
+        "why_this_unit": "stale cached no-ready projection",
+        "sequential_vs_parallel_posture": "blocked",
+        "ready_task_candidates": [],
+        "blocker_codes": ["no_ready_task_candidates"],
+        "next_actions": ["Create/import the next task or refresh TaskFlow state before continuing."],
+        "source_surfaces": ["task-next-lawful-latest"]
+    })
+}
+
 fn seed_model_profile_readiness_dispatch_context(state_dir: &str) {
     let runtime = Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
@@ -1565,6 +1580,123 @@ fn operator_json_surfaces_reuse_fresh_projection_before_store_open() {
         next_lawful["active_bounded_unit"]["task_id"],
         "cached-next-lawful-task"
     );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_next_lawful_cache_refreshes_after_task_mutation() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let stale_output = run_command_capture(&["task", "next-lawful", "--json"], &state_dir);
+    assert!(
+        !stale_output.status.success(),
+        "empty state should produce blocked next-lawful stdout={} stderr={}",
+        String::from_utf8_lossy(&stale_output.stdout),
+        String::from_utf8_lossy(&stale_output.stderr)
+    );
+    let stale: serde_json::Value = serde_json::from_slice(&stale_output.stdout)
+        .expect("blocked next-lawful json should parse");
+    assert_eq!(stale["status"], "blocked");
+    assert!(stale["blocker_codes"]
+        .as_array()
+        .expect("blocker_codes should render")
+        .iter()
+        .any(|code| code == "no_ready_task_candidates"));
+
+    thread::sleep(Duration::from_millis(10));
+    let active_task_id = "cache-refresh-active-task";
+    let active = run_command_json(
+        &[
+            "task",
+            "create",
+            active_task_id,
+            "Cache refresh active task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(active["status"], "pass");
+    let next_lawful = run_command_json(&["task", "next-lawful", "--json"], &state_dir);
+    assert_eq!(next_lawful["status"], "pass");
+    assert_ne!(
+        next_lawful["cache_probe"], "task-next-lawful-reused",
+        "task create must invalidate stale next-lawful projection"
+    );
+    assert_eq!(
+        next_lawful["active_bounded_unit"]["task_id"],
+        active_task_id
+    );
+    assert!(!next_lawful["blocker_codes"]
+        .as_array()
+        .expect("blocker_codes should render")
+        .iter()
+        .any(|code| code == "no_ready_task_candidates"));
+
+    write_operator_projection(
+        &state_dir,
+        "task-next-lawful-latest",
+        &stale_blocked_next_lawful_projection(),
+    );
+    thread::sleep(Duration::from_millis(10));
+    let blocker_task_id = "cache-refresh-blocker-task";
+    let blocker = run_command_json(
+        &[
+            "task",
+            "create",
+            blocker_task_id,
+            "Cache refresh blocker task",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--priority",
+            "2",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(blocker["status"], "pass");
+
+    write_operator_projection(
+        &state_dir,
+        "task-next-lawful-latest",
+        &stale_blocked_next_lawful_projection(),
+    );
+    thread::sleep(Duration::from_millis(10));
+    let dep_output = run_command_capture(
+        &[
+            "task",
+            "dep",
+            "add",
+            blocker_task_id,
+            active_task_id,
+            "blocks",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        dep_output.status.success(),
+        "dep add stdout={} stderr={}",
+        String::from_utf8_lossy(&dep_output.stdout),
+        String::from_utf8_lossy(&dep_output.stderr)
+    );
+    let after_dep = run_command_json(&["task", "next-lawful", "--json"], &state_dir);
+    assert_eq!(after_dep["status"], "pass");
+    assert_ne!(
+        after_dep["cache_probe"], "task-next-lawful-reused",
+        "task dependency mutation must invalidate stale next-lawful projection"
+    );
+    assert_eq!(after_dep["active_bounded_unit"]["task_id"], active_task_id);
 
     let _ = fs::remove_dir_all(&state_dir);
 }

@@ -224,7 +224,9 @@ async fn refresh_task_snapshot_after_mutation(
     store
         .refresh_task_snapshot()
         .await
-        .map(|_| ())
+        .map(|_| {
+            crate::operator_projection_cache::touch_state_mutation_marker(store.root());
+        })
         .map_err(|error| {
             eprintln!("Failed to refresh canonical task snapshot after {surface}: {error}");
             ExitCode::from(1)
