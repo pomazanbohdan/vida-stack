@@ -728,6 +728,24 @@ pub(crate) fn has_evidence_id(value: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+const CLOSURE_ADMISSION_EVIDENCE_CLASSES: &[&str] = &[
+    "closure_decision_record",
+    "runtime_consumption_final_snapshot",
+    "docflow_readiness_and_proof_receipts",
+    "lane_execution_and_handoff_receipts",
+    "replay_checkpoint_lineage_artifacts",
+    "risk_acceptance_artifacts",
+    "evidence_bundle_linkage",
+];
+
+const RUNTIME_CONSUMPTION_CLOSURE_ADMISSION_REQUIREMENTS: &[&str] = &[
+    "taskflow_bundle_check",
+    "docflow_readiness",
+    "approved_design_packet",
+    "spec_work_pool_dev_handoff",
+    "execution_preparation",
+];
+
 fn release_admission_record(
     snapshot: &serde_json::Value,
 ) -> Option<&serde_json::Map<String, serde_json::Value>> {
@@ -751,6 +769,119 @@ fn release_admission_record(
                 .and_then(|payload| payload.get("release_admission"))
                 .and_then(serde_json::Value::as_object)
         })
+        .or_else(|| {
+            snapshot
+                .get("payload")
+                .and_then(|payload| payload.get("closure_admission_artifact"))
+                .and_then(serde_json::Value::as_object)
+        })
+}
+
+fn string_array_has_evidence_ref(value: Option<&serde_json::Value>) -> bool {
+    value
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|refs| {
+            refs.iter().any(|value| {
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .is_some_and(|value| !value.is_empty())
+            })
+        })
+}
+
+fn closure_admission_row_class(row: &serde_json::Map<String, serde_json::Value>) -> Option<&str> {
+    row.get("evidence_class")
+        .or_else(|| row.get("evidence_family"))
+        .or_else(|| row.get("requirement"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn closure_admission_row_is_pass(row: &serde_json::Map<String, serde_json::Value>) -> bool {
+    Release1ContractStatus::from_str(row["status"].as_str().unwrap_or_default())
+        == Some(Release1ContractStatus::Pass)
+        && string_array_has_evidence_ref(row.get("evidence_refs"))
+}
+
+fn closure_admission_record_has_decision(
+    record: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    let blockers_clear = record
+        .get("blockers")
+        .or_else(|| record.get("blocked_by"))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|blockers| blockers.is_empty());
+    let has_evidence_bundle_refs = string_array_has_evidence_ref(
+        record
+            .get("evidence_bundle_refs")
+            .or_else(|| record.get("proof_surfaces")),
+    );
+    let canonical_decision_closed = record
+        .get("closure_decision")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|decision| matches!(decision.trim(), "closed" | "admit"))
+        && has_evidence_id(
+            record
+                .get("decision_owner")
+                .and_then(serde_json::Value::as_str),
+        )
+        && has_evidence_id(
+            record
+                .get("decision_at")
+                .and_then(serde_json::Value::as_str),
+        )
+        && has_evidence_bundle_refs
+        && blockers_clear;
+    let runtime_admission_passed = record.get("admitted").and_then(serde_json::Value::as_bool)
+        == Some(true)
+        && matches!(
+            record
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim),
+            Some("pass" | "admit")
+        )
+        && has_evidence_bundle_refs
+        && blockers_clear;
+
+    canonical_decision_closed || runtime_admission_passed
+}
+
+fn closure_admission_evidence_table_complete(
+    record: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    if !closure_admission_record_has_decision(record) {
+        return false;
+    }
+
+    let Some(rows) = record
+        .get("evidence_table")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return false;
+    };
+
+    let mut satisfied_classes = BTreeSet::new();
+    for row in rows {
+        let Some(row) = row.as_object() else {
+            continue;
+        };
+        if !closure_admission_row_is_pass(row) {
+            continue;
+        }
+        if let Some(row_class) = closure_admission_row_class(row) {
+            satisfied_classes.insert(row_class);
+        }
+    }
+
+    CLOSURE_ADMISSION_EVIDENCE_CLASSES
+        .iter()
+        .all(|required| satisfied_classes.contains(required))
+        || RUNTIME_CONSUMPTION_CLOSURE_ADMISSION_REQUIREMENTS
+            .iter()
+            .all(|required| satisfied_classes.contains(required))
 }
 
 pub(crate) fn release_admission_operator_evidence_snapshot(snapshot: &serde_json::Value) -> bool {
@@ -762,18 +893,15 @@ pub(crate) fn release_admission_operator_evidence_snapshot(snapshot: &serde_json
             .unwrap_or_default(),
     )
     .is_some();
-    let release_admission_has_evidence_table =
-        release_admission_record(snapshot).is_some_and(|admission| {
-            admission
-                .get("evidence_table")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|rows| !rows.is_empty())
-        });
+    let release_admission_has_complete_evidence_table =
+        release_admission_record(snapshot).is_some_and(closure_admission_evidence_table_complete);
+    let is_terminal_continue = snapshot.get("surface").and_then(serde_json::Value::as_str)
+        == Some("vida taskflow consume continue");
 
     status_ok
         && operator_status_ok
-        && (release_admission_has_evidence_table
-            || terminal_continue_closure_release_admission_evidence(snapshot))
+        && release_admission_has_complete_evidence_table
+        && (!is_terminal_continue || terminal_continue_closure_release_admission_evidence(snapshot))
 }
 
 pub(crate) fn terminal_continue_closure_release_admission_evidence(
@@ -806,7 +934,7 @@ pub(crate) fn terminal_continue_closure_release_admission_evidence(
         .get("payload")
         .and_then(|payload| payload.get("release_admission"))
         .and_then(serde_json::Value::as_object)
-        .is_some();
+        .is_some_and(closure_admission_evidence_table_complete);
 
     status_ok && operator_status_ok && terminal_dispatch && release_admission_marker
 }

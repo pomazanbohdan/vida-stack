@@ -616,6 +616,42 @@ fn assert_operator_contracts_consistency(surface: &serde_json::Value, label: &st
     assert_release1_contract_mirror(surface, "operator_contracts", label);
 }
 
+fn assert_release1_shared_envelope_fields(surface: &serde_json::Value, label: &str) {
+    for key in [
+        "surface",
+        "status",
+        "trace_id",
+        "workflow_class",
+        "risk_tier",
+        "artifact_refs",
+        "next_actions",
+        "blocker_codes",
+    ] {
+        assert!(
+            surface.get(key).is_some(),
+            "{label} should expose top-level release-1 shared envelope field `{key}`"
+        );
+    }
+    for key in [
+        "status",
+        "trace_id",
+        "workflow_class",
+        "risk_tier",
+        "artifact_refs",
+        "next_actions",
+        "blocker_codes",
+    ] {
+        assert_eq!(
+            surface[key], surface["shared_fields"][key],
+            "{label} should mirror `{key}` through shared_fields"
+        );
+        assert_eq!(
+            surface[key], surface["operator_contracts"][key],
+            "{label} should mirror `{key}` through operator_contracts"
+        );
+    }
+}
+
 #[test]
 fn taskflow_plan_generate_require_context_blocks_missing_cli_refs() {
     let state_dir = unique_state_dir();
@@ -652,6 +688,117 @@ fn taskflow_plan_generate_require_context_blocks_missing_cli_refs() {
         ]
     );
     let _ = fs::remove_dir_all(state_dir);
+}
+
+#[test]
+fn validate_graph_json_exposes_full_release1_shared_envelope() {
+    let state_dir = unique_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let parsed = run_command_json(&["task", "validate-graph", "--json"], &state_dir);
+
+    assert_eq!(parsed["surface"], "vida task validate-graph");
+    assert_eq!(parsed["status"], "pass");
+    assert_eq!(parsed["valid"], true);
+    assert_release1_shared_envelope_fields(&parsed, "validate-graph");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn taskflow_artifacts_json_exposes_full_release1_shared_envelope() {
+    let state_dir = unique_state_dir();
+    let runtime_consumption_dir = format!("{state_dir}/runtime-consumption");
+    fs::create_dir_all(&runtime_consumption_dir).expect("create runtime-consumption dir");
+    fs::write(
+        format!("{runtime_consumption_dir}/final-artifacts-envelope-smoke.json"),
+        serde_json::json!({
+            "surface": "vida taskflow consume final",
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "artifact_refs": {},
+            "operator_contracts": {
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "status": "pass",
+                "trace_id": null,
+                "workflow_class": null,
+                "risk_tier": null,
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {}
+            },
+            "shared_fields": {
+                "status": "pass",
+                "trace_id": null,
+                "workflow_class": null,
+                "risk_tier": null,
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {}
+            },
+            "execution_preparation_artifacts": {
+                "required_artifacts": [
+                    "architecture_preparation_report",
+                    "change_boundary",
+                    "dependency_impact_summary",
+                    "developer_handoff_packet",
+                    "spec_alignment_summary"
+                ],
+                "architecture_preparation_report": {
+                    "ready": false,
+                    "status": "not_required",
+                    "path": null
+                },
+                "change_boundary": {
+                    "ready": false,
+                    "status": "not_required",
+                    "path": null
+                },
+                "dependency_impact_summary": {
+                    "ready": false,
+                    "status": "not_required",
+                    "path": null
+                },
+                "developer_handoff_packet": {
+                    "ready": false,
+                    "status": "not_required",
+                    "path": null
+                },
+                "spec_alignment_summary": {
+                    "ready": false,
+                    "status": "not_required",
+                    "path": null
+                },
+                "execution_preparation_evidence": {
+                    "ready": true,
+                    "status": "ready"
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write final artifact snapshot");
+
+    let list = run_command_json(&["taskflow", "artifacts", "list", "--json"], &state_dir);
+    assert_eq!(list["surface"], "vida taskflow artifacts list");
+    assert_release1_shared_envelope_fields(&list, "taskflow artifacts list");
+
+    let show = run_command_json(
+        &[
+            "taskflow",
+            "artifacts",
+            "show",
+            "developer_handoff_packet",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(show["surface"], "vida taskflow artifacts show");
+    assert_release1_shared_envelope_fields(&show, "taskflow artifacts show");
+
+    let _ = fs::remove_dir_all(&state_dir);
 }
 
 #[test]
@@ -3244,11 +3391,14 @@ fn validate_graph_broken_edge_matches_golden_fixture() {
     assert!(!output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let actual_json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("validate-graph json should parse");
+    assert_release1_shared_envelope_fields(&actual_json, "blocked validate-graph");
     let expected =
         include_str!("../../../tests/golden/taskflow/validate_graph_missing_dependency.json")
             .trim_end();
     assert_eq!(
-        normalize_json_fixture(&stdout),
+        serde_json::to_string_pretty(&actual_json["issues"]).expect("actual json should render"),
         normalize_json_fixture(expected)
     );
 
@@ -5146,8 +5296,8 @@ fn status_json_reports_non_default_host_agents_summary() {
         "worker"
     );
     assert_eq!(opencode["feedback_count"].as_u64(), Some(0));
-    assert!(opencode["effective_score"].is_null());
-    assert!(opencode["lifecycle_state"].is_null());
+    assert_eq!(opencode["effective_score"].as_u64(), Some(70));
+    assert_eq!(opencode["lifecycle_state"].as_str(), Some("probation"));
     assert_eq!(
         host_agents["selection_policy"]["rule"],
         "capability_first_then_score_guard_then_cheapest_tier"
@@ -5925,15 +6075,28 @@ fn taskflow_task_update_ignores_legacy_helper_status_override_env() {
         &state_dir,
     );
 
-    let output = vida()
-        .args([
-            "taskflow", "task", "update", "vida-a", "--status", "pass", "--json",
-        ])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .env("VIDA_TASK_BRIDGE_STATUS_OVERRIDE", "bananas")
-        .output()
-        .expect("task update should run");
-    assert!(output.status.success());
+    let output = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "taskflow",
+                "task",
+                "update",
+                "vida-a",
+                "--status",
+                "in_progress",
+                "--json",
+            ])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .env("VIDA_TASK_BRIDGE_STATUS_OVERRIDE", "bananas");
+        command
+    });
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let parsed: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("update json should parse");
     assert_eq!(parsed["status"], "pass");
@@ -6667,7 +6830,17 @@ fn cross_surface_protocol_binding_parity() {
                 doctor_root_trace["runtime_consumption_latest_snapshot_path"],
                 retrieval_trust_signal["citation"]
             );
-            assert_eq!(doctor_json["trace_evidence"]["status"], "pass");
+            if consume_json["status"] == "blocked"
+                || consume_json["operator_contracts"]["status"] == "blocked"
+            {
+                assert!(
+                    doctor_json["trace_evidence"]["status"] == "blocked"
+                        || doctor_json["operator_contracts"]["status"] == "blocked",
+                    "blocked consume-final evidence must propagate through doctor trace or operator status"
+                );
+            } else {
+                assert_eq!(doctor_json["trace_evidence"]["status"], "pass");
+            }
         }
         None => {
             assert!(

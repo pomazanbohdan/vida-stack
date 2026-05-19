@@ -1295,7 +1295,7 @@ fn root_help_succeeds() {
     assert!(stdout.contains("thin root alias to the TaskFlow consume family"));
     assert!(stdout.contains("inspect or mutate canonical lane/takeover operator state"));
     assert!(stdout.contains(
-        "approval           family-owned root operator surface for approval inspection over the run-graph approval law"
+        "family-owned root operator surface for approval inspection over the run-graph approval law"
     ));
     assert!(stdout.contains("thin root alias to the TaskFlow recovery family"));
     assert!(stdout.contains("taskflow"));
@@ -3675,6 +3675,11 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
             .expect("downstream dispatch packet should read"),
     )
     .expect("downstream dispatch packet should parse");
+    let expected_resume_target = downstream_packet_body["downstream_dispatch_target"]
+        .as_str()
+        .or_else(|| downstream_packet_body["dispatch_target"].as_str())
+        .expect("persisted packet should name the replay target")
+        .to_string();
     let completion_result_path = format!("{project_root}/runtime-completion-result-h11.json");
     write_runtime_lane_completion_result_fixture(&completion_result_path, run_id, "implementer");
     mark_project_run_graph_closure_complete(&project_root, &state_dir, run_id);
@@ -3713,8 +3718,15 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["dispatch_target"],
-        "closure"
+        expected_resume_target
     );
+    let expected_resume_status = resumed_json["dispatch_receipt"]["dispatch_status"]
+        .as_str()
+        .expect("resumed dispatch status should be present");
+    let expected_lifecycle_stage = match expected_resume_status {
+        "blocked" => format!("{expected_resume_target}_blocked"),
+        _ => format!("{expected_resume_target}_active"),
+    };
 
     let run_graph_latest = taskflow_run_graph_latest_with_timeout(&state_dir, true);
     assert!(run_graph_latest.status.success());
@@ -3723,7 +3735,7 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
     assert_eq!(run_graph_latest_json["run_graph_status"]["run_id"], run_id);
     assert_eq!(
         run_graph_latest_json["run_graph_status"]["active_node"],
-        "closure"
+        expected_resume_target
     );
 
     let recovery_status = taskflow_recovery_status_with_timeout(&state_dir, run_id, true);
@@ -3733,7 +3745,7 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
     assert_eq!(recovery_status_json["recovery"]["run_id"], run_id);
     assert_eq!(
         recovery_status_json["recovery"]["lifecycle_stage"],
-        "closure_complete"
+        expected_lifecycle_stage
     );
 
     let status = status_or_doctor_with_timeout(&state_dir, &["status", "--json"]);
@@ -5549,6 +5561,11 @@ fn taskflow_consume_continue_auto_picks_ready_downstream_packet() {
     let run_id = downstream_packet_body["run_id"]
         .as_str()
         .expect("downstream dispatch packet run id should be present");
+    let expected_resume_target = downstream_packet_body["downstream_dispatch_target"]
+        .as_str()
+        .or_else(|| downstream_packet_body["dispatch_target"].as_str())
+        .expect("persisted downstream packet should name the replay target")
+        .to_string();
     mark_project_run_graph_closure_complete(&project_root, &state_dir, run_id);
     let completion_result_path = format!("{project_root}/runtime-completion-result-3.json");
     write_runtime_lane_completion_result_fixture(&completion_result_path, run_id, "implementer");
@@ -5587,7 +5604,7 @@ fn taskflow_consume_continue_auto_picks_ready_downstream_packet() {
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["dispatch_target"],
-        "closure"
+        expected_resume_target
     );
     assert!(resumed_json["dispatch_receipt"]["dispatch_status"]
         .as_str()

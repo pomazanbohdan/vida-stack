@@ -29,10 +29,6 @@ impl TaskReadMetadata {
     }
 }
 
-fn task_snapshot_missing(error: &state_store::StateStoreError) -> bool {
-    matches!(error, state_store::StateStoreError::Io(io_error) if io_error.kind() == std::io::ErrorKind::NotFound)
-}
-
 fn task_json_success_status() -> &'static str {
     crate::contract_profile_adapter::release_contract_status(true)
 }
@@ -150,19 +146,6 @@ async fn load_task_snapshot_rows_authoritative_first(
     state_dir: &std::path::Path,
 ) -> Result<(Vec<state_store::TaskRecord>, TaskReadMetadata), state_store::StateStoreError> {
     let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
-    match load_task_snapshot_rows_with_retry(state_dir).await {
-        Ok(rows) => {
-            return Ok((
-                rows,
-                TaskReadMetadata::snapshot(
-                    &snapshot_path,
-                    "served from canonical task snapshot evidence for fast bounded operator read",
-                ),
-            ));
-        }
-        Err(error) if task_snapshot_missing(&error) => {}
-        Err(error) => return Err(error),
-    }
     match open_read_only_task_store(state_dir.to_path_buf()).await {
         Ok(store) => match store.list_tasks(None, true).await {
             Ok(rows) => Ok((rows, TaskReadMetadata::authoritative_live())),

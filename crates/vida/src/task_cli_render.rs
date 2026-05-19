@@ -58,12 +58,18 @@ fn build_operator_surface_payload(
     let mut payload = serde_json::json!({
         "surface": surface,
         "status": finalized.status,
+        "trace_id": finalized.operator_contracts["trace_id"].clone(),
+        "workflow_class": finalized.operator_contracts["workflow_class"].clone(),
+        "risk_tier": finalized.operator_contracts["risk_tier"].clone(),
         "blocker_codes": finalized.blocker_codes,
         "next_actions": finalized.next_actions,
         "artifact_refs": finalized.artifact_refs,
         "shared_fields": finalized.shared_fields,
         "operator_contracts": finalized.operator_contracts,
     });
+    for key in ["trace_id", "workflow_class", "risk_tier"] {
+        payload["shared_fields"][key] = payload["operator_contracts"][key].clone();
+    }
     let extra_object = extra_fields
         .as_object()
         .expect("task operator surface extras must be an object")
@@ -978,8 +984,23 @@ mod tests {
 
         assert_eq!(pass_payload["surface"], "vida task validate-graph");
         assert_eq!(pass_payload["status"], "pass");
+        assert!(pass_payload["trace_id"].is_null());
+        assert!(pass_payload["workflow_class"].is_null());
+        assert!(pass_payload["risk_tier"].is_null());
         assert_eq!(pass_payload["valid"], true);
         assert_eq!(pass_payload["issue_count"], 0);
+        assert_eq!(
+            pass_payload["shared_fields"]["trace_id"],
+            pass_payload["operator_contracts"]["trace_id"]
+        );
+        assert_eq!(
+            pass_payload["shared_fields"]["workflow_class"],
+            pass_payload["operator_contracts"]["workflow_class"]
+        );
+        assert_eq!(
+            pass_payload["shared_fields"]["risk_tier"],
+            pass_payload["operator_contracts"]["risk_tier"]
+        );
         assert_eq!(
             pass_payload["artifact_refs"]["surface"],
             "vida task validate-graph"

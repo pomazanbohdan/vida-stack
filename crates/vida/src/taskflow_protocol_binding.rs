@@ -623,6 +623,9 @@ pub(crate) async fn run_taskflow_protocol_binding(args: &[String]) -> ExitCode {
                         .await
                     {
                         Ok(receipt) => {
+                            crate::operator_projection_cache::touch_state_mutation_marker(
+                                store.root(),
+                            );
                             super::print_surface_header(
                                 super::RenderMode::Plain,
                                 "vida taskflow protocol-binding sync",
@@ -705,6 +708,9 @@ pub(crate) async fn run_taskflow_protocol_binding(args: &[String]) -> ExitCode {
                         .await
                     {
                         Ok(receipt) => {
+                            crate::operator_projection_cache::touch_state_mutation_marker(
+                                store.root(),
+                            );
                             println!(
                                 "{}",
                                 serde_json::to_string_pretty(&serde_json::json!({
@@ -863,6 +869,7 @@ pub(crate) async fn sync_taskflow_protocol_binding_snapshot(
         )
         .await
         .map_err(|error| format!("Failed to record protocol-binding snapshot: {error}"))?;
+    crate::operator_projection_cache::touch_state_mutation_marker(store.root());
     Ok(())
 }
 

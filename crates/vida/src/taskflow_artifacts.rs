@@ -390,6 +390,18 @@ fn with_artifact_operator_contract(
         Value::String(finalized.status.to_string()),
     );
     object.insert(
+        "trace_id".to_string(),
+        finalized.operator_contracts["trace_id"].clone(),
+    );
+    object.insert(
+        "workflow_class".to_string(),
+        finalized.operator_contracts["workflow_class"].clone(),
+    );
+    object.insert(
+        "risk_tier".to_string(),
+        finalized.operator_contracts["risk_tier"].clone(),
+    );
+    object.insert(
         "blocker_codes".to_string(),
         serde_json::to_value(finalized.blocker_codes)
             .expect("artifact blocker codes should serialize"),
@@ -400,7 +412,11 @@ fn with_artifact_operator_contract(
             .expect("artifact next actions should serialize"),
     );
     object.insert("artifact_refs".to_string(), finalized.artifact_refs);
-    object.insert("shared_fields".to_string(), finalized.shared_fields);
+    let mut shared_fields = finalized.shared_fields;
+    shared_fields["trace_id"] = finalized.operator_contracts["trace_id"].clone();
+    shared_fields["workflow_class"] = finalized.operator_contracts["workflow_class"].clone();
+    shared_fields["risk_tier"] = finalized.operator_contracts["risk_tier"].clone();
+    object.insert("shared_fields".to_string(), shared_fields);
     object.insert(
         "operator_contracts".to_string(),
         finalized.operator_contracts,
@@ -921,8 +937,23 @@ mod tests {
 
         let payload = build_artifact_list_payload(&snapshot, Some(&temp_root));
         assert_eq!(payload["status"], "pass");
+        assert!(payload["trace_id"].is_null());
+        assert!(payload["workflow_class"].is_null());
+        assert!(payload["risk_tier"].is_null());
         assert_eq!(payload["operator_contracts"]["status"], "pass");
         assert_eq!(payload["shared_fields"]["status"], payload["status"]);
+        assert_eq!(
+            payload["shared_fields"]["trace_id"],
+            payload["operator_contracts"]["trace_id"]
+        );
+        assert_eq!(
+            payload["shared_fields"]["workflow_class"],
+            payload["operator_contracts"]["workflow_class"]
+        );
+        assert_eq!(
+            payload["shared_fields"]["risk_tier"],
+            payload["operator_contracts"]["risk_tier"]
+        );
         assert_eq!(
             payload["shared_fields"]["artifact_refs"],
             payload["artifact_refs"]
@@ -939,8 +970,23 @@ mod tests {
 
         let show = build_artifact_show_payload(&payload, "developer_handoff_packet");
         assert_eq!(show["status"], "pass");
+        assert!(show["trace_id"].is_null());
+        assert!(show["workflow_class"].is_null());
+        assert!(show["risk_tier"].is_null());
         assert_eq!(show["operator_contracts"]["status"], "pass");
         assert_eq!(show["shared_fields"]["status"], show["status"]);
+        assert_eq!(
+            show["shared_fields"]["trace_id"],
+            show["operator_contracts"]["trace_id"]
+        );
+        assert_eq!(
+            show["shared_fields"]["workflow_class"],
+            show["operator_contracts"]["workflow_class"]
+        );
+        assert_eq!(
+            show["shared_fields"]["risk_tier"],
+            show["operator_contracts"]["risk_tier"]
+        );
         assert_eq!(show["artifact"]["materialized"], true);
         assert_eq!(
             show["artifact_registry_contract"]["contract_id"],

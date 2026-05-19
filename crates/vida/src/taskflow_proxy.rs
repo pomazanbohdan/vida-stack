@@ -2537,10 +2537,14 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
         crate::latest_terminal_consume_continue_snapshot_run_id(state_dir).map_err(|error| {
             format!("Failed to read latest terminal consume-continue snapshot: {error}")
         })?;
-    let latest_run_graph_task_closed = latest_run_graph
-        .as_ref()
-        .and_then(|status| all_tasks.iter().find(|task| task.id == status.task_id))
-        .is_some_and(|task| task.status == "closed");
+    let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
+        match latest_run_graph.as_ref() {
+            Some(status) => match all_tasks.iter().find(|task| task.id == status.task_id) {
+                Some(task) => (task.status == "closed", false),
+                None => (false, true),
+            },
+            None => (false, false),
+        };
     let latest_run_graph_legacy_ownerless = match latest_run_graph.as_ref() {
         Some(status) => store
             .run_graph_legacy_ownerless(&status.run_id)
@@ -2569,7 +2573,7 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
         return Ok(None);
     }
     let continuation_binding_summary =
-        crate::continuation_binding_summary::build_continuation_binding_summary_with_idle_policy(
+        crate::continuation_binding_summary::build_continuation_binding_summary_with_task_authority(
             explicit_binding.as_ref(),
             latest_run_graph.as_ref(),
             recovery.as_ref(),
@@ -2578,6 +2582,7 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
             evidence_ambiguous,
             false,
             latest_run_graph_task_closed,
+            latest_run_graph_task_missing,
         );
 
     Ok(continuation_dispatch_gate_from_decision(

@@ -67,40 +67,117 @@ pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_
 pub(crate) const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION: &str = "Refresh the latest checkpoint evidence before rerunning consume-final so the latest status and checkpoint rows share the same run_id.";
 
 pub(crate) fn latest_admissible_retrieval_trust_signal(
-    _runtime_consumption: &RuntimeConsumptionSummary,
+    runtime_consumption: &RuntimeConsumptionSummary,
     latest_final_snapshot_path: Option<&str>,
     protocol_binding_latest_receipt_id: Option<&str>,
 ) -> Option<serde_json::Value> {
     let acl = protocol_binding_latest_receipt_id?.trim();
-    let (citation, registry_ref, freshness, freshness_posture) = {
-        let path = latest_final_snapshot_path
-            .map(str::trim)
-            .filter(|path| !path.is_empty())?;
-        (
-            path,
-            RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
-            "final",
-            RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
-        )
-    };
-
-    if citation.is_empty() || acl.is_empty() {
+    if acl.is_empty() {
         return None;
     }
 
-    Some(serde_json::json!({
-        "source": RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
-        "source_registry_ref": registry_ref,
-        "citation": citation,
-        "freshness": freshness,
-        "freshness_posture": freshness_posture,
-        "acl": acl,
-        "acl_context": format!(
-            "{}:{acl}",
-            RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT
-        ),
-        "acl_propagation": RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
-    }))
+    if let Some(citation) = latest_final_snapshot_path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        return Some(serde_json::json!({
+            "source": RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
+            "source_registry_ref": RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
+            "citation": citation,
+            "freshness": "final",
+            "freshness_posture": RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
+            "acl": acl,
+            "acl_context": format!(
+                "{}:{acl}",
+                RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT
+            ),
+            "acl_propagation": RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
+        }));
+    }
+
+    latest_bundle_check_retrieval_trust_signal(runtime_consumption, acl)
+}
+
+fn latest_bundle_check_retrieval_trust_signal(
+    runtime_consumption: &RuntimeConsumptionSummary,
+    current_protocol_binding_receipt_id: &str,
+) -> Option<serde_json::Value> {
+    if runtime_consumption.latest_kind.as_deref() != Some("bundle-check") {
+        return None;
+    }
+    let snapshot_path = runtime_consumption.latest_snapshot_path.as_deref()?.trim();
+    if snapshot_path.is_empty() {
+        return None;
+    }
+
+    let payload = std::fs::read_to_string(snapshot_path).ok()?;
+    let snapshot = serde_json::from_str::<serde_json::Value>(&payload).ok()?;
+    if snapshot.get("surface").and_then(serde_json::Value::as_str)
+        != Some("vida taskflow consume bundle check")
+        || snapshot
+            .get("check")
+            .and_then(|check| check.get("ok"))
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+        || snapshot
+            .get("operator_contracts")
+            .and_then(|contracts| contracts.get("status"))
+            .and_then(serde_json::Value::as_str)
+            != Some("pass")
+        || !snapshot
+            .get("blocker_codes")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|blockers| blockers.is_empty())
+        || !snapshot
+            .get("operator_contracts")
+            .and_then(|contracts| contracts.get("blocker_codes"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|blockers| blockers.is_empty())
+    {
+        return None;
+    }
+
+    let signal = snapshot
+        .get("artifact_refs")
+        .and_then(|refs| refs.get("retrieval_trust_signal"))
+        .or_else(|| {
+            snapshot
+                .get("operator_contracts")
+                .and_then(|contracts| contracts.get("artifact_refs"))
+                .and_then(|refs| refs.get("retrieval_trust_signal"))
+        })
+        .or_else(|| {
+            snapshot
+                .get("bundle")
+                .and_then(|bundle| bundle.get("cache_delivery_contract"))
+                .and_then(|contract| contract.get("retrieval_trust_evidence"))
+        })?;
+
+    retrieval_trust_signal_is_complete(signal, current_protocol_binding_receipt_id)
+        .then(|| signal.clone())
+}
+
+fn retrieval_trust_signal_field<'a>(signal: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    signal
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn retrieval_trust_signal_is_complete(
+    signal: &serde_json::Value,
+    current_protocol_binding_receipt_id: &str,
+) -> bool {
+    retrieval_trust_signal_field(signal, "source")
+        == Some(RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX)
+        && retrieval_trust_signal_field(signal, "source_registry_ref").is_some()
+        && retrieval_trust_signal_field(signal, "citation").is_some()
+        && retrieval_trust_signal_field(signal, "freshness").is_some()
+        && retrieval_trust_signal_field(signal, "freshness_posture").is_some()
+        && retrieval_trust_signal_field(signal, "acl") == Some(current_protocol_binding_receipt_id)
+        && retrieval_trust_signal_field(signal, "acl_context").is_some()
+        && retrieval_trust_signal_field(signal, "acl_propagation").is_some()
 }
 
 pub(crate) fn write_runtime_consumption_snapshot(
@@ -295,47 +372,7 @@ pub(crate) fn runtime_consumption_summary(
 pub(crate) fn runtime_consumption_snapshot_has_release_admission_evidence(
     snapshot: &serde_json::Value,
 ) -> bool {
-    let operator_contracts = match snapshot.get("operator_contracts") {
-        Some(value) => value,
-        None => return false,
-    };
-    let status_ok =
-        crate::operator_contracts::canonical_release1_operator_contract_status(&snapshot["status"])
-            .is_some();
-    let operator_status_ok =
-        crate::operator_contracts::canonical_release1_operator_contract_status(
-            &operator_contracts["status"],
-        )
-        .is_some();
-    let release_admission = snapshot
-        .get("release_admission")
-        .and_then(serde_json::Value::as_object)
-        .or_else(|| {
-            snapshot
-                .get("closure_admission")
-                .and_then(serde_json::Value::as_object)
-        })
-        .or_else(|| {
-            snapshot
-                .get("payload")
-                .and_then(|payload| payload.get("closure_admission"))
-                .and_then(serde_json::Value::as_object)
-        })
-        .or_else(|| {
-            snapshot
-                .get("payload")
-                .and_then(|payload| payload.get("release_admission"))
-                .and_then(serde_json::Value::as_object)
-        });
-
-    let release_admission_has_evidence_table = release_admission.is_some_and(|admission| {
-        admission
-            .get("evidence_table")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|rows| !rows.is_empty())
-    });
-
-    status_ok && operator_status_ok && release_admission_has_evidence_table
+    crate::release1_contracts::release_admission_operator_evidence_snapshot(snapshot)
 }
 
 fn runtime_consumption_snapshot_release_admission(
@@ -654,6 +691,57 @@ mod tests {
         }
     }
 
+    fn case10_closure_admission_record() -> serde_json::Value {
+        serde_json::json!({
+            "status": "pass",
+            "admitted": true,
+            "closure_decision": "closed",
+            "decision_owner": "release-owner",
+            "decision_at": "2026-05-19T00:00:00Z",
+            "evidence_bundle_refs": ["evidence-bundle-case10"],
+            "open_risk_acceptance_ids": ["risk-acceptance-case10"],
+            "blockers": [],
+            "proof_surfaces": ["vida taskflow consume final"],
+            "evidence_table": [
+                {
+                    "evidence_class": "closure_decision_record",
+                    "status": "pass",
+                    "evidence_refs": ["closure-record-case10"]
+                },
+                {
+                    "evidence_class": "runtime_consumption_final_snapshot",
+                    "status": "pass",
+                    "evidence_refs": ["final-snapshot-case10"]
+                },
+                {
+                    "evidence_class": "docflow_readiness_and_proof_receipts",
+                    "status": "pass",
+                    "evidence_refs": ["docflow-readiness-case10", "docflow-proof-case10"]
+                },
+                {
+                    "evidence_class": "lane_execution_and_handoff_receipts",
+                    "status": "pass",
+                    "evidence_refs": ["lane-execution-case10", "handoff-case10"]
+                },
+                {
+                    "evidence_class": "replay_checkpoint_lineage_artifacts",
+                    "status": "pass",
+                    "evidence_refs": ["checkpoint-case10", "replay-case10"]
+                },
+                {
+                    "evidence_class": "risk_acceptance_artifacts",
+                    "status": "pass",
+                    "evidence_refs": ["risk-acceptance-case10"]
+                },
+                {
+                    "evidence_class": "evidence_bundle_linkage",
+                    "status": "pass",
+                    "evidence_refs": ["evidence-bundle-case10"]
+                }
+            ]
+        })
+    }
+
     #[test]
     fn runtime_consumption_snapshot_path_string_uses_contract_separators() {
         let raw =
@@ -769,6 +857,96 @@ mod tests {
     }
 
     #[test]
+    fn latest_admissible_retrieval_trust_signal_accepts_latest_bundle_check_signal() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-bundle-check-retrieval-trust-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let runtime_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
+        let snapshot_path = runtime_dir.join("bundle-check-2026-05-19T00-00-00Z.json");
+        fs::write(
+            &snapshot_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume bundle check",
+                "check": { "ok": true },
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {
+                    "root_artifact_id": "framework-agent-definition",
+                    "bundle_artifact_name": "taskflow_runtime_bundle",
+                    "surface": "vida taskflow consume bundle check"
+                },
+                "operator_contracts": {
+                    "contract_id": "release-1-operator-contracts",
+                    "schema_version": "release-1-v1",
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {
+                        "root_artifact_id": "framework-agent-definition",
+                        "bundle_artifact_name": "taskflow_runtime_bundle",
+                        "surface": "vida taskflow consume bundle check"
+                    }
+                },
+                "bundle": {
+                    "cache_delivery_contract": {
+                        "retrieval_trust_evidence": {
+                            "source": RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
+                            "source_registry_ref": RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
+                            "citation": "/tmp/project/runtime-consumption/final-recorded.json",
+                            "freshness": "final",
+                            "freshness_posture": RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
+                            "acl": "protocol-binding-receipt-2",
+                            "acl_context": "protocol_binding_receipt:protocol-binding-receipt-2",
+                            "acl_propagation": RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("bundle-check snapshot should be writable");
+        let runtime_consumption = RuntimeConsumptionSummary {
+            total_snapshots: 2,
+            bundle_snapshots: 0,
+            bundle_check_snapshots: 1,
+            final_snapshots: 1,
+            latest_kind: Some("bundle-check".to_string()),
+            latest_snapshot_path: Some(runtime_consumption_snapshot_path_string(&snapshot_path)),
+        };
+
+        let signal = latest_admissible_retrieval_trust_signal(
+            &runtime_consumption,
+            None,
+            Some("protocol-binding-receipt-2"),
+        )
+        .expect("latest passing bundle-check snapshot should publish retrieval trust");
+
+        assert_eq!(
+            signal["citation"],
+            "/tmp/project/runtime-consumption/final-recorded.json"
+        );
+        assert_eq!(signal["acl"], "protocol-binding-receipt-2");
+
+        let stale_signal = latest_admissible_retrieval_trust_signal(
+            &runtime_consumption,
+            None,
+            Some("protocol-binding-receipt-3"),
+        );
+        assert!(
+            stale_signal.is_none(),
+            "bundle-check retrieval trust must not survive protocol-binding ACL drift"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn latest_final_runtime_consumption_snapshot_path_prefers_newest_valid_final_snapshot() {
         let root = std::env::temp_dir().join(format!(
             "vida-valid-final-snapshot-{}-{}",
@@ -808,18 +986,7 @@ mod tests {
                     }
                 },
                 "payload": {
-                    "closure_admission": {
-                        "status": "pass",
-                        "admitted": true,
-                        "blockers": [],
-                        "proof_surfaces": ["vida taskflow consume final"],
-                        "evidence_table": [{
-                            "requirement": "closure_admission",
-                            "status": "pass",
-                            "evidence_refs": ["vida taskflow consume final"],
-                            "blockers": []
-                        }]
-                    }
+                    "closure_admission": case10_closure_admission_record()
                 }
             })
             .to_string(),
@@ -898,18 +1065,7 @@ mod tests {
                     "artifact_refs": {}
                 },
                 "payload": {
-                    "closure_admission": {
-                        "status": "admit",
-                        "admitted": true,
-                        "blockers": [],
-                        "proof_surfaces": ["vida taskflow consume final"],
-                        "evidence_table": [{
-                            "requirement": "closure_admission",
-                            "status": "pass",
-                            "evidence_refs": ["vida taskflow consume final"],
-                            "blockers": []
-                        }]
-                    }
+                    "closure_admission": case10_closure_admission_record()
                 }
             })
             .to_string(),
@@ -1037,18 +1193,7 @@ mod tests {
                 "artifact_refs": {}
             },
             "payload": {
-                "closure_admission": {
-                    "status": "pass",
-                    "admitted": true,
-                    "blockers": [],
-                    "proof_surfaces": ["vida taskflow consume final"],
-                    "evidence_table": [{
-                        "requirement": "closure_admission",
-                        "status": "pass",
-                        "evidence_refs": ["vida taskflow consume final"],
-                        "blockers": []
-                    }]
-                }
+                "closure_admission": case10_closure_admission_record()
             }
         });
 
@@ -1091,18 +1236,7 @@ mod tests {
                     "artifact_refs": {}
                 },
                 "payload": {
-                    "closure_admission": {
-                        "status": "pass",
-                        "admitted": true,
-                        "blockers": [],
-                        "proof_surfaces": ["vida taskflow consume final"],
-                        "evidence_table": [{
-                            "requirement": "closure_admission",
-                            "status": "pass",
-                            "evidence_refs": ["vida taskflow consume final"],
-                            "blockers": []
-                        }]
-                    }
+                    "closure_admission": case10_closure_admission_record()
                 }
             })
             .to_string(),
@@ -1149,18 +1283,7 @@ mod tests {
                     "artifact_refs": {}
                 },
                 "payload": {
-                    "closure_admission": {
-                        "status": "pass",
-                        "admitted": true,
-                        "blockers": [],
-                        "proof_surfaces": ["vida taskflow consume final"],
-                        "evidence_table": [{
-                            "requirement": "closure_admission",
-                            "status": "pass",
-                            "evidence_refs": ["vida taskflow consume final"],
-                            "blockers": []
-                        }]
-                    }
+                    "closure_admission": case10_closure_admission_record()
                 }
             })
             .to_string(),
@@ -1205,18 +1328,7 @@ mod tests {
                     "artifact_refs": {}
                 },
                 "payload": {
-                    "closure_admission": {
-                        "status": "pass",
-                        "admitted": true,
-                        "blockers": [],
-                        "proof_surfaces": ["vida taskflow consume final"],
-                        "evidence_table": [{
-                            "requirement": "closure_admission",
-                            "status": "pass",
-                            "evidence_refs": ["vida taskflow consume final"],
-                            "blockers": []
-                        }]
-                    }
+                    "closure_admission": case10_closure_admission_record()
                 }
             })
             .to_string(),

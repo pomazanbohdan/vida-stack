@@ -262,6 +262,7 @@ fn doctor_operator_blocker_codes(
     principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
     memory_governance: Option<&crate::state_store::RunGraphMemoryGovernanceProjection>,
     no_active_taskflow_work: bool,
+    latest_run_graph_task_missing: bool,
     trace_evidence_blocker_codes: Vec<String>,
 ) -> Vec<String> {
     let mut operator_blocker_codes: Vec<String> = Vec::new();
@@ -339,6 +340,7 @@ fn doctor_operator_blocker_codes(
             .push(blocker_code_str(BlockerCode::MissingRootSessionWriteGuard).to_string());
     }
     if !no_active_taskflow_work
+        && !latest_run_graph_task_missing
         && latest_run_graph_recovery.as_ref().is_some_and(|summary| {
             !summary.recovery_ready
                 && !(summary.resume_status == "completed"
@@ -690,6 +692,17 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+            let latest_run_graph_task_missing = match latest_run_graph_status.as_ref() {
+                Some(status) => match store.show_task(&status.task_id).await {
+                    Ok(_) => false,
+                    Err(crate::state_store::StateStoreError::MissingTask { .. }) => true,
+                    Err(error) => {
+                        eprintln!("latest run graph task authority: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                },
+                None => false,
+            };
             let latest_run_graph_approval_receipt = match latest_run_graph_status.as_ref() {
                 Some(status) => match store
                     .run_graph_approval_delegation_receipt(&status.run_id)
@@ -803,6 +816,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     latest_principal_delegation.as_ref(),
                     latest_memory_governance.as_ref(),
                     no_active_taskflow_work,
+                    latest_run_graph_task_missing,
                     trace_evidence_blocker_codes,
                 );
                 let mut operator_next_actions = doctor_operator_next_actions(

@@ -323,21 +323,22 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-                let latest_run_graph_task_closed = match latest_run_graph_status.as_ref() {
-                    Some(status) => match store.show_task(&status.task_id).await {
-                        Ok(task) => task.status == "closed",
-                        Err(state_store::StateStoreError::MissingTask { .. }) => false,
-                        Err(error) => {
-                            eprintln!(
-                                "Failed to read tasks for latest run-graph task state: {error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                    },
-                    None => false,
-                };
+                let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
+                    match latest_run_graph_status.as_ref() {
+                        Some(status) => match store.show_task(&status.task_id).await {
+                            Ok(task) => (task.status == "closed", false),
+                            Err(state_store::StateStoreError::MissingTask { .. }) => (false, true),
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to read tasks for latest run-graph task state: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        },
+                        None => (false, false),
+                    };
                 let continuation_binding =
-                    crate::continuation_binding_summary::build_continuation_binding_summary_with_idle_policy(
+                    crate::continuation_binding_summary::build_continuation_binding_summary_with_task_authority(
                         explicit_continuation_binding.as_ref(),
                         latest_run_graph_status.as_ref(),
                         latest_run_graph_recovery.as_ref(),
@@ -359,6 +360,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             || latest_run_graph_dispatch_receipt_checkpoint_leakage,
                         no_active_taskflow_work,
                         latest_run_graph_task_closed,
+                        latest_run_graph_task_missing,
                     );
                 let continuation_binding_ambiguous =
                     continuation_binding["status"].as_str() == Some("ambiguous");
@@ -440,7 +442,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             }
                         };
                     let incomplete_release_admission_operator_evidence =
-                        match if latest_final_snapshot_path.is_some() {
+                        match if latest_final_snapshot_path.is_some() && !summary_only {
                             Ok(false)
                         } else if summary_only {
                             crate::runtime_consumption_state::release_admission_operator_evidence_incomplete_from_latest_snapshot(

@@ -267,6 +267,30 @@ pub(crate) fn build_continuation_binding_summary_with_idle_policy(
     terminal_completed_without_next_unit_is_idle: bool,
     latest_run_graph_task_closed: bool,
 ) -> serde_json::Value {
+    build_continuation_binding_summary_with_task_authority(
+        explicit_binding,
+        latest_run_graph_status,
+        latest_run_graph_recovery,
+        latest_run_graph_dispatch_receipt,
+        terminal_consume_continue_run_id,
+        evidence_ambiguous,
+        terminal_completed_without_next_unit_is_idle,
+        latest_run_graph_task_closed,
+        false,
+    )
+}
+
+pub(crate) fn build_continuation_binding_summary_with_task_authority(
+    explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
+    latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+    latest_run_graph_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    terminal_consume_continue_run_id: Option<&str>,
+    evidence_ambiguous: bool,
+    terminal_completed_without_next_unit_is_idle: bool,
+    latest_run_graph_task_closed: bool,
+    latest_run_graph_task_missing: bool,
+) -> serde_json::Value {
     let active_run_id = latest_run_graph_status.map(|status| status.run_id.as_str());
     let delegated_cycle_open = latest_run_graph_recovery
         .is_some_and(|recovery| recovery.delegation_gate.delegated_cycle_open);
@@ -291,6 +315,33 @@ pub(crate) fn build_continuation_binding_summary_with_idle_policy(
             ]
         })
         .unwrap_or_default();
+    if let Some(status) = latest_run_graph_status {
+        if latest_run_graph_task_missing && run_graph_status_is_blocked(&status.status) {
+            return serde_json::json!({
+                "status": "idle",
+                "continuation_allowed": false,
+                "continuation_required_now": false,
+                "active_bounded_unit": serde_json::Value::Null,
+                "binding_source": serde_json::Value::Null,
+                "why_this_unit": format!(
+                    "Latest run `{}` is blocked but its task `{}` is missing from authoritative TaskFlow state.",
+                    status.run_id, status.task_id
+                ),
+                "primary_path": "taskflow_selection_path",
+                "sequential_vs_parallel_posture": "sequential_only_taskflow_authority",
+                "pause_boundary_gate": "allowed_if_authoritative_taskflow_selection_exists",
+                "ambiguity_reason": serde_json::Value::Null,
+                "stale_missing_task_run_graph_status": {
+                    "task_id": status.task_id,
+                    "run_id": status.run_id,
+                    "active_node": status.active_node,
+                    "status": status.status,
+                    "lifecycle_stage": status.lifecycle_stage,
+                },
+                "next_actions": []
+            });
+        }
+    }
     if evidence_ambiguous {
         return serde_json::json!({
             "status": "ambiguous",
