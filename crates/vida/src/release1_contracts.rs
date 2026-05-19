@@ -728,6 +728,138 @@ pub(crate) fn has_evidence_id(value: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+fn release_admission_record(
+    snapshot: &serde_json::Value,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    snapshot
+        .get("release_admission")
+        .and_then(serde_json::Value::as_object)
+        .or_else(|| {
+            snapshot
+                .get("closure_admission")
+                .and_then(serde_json::Value::as_object)
+        })
+        .or_else(|| {
+            snapshot
+                .get("payload")
+                .and_then(|payload| payload.get("closure_admission"))
+                .and_then(serde_json::Value::as_object)
+        })
+        .or_else(|| {
+            snapshot
+                .get("payload")
+                .and_then(|payload| payload.get("release_admission"))
+                .and_then(serde_json::Value::as_object)
+        })
+}
+
+pub(crate) fn release_admission_operator_evidence_snapshot(snapshot: &serde_json::Value) -> bool {
+    let status_ok =
+        Release1ContractStatus::from_str(snapshot["status"].as_str().unwrap_or_default()).is_some();
+    let operator_status_ok = Release1ContractStatus::from_str(
+        snapshot["operator_contracts"]["status"]
+            .as_str()
+            .unwrap_or_default(),
+    )
+    .is_some();
+    let release_admission_has_evidence_table =
+        release_admission_record(snapshot).is_some_and(|admission| {
+            admission
+                .get("evidence_table")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|rows| !rows.is_empty())
+        });
+
+    status_ok
+        && operator_status_ok
+        && (release_admission_has_evidence_table
+            || terminal_continue_closure_release_admission_evidence(snapshot))
+}
+
+pub(crate) fn terminal_continue_closure_release_admission_evidence(
+    snapshot: &serde_json::Value,
+) -> bool {
+    let status_ok =
+        Release1ContractStatus::from_str(snapshot["status"].as_str().unwrap_or_default())
+            == Some(Release1ContractStatus::Pass);
+    let operator_status_ok = Release1ContractStatus::from_str(
+        snapshot["operator_contracts"]["status"]
+            .as_str()
+            .unwrap_or_default(),
+    ) == Some(Release1ContractStatus::Pass);
+    let terminal_dispatch = snapshot.get("surface").and_then(serde_json::Value::as_str)
+        == Some("vida taskflow consume continue")
+        && snapshot
+            .get("payload")
+            .and_then(|payload| payload.get("dispatch_receipt"))
+            .is_some_and(|receipt| {
+                receipt
+                    .get("dispatch_status")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("executed")
+                    && receipt
+                        .get("lane_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("lane_completed")
+            });
+    let release_admission_marker = snapshot
+        .get("payload")
+        .and_then(|payload| payload.get("release_admission"))
+        .and_then(serde_json::Value::as_object)
+        .is_some();
+
+    status_ok && operator_status_ok && terminal_dispatch && release_admission_marker
+}
+
+pub(crate) fn latest_release_admission_operator_evidence_snapshot_path(
+    state_root: &std::path::Path,
+) -> Result<Option<String>, String> {
+    let snapshot_dir = state_root.join("runtime-consumption");
+    if !snapshot_dir.exists() {
+        return Ok(None);
+    }
+
+    let mut latest: Option<(std::time::SystemTime, String)> = None;
+    for entry in std::fs::read_dir(&snapshot_dir)
+        .map_err(|error| format!("Failed to read runtime-consumption directory: {error}"))?
+    {
+        let entry = entry
+            .map_err(|error| format!("Failed to inspect runtime-consumption entry: {error}"))?;
+        let path = entry.path();
+        if !path.is_file()
+            || !path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|file_name| file_name.starts_with("final-"))
+        {
+            continue;
+        }
+        let payload = match std::fs::read_to_string(&path) {
+            Ok(payload) => payload,
+            Err(_) => continue,
+        };
+        let snapshot = match serde_json::from_str::<serde_json::Value>(&payload) {
+            Ok(snapshot) => snapshot,
+            Err(_) => continue,
+        };
+        if !release_admission_operator_evidence_snapshot(&snapshot) {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let path_display = path.to_string_lossy().replace('\\', "/");
+        match &latest {
+            Some((latest_modified, _)) if modified <= *latest_modified => {}
+            _ => latest = Some((modified, path_display)),
+        }
+    }
+
+    Ok(latest.map(|(_, path)| path))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExceptionTakeoverState {
     NotRecorded,

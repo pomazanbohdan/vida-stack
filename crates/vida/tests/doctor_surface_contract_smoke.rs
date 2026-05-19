@@ -804,3 +804,223 @@ fn doctor_json_prefers_latest_final_snapshot_guard_when_latest_snapshot_is_bundl
         serde_json::json!(final_snapshot_path)
     );
 }
+
+#[test]
+fn doctor_json_ignores_newer_incomplete_final_when_admissible_final_exists() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    sync_protocol_binding(&state_dir);
+
+    let runtime_consumption_dir = format!("{state_dir}/runtime-consumption");
+    let admitted_snapshot_path =
+        format!("{runtime_consumption_dir}/final-2026-05-19T00-00-01Z.json");
+    write_final_snapshot(
+        &state_dir,
+        "final-2026-05-19T00-00-01Z.json",
+        serde_json::json!({
+            "surface": "vida taskflow consume continue",
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "operator_contracts": {
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {
+                    "runtime_consumption_latest_snapshot_path": admitted_snapshot_path,
+                }
+            },
+            "payload": {
+                "closure_admission": {
+                    "status": "admit",
+                    "admitted": true,
+                    "blockers": [],
+                    "evidence_table": [
+                        {
+                            "surface": "vida taskflow consume final",
+                            "status": "pass"
+                        }
+                    ]
+                }
+            },
+            "artifact_refs": {
+                "runtime_consumption_latest_snapshot_path": admitted_snapshot_path,
+            }
+        }),
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(15));
+    let stale_snapshot_path = format!("{runtime_consumption_dir}/final-2026-05-18T00-00-02Z.json");
+    write_final_snapshot(
+        &state_dir,
+        "final-2026-05-18T00-00-02Z.json",
+        serde_json::json!({
+            "surface": "vida taskflow consume final",
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "operator_contracts": {
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {
+                    "runtime_consumption_latest_snapshot_path": stale_snapshot_path,
+                }
+            },
+            "payload": {
+                "closure_admission": {
+                    "status": "blocked",
+                    "admitted": false,
+                    "blockers": ["missing release evidence"]
+                }
+            },
+            "artifact_refs": {
+                "runtime_consumption_latest_snapshot_path": stale_snapshot_path,
+            }
+        }),
+    );
+
+    let doctor = vida()
+        .args(["doctor", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("doctor should run");
+    assert!(doctor.status.success());
+    let doctor_json: serde_json::Value =
+        serde_json::from_slice(&doctor.stdout).expect("doctor json should parse");
+    let blocker_codes = doctor_json["blocker_codes"]
+        .as_array()
+        .expect("blocker_codes should be array");
+
+    assert!(
+        !blocker_codes.iter().any(|code| {
+            code.as_str() == Some("incomplete_release_admission_operator_evidence")
+        }),
+        "doctor json must not let a newer incomplete final snapshot override admissible closure evidence"
+    );
+    assert_eq!(
+        doctor_json["artifact_refs"]["runtime_consumption_latest_snapshot_path"],
+        serde_json::json!(admitted_snapshot_path)
+    );
+}
+
+#[test]
+fn doctor_json_accepts_latest_terminal_continue_closure_release_admission() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    sync_protocol_binding(&state_dir);
+
+    let runtime_consumption_dir = format!("{state_dir}/runtime-consumption");
+    let older_snapshot_path = format!("{runtime_consumption_dir}/final-2026-05-18T00-00-01Z.json");
+    write_final_snapshot(
+        &state_dir,
+        "final-2026-05-18T00-00-01Z.json",
+        serde_json::json!({
+            "surface": "vida taskflow consume final",
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "operator_contracts": {
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {
+                    "runtime_consumption_latest_snapshot_path": older_snapshot_path,
+                }
+            },
+            "payload": {
+                "closure_admission": {
+                    "status": "admit",
+                    "admitted": true,
+                    "blockers": [],
+                    "evidence_table": [
+                        {
+                            "surface": "vida taskflow consume final",
+                            "status": "pass"
+                        }
+                    ]
+                }
+            },
+            "artifact_refs": {
+                "runtime_consumption_latest_snapshot_path": older_snapshot_path,
+            }
+        }),
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(15));
+    let terminal_snapshot_path =
+        format!("{runtime_consumption_dir}/final-2026-05-19T00-00-02Z.json");
+    write_final_snapshot(
+        &state_dir,
+        "final-2026-05-19T00-00-02Z.json",
+        serde_json::json!({
+            "surface": "vida taskflow consume continue",
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "operator_contracts": {
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {
+                    "runtime_consumption_latest_snapshot_path": terminal_snapshot_path,
+                }
+            },
+            "payload": {
+                "dispatch_receipt": {
+                    "dispatch_status": "executed",
+                    "lane_status": "lane_completed"
+                },
+                "release_admission": {}
+            },
+            "artifact_refs": {
+                "runtime_consumption_latest_snapshot_path": terminal_snapshot_path,
+            }
+        }),
+    );
+
+    let doctor = vida()
+        .args(["doctor", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("doctor should run");
+    assert!(doctor.status.success());
+    let doctor_json: serde_json::Value =
+        serde_json::from_slice(&doctor.stdout).expect("doctor json should parse");
+    let blocker_codes = doctor_json["blocker_codes"]
+        .as_array()
+        .expect("blocker_codes should be array");
+
+    assert!(
+        !blocker_codes.iter().any(|code| {
+            code.as_str() == Some("incomplete_release_admission_operator_evidence")
+        }),
+        "doctor json must accept the latest terminal consume-continue closure receipt"
+    );
+    assert_eq!(
+        doctor_json["artifact_refs"]["runtime_consumption_latest_snapshot_path"],
+        serde_json::json!(terminal_snapshot_path)
+    );
+}

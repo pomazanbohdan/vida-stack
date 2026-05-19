@@ -92,7 +92,7 @@ fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> boo
     if shared_operator_output_contract_parity_error(&summary_json).is_some() {
         return true;
     }
-    !super::runtime_consumption_snapshot_has_release_admission_evidence(&summary_json)
+    !crate::release1_contracts::release_admission_operator_evidence_snapshot(&summary_json)
 }
 
 fn trace_evidence_next_action() -> String {
@@ -317,8 +317,9 @@ fn doctor_operator_blocker_codes(
         operator_blocker_codes
             .push(blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence).to_string());
     }
-    if latest_recorded_final_snapshot_path
-        .is_some_and(final_snapshot_missing_release_admission_evidence)
+    if latest_final_snapshot_path.is_none()
+        && latest_recorded_final_snapshot_path
+            .is_some_and(final_snapshot_missing_release_admission_evidence)
     {
         operator_blocker_codes.push(
             blocker_code_str(BlockerCode::IncompleteReleaseAdmissionOperatorEvidence).to_string(),
@@ -630,7 +631,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
             };
             let latest_final_snapshot_path =
-                match super::latest_final_runtime_consumption_snapshot_path(store.root()) {
+                match crate::release1_contracts::latest_release_admission_operator_evidence_snapshot_path(store.root()) {
                     Ok(path) => path,
                     Err(error) => {
                         eprintln!("runtime consumption: failed ({error})");
