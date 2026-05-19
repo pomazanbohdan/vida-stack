@@ -37,27 +37,6 @@ fn task_json_success_status() -> &'static str {
     crate::contract_profile_adapter::release_contract_status(true)
 }
 
-fn task_next_lawful_projection_name() -> &'static str {
-    "task-next-lawful-latest"
-}
-
-fn cached_task_next_lawful_projection_exit(
-    state_dir: &std::path::Path,
-) -> Option<(String, ExitCode)> {
-    let cached = crate::operator_projection_cache::read_fresh_json_projection(
-        state_dir,
-        task_next_lawful_projection_name(),
-    )?;
-    let parsed: serde_json::Value = serde_json::from_str(&cached).ok()?;
-    let status = parsed.get("status").and_then(serde_json::Value::as_str)?;
-    let exit_code = if status == task_json_success_status() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(1)
-    };
-    Some((cached, exit_code))
-}
-
 fn canonical_json_string_array_entries(value: &serde_json::Value) -> Option<Vec<String>> {
     let rows = value.as_array()?;
     let mut entries = Vec::with_capacity(rows.len());
@@ -3774,14 +3753,6 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .state_dir
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
-            if command.json && command.scope.is_none() {
-                if let Some((cached, exit_code)) =
-                    cached_task_next_lawful_projection_exit(&state_dir)
-                {
-                    println!("{cached}");
-                    return exit_code;
-                }
-            }
             match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => {
                     let tasks = match store.list_tasks(None, true).await {
