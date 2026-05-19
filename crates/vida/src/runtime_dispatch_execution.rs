@@ -587,6 +587,21 @@ fn external_provider_output_indicates_error(output: &ParsedExternalProviderOutpu
         return true;
     }
 
+    if output.is_error == Some(false)
+        && output
+            .raw_json
+            .pointer("/raw_provider/provider")
+            .and_then(serde_json::Value::as_str)
+            == Some("pi")
+        && output
+            .raw_json
+            .pointer("/raw_provider/terminal_event")
+            .and_then(serde_json::Value::as_str)
+            == Some("agent_end")
+    {
+        return false;
+    }
+
     let Some(result_text) = output.result_text.as_ref() else {
         return false;
     };
@@ -2428,6 +2443,18 @@ mod tests {
             r#"{"type":"result","subtype":"success","is_error":false,"result":"OK"}"#,
         )
         .expect("qwen json error output should parse");
+
+        assert!(!super::external_provider_output_indicates_error(&parsed));
+        assert!(external_provider_output_confirms_execution(Some(&parsed)));
+    }
+
+    #[test]
+    fn parse_external_provider_output_trusts_pi_agent_end_success_even_when_result_mentions_auth_text(
+    ) {
+        let parsed = parse_external_provider_output(
+            r#"{"type":"result","subtype":"success","is_error":false,"raw_provider":{"mode":"rpc","provider":"pi","terminal_event":"agent_end"},"result":"packet text mentions authentication failed and invalid api key as configuration examples"}"#,
+        )
+        .expect("pi adapter json output should parse");
 
         assert!(!super::external_provider_output_indicates_error(&parsed));
         assert!(external_provider_output_confirms_execution(Some(&parsed)));

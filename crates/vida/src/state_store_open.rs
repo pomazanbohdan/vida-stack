@@ -276,6 +276,19 @@ impl StateStore {
         Self::open_with_authoritative_lock_retry(root, Self::open_existing_once).await
     }
 
+    pub async fn open_existing_with_timeout(
+        root: PathBuf,
+        timeout: std::time::Duration,
+    ) -> Result<Self, StateStoreError> {
+        match tokio::time::timeout(timeout, Self::open_existing(root)).await {
+            Ok(result) => result,
+            Err(_) => Err(StateStoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "timed out while waiting for authoritative datastore lock; another VIDA process still holds the authoritative datastore lock, so stop or wait for that process and retry the command",
+            ))),
+        }
+    }
+
     pub async fn open_existing_read_only(root: PathBuf) -> Result<Self, StateStoreError> {
         if !root.exists() {
             return Err(StateStoreError::MissingStateDir(root));

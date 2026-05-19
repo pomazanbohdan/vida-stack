@@ -808,13 +808,6 @@ pub(crate) fn execution_plan_route_for_dispatch_target<'a>(
     let development_flow = &execution_plan["development_flow"];
     if dispatch_target == "analysis" {
         if let Some(route) = development_flow
-            .get("implementation")
-            .filter(|value| !value.is_null())
-            .filter(|route| route_has_backend_hints(execution_plan, route))
-        {
-            return Some(route);
-        }
-        if let Some(route) = development_flow
             .get("analysis")
             .filter(|value| !value.is_null())
         {
@@ -11783,7 +11776,7 @@ mod tests {
     }
 
     #[test]
-    fn route_selected_backend_for_analysis_prefers_implementation_route_over_analysis_alias() {
+    fn route_selected_backend_for_analysis_prefers_explicit_analysis_route() {
         let execution_plan = serde_json::json!({
             "development_flow": {
                 "analysis": {
@@ -11797,7 +11790,7 @@ mod tests {
 
         let backend = route_selected_backend_for_dispatch_target(&execution_plan, "analysis");
 
-        assert_eq!(backend.as_deref(), Some("opencode_cli"));
+        assert_eq!(backend.as_deref(), Some("analysis_cli"));
     }
 
     #[test]

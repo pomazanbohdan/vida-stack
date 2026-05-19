@@ -8,7 +8,7 @@ use crate::{
     read_or_sync_launcher_activation_snapshot, StateStore,
 };
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub(crate) struct RuntimeConsumptionLaneSelection {
     pub(crate) ok: bool,
     pub(crate) activation_source: String,

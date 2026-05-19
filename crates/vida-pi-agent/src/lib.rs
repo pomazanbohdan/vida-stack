@@ -145,7 +145,7 @@ fn run_adapter(
 
     let prewrite_guard = PrewriteGuardActivation::prepare(cli, scope_guard)?;
     let mut child = spawn_pi_rpc(cli, prewrite_guard.as_ref())?;
-    let child_stdin = child
+    let mut child_stdin = child
         .stdin
         .take()
         .ok_or_else(|| "Failed to open Pi RPC stdin".to_string())?;
@@ -172,7 +172,7 @@ fn run_adapter(
         }
     });
 
-    write_rpc_commands(child_stdin, cli, &prompt)?;
+    write_rpc_commands(&mut child_stdin, cli, &prompt)?;
     wait_for_agent_end(
         &mut child,
         line_rx,

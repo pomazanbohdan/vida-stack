@@ -1734,11 +1734,13 @@ agent_system:
       verification_route_task_class: verification_ensemble
       independent_verification_required: yes
     analysis:
-      executor_backend: opencode_cli
-      subagents: opencode_cli
+      executor_backend: pi_cli
+      subagents: pi_cli
       profiles:
+        pi_cli: pi_gpt55_high_readonly
         internal_subagents: codex_gpt55_medium_write
       fanout_executor_backends:
+        - pi_cli
         - hermes_cli
         - opencode_cli
         - kilo_cli
