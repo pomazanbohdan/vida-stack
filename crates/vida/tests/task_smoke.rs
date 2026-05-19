@@ -2048,6 +2048,217 @@ fn taskflow_factual_sandbox_h12_h16_invariant_matrix() {
 }
 
 #[test]
+fn taskflow_defect_loop_routes_repair_and_gates_parent_closure() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_task_id = "case-06-parent";
+    let defect_task_id = "case-06-defect";
+
+    let parent = run_command_json(
+        &[
+            "task",
+            "create",
+            parent_task_id,
+            "Case 06 parent",
+            "--type",
+            "epic",
+            "--status",
+            "closed",
+            "--priority",
+            "9",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(parent["status"], "pass");
+    assert_eq!(parent["task"]["status"], "closed");
+
+    let defect = run_command_json(
+        &[
+            "task",
+            "create",
+            defect_task_id,
+            "Case 06 factual failure defect",
+            "--type",
+            "defect",
+            "--parent-id",
+            parent_task_id,
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(defect["status"], "pass");
+    assert_eq!(defect["task"]["status"], "open");
+    assert_eq!(defect["task"]["issue_type"], "defect");
+    assert_eq!(
+        defect["task"]["dependencies"][0]["depends_on_id"],
+        parent_task_id
+    );
+    assert_eq!(
+        defect["task"]["dependencies"][0]["edge_type"],
+        "parent-child"
+    );
+    assert_task_graph_valid_after(&state_dir, "create case 06 defect child");
+
+    let parent_after_defect =
+        run_command_json(&["task", "show", parent_task_id, "--json"], &state_dir);
+    assert_eq!(parent_after_defect["task"]["status"], "in_progress");
+    assert!(parent_after_defect["task"]["closed_at"].is_null());
+    assert!(parent_after_defect["task"]["close_reason"].is_null());
+
+    let defect_update = run_command_json(
+        &[
+            "task",
+            "update",
+            defect_task_id,
+            "--status",
+            "in_progress",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(defect_update["status"], "pass");
+    assert_eq!(defect_update["task"]["status"], "in_progress");
+    assert_task_graph_valid_after(&state_dir, "route case 06 defect repair");
+
+    let next_lawful = run_command_json(&["task", "next-lawful", "--json"], &state_dir);
+    assert_eq!(next_lawful["status"], "pass");
+    assert_eq!(
+        next_lawful["active_bounded_unit"]["task_id"],
+        defect_task_id
+    );
+    assert_eq!(next_lawful["active_bounded_unit"]["issue_type"], "defect");
+    assert!(next_lawful["blocker_codes"]
+        .as_array()
+        .expect("next-lawful blocker_codes should render")
+        .is_empty());
+    assert_eq!(
+        next_lawful["why_this_unit"],
+        "single TaskFlow in_progress task is the lawful continuation"
+    );
+    assert_eq!(
+        next_lawful["sequential_vs_parallel_posture"],
+        "sequential_only_active_task"
+    );
+
+    let dispatch_preview = run_command_json(
+        &[
+            "agent",
+            "dispatch-next",
+            "--current-task-id",
+            defect_task_id,
+            "--lanes",
+            "1",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dispatch_preview["status"], "pass");
+    assert_eq!(dispatch_preview["mode"], "preview");
+    assert_eq!(dispatch_preview["execute_supported"], false);
+    assert_eq!(dispatch_preview["execution_attempted"], false);
+    assert_eq!(dispatch_preview["lanes_selected"], 1);
+    let selected_lanes = dispatch_preview["selected_lanes"]
+        .as_array()
+        .expect("dispatch selected_lanes should be an array");
+    assert_eq!(selected_lanes.len(), 1);
+    assert_eq!(selected_lanes[0]["task_id"], defect_task_id);
+    assert_eq!(selected_lanes[0]["runtime_role"], "worker");
+    assert_eq!(selected_lanes[0]["task_class"], "implementation");
+    let dispatch_command = require_json_string(
+        &selected_lanes[0]["dispatch_command"],
+        "case 06 dispatch_command",
+    );
+    assert!(
+        dispatch_command.contains("vida agent-init")
+            && dispatch_command.contains("--role worker")
+            && dispatch_command.contains(defect_task_id)
+            && dispatch_command.contains("--state-dir")
+            && dispatch_command.contains("--json"),
+        "repair dispatch should route through vida agent-init: {dispatch_command}"
+    );
+    let source_surfaces = require_json_string_array(
+        &dispatch_preview["source_surfaces"],
+        "case 06 dispatch source_surfaces",
+    );
+    assert!(source_surfaces
+        .iter()
+        .any(|surface| surface == "vida agent-init --role <runtime-role> <task-id> --json"));
+
+    let rejected_parent_close = run_command_capture(
+        &[
+            "task",
+            "close",
+            parent_task_id,
+            "--reason",
+            "must fail until defect repair evidence exists",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !rejected_parent_close.status.success(),
+        "parent close must fail while defect repair is open"
+    );
+    let rejected_parent_close_stderr = String::from_utf8_lossy(&rejected_parent_close.stderr);
+    assert!(
+        rejected_parent_close_stderr.contains("open child tasks exist")
+            && rejected_parent_close_stderr.contains(defect_task_id),
+        "{rejected_parent_close_stderr}"
+    );
+
+    let defect_closed = run_command_json(
+        &[
+            "task",
+            "close",
+            defect_task_id,
+            "--reason",
+            "repair evidence recorded through agent repair loop",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(defect_closed["status"], "pass");
+    assert_eq!(defect_closed["task"]["status"], "closed");
+    assert_task_graph_valid_after(&state_dir, "close case 06 repaired defect");
+
+    let parent_closed = run_command_json(
+        &[
+            "task",
+            "close",
+            parent_task_id,
+            "--reason",
+            "parent closure allowed after defect repair evidence",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(parent_closed["status"], "pass");
+    assert_eq!(parent_closed["task"]["status"], "closed");
+
+    let no_continuation = run_command_capture(&["task", "next-lawful", "--json"], &state_dir);
+    assert!(
+        !no_continuation.status.success(),
+        "all case 06 work is closed, so no continuation should remain"
+    );
+    let no_continuation_json: serde_json::Value =
+        serde_json::from_slice(&no_continuation.stdout).expect("blocked next-lawful json parses");
+    assert_eq!(no_continuation_json["status"], "blocked");
+    assert!(no_continuation_json["blocker_codes"]
+        .as_array()
+        .expect("next-lawful blocker_codes should render")
+        .iter()
+        .any(|code| code == "no_ready_task_candidates"));
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
 fn taskflow_testing_h24_operator_budget_guard() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
