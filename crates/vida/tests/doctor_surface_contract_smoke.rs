@@ -757,6 +757,12 @@ fn doctor_json_prefers_latest_final_snapshot_guard_when_latest_snapshot_is_bundl
                     "status": "admit",
                     "admitted": true,
                     "blockers": [],
+                    "evidence_table": [
+                        {
+                            "surface": "vida taskflow consume bundle check",
+                            "status": "pass"
+                        }
+                    ],
                     "proof_surfaces": [
                         "vida taskflow consume bundle check"
                     ]

@@ -1343,6 +1343,402 @@ fn agent_dispatch_preview_aligns_with_scheduler_selected_tasks_and_routing_truth
 }
 
 #[test]
+fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_and_doctor() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let orchestrator = run_command_json(&["orchestrator-init", "--json"], &state_dir);
+    assert_eq!(orchestrator["surface"], "vida orchestrator-init");
+    assert!(matches!(
+        orchestrator["init"]["status"].as_str(),
+        Some("ready_enough_for_normal_work") | Some("pending")
+    ));
+    assert!(orchestrator["init"]["project_activation"]["activation_pending"].is_boolean());
+
+    let root_task_id = "case-08-root";
+    let implementation_task_id = "case-08-implementation";
+    let parallel_task_id = "case-08-parallel";
+    let defect_task_id = "case-08-defect-stop";
+    let closed_task_id = "case-08-closed-continuation";
+
+    let root = run_command_json(
+        &[
+            "task",
+            "create",
+            root_task_id,
+            "Case 08 autonomous orchestrator plus agents root",
+            "--type",
+            "epic",
+            "--priority",
+            "9",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    for task_id in [implementation_task_id, parallel_task_id] {
+        let created = run_command_json(
+            &[
+                "task",
+                "create",
+                task_id,
+                "Case 08 implementation lane",
+                "--parent-id",
+                root_task_id,
+                "--type",
+                "task",
+                "--priority",
+                "1",
+                "--execution-mode",
+                "parallel_safe",
+                "--order-bucket",
+                "case-08-wave",
+                "--parallel-group",
+                "case-08-pack",
+                "--conflict-domain",
+                task_id,
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert_eq!(created["status"], "pass");
+    }
+
+    let scheduler_preview = run_command_json(
+        &[
+            "taskflow",
+            "scheduler",
+            "dispatch",
+            "--current-task-id",
+            implementation_task_id,
+            "--limit",
+            "2",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(
+        scheduler_preview["surface"],
+        "vida taskflow scheduler dispatch"
+    );
+    assert_eq!(scheduler_preview["status"], "pass");
+    assert_eq!(scheduler_preview["activation_attempt_supported"], false);
+    assert_eq!(
+        scheduler_preview["worker_execution_evidence_status"],
+        "not_received"
+    );
+    assert_eq!(
+        require_json_string_array(
+            &scheduler_preview["selected_task_ids"],
+            "case 08 scheduler selected_task_ids"
+        ),
+        vec![
+            implementation_task_id.to_string(),
+            parallel_task_id.to_string()
+        ]
+    );
+
+    let dispatch_preview = run_command_json(
+        &[
+            "agent",
+            "dispatch-next",
+            "--current-task-id",
+            implementation_task_id,
+            "--lanes",
+            "2",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dispatch_preview["status"], "pass");
+    assert_eq!(dispatch_preview["mode"], "preview");
+    assert_eq!(dispatch_preview["execute_supported"], false);
+    assert_eq!(dispatch_preview["execution_attempted"], false);
+    let selected_lanes = dispatch_preview["selected_lanes"]
+        .as_array()
+        .expect("case 08 selected_lanes should be an array");
+    assert_eq!(selected_lanes.len(), 2);
+    for lane in selected_lanes {
+        assert_eq!(lane["runtime_role"], "worker");
+        assert_eq!(lane["task_class"], "implementation");
+        let command = require_json_string(&lane["dispatch_command"], "case 08 dispatch command");
+        assert!(command.contains("vida agent-init"));
+        assert!(command.contains("--role worker"));
+        assert!(command.contains("--state-dir"));
+        assert!(command.contains("--json"));
+    }
+
+    let agent_init = run_command_json(
+        &[
+            "agent-init",
+            "--role",
+            "worker",
+            implementation_task_id,
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(agent_init["surface"], "vida agent-init");
+    assert_eq!(agent_init["selection"]["selected_role"], "worker");
+    assert_eq!(
+        agent_init["selection"]["request_text"],
+        implementation_task_id
+    );
+    assert_eq!(agent_init["activation_semantics"]["view_only"], true);
+    assert_eq!(agent_init["activation_semantics"]["executes_packet"], false);
+    assert_eq!(
+        agent_init["dispatch_mode"]["root_session_write_authority_granted"],
+        false
+    );
+
+    let seeded = run_command_json(
+        &[
+            "taskflow",
+            "run-graph",
+            "seed",
+            implementation_task_id,
+            "case 08 autonomous orchestrator plus agents request",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(seeded["surface"], "vida taskflow run-graph seed");
+    assert_eq!(seeded["run_id"], implementation_task_id);
+
+    let dispatch_receipt = run_command_json(
+        &[
+            "taskflow",
+            "run-graph",
+            "dispatch-init",
+            implementation_task_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(
+        dispatch_receipt["surface"],
+        "vida taskflow run-graph dispatch-init"
+    );
+    assert_eq!(dispatch_receipt["run_id"], implementation_task_id);
+    assert_eq!(
+        dispatch_receipt["dispatch_receipt"]["run_id"],
+        implementation_task_id
+    );
+    assert_eq!(
+        dispatch_receipt["dispatch_receipt"]["dispatch_status"],
+        "routed"
+    );
+
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            implementation_task_id,
+            "implementation",
+            "implementation",
+            "blocked",
+            "implementation",
+            "{\"policy_gate\":\"validation_report_required\",\"context_state\":\"sealed\",\"resume_target\":\"dispatch.implementation\",\"recovery_ready\":true,\"lifecycle_stage\":\"recovery_ready\"}",
+        ],
+        &state_dir,
+    );
+    let run_graph_status = run_command_json(
+        &[
+            "taskflow",
+            "run-graph",
+            "status",
+            implementation_task_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(run_graph_status["status"], "blocked");
+    assert_eq!(run_graph_status["run_graph_status"]["status"], "blocked");
+    assert_eq!(
+        run_graph_status["run_graph_status"]["policy_gate"],
+        "validation_report_required"
+    );
+    assert_eq!(run_graph_status["run_graph_status"]["recovery_ready"], true);
+
+    let recovery = run_command_json(
+        &[
+            "taskflow",
+            "recovery",
+            "status",
+            implementation_task_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(recovery["status"], "blocked");
+    assert_eq!(recovery["recovery"]["run_id"], implementation_task_id);
+    assert_eq!(recovery["recovery"]["recovery_ready"], true);
+    assert_eq!(
+        recovery["recovery"]["resume_target"],
+        "dispatch.implementation"
+    );
+
+    let defect = run_command_json(
+        &[
+            "task",
+            "create",
+            defect_task_id,
+            "Case 08 defect stop",
+            "--type",
+            "defect",
+            "--parent-id",
+            root_task_id,
+            "--priority",
+            "0",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(defect["status"], "pass");
+    assert_eq!(defect["task"]["issue_type"], "defect");
+    let defect_update = run_command_json(
+        &[
+            "task",
+            "update",
+            defect_task_id,
+            "--status",
+            "in_progress",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(defect_update["status"], "pass");
+    let next_lawful_output = run_command_capture(&["task", "next-lawful", "--json"], &state_dir);
+    assert!(
+        !next_lawful_output.status.success(),
+        "open delegated run must block heuristic defect takeover"
+    );
+    let next_lawful: serde_json::Value = serde_json::from_slice(&next_lawful_output.stdout)
+        .expect("case 08 blocked next-lawful json should parse");
+    assert_eq!(next_lawful["status"], "blocked");
+    assert!(next_lawful["blocker_codes"]
+        .as_array()
+        .expect("case 08 next-lawful blocker_codes should render")
+        .iter()
+        .any(|code| code == "open_delegated_cycle"));
+    assert!(next_lawful_candidate_ids(&next_lawful)
+        .iter()
+        .any(|task_id| task_id == defect_task_id));
+
+    let rejected_parent_close = run_command_capture(
+        &[
+            "task",
+            "close",
+            root_task_id,
+            "--reason",
+            "must stop on defect and open delegated children",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !rejected_parent_close.status.success(),
+        "root close must fail while defect and child lanes are open"
+    );
+    let rejected_stderr = String::from_utf8_lossy(&rejected_parent_close.stderr);
+    assert!(rejected_stderr.contains("open child tasks exist"));
+    assert!(rejected_stderr.contains(defect_task_id));
+
+    let closed = run_command_json(
+        &[
+            "task",
+            "create",
+            closed_task_id,
+            "Case 08 closed continuation negative control",
+            "--type",
+            "task",
+            "--status",
+            "closed",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed["status"], "pass");
+    assert_eq!(closed["task"]["status"], "closed");
+    let closed_dispatch_output = run_command_capture(
+        &[
+            "agent",
+            "dispatch-next",
+            "--current-task-id",
+            closed_task_id,
+            "--lanes",
+            "1",
+            "--state-dir",
+            state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !closed_dispatch_output.status.success(),
+        "closed continuation dispatch should fail closed"
+    );
+    let closed_dispatch: serde_json::Value = serde_json::from_slice(&closed_dispatch_output.stdout)
+        .expect("closed continuation dispatch json should parse");
+    assert_eq!(closed_dispatch["status"], "blocked");
+    assert_eq!(closed_dispatch["lanes_selected"], 0);
+    assert!(closed_dispatch["selected_lanes"]
+        .as_array()
+        .expect("closed continuation selected_lanes should be an array")
+        .is_empty());
+    assert_no_run_id_consume_continue_command(&closed_dispatch, closed_task_id, "case 08 closed");
+
+    for task_id in [defect_task_id, implementation_task_id, parallel_task_id] {
+        let closed_child = run_command_json(
+            &[
+                "task",
+                "close",
+                task_id,
+                "--reason",
+                "case 08 closure gate satisfied",
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert_eq!(closed_child["status"], "pass");
+        assert_eq!(closed_child["task"]["status"], "closed");
+    }
+    let root_closed = run_command_json(
+        &[
+            "task",
+            "close",
+            root_task_id,
+            "--reason",
+            "case 08 lifecycle closed after delegated evidence",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root_closed["status"], "pass");
+    assert_eq!(root_closed["task"]["status"], "closed");
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    assert_eq!(status["surface"], "vida status");
+    assert_no_run_id_consume_continue_command(&status, closed_task_id, "case 08 status");
+
+    let doctor = run_command_json(&["doctor", "--json"], &state_dir);
+    assert_eq!(doctor["surface"], "vida doctor");
+    assert_no_run_id_consume_continue_command(&doctor, closed_task_id, "case 08 doctor");
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
 fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
