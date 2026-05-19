@@ -2420,6 +2420,96 @@ fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding()
 }
 
 #[test]
+fn task_next_lawful_blocks_closed_downstream_closure_binding_without_active_or_ready_task() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let closed_task_id = "closed-downstream-only-task";
+    let closed_task = run_command_json(
+        &[
+            "task",
+            "create",
+            closed_task_id,
+            "Closed downstream only task",
+            "--type",
+            "task",
+            "--status",
+            "closed",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed_task["status"], "pass");
+    assert_eq!(closed_task["task"]["status"], "closed");
+
+    let closed_run_id = "closed-downstream-only-run";
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let binding = serde_json::json!({
+            "run_id": closed_run_id,
+            "task_id": closed_task_id,
+            "status": "bound",
+            "active_bounded_unit": {
+                "kind": "downstream_dispatch_target",
+                "task_id": closed_task_id,
+                "run_id": closed_run_id,
+                "dispatch_target": "closure"
+            },
+            "binding_source": "task_close_reconcile",
+            "why_this_unit": "closed task reconciled into downstream closure with no active successor",
+            "primary_path": "normal_delivery_path",
+            "sequential_vs_parallel_posture": "sequential_only",
+            "recorded_at": "2026-05-19T00:00:04Z"
+        });
+        db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
+            .bind(("run", closed_run_id))
+            .bind(("binding", binding))
+            .await
+            .expect("seed closed downstream closure continuation binding");
+        drop(db);
+    });
+
+    let next_lawful_output = run_command_capture(&["task", "next-lawful", "--json"], &state_dir);
+    assert!(
+        !next_lawful_output.status.success(),
+        "closed downstream marker without active/ready candidates must fail closed: stdout={} stderr={}",
+        String::from_utf8_lossy(&next_lawful_output.stdout),
+        String::from_utf8_lossy(&next_lawful_output.stderr)
+    );
+    let next_lawful: serde_json::Value = serde_json::from_slice(&next_lawful_output.stdout)
+        .unwrap_or_else(|error| {
+            panic!(
+                "next-lawful json should parse: {error}; stdout={} stderr={}",
+                String::from_utf8_lossy(&next_lawful_output.stdout),
+                String::from_utf8_lossy(&next_lawful_output.stderr)
+            )
+        });
+    assert_eq!(next_lawful["status"], "blocked");
+    assert_eq!(next_lawful["binding_source"], serde_json::Value::Null);
+    assert!(next_lawful["blocker_codes"]
+        .as_array()
+        .expect("next-lawful blocker_codes should render")
+        .iter()
+        .any(|code| code == "no_ready_task_candidates"));
+    assert_ne!(
+        next_lawful["blocker_codes"],
+        serde_json::json!(["runtime_binding_task_closed"])
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_list_show_ready_prefer_authoritative_state_over_stale_snapshot() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

@@ -3158,10 +3158,7 @@ fn task_next_lawful_receipt(
         .collect::<Vec<_>>();
 
     if let Some(binding) = runtime_binding {
-        let closed_downstream_marker_defers_to_active =
-            continuation_binding_is_closed_downstream_marker(tasks, binding)
-                && active_tasks.iter().any(|task| task.id != binding.task_id);
-        if !closed_downstream_marker_defers_to_active {
+        if !continuation_binding_is_closed_downstream_marker(tasks, binding) {
             let binding_task = tasks.iter().find(|task| task.id == binding.task_id);
             let conflicting_active = active_tasks
                 .iter()
@@ -5609,25 +5606,17 @@ mod tests {
         let binding = test_continuation_binding(
             "current-run",
             "closed-feature-task",
-            "consume_continue_after_downstream_chain",
+            "task_close_reconcile",
             "downstream_dispatch_target",
         );
 
         let receipt = task_next_lawful_receipt(&[closed_task], Vec::new(), Some(&binding));
 
-        assert_eq!(receipt.status, "pass");
-        assert_eq!(
-            receipt.active_bounded_unit["task_id"],
-            "closed-feature-task"
-        );
-        assert_eq!(
-            receipt.why_this_unit,
-            "consume_continue_after_downstream_chain selects closed-feature-task"
-        );
-        assert_eq!(
-            receipt.binding_source.as_deref(),
-            Some("consume_continue_after_downstream_chain")
-        );
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["no_ready_task_candidates"]);
+        assert_eq!(receipt.active_bounded_unit, serde_json::Value::Null);
+        assert_eq!(receipt.binding_source, None);
+        assert!(receipt.ready_task_candidates.is_empty());
     }
 
     #[test]
