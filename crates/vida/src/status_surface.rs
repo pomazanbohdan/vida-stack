@@ -96,8 +96,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             &state_dir,
             status_json_projection_name(summary_only),
         ) {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
+            if cached_status_projection_admissible(&state_dir, summary_only, &cached) {
+                println!("{cached}");
+                return ExitCode::SUCCESS;
+            }
         }
     }
 
@@ -442,7 +444,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             }
                         };
                     let incomplete_release_admission_operator_evidence =
-                        match if latest_final_snapshot_path.is_some() && !summary_only {
+                        match if latest_final_snapshot_path.is_some() {
                             Ok(false)
                         } else if summary_only {
                             crate::runtime_consumption_state::release_admission_operator_evidence_incomplete_from_latest_snapshot(
@@ -651,10 +653,49 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
 
 fn status_json_projection_name(summary_only: bool) -> &'static str {
     if summary_only {
-        "status-summary-latest"
+        "status-summary-v2-latest"
     } else {
         "status-full-latest"
     }
+}
+
+fn cached_status_projection_admissible(
+    state_dir: &std::path::Path,
+    summary_only: bool,
+    cached: &str,
+) -> bool {
+    if !summary_only {
+        return true;
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(cached) else {
+        return false;
+    };
+    let has_release_admission_blocker = value
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|codes| {
+            codes
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .any(|code| {
+                    matches!(
+                        code,
+                        "incomplete_release_admission_operator_evidence"
+                            | "missing_retrieval_trust_operator_evidence"
+                            | "missing_retrieval_trust_signal_operator_evidence"
+                            | "missing_retrieval_trust_source_operator_evidence"
+                    )
+                })
+        });
+    if !has_release_admission_blocker {
+        return true;
+    }
+    !matches!(
+        crate::release1_contracts::latest_release_admission_operator_evidence_snapshot_path(
+            state_dir
+        ),
+        Ok(Some(_))
+    )
 }
 
 #[cfg(test)]
@@ -675,6 +716,18 @@ mod tests {
     };
     use crate::status_surface_write_guard::root_session_write_guard_summary_from_snapshot_path;
     use crate::{blocker_code_str, state_store, BlockerCode};
+
+    #[test]
+    fn status_summary_projection_cache_key_is_shape_versioned() {
+        assert_eq!(
+            super::status_json_projection_name(true),
+            "status-summary-v2-latest"
+        );
+        assert_eq!(
+            super::status_json_projection_name(false),
+            "status-full-latest"
+        );
+    }
 
     #[test]
     fn release1_operator_contracts_consistency_accepts_pass_without_blockers() {

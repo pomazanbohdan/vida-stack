@@ -3790,17 +3790,29 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                     };
                     let current_binding = match latest_run_graph_status.as_ref() {
-                        Some(status) => {
-                            match store.run_graph_continuation_binding(&status.run_id).await {
-                                Ok(binding) => binding,
-                                Err(error) => {
-                                    eprintln!(
+                        Some(status) => match store
+                            .run_graph_status_is_stale_after_release_admission_complete(status)
+                            .await
+                        {
+                            Ok(true) => None,
+                            Ok(false) => {
+                                match store.run_graph_continuation_binding(&status.run_id).await {
+                                    Ok(binding) => binding,
+                                    Err(error) => {
+                                        eprintln!(
                                         "Failed to read current latest-run continuation binding: {error}"
                                     );
-                                    return ExitCode::from(1);
+                                        return ExitCode::from(1);
+                                    }
                                 }
                             }
-                        }
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to classify release-admitted stale run-graph status: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        },
                         None => None,
                     };
                     let runtime_binding = match select_task_next_lawful_binding(
@@ -3837,7 +3849,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         && runtime_binding
                             .map(|binding| !task_exists_for_binding(&tasks, binding))
                             .unwrap_or(false);
-                    let scoped_runtime_binding = if runtime_binding_task_missing_in_explicit_scope {
+                    let runtime_binding_is_closed_downstream_marker = runtime_binding
+                        .map(|binding| {
+                            continuation_binding_is_closed_downstream_marker(&tasks, binding)
+                        })
+                        .unwrap_or(false);
+                    let scoped_runtime_binding = if runtime_binding_task_missing_in_explicit_scope
+                        || runtime_binding_is_closed_downstream_marker
+                    {
                         None
                     } else {
                         runtime_binding
@@ -5776,6 +5795,101 @@ mod tests {
         ])));
 
         assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn task_next_lawful_command_selects_ready_task_over_closed_downstream_closure_marker() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(
+                &store,
+                "taskflow-defect-case-11-closed-downstream-binding-blocks-ready",
+                "Closed downstream marker",
+                "defect",
+                "closed",
+                1,
+                None,
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "taskflow-case-11-actual-agent-autonomy",
+                "Actual ready candidate",
+                "task",
+                "open",
+                2,
+                None,
+            )
+            .await;
+            store
+                .record_run_graph_status(&crate::state_store::RunGraphStatus {
+                    run_id: "run-closed-downstream-marker".to_string(),
+                    task_id: "taskflow-defect-case-11-closed-downstream-binding-blocks-ready"
+                        .to_string(),
+                    task_class: "worker".to_string(),
+                    active_node: "closure".to_string(),
+                    next_node: None,
+                    status: "ready".to_string(),
+                    route_task_class: "implementation".to_string(),
+                    selected_backend: "taskflow_state_store".to_string(),
+                    lane_id: "closure_lane".to_string(),
+                    lifecycle_stage: "closure_active".to_string(),
+                    policy_gate: "not_required".to_string(),
+                    handoff_state: "none".to_string(),
+                    context_state: "sealed".to_string(),
+                    checkpoint_kind: "execution_cursor".to_string(),
+                    resume_target: "none".to_string(),
+                    recovery_ready: true,
+                })
+                .await
+                .expect("run graph status should record");
+            let binding = test_continuation_binding(
+                "run-closed-downstream-marker",
+                "taskflow-defect-case-11-closed-downstream-binding-blocks-ready",
+                "task_close_reconcile",
+                "downstream_dispatch_target",
+            );
+            store
+                .record_run_graph_continuation_binding(&binding)
+                .await
+                .expect("continuation binding should record");
+            store
+                .refresh_task_snapshot()
+                .await
+                .expect("snapshot should refresh");
+        });
+
+        let code = runtime.block_on(crate::run(cli(&[
+            "task",
+            "next-lawful",
+            "--state-dir",
+            harness.path().to_str().expect("state path should be utf8"),
+            "--json",
+        ])));
+
+        assert_eq!(code, ExitCode::SUCCESS);
+        let projection_path = harness
+            .path()
+            .join("operator-projections")
+            .join("task-next-lawful-latest.json");
+        let projection: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(projection_path).expect("next-lawful projection should be written"),
+        )
+        .expect("next-lawful projection should parse");
+        assert_eq!(projection["status"], task_json_success_status());
+        assert_eq!(
+            projection["active_bounded_unit"]["task_id"],
+            "taskflow-case-11-actual-agent-autonomy"
+        );
+        assert_eq!(projection["binding_source"], serde_json::Value::Null);
+        assert!(projection["blocker_codes"]
+            .as_array()
+            .expect("blockers should be an array")
+            .is_empty());
     }
 
     #[test]

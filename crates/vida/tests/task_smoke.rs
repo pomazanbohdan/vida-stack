@@ -2928,7 +2928,7 @@ fn operator_json_surfaces_reuse_fresh_projection_before_store_open() {
             "blocker_codes": [],
             "next_actions": [],
             "artifact_refs": {
-                "projection": "status-summary-latest"
+                "projection": "status-summary-v2-latest"
             }
         },
         "operator_contracts": {
@@ -2938,19 +2938,19 @@ fn operator_json_surfaces_reuse_fresh_projection_before_store_open() {
             "blocker_codes": [],
             "next_actions": [],
             "artifact_refs": {
-                "projection": "status-summary-latest"
+                "projection": "status-summary-v2-latest"
             }
         },
         "blocker_codes": [],
         "next_actions": []
     });
-    write_operator_projection(&state_dir, "status-summary-latest", &status_projection);
+    write_operator_projection(&state_dir, "status-summary-v2-latest", &status_projection);
 
     let status = run_command_json(&["status", "--summary", "--json"], &state_dir);
     assert_eq!(status["cache_probe"], "status-summary-reused");
     assert_eq!(
         status["operator_contracts"]["artifact_refs"]["projection"],
-        "status-summary-latest"
+        "status-summary-v2-latest"
     );
 
     let graph_projection = serde_json::json!({
@@ -3739,6 +3739,381 @@ fn missing_task_stale_blocked_run_can_retire_without_ambiguous_next_action() {
         !next_lawful.to_string().contains("h22-missing-task"),
         "retired missing-task run must not leak into next action"
     );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn release_admitted_missing_stale_run_does_not_block_recovery_or_dispatch_preview() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let ready_task_id = "case11-ready-after-release";
+    let ready = run_command_json(
+        &[
+            "task",
+            "create",
+            ready_task_id,
+            "CASE-11 ready task after release",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(ready["status"], "pass");
+
+    let stale_run_id = "runtime-case-closure-admission-evidence-table-completed";
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            stale_run_id,
+            "implementation",
+        ],
+        &state_dir,
+    );
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            stale_run_id,
+            "implementation",
+            "implementation",
+            "blocked",
+            "implementation",
+            "{\"policy_gate\":\"validation_report_required\",\"context_state\":\"sealed\",\"resume_target\":\"none\",\"recovery_ready\":false}",
+        ],
+        &state_dir,
+    );
+
+    let runtime_consumption_dir = format!("{state_dir}/runtime-consumption");
+    fs::create_dir_all(&runtime_consumption_dir).expect("create runtime-consumption dir");
+    fs::write(
+        format!("{runtime_consumption_dir}/final-2026-05-19T00-00-00Z.json"),
+        serde_json::json!({
+            "surface": "vida taskflow consume final",
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "artifact_refs": {},
+            "operator_contracts": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {}
+            },
+            "shared_fields": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {}
+            },
+            "payload": {
+                "closure_admission": {
+                    "status": "pass",
+                    "admitted": true,
+                    "closure_decision": "closed",
+                    "decision_owner": "release-owner",
+                    "decision_at": "2026-05-19T00:00:00Z",
+                    "evidence_bundle_refs": ["evidence-bundle-case11"],
+                    "open_risk_acceptance_ids": ["risk-acceptance-case11"],
+                    "blockers": [],
+                    "proof_surfaces": ["vida taskflow consume final"],
+                    "evidence_table": [
+                        {"evidence_class": "closure_decision_record", "status": "pass", "evidence_refs": ["closure-record-case11"]},
+                        {"evidence_class": "runtime_consumption_final_snapshot", "status": "pass", "evidence_refs": ["final-snapshot-case11"]},
+                        {"evidence_class": "docflow_readiness_and_proof_receipts", "status": "pass", "evidence_refs": ["docflow-readiness-case11", "docflow-proof-case11"]},
+                        {"evidence_class": "lane_execution_and_handoff_receipts", "status": "pass", "evidence_refs": ["lane-execution-case11", "handoff-case11"]},
+                        {"evidence_class": "replay_checkpoint_lineage_artifacts", "status": "pass", "evidence_refs": ["checkpoint-case11", "replay-case11"]},
+                        {"evidence_class": "risk_acceptance_artifacts", "status": "pass", "evidence_refs": ["risk-acceptance-case11"]},
+                        {"evidence_class": "evidence_bundle_linkage", "status": "pass", "evidence_refs": ["evidence-bundle-case11"]}
+                    ]
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write release-admitted final snapshot");
+
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    fs::create_dir_all(&packet_dir).expect("create packet dir");
+    let packet_path = format!("{packet_dir}/{stale_run_id}.json");
+    fs::write(&packet_path, format!("{{\"run_id\":\"{stale_run_id}\"}}"))
+        .expect("write stale packet");
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": stale_run_id,
+            "dispatch_target": "implementation",
+            "dispatch_status": "blocked",
+            "lane_status": "lane_running",
+            "dispatch_kind": "test_dispatch",
+            "dispatch_surface": "vida agent-init",
+            "dispatch_command": "vida agent-init --execute-dispatch",
+            "dispatch_packet_path": packet_path,
+            "blocker_code": "internal_activation_view_only",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": ["internal_activation_view_only"],
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "worker",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-05-19T00:00:01Z"
+        });
+        db.query("UPSERT type::record('run_graph_dispatch_receipt', $run) CONTENT $receipt")
+            .bind(("run", stale_run_id))
+            .bind(("receipt", receipt))
+            .await
+            .expect("seed stale blocked dispatch receipt");
+        drop(db);
+    });
+
+    let recovery = run_command_json(&["taskflow", "recovery", "latest", "--json"], &state_dir);
+    assert_eq!(recovery["surface"], "vida taskflow recovery latest");
+    assert_eq!(
+        recovery["status"],
+        serde_json::Value::Null,
+        "release-admitted missing stale run should not remain latest recovery"
+    );
+
+    let next_lawful = run_command_json(&["task", "next-lawful", "--json"], &state_dir);
+    assert_eq!(next_lawful["status"], "pass");
+    assert_eq!(next_lawful["active_bounded_unit"]["task_id"], ready_task_id);
+    assert!(
+        !next_lawful.to_string().contains(stale_run_id),
+        "next-lawful must not leak stale run id"
+    );
+
+    let dispatch_output = run_command_capture(
+        &["agent", "dispatch-next", "--dev-team", "--json"],
+        &state_dir,
+    );
+    let dispatch: serde_json::Value = serde_json::from_slice(&dispatch_output.stdout)
+        .unwrap_or_else(|error| {
+            panic!(
+                "dispatch-next json should parse: {error}; stdout={} stderr={}",
+                String::from_utf8_lossy(&dispatch_output.stdout),
+                String::from_utf8_lossy(&dispatch_output.stderr)
+            )
+        });
+    assert!(
+        !dispatch.to_string().contains(stale_run_id),
+        "dispatch-next must not block on stale missing run"
+    );
+    let dispatch_blockers = dispatch["blocker_codes"]
+        .as_array()
+        .expect("dispatch blocker_codes should render");
+    assert!(
+        !dispatch_blockers
+            .iter()
+            .any(|code| code == "open_delegated_cycle"),
+        "dispatch-next must not preserve the stale delegated-cycle blocker: {dispatch}"
+    );
+    assert!(
+        dispatch["next_actions"]
+            .as_array()
+            .expect("dispatch next_actions should render")
+            .iter()
+            .any(|action| action
+                .as_str()
+                .is_some_and(|value| value.contains(ready_task_id))),
+        "dispatch-next should continue evaluating the ready successor task: {dispatch}"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn case11_agent_init_timeout_bridge_remains_blocked_evidence_without_impossible_continuation() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let task_id = "taskflow-case-11-actual-agent-autonomy";
+    let run_id = task_id;
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "CASE-11 actual agent autonomy",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", task_id, "implementation"],
+        &state_dir,
+    );
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            task_id,
+            "implementation",
+            "implementation",
+            "blocked",
+            "implementation",
+            "{\"policy_gate\":\"agent_init_execute_dispatch_timeout\",\"context_state\":\"sealed\",\"resume_target\":\"none\",\"recovery_ready\":false,\"lifecycle_stage\":\"dispatch_blocked\"}",
+        ],
+        &state_dir,
+    );
+
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    let result_dir = format!("{state_dir}/runtime-consumption/dispatch-results");
+    fs::create_dir_all(&packet_dir).expect("create packet dir");
+    fs::create_dir_all(&result_dir).expect("create result dir");
+    let packet_path = format!("{packet_dir}/{run_id}.json");
+    let result_path = format!("{result_dir}/{run_id}.json");
+    fs::write(
+        &packet_path,
+        serde_json::json!({
+            "run_id": run_id,
+            "task_id": task_id,
+            "dispatch_target": "implementation"
+        })
+        .to_string(),
+    )
+    .expect("write dispatch packet");
+    fs::write(
+        &result_path,
+        serde_json::json!({
+            "surface": "vida agent-init",
+            "status": "blocked",
+            "execution_state": "blocked",
+            "blocker_code": "internal_dispatch_timeout_without_receipt",
+            "provider_error": "configured host bridge cannot provide receipt-backed completion evidence",
+            "activation_vs_execution_evidence": {
+                "evidence_state": "internal_dispatch_timeout_without_receipt",
+                "receipt_backed": false
+            },
+            "activation_semantics": {
+                "activation_kind": "activation_view",
+                "view_only": true,
+                "executes_packet": false,
+                "records_completion_receipt": false
+            },
+            "execution_evidence": null
+        })
+        .to_string(),
+    )
+    .expect("write timeout result");
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "implementation",
+            "dispatch_status": "blocked",
+            "lane_status": "lane_blocked",
+            "dispatch_kind": "agent_lane",
+            "dispatch_surface": "vida agent-init",
+            "dispatch_command": "vida agent-init --dispatch-packet packet --execute-dispatch --json",
+            "dispatch_packet_path": packet_path,
+            "dispatch_result_path": result_path,
+            "blocker_code": "internal_dispatch_timeout_without_receipt",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": ["internal_dispatch_timeout_without_receipt"],
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "worker",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-05-19T00:00:00Z"
+        });
+        db.query("UPSERT type::record('run_graph_dispatch_receipt', $run) CONTENT $receipt")
+            .bind(("run", run_id))
+            .bind(("receipt", receipt))
+            .await
+            .expect("seed timeout dispatch receipt");
+        let binding = serde_json::json!({
+            "run_id": run_id,
+            "task_id": task_id,
+            "status": "bound",
+            "active_bounded_unit": {
+                "kind": "run_graph_task",
+                "task_id": task_id,
+                "run_id": run_id,
+                "active_node": "implementation"
+            },
+            "binding_source": "agent_init_execute_dispatch_timeout",
+            "why_this_unit": "CASE-11 timeout bridge remains blocked without completion evidence",
+            "primary_path": "normal_delivery_path",
+            "sequential_vs_parallel_posture": "sequential_case_11_only",
+            "recorded_at": "2026-05-19T00:00:00Z"
+        });
+        db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
+            .bind(("run", run_id))
+            .bind(("binding", binding))
+            .await
+            .expect("seed timeout continuation binding");
+        drop(db);
+    });
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    assert_eq!(
+        status["latest_run_graph_dispatch_receipt"]["blocker_code"],
+        "internal_dispatch_timeout_without_receipt"
+    );
+    assert_eq!(
+        status["latest_run_graph_dispatch_receipt"]["dispatch_status"],
+        "blocked"
+    );
+    assert_no_run_id_consume_continue_command(&status, run_id, "status");
+
+    let next_lawful_output = run_command_capture(&["task", "next-lawful", "--json"], &state_dir);
+    assert!(
+        !next_lawful_output.status.success(),
+        "CASE-11 timeout bridge must not be treated as completion: stdout={} stderr={}",
+        String::from_utf8_lossy(&next_lawful_output.stdout),
+        String::from_utf8_lossy(&next_lawful_output.stderr)
+    );
+    let next_lawful: serde_json::Value = serde_json::from_slice(&next_lawful_output.stdout)
+        .expect("next-lawful blocked json should parse");
+    assert_eq!(next_lawful["status"], "blocked");
+    assert!(next_lawful["blocker_codes"]
+        .as_array()
+        .expect("next-lawful blocker_codes should render")
+        .iter()
+        .any(|code| code == "open_delegated_cycle"));
+    assert_no_run_id_consume_continue_command(&next_lawful, run_id, "next-lawful");
+
+    let doctor = run_command_json(&["doctor", "--json"], &state_dir);
+    assert_eq!(
+        doctor["latest_run_graph_dispatch_receipt"]["blocker_code"],
+        "internal_dispatch_timeout_without_receipt"
+    );
+    assert_no_run_id_consume_continue_command(&doctor, run_id, "doctor");
 
     let _ = fs::remove_dir_all(&state_dir);
 }

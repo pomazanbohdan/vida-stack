@@ -25,15 +25,25 @@ pub(crate) fn build_status_truth_inputs(
     let mut host_agents = status_project_root
         .as_deref()
         .and_then(build_host_agent_status_summary);
-    let latest_final_snapshot_path = if summary_only {
-        runtime_consumption_latest_snapshot_path
-            .filter(|path| path.contains("/final-") || path.contains("\\final-"))
-            .map(ToOwned::to_owned)
-    } else {
-        crate::runtime_consumption_state::latest_final_runtime_consumption_snapshot_path(state_root)
-            .ok()
-            .flatten()
-    };
+    let latest_final_snapshot_path =
+        crate::release1_contracts::latest_release_admission_operator_evidence_snapshot_path(
+            state_root,
+        )
+        .ok()
+        .flatten()
+        .or_else(|| {
+            if summary_only {
+                runtime_consumption_latest_snapshot_path
+                    .filter(|path| path.contains("/final-") || path.contains("\\final-"))
+                    .map(ToOwned::to_owned)
+            } else {
+                crate::runtime_consumption_state::latest_final_runtime_consumption_snapshot_path(
+                    state_root,
+                )
+                .ok()
+                .flatten()
+            }
+        });
     let latest_recorded_final_snapshot_path = if summary_only {
         None
     } else {

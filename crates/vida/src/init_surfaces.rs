@@ -315,6 +315,110 @@ fn agent_init_dispatch_timeout_fallback_payload(
     payload
 }
 
+fn orchestrator_init_projection_name(full: bool) -> &'static str {
+    if full {
+        "orchestrator-init-full-latest"
+    } else {
+        "orchestrator-init-summary-latest"
+    }
+}
+
+fn compact_project_activation_summary(init_view: &serde_json::Value) -> serde_json::Value {
+    let project_activation = &init_view["project_activation"];
+    serde_json::json!({
+        "status": project_activation["status"],
+        "activation_pending": project_activation["activation_pending"],
+        "project_shape": project_activation["project_shape"],
+        "next_steps": project_activation["next_steps"],
+        "host_environment": {
+            "selected_cli_system": project_activation["host_environment"]["selected_cli_system"],
+            "selected_cli_execution_class": project_activation["host_environment"]["selected_cli_execution_class"],
+            "template_materialized": project_activation["host_environment"]["template_materialized"],
+            "materialization_required": project_activation["host_environment"]["materialization_required"],
+        }
+    })
+}
+
+fn compact_dev_team_readiness_summary(dev_team_readiness: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "status": dev_team_readiness["status"],
+        "sequence": dev_team_readiness["sequence"],
+        "role_count": dev_team_readiness["roles"].as_array().map(|roles| roles.len()).unwrap_or(0),
+        "flow_count": dev_team_readiness["flows"].as_array().map(|flows| flows.len()).unwrap_or(0),
+        "active_selection": dev_team_readiness["active_selection"],
+        "source_paths": dev_team_readiness["source_paths"],
+    })
+}
+
+fn orchestrator_runtime_bundle_summary(
+    bundle: &crate::TaskflowConsumeBundlePayload,
+    state_dir: &Path,
+) -> serde_json::Value {
+    serde_json::json!({
+        "bundle_id": bundle.metadata["bundle_id"],
+        "root_artifact_id": bundle.control_core["root_artifact_id"],
+        "activation_source": &bundle.activation_source,
+        "vida_root": &bundle.vida_root,
+        "state_dir": state_dir.display().to_string(),
+        "launcher_runtime_paths": &bundle.launcher_runtime_paths,
+    })
+}
+
+fn build_orchestrator_init_full_payload(
+    init_view: &serde_json::Value,
+    dev_team_readiness: &serde_json::Value,
+    orchestrator_runtime_contract: &serde_json::Value,
+    bundle: &crate::TaskflowConsumeBundlePayload,
+    state_dir: &Path,
+) -> serde_json::Value {
+    serde_json::json!({
+        "surface": "vida orchestrator-init",
+        "view": "full",
+        "state_read": {
+            "mode": "authoritative_open",
+            "lock_resilient": true,
+            "fallback": "degraded_lock_contention_surface"
+        },
+        "init": init_view,
+        "dev_team_readiness": dev_team_readiness,
+        "orchestrator_runtime_contract": orchestrator_runtime_contract,
+        "runtime_bundle_summary": orchestrator_runtime_bundle_summary(bundle, state_dir),
+    })
+}
+
+fn build_orchestrator_init_summary_payload(
+    init_view: &serde_json::Value,
+    dev_team_readiness: &serde_json::Value,
+    orchestrator_runtime_contract: &serde_json::Value,
+    bundle: &crate::TaskflowConsumeBundlePayload,
+    state_dir: &Path,
+) -> serde_json::Value {
+    serde_json::json!({
+        "surface": "vida orchestrator-init",
+        "view": "summary",
+        "status": init_view["status"],
+        "full_output_available": true,
+        "full_output_command": "vida orchestrator-init --full --json",
+        "state_read": {
+            "mode": "authoritative_open",
+            "lock_resilient": true,
+            "fallback": "degraded_lock_contention_surface"
+        },
+        "init": {
+            "status": init_view["status"],
+            "local_runtime_surface": init_view["local_runtime_surface"],
+            "boot_surface": init_view["boot_surface"],
+            "continuation_binding": init_view["continuation_binding"],
+            "project_activation": compact_project_activation_summary(init_view),
+            "project_root": init_view["project_root"],
+            "root_artifact_id": init_view["root_artifact_id"],
+        },
+        "next_lawful_dispatch_action": orchestrator_runtime_contract["next_lawful_dispatch_action"],
+        "dev_team_readiness_summary": compact_dev_team_readiness_summary(dev_team_readiness),
+        "runtime_bundle_summary": orchestrator_runtime_bundle_summary(bundle, state_dir),
+    })
+}
+
 fn build_orchestrator_runtime_contract(
     init_view: &serde_json::Value,
     dev_team_readiness: &serde_json::Value,
@@ -2586,7 +2690,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
     if args.json {
         if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
             &state_dir,
-            "orchestrator-init-latest",
+            orchestrator_init_projection_name(args.full),
         ) {
             println!("{cached}");
             return ExitCode::SUCCESS;
@@ -2649,7 +2753,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                     };
                     let init_view =
                         super::project_activator_surface::merge_project_activation_into_init_view(
-                            bundle.orchestrator_init_view,
+                            bundle.orchestrator_init_view.clone(),
                             &project_activation_view,
                         );
                     let dev_team_readiness =
@@ -2660,33 +2764,31 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                     let orchestrator_runtime_contract =
                         build_orchestrator_runtime_contract(&init_view, &dev_team_readiness);
                     if args.json {
-                        let payload = serde_json::json!({
-                            "surface": "vida orchestrator-init",
-                            "state_read": {
-                                "mode": "authoritative_open",
-                                "lock_resilient": true,
-                                "fallback": "degraded_lock_contention_surface"
-                            },
-                            "init": init_view,
-                            "dev_team_readiness": dev_team_readiness,
-                            "orchestrator_runtime_contract": orchestrator_runtime_contract,
-                            "runtime_bundle_summary": {
-                                "bundle_id": bundle.metadata["bundle_id"],
-                                "root_artifact_id": bundle.control_core["root_artifact_id"],
-                                "activation_source": bundle.activation_source,
-                                "vida_root": bundle.vida_root,
-                                "state_dir": store.root().display().to_string(),
-                                "launcher_runtime_paths": bundle.launcher_runtime_paths,
-                            },
-                        });
+                        let payload = if args.full {
+                            build_orchestrator_init_full_payload(
+                                &init_view,
+                                &dev_team_readiness,
+                                &orchestrator_runtime_contract,
+                                &bundle,
+                                store.root(),
+                            )
+                        } else {
+                            build_orchestrator_init_summary_payload(
+                                &init_view,
+                                &dev_team_readiness,
+                                &orchestrator_runtime_contract,
+                                &bundle,
+                                store.root(),
+                            )
+                        };
                         println!(
                             "{}",
                             serde_json::to_string_pretty(&payload)
-                            .expect("orchestrator-init json should render")
+                                .expect("orchestrator-init json should render")
                         );
                         crate::operator_projection_cache::write_json_projection(
                             store.root(),
-                            "orchestrator-init-latest",
+                            orchestrator_init_projection_name(args.full),
                             &payload,
                         );
                     } else {

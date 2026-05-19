@@ -3429,6 +3429,14 @@ fn bootstrap_init_surfaces_report_installed_vs_source_launcher_parity() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let parsed: serde_json::Value =
             serde_json::from_str(&stdout).expect("init surface json should parse");
+        if args.first().copied() == Some("orchestrator-init") {
+            assert_eq!(parsed["view"], "summary");
+            assert!(parsed.get("dev_team_readiness").is_none());
+            assert!(parsed.get("orchestrator_runtime_contract").is_none());
+            assert!(parsed["init"].get("operator_command_map").is_none());
+            assert!(parsed["init"].get("project_startup_capsules").is_none());
+            assert!(parsed["next_lawful_dispatch_action"].is_object());
+        }
         let launcher = &parsed["runtime_bundle_summary"]["launcher_runtime_paths"];
         assert_eq!(launcher["status"], "pass", "{args:?}");
         assert_eq!(launcher["next_actions"].as_array().map(Vec::len), Some(0));
@@ -3467,6 +3475,32 @@ fn bootstrap_init_surfaces_report_installed_vs_source_launcher_parity() {
             1,
             "exactly one active source-built launcher should be marked active"
         );
+        if args.first().copied() == Some("orchestrator-init") {
+            let full_output = run_command_with_state_lock_retry(|| {
+                let mut command = vida();
+                command
+                    .args(["orchestrator-init", "--full", "--json"])
+                    .current_dir(&project_root)
+                    .env_remove("VIDA_ROOT")
+                    .env("VIDA_HOME", &install_root)
+                    .env("HOME", &home_root)
+                    .env("VIDA_STATE_DIR", &state_dir);
+                command
+            });
+            assert!(
+                full_output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&full_output.stderr)
+            );
+            let full_stdout = String::from_utf8_lossy(&full_output.stdout);
+            let full_parsed: serde_json::Value = serde_json::from_str(&full_stdout)
+                .expect("orchestrator-init full json should parse");
+            assert_eq!(full_parsed["view"], "full");
+            assert!(full_parsed["dev_team_readiness"].is_object());
+            assert!(full_parsed["orchestrator_runtime_contract"]["allowed_topology"].is_object());
+            assert!(full_parsed["init"]["operator_command_map"].is_object());
+            assert!(full_parsed["init"]["project_startup_capsules"].is_array());
+        }
         fs::remove_dir_all(project_root).expect("temp root should be removed");
     }
 }
@@ -14370,7 +14404,9 @@ fn status_surface_supports_compact_json_summary_view() {
     assert!(parsed["state_spine"].is_object());
     assert!(parsed["project_activation"].is_object());
     assert!(parsed["protocol_binding"].is_object());
-    assert!(parsed["host_agents"].is_object());
+    assert!(parsed.get("host_agents").is_none());
+    assert!(parsed.get("operator_session_projection").is_none());
+    assert!(parsed.get("current_session").is_none());
     assert_eq!(
         parsed["root_session_write_guard"]["status"],
         "blocked_by_default"

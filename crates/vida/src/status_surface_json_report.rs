@@ -131,7 +131,6 @@ pub(crate) fn build_status_json_report(
             "latest_run_graph_dispatch_route_truth": latest_run_graph_dispatch_route_truth.clone(),
             "latest_run_graph_downstream_dispatch_preview": latest_run_graph_downstream_dispatch_preview.clone(),
             "latest_run_graph_dispatch_compact_summary": latest_run_graph_dispatch_compact_summary.clone(),
-            "host_agents": host_agents_json_value(inputs.host_agents),
         })
     } else {
         serde_json::json!({
@@ -213,31 +212,33 @@ pub(crate) fn build_status_json_report(
         })
     };
 
-    if let Some(object) = summary_json.as_object_mut() {
-        object.insert(
-            "operator_session_projection".to_string(),
-            inputs.operator_session_projection.clone(),
-        );
-        object.insert(
-            "current_session".to_string(),
-            inputs.operator_session_projection["current_session"].clone(),
-        );
-        object.insert(
-            "project_foreign_runs".to_string(),
-            inputs.operator_session_projection["project_foreign_runs"].clone(),
-        );
-        object.insert(
-            "project_foreign_blockers".to_string(),
-            inputs.operator_session_projection["project_foreign_blockers"].clone(),
-        );
-        object.insert(
-            "global_blockers".to_string(),
-            inputs.operator_session_projection["global_blockers"].clone(),
-        );
-        object.insert(
-            "claim_conflicts".to_string(),
-            inputs.operator_session_projection["claim_conflicts"].clone(),
-        );
+    if !inputs.summary_only {
+        if let Some(object) = summary_json.as_object_mut() {
+            object.insert(
+                "operator_session_projection".to_string(),
+                inputs.operator_session_projection.clone(),
+            );
+            object.insert(
+                "current_session".to_string(),
+                inputs.operator_session_projection["current_session"].clone(),
+            );
+            object.insert(
+                "project_foreign_runs".to_string(),
+                inputs.operator_session_projection["project_foreign_runs"].clone(),
+            );
+            object.insert(
+                "project_foreign_blockers".to_string(),
+                inputs.operator_session_projection["project_foreign_blockers"].clone(),
+            );
+            object.insert(
+                "global_blockers".to_string(),
+                inputs.operator_session_projection["global_blockers"].clone(),
+            );
+            object.insert(
+                "claim_conflicts".to_string(),
+                inputs.operator_session_projection["claim_conflicts"].clone(),
+            );
+        }
     }
 
     if let Some(error) =

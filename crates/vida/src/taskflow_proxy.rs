@@ -2441,6 +2441,22 @@ async fn scoped_latest_run_graph_for_explicit_ready_task(
     explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     ready_head: Option<&crate::state_store::TaskRecord>,
 ) -> Result<Option<crate::state_store::RunGraphStatus>, String> {
+    let latest_run_graph = match latest_run_graph {
+        Some(status)
+            if ready_head.is_some()
+                && store
+                    .run_graph_status_is_stale_after_release_admission_complete(&status)
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "Failed to classify release-admitted stale run-graph status: {error}"
+                        )
+                    })? =>
+        {
+            None
+        }
+        other => other,
+    };
     let Some(bound_task_id) =
         explicit_task_binding_matches_ready_task(explicit_binding, ready_head)
     else {

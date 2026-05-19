@@ -1018,6 +1018,12 @@ pub(crate) struct InitArgs {
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
 
+    #[arg(
+        long = "full",
+        help = "Render the full init envelope; routine --json output defaults to compact summary"
+    )]
+    pub(crate) full: bool,
+
     #[arg(long = "json")]
     pub(crate) json: bool,
 }

@@ -1323,7 +1323,11 @@ fn bundle_check_retrieval_trust_evidence_clears_status_and_doctor_retrieval_bloc
     )
     .expect("bundle-check snapshot should be written");
 
-    for surface_args in [vec!["status", "--json"], vec!["doctor", "--json"]] {
+    for surface_args in [
+        vec!["status", "--json"],
+        vec!["status", "--summary", "--json"],
+        vec!["doctor", "--json"],
+    ] {
         let output = vida()
             .args(surface_args)
             .env("VIDA_STATE_DIR", &state_dir)
@@ -1455,7 +1459,50 @@ fn status_and_doctor_accept_runtime_closure_admission_after_bundle_check() {
     )
     .expect("bundle-check snapshot should be written");
 
-    for surface_args in [vec!["status", "--json"], vec!["doctor", "--json"]] {
+    let projection_dir = format!("{state_dir}/operator-projections");
+    std::fs::create_dir_all(&projection_dir).expect("operator projection dir should exist");
+    std::fs::write(
+        format!("{projection_dir}/status-summary-v2-latest.json"),
+        serde_json::json!({
+            "surface": "vida status",
+            "view": "summary",
+            "status": "blocked",
+            "blocker_codes": [
+                "incomplete_release_admission_operator_evidence",
+                "missing_retrieval_trust_operator_evidence"
+            ],
+            "next_actions": ["stale cached summary"],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": [
+                    "incomplete_release_admission_operator_evidence",
+                    "missing_retrieval_trust_operator_evidence"
+                ],
+                "next_actions": ["stale cached summary"]
+            },
+            "operator_contracts": {
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "status": "blocked",
+                "blocker_codes": [
+                    "incomplete_release_admission_operator_evidence",
+                    "missing_retrieval_trust_operator_evidence"
+                ],
+                "next_actions": ["stale cached summary"],
+                "artifact_refs": {
+                    "runtime_consumption_latest_snapshot_path": format!("{runtime_consumption_dir}/bundle-check-2026-05-19T00-00-07Z.json")
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("stale status summary projection should be written");
+
+    for surface_args in [
+        vec!["status", "--json"],
+        vec!["status", "--summary", "--json"],
+        vec!["doctor", "--json"],
+    ] {
         let output = vida()
             .args(surface_args)
             .env("VIDA_STATE_DIR", &state_dir)

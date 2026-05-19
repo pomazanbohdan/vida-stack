@@ -2254,6 +2254,12 @@ impl StateStore {
             return Ok(None);
         };
         let status = self.load_consistent_run_graph_status(&run_id).await?;
+        if self
+            .run_graph_status_is_stale_after_release_admission_complete(&status)
+            .await?
+        {
+            return Ok(None);
+        }
         Ok(Some(RunGraphRecoverySummary::from_status(status)))
     }
 
@@ -2264,6 +2270,12 @@ impl StateStore {
             return Ok(None);
         };
         let status = self.load_consistent_run_graph_status(&run_id).await?;
+        if self
+            .run_graph_status_is_stale_after_release_admission_complete(&status)
+            .await?
+        {
+            return Ok(None);
+        }
         Ok(Some(RunGraphCheckpointSummary::from_status(status)))
     }
 
@@ -2274,6 +2286,12 @@ impl StateStore {
             return Ok(None);
         };
         let status = self.load_consistent_run_graph_status(&run_id).await?;
+        if self
+            .run_graph_status_is_stale_after_release_admission_complete(&status)
+            .await?
+        {
+            return Ok(None);
+        }
         Ok(Some(RunGraphGateSummary::from_status(status)))
     }
 
@@ -2296,6 +2314,31 @@ impl StateStore {
             .await?;
         Self::ensure_run_graph_recovery_surface_consistency(&status)?;
         Ok(status)
+    }
+
+    pub(crate) async fn run_graph_status_is_stale_after_release_admission_complete(
+        &self,
+        status: &RunGraphStatus,
+    ) -> Result<bool, StateStoreError> {
+        let blocked_or_open_cycle = status.status == "blocked"
+            || status.lifecycle_stage.ends_with("_blocked")
+            || status.delegation_gate().delegated_cycle_open;
+        if !blocked_or_open_cycle {
+            return Ok(false);
+        }
+        let release_admission_complete =
+            !crate::runtime_consumption_state::release_admission_operator_evidence_incomplete(
+                self.root(),
+            )
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        if !release_admission_complete {
+            return Ok(false);
+        }
+        match self.show_task(&status.task_id).await {
+            Ok(task) => Ok(task.status == "closed"),
+            Err(StateStoreError::MissingTask { .. }) => Ok(true),
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn run_graph_checkpoint_summary(
