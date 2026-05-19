@@ -340,6 +340,15 @@ fn next_lawful_candidate_ids(next_lawful: &Value) -> Vec<String> {
         .collect()
 }
 
+fn assert_no_run_id_consume_continue_command(value: &Value, run_id: &str, label: &str) {
+    let rendered = value.to_string();
+    let impossible_command = format!("vida taskflow consume continue --run-id {run_id} --json");
+    assert!(
+        !rendered.contains(&impossible_command),
+        "{label} must not emit impossible consume command `{impossible_command}`: {rendered}"
+    );
+}
+
 fn normalize_json_fixture(value: &str) -> String {
     let parsed: serde_json::Value = serde_json::from_str(value).expect("json output should parse");
     serde_json::to_string_pretty(&parsed).expect("json output should pretty render")
@@ -3527,6 +3536,170 @@ fn task_next_lawful_blocks_closed_downstream_closure_binding_without_active_or_r
         next_lawful["blocker_codes"],
         serde_json::json!(["runtime_binding_task_closed"])
     );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn closed_task_continuation_blocks_operator_surfaces_without_impossible_consume_command() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let task_id = "closed-task-continuation";
+    let run_id = task_id;
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Closed task continuation",
+            "--type",
+            "task",
+            "--status",
+            "closed",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+    assert_eq!(created["task"]["status"], "closed");
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", task_id, "implementation"],
+        &state_dir,
+    );
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            task_id,
+            "implementation",
+            "implementation",
+            "blocked",
+            "implementation",
+            "{\"policy_gate\":\"validation_report_required\",\"context_state\":\"sealed\",\"resume_target\":\"none\",\"recovery_ready\":false}",
+        ],
+        &state_dir,
+    );
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    fs::create_dir_all(&packet_dir).expect("create packet dir");
+    let packet_path = format!("{packet_dir}/{run_id}.json");
+    fs::write(
+        &packet_path,
+        serde_json::json!({
+            "run_id": run_id,
+            "task_id": task_id,
+            "dispatch_target": "implementation"
+        })
+        .to_string(),
+    )
+    .expect("write dispatch packet");
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "implementation",
+            "dispatch_status": "blocked",
+            "lane_status": "lane_running",
+            "dispatch_kind": "test_dispatch",
+            "dispatch_surface": "vida taskflow run-graph dispatch-init",
+            "dispatch_command": "vida taskflow run-graph dispatch-init closed-task-continuation --json",
+            "dispatch_packet_path": packet_path,
+            "blocker_code": "tool_execution_failed",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": [],
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "worker",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-05-19T00:00:00Z"
+        });
+        db.query("UPSERT type::record('run_graph_dispatch_receipt', $run) CONTENT $receipt")
+            .bind(("run", run_id))
+            .bind(("receipt", receipt))
+            .await
+            .expect("seed blocked dispatch receipt");
+        let binding = serde_json::json!({
+            "run_id": run_id,
+            "task_id": task_id,
+            "status": "bound",
+            "active_bounded_unit": {
+                "kind": "task_graph_task",
+                "task_id": task_id,
+                "run_id": run_id
+            },
+            "binding_source": "explicit_continuation_bind_task",
+            "why_this_unit": "closed task continuation regression seed",
+            "primary_path": "normal_delivery_path",
+            "sequential_vs_parallel_posture": "sequential_only",
+            "recorded_at": "2026-05-19T00:00:00Z"
+        });
+        db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
+            .bind(("run", run_id))
+            .bind(("binding", binding))
+            .await
+            .expect("seed closed task continuation binding");
+        drop(db);
+    });
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    let continuation = &status["continuation_binding"];
+    assert_ne!(continuation["status"], "bound");
+    assert_eq!(continuation["continuation_allowed"], false);
+    assert_eq!(continuation["active_bounded_unit"], serde_json::Value::Null);
+    assert_no_run_id_consume_continue_command(&status, run_id, "status");
+
+    let next_lawful_output = run_command_capture(&["task", "next-lawful", "--json"], &state_dir);
+    assert!(
+        !next_lawful_output.status.success(),
+        "closed continuation next-lawful must fail closed: stdout={} stderr={}",
+        String::from_utf8_lossy(&next_lawful_output.stdout),
+        String::from_utf8_lossy(&next_lawful_output.stderr)
+    );
+    let next_lawful: serde_json::Value = serde_json::from_slice(&next_lawful_output.stdout)
+        .expect("next-lawful blocked json should parse");
+    assert_eq!(next_lawful["status"], "blocked");
+    assert_eq!(next_lawful["active_bounded_unit"], serde_json::Value::Null);
+    assert!(next_lawful["blocker_codes"]
+        .as_array()
+        .expect("next-lawful blocker_codes should render")
+        .iter()
+        .any(|code| code == "no_ready_task_candidates"));
+    assert_no_run_id_consume_continue_command(&next_lawful, run_id, "next-lawful");
+
+    let consume_continue_output = run_command_capture(
+        &[
+            "taskflow", "consume", "continue", "--run-id", run_id, "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !consume_continue_output.status.success(),
+        "consume continue for closed blocked task must fail closed: stdout={} stderr={}",
+        String::from_utf8_lossy(&consume_continue_output.stdout),
+        String::from_utf8_lossy(&consume_continue_output.stderr)
+    );
+    let consume_continue: serde_json::Value =
+        serde_json::from_slice(&consume_continue_output.stdout)
+            .expect("consume continue blocked json should parse");
+    assert_eq!(consume_continue["status"], "blocked");
+    assert_no_run_id_consume_continue_command(&consume_continue, run_id, "consume continue");
+
+    let doctor = run_command_json(&["doctor", "--json"], &state_dir);
+    assert_eq!(doctor["latest_run_graph_status"], serde_json::Value::Null);
+    assert_eq!(doctor["task_store"]["closed_count"], 1);
+    assert_no_run_id_consume_continue_command(&doctor, run_id, "doctor");
 
     let _ = fs::remove_dir_all(&state_dir);
 }
