@@ -82,6 +82,157 @@ fn external_cli_command_probe<'a>(
         })
 }
 
+fn readiness_command<'a>(
+    readiness: &'a serde_yaml::Value,
+    section: &str,
+) -> Option<(&'static str, &'a str)> {
+    crate::yaml_lookup(readiness, &[section, "command"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|command| match section {
+            "adapter" => ("readiness.adapter.command", command),
+            "provider" => ("readiness.provider.command", command),
+            _ => ("readiness.command", command),
+        })
+}
+
+fn profile_write_scope_requires_guard(profile: &serde_json::Value) -> bool {
+    matches!(
+        profile["write_scope"]
+            .as_str()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default()
+            .as_str(),
+        "guard_required"
+            | "guard-required"
+            | "guard_required_owned_paths"
+            | "guard-required-owned-paths"
+            | "guard_required_packet_owned_paths"
+            | "guard-required-packet-owned-paths"
+    )
+}
+
+fn command_output_with_timeout(
+    command: &str,
+    args: &[&str],
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    let mut child = std::process::Command::new(command)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Failed to spawn `{command}`: {error}"))?;
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return child
+                    .wait_with_output()
+                    .map_err(|error| format!("Failed to collect `{command}` output: {error}"));
+            }
+            Ok(None) if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("Timed out running `{command}` readiness probe"));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            Err(error) => {
+                return Err(format!(
+                    "Failed to inspect `{command}` readiness probe: {error}"
+                ))
+            }
+        }
+    }
+}
+
+fn adapter_prewrite_guard_capabilities(adapter_command: &str) -> serde_json::Value {
+    #[cfg(test)]
+    if adapter_command == "sh" {
+        return serde_json::json!({
+            "status": "available",
+            "pre_write_enforcement": true,
+            "explicit_extension_arg": true,
+            "source": "test-fixture"
+        });
+    }
+
+    let output = match command_output_with_timeout(
+        adapter_command,
+        &["--capabilities-json"],
+        std::time::Duration::from_secs(3),
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            return serde_json::json!({
+                "status": "probe_failed",
+                "pre_write_enforcement": false,
+                "error": error,
+            })
+        }
+    };
+    if !output.status.success() {
+        return serde_json::json!({
+            "status": "probe_failed",
+            "pre_write_enforcement": false,
+            "exit_status": output.status.to_string(),
+        });
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(stdout.trim()) else {
+        return serde_json::json!({
+            "status": "invalid_capabilities_json",
+            "pre_write_enforcement": false,
+        });
+    };
+    let scope_guard = &value["scope_guard"];
+    let pre_write_enforcement = scope_guard["pre_write_enforcement"]
+        .as_bool()
+        .unwrap_or(false)
+        && scope_guard["explicit_extension_arg"]
+            .as_bool()
+            .unwrap_or(false);
+    serde_json::json!({
+        "status": if pre_write_enforcement { "available" } else { "missing" },
+        "pre_write_enforcement": pre_write_enforcement,
+        "explicit_extension_arg": scope_guard["explicit_extension_arg"].as_bool().unwrap_or(false),
+        "raw": value,
+    })
+}
+
+fn pi_model_catalog_contains_model(
+    provider_command: &str,
+    expected_model_ref: &str,
+) -> Result<bool, String> {
+    let output = command_output_with_timeout(
+        provider_command,
+        &["--list-models"],
+        std::time::Duration::from_secs(3),
+    )?;
+    if !output.status.success() {
+        return Err(format!(
+            "Pi model catalog probe failed with status {}",
+            output.status
+        ));
+    }
+    let mut combined = String::new();
+    combined.push_str(&String::from_utf8_lossy(&output.stdout));
+    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    let expected = expected_model_ref.trim();
+    if expected.is_empty() {
+        return Ok(true);
+    }
+    if combined.contains(expected) {
+        return Ok(true);
+    }
+    if let Some((provider, model)) = expected.split_once('/') {
+        return Ok(combined.contains(provider.trim()) && combined.contains(model.trim()));
+    }
+    Ok(combined.contains(expected))
+}
+
 fn read_text_file(path: &str) -> Option<String> {
     std::fs::read_to_string(expand_user_path(path)).ok()
 }
@@ -273,12 +424,371 @@ fn selected_external_cli_profile(
         .unwrap_or_else(|| profile_projection["default_model_profile"].clone())
 }
 
+fn selected_profile_id_value(
+    profile_projection: &serde_json::Value,
+    selected_profile: &serde_json::Value,
+) -> serde_json::Value {
+    selected_profile["profile_id"]
+        .as_str()
+        .map(|value| serde_json::Value::String(value.to_string()))
+        .unwrap_or_else(|| profile_projection["default_model_profile"].clone())
+}
+
+fn pi_style_readiness_payload(
+    backend_id: &str,
+    status: &str,
+    blocked: bool,
+    blocker_code: serde_json::Value,
+    profile_projection: &serde_json::Value,
+    selected_profile: &serde_json::Value,
+    expected_model_ref: Option<String>,
+    adapter_status: serde_json::Value,
+    provider_status: serde_json::Value,
+    model_catalog_status: serde_json::Value,
+    write_scope_guard_status: serde_json::Value,
+    next_actions: Vec<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "backend_id": backend_id,
+        "status": status,
+        "blocked": blocked,
+        "blocker_code": blocker_code,
+        "current_model_ref": serde_json::Value::Null,
+        "current_reasoning_effort": profile_projection["current_reasoning_effort"].clone(),
+        "expected_model_ref": expected_model_ref,
+        "default_model_profile": profile_projection["default_model_profile"].clone(),
+        "selected_model_profile": selected_profile_id_value(profile_projection, selected_profile),
+        "model_profiles": profile_projection["model_profiles"].clone(),
+        "adapter": adapter_status,
+        "provider": provider_status,
+        "model_catalog": model_catalog_status,
+        "write_scope_guard": write_scope_guard_status,
+        "next_actions": next_actions,
+    })
+}
+
+fn command_ready_status(source: &str, command: &str) -> serde_json::Value {
+    serde_json::json!({
+        "source": source,
+        "status": "command_found",
+        "command": command,
+    })
+}
+
+fn command_missing_status(source: &str, command: &str) -> serde_json::Value {
+    serde_json::json!({
+        "source": source,
+        "status": "command_not_found",
+        "command": command,
+    })
+}
+
+fn pi_style_external_cli_carrier_readiness(
+    backend_id: &str,
+    backend_entry: &serde_yaml::Value,
+    readiness: &serde_yaml::Value,
+    profile_projection: &serde_json::Value,
+    selected_profile: &serde_json::Value,
+    _preferred_profile_id: Option<&str>,
+) -> serde_json::Value {
+    let expected_model_ref = selected_profile["model_ref"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            profile_projection["model"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        });
+    let selected_profile_id = selected_profile_id_value(profile_projection, selected_profile);
+    let adapter_command = readiness_command(readiness, "adapter")
+        .or_else(|| external_cli_command_probe(backend_entry));
+    let Some((adapter_source, adapter_command)) = adapter_command else {
+        return pi_style_readiness_payload(
+            backend_id,
+            "pi_adapter_command_not_configured",
+            true,
+            serde_json::Value::String(
+                crate::release1_contracts::blocker_code_str(
+                    crate::release1_contracts::BlockerCode::ToolExecutionFailed,
+                )
+                .to_string(),
+            ),
+            profile_projection,
+            selected_profile,
+            expected_model_ref,
+            serde_json::json!({"status":"command_not_configured"}),
+            serde_json::json!({"status":"not_checked"}),
+            serde_json::json!({"status":"not_checked"}),
+            serde_json::json!({"status":"not_checked"}),
+            vec!["Configure readiness.adapter.command for this Pi external carrier.".to_string()],
+        );
+    };
+    if !command_is_resolvable(adapter_command) {
+        return pi_style_readiness_payload(
+            backend_id,
+            "pi_adapter_command_not_found",
+            true,
+            serde_json::Value::String(
+                crate::release1_contracts::blocker_code_str(
+                    crate::release1_contracts::BlockerCode::ToolExecutionFailed,
+                )
+                .to_string(),
+            ),
+            profile_projection,
+            selected_profile,
+            expected_model_ref,
+            command_missing_status(adapter_source, adapter_command),
+            serde_json::json!({"status":"not_checked"}),
+            serde_json::json!({"status":"not_checked"}),
+            serde_json::json!({"status":"not_checked"}),
+            vec![format!(
+                "Install or expose Pi adapter command `{adapter_command}` on PATH before dispatch."
+            )],
+        );
+    }
+    let adapter_status = command_ready_status(adapter_source, adapter_command);
+
+    let provider_command = readiness_command(readiness, "provider");
+    let Some((provider_source, provider_command)) = provider_command else {
+        return pi_style_readiness_payload(
+            backend_id,
+            "pi_provider_command_not_configured",
+            true,
+            serde_json::Value::String(
+                crate::release1_contracts::blocker_code_str(
+                    crate::release1_contracts::BlockerCode::ToolExecutionFailed,
+                )
+                .to_string(),
+            ),
+            profile_projection,
+            selected_profile,
+            expected_model_ref,
+            adapter_status,
+            serde_json::json!({"status":"command_not_configured"}),
+            serde_json::json!({"status":"not_checked"}),
+            serde_json::json!({"status":"not_checked"}),
+            vec!["Configure readiness.provider.command for this Pi external carrier.".to_string()],
+        );
+    };
+    if !command_is_resolvable(provider_command) {
+        return pi_style_readiness_payload(
+            backend_id,
+            "pi_provider_command_not_found",
+            true,
+            serde_json::Value::String(crate::release1_contracts::blocker_code_str(
+                crate::release1_contracts::BlockerCode::ToolExecutionFailed,
+            ).to_string()),
+            profile_projection,
+            selected_profile,
+            expected_model_ref,
+            adapter_status,
+            command_missing_status(provider_source, provider_command),
+            serde_json::json!({"status":"not_checked"}),
+            serde_json::json!({"status":"not_checked"}),
+            vec![format!("Install or expose Pi provider command `{provider_command}` on PATH before dispatch.")],
+        );
+    }
+    let provider_status = command_ready_status(provider_source, provider_command);
+
+    let model_catalog_mode = crate::yaml_lookup(readiness, &["model_catalog", "mode"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .unwrap_or("none");
+    let model_catalog_status = if matches!(
+        model_catalog_mode,
+        "pi_rpc_get_available_models" | "pi_list_models" | "pi_get_available_models"
+    ) {
+        match expected_model_ref.as_deref() {
+            Some(expected) => match pi_model_catalog_contains_model(provider_command, expected) {
+                Ok(true) => serde_json::json!({
+                    "mode": model_catalog_mode,
+                    "status": "model_available",
+                    "expected_model_ref": expected,
+                }),
+                Ok(false) => {
+                    return pi_style_readiness_payload(
+                        backend_id,
+                        "pi_model_unavailable",
+                        true,
+                        serde_json::Value::String(crate::release1_contracts::blocker_code_str(
+                            crate::release1_contracts::BlockerCode::ModelNotPinned,
+                        ).to_string()),
+                        profile_projection,
+                        selected_profile,
+                        expected_model_ref.clone(),
+                        adapter_status,
+                        provider_status,
+                        serde_json::json!({
+                            "mode": model_catalog_mode,
+                            "status": "model_not_found",
+                            "expected_model_ref": expected,
+                        }),
+                        serde_json::json!({"status":"not_checked"}),
+                        vec![format!("Pi model catalog does not include selected model `{expected}` for profile `{}`.", selected_profile_id.as_str().unwrap_or("unknown"))],
+                    );
+                }
+                Err(error) => {
+                    return pi_style_readiness_payload(
+                        backend_id,
+                        "pi_model_catalog_unavailable",
+                        true,
+                        serde_json::Value::String(
+                            crate::release1_contracts::blocker_code_str(
+                                crate::release1_contracts::BlockerCode::ToolExecutionFailed,
+                            )
+                            .to_string(),
+                        ),
+                        profile_projection,
+                        selected_profile,
+                        expected_model_ref.clone(),
+                        adapter_status,
+                        provider_status,
+                        serde_json::json!({
+                            "mode": model_catalog_mode,
+                            "status": "probe_failed",
+                            "error": error,
+                        }),
+                        serde_json::json!({"status":"not_checked"}),
+                        vec![
+                            "Repair Pi model catalog access, then rerun `vida status --json`."
+                                .to_string(),
+                        ],
+                    );
+                }
+            },
+            None => serde_json::json!({
+                "mode": model_catalog_mode,
+                "status": "not_checked_no_expected_model",
+            }),
+        }
+    } else {
+        serde_json::json!({
+            "mode": model_catalog_mode,
+            "status": "not_required",
+        })
+    };
+
+    let guard_required_for_write = crate::yaml_bool(
+        crate::yaml_lookup(
+            readiness,
+            &["write_scope_guard", "required_for_write_profiles"],
+        ),
+        false,
+    );
+    let fail_closed_until_available = crate::yaml_bool(
+        crate::yaml_lookup(
+            readiness,
+            &["write_scope_guard", "fail_closed_until_available"],
+        ),
+        false,
+    );
+    let guard_required_by_profile = profile_write_scope_requires_guard(selected_profile);
+    let guard_mode = crate::yaml_lookup(readiness, &["write_scope_guard", "mode"])
+        .and_then(serde_yaml::Value::as_str)
+        .unwrap_or("none");
+    let adapter_capabilities = if guard_required_for_write || guard_required_by_profile {
+        adapter_prewrite_guard_capabilities(adapter_command)
+    } else {
+        serde_json::json!({"status":"not_required", "pre_write_enforcement": false})
+    };
+    let prewrite_guard_active = adapter_capabilities["pre_write_enforcement"]
+        .as_bool()
+        .unwrap_or(false);
+    let write_scope_guard_status = serde_json::json!({
+        "mode": guard_mode,
+        "required_for_write_profiles": guard_required_for_write,
+        "fail_closed_until_available": fail_closed_until_available,
+        "selected_profile_requires_guard": guard_required_by_profile,
+        "pre_write_enforcement": prewrite_guard_active,
+        "adapter_capabilities": adapter_capabilities,
+        "status": if guard_required_by_profile && guard_required_for_write && prewrite_guard_active {
+            "active"
+        } else if guard_required_by_profile && guard_required_for_write && fail_closed_until_available {
+            "guard_required_not_active"
+        } else {
+            "not_blocking"
+        },
+    });
+    if guard_required_by_profile
+        && guard_required_for_write
+        && fail_closed_until_available
+        && !prewrite_guard_active
+    {
+        return pi_style_readiness_payload(
+            backend_id,
+            "pi_write_scope_guard_required",
+            true,
+            serde_json::Value::String("write_scope_guard_required".to_string()),
+            profile_projection,
+            selected_profile,
+            expected_model_ref,
+            adapter_status,
+            provider_status,
+            model_catalog_status,
+            write_scope_guard_status,
+            vec!["Install an updated vida-pi-agent that reports Pi pre-write guard capabilities before admitting write-capable Pi profiles.".to_string()],
+        );
+    }
+
+    pi_style_readiness_payload(
+        backend_id,
+        "carrier_ready",
+        false,
+        serde_json::Value::Null,
+        profile_projection,
+        selected_profile,
+        expected_model_ref,
+        adapter_status,
+        provider_status,
+        model_catalog_status,
+        write_scope_guard_status,
+        Vec::new(),
+    )
+}
+
 fn external_cli_carrier_readiness(
     backend_id: &str,
     backend_entry: &serde_yaml::Value,
     preferred_profile_id: Option<&str>,
 ) -> serde_json::Value {
     let profile_projection = external_backend_profile_projection(backend_id, backend_entry);
+    let readiness = crate::yaml_lookup(backend_entry, &["readiness"]);
+    let preferred_profile = crate::model_profile_contract::selected_model_profile_from_json_row(
+        &profile_projection,
+        preferred_profile_id,
+    )
+    .unwrap_or(serde_json::Value::Null);
+    let selected_profile = if preferred_profile.is_null() {
+        crate::model_profile_contract::selected_model_profile_from_json_row(
+            &profile_projection,
+            profile_projection["default_model_profile"].as_str(),
+        )
+        .unwrap_or(serde_json::Value::Null)
+    } else {
+        preferred_profile.clone()
+    };
+
+    if let Some(readiness) = readiness {
+        let has_pi_style_readiness = readiness_command(readiness, "adapter").is_some()
+            || readiness_command(readiness, "provider").is_some()
+            || crate::yaml_lookup(readiness, &["model_catalog", "mode"]).is_some()
+            || crate::yaml_lookup(readiness, &["write_scope_guard", "mode"]).is_some();
+        if has_pi_style_readiness {
+            return pi_style_external_cli_carrier_readiness(
+                backend_id,
+                backend_entry,
+                readiness,
+                &profile_projection,
+                &selected_profile,
+                preferred_profile_id,
+            );
+        }
+    }
+
     if let Some((command_source, command)) = external_cli_command_probe(backend_entry) {
         if !command_is_resolvable(command) {
             return serde_json::json!({
@@ -307,7 +817,6 @@ fn external_cli_carrier_readiness(
             });
         }
     }
-    let readiness = crate::yaml_lookup(backend_entry, &["readiness"]);
     if readiness.is_none() {
         return serde_json::json!({
             "backend_id": backend_id,
@@ -1124,10 +1633,243 @@ fn external_cli_preflight_summary_with_probe(
 #[cfg(test)]
 mod tests {
     use super::{
-        external_cli_backend_readiness_verdict_for_profile, external_cli_preflight_summary,
-        external_cli_preflight_summary_with_probe_override,
+        adapter_prewrite_guard_capabilities, external_cli_backend_readiness_verdict_for_profile,
+        external_cli_preflight_summary, external_cli_preflight_summary_with_probe_override,
     };
     use std::fs;
+
+    #[test]
+    fn adapter_prewrite_guard_capabilities_reports_test_fixture_active() {
+        let capabilities = adapter_prewrite_guard_capabilities("sh");
+        assert_eq!(capabilities["status"], "available");
+        assert_eq!(capabilities["pre_write_enforcement"], true);
+        assert_eq!(capabilities["explicit_extension_arg"], true);
+    }
+
+    fn current_exe_command() -> String {
+        std::env::current_exe()
+            .expect("current executable path should be available")
+            .display()
+            .to_string()
+    }
+
+    fn fake_pi_list_models_command(models: &[&str]) -> String {
+        let root = std::env::temp_dir().join(format!(
+            "vida-fake-pi-list-models-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should support unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("fake pi command dir should exist");
+        #[cfg(windows)]
+        {
+            let path = root.join("fake-pi.cmd");
+            let mut body = String::from("@echo off\r\n");
+            body.push_str("if \"%1\"==\"--list-models\" (\r\n");
+            body.push_str("  echo provider model\r\n");
+            for model in models {
+                if let Some((provider, model_id)) = model.split_once('/') {
+                    body.push_str(&format!("  echo {provider} {model_id}\r\n"));
+                } else {
+                    body.push_str(&format!("  echo {model}\r\n"));
+                }
+            }
+            body.push_str("  exit /b 0\r\n)\r\nexit /b 0\r\n");
+            fs::write(&path, body).expect("fake pi command should write");
+            path.display().to_string()
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = root.join("fake-pi.sh");
+            let mut body = String::from(
+                "#!/bin/sh\nif [ \"$1\" = \"--list-models\" ]; then\n  echo 'provider model'\n",
+            );
+            for model in models {
+                if let Some((provider, model_id)) = model.split_once('/') {
+                    body.push_str(&format!("  echo '{provider} {model_id}'\n"));
+                } else {
+                    body.push_str(&format!("  echo '{model}'\n"));
+                }
+            }
+            body.push_str("  exit 0\nfi\nexit 0\n");
+            fs::write(&path, body).expect("fake pi command should write");
+            let mut permissions = fs::metadata(&path)
+                .expect("fake pi command metadata should read")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&path, permissions).expect("fake pi command should be executable");
+            path.display().to_string()
+        }
+    }
+
+    fn pi_backend_entry(adapter_command: &str, provider_command: &str) -> serde_yaml::Value {
+        serde_yaml::to_value(serde_json::json!({
+            "enabled": true,
+            "subagent_backend_class": "external_cli",
+            "detect_command": "vida-pi-agent",
+            "default_model": "openai-codex/gpt-5.5",
+            "default_model_profile": "pi_gpt55_medium_guarded",
+            "model_profiles": {
+                "pi_gpt55_medium_guarded": {
+                    "profile_id": "pi_gpt55_medium_guarded",
+                    "provider": "pi",
+                    "model_ref": "openai-codex/gpt-5.5",
+                    "reasoning_effort": "medium",
+                    "normalized_cost_units": 4,
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "write_scope": "guard_required_owned_paths"
+                },
+                "pi_gpt55_high_readonly": {
+                    "profile_id": "pi_gpt55_high_readonly",
+                    "provider": "pi",
+                    "model_ref": "openai-codex/gpt-5.5",
+                    "reasoning_effort": "high",
+                    "normalized_cost_units": 16,
+                    "runtime_roles": ["verifier"],
+                    "task_classes": ["review", "verification"],
+                    "write_scope": "none"
+                }
+            },
+            "dispatch": {
+                "command": "vida-pi-agent",
+                "model_flag": "--model"
+            },
+            "readiness": {
+                "adapter": {"mode": "command_found", "command": adapter_command},
+                "provider": {"mode": "command_found", "command": provider_command},
+                "model_catalog": {"mode": "pi_rpc_get_available_models", "required": true},
+                "write_scope_guard": {
+                    "mode": "adapter_feature_required",
+                    "required_for_write_profiles": true,
+                    "fail_closed_until_available": true
+                }
+            }
+        }))
+        .expect("pi backend yaml value should render")
+    }
+
+    #[test]
+    fn pi_readiness_blocks_when_adapter_command_missing_distinctly() {
+        let provider = fake_pi_list_models_command(&["openai-codex/gpt-5.5"]);
+        let entry = pi_backend_entry(
+            "vida-definitely-missing-pi-adapter-command-for-test",
+            &provider,
+        );
+
+        let readiness = external_cli_backend_readiness_verdict_for_profile(
+            "pi_cli",
+            &entry,
+            Some("pi_gpt55_high_readonly"),
+        );
+
+        assert_eq!(readiness["status"], "pi_adapter_command_not_found");
+        assert_eq!(readiness["blocked"], true);
+        assert_eq!(readiness["adapter"]["status"], "command_not_found");
+        assert_eq!(readiness["adapter"]["source"], "readiness.adapter.command");
+        assert_eq!(readiness["provider"]["status"], "not_checked");
+    }
+
+    #[test]
+    fn pi_readiness_blocks_when_provider_command_missing_after_adapter_found() {
+        let entry = pi_backend_entry(
+            &current_exe_command(),
+            "vida-definitely-missing-pi-provider-command-for-test",
+        );
+
+        let readiness = external_cli_backend_readiness_verdict_for_profile(
+            "pi_cli",
+            &entry,
+            Some("pi_gpt55_high_readonly"),
+        );
+
+        assert_eq!(readiness["status"], "pi_provider_command_not_found");
+        assert_eq!(readiness["blocked"], true);
+        assert_eq!(readiness["adapter"]["status"], "command_found");
+        assert_eq!(readiness["provider"]["status"], "command_not_found");
+        assert_eq!(
+            readiness["provider"]["source"],
+            "readiness.provider.command"
+        );
+    }
+
+    #[test]
+    fn pi_readiness_reports_model_catalog_ready_for_readonly_profile() {
+        let provider = fake_pi_list_models_command(&["openai-codex/gpt-5.5"]);
+        let entry = pi_backend_entry(&current_exe_command(), &provider);
+
+        let readiness = external_cli_backend_readiness_verdict_for_profile(
+            "pi_cli",
+            &entry,
+            Some("pi_gpt55_high_readonly"),
+        );
+
+        assert_eq!(readiness["status"], "carrier_ready");
+        assert_eq!(readiness["blocked"], false);
+        assert_eq!(readiness["model_catalog"]["status"], "model_available");
+        assert_eq!(readiness["write_scope_guard"]["status"], "not_blocking");
+    }
+
+    #[test]
+    fn pi_readiness_blocks_when_model_catalog_is_missing_selected_model() {
+        let provider = fake_pi_list_models_command(&["openai-codex/gpt-5.4"]);
+        let entry = pi_backend_entry(&current_exe_command(), &provider);
+
+        let readiness = external_cli_backend_readiness_verdict_for_profile(
+            "pi_cli",
+            &entry,
+            Some("pi_gpt55_high_readonly"),
+        );
+
+        assert_eq!(readiness["status"], "pi_model_unavailable");
+        assert_eq!(readiness["blocked"], true);
+        assert_eq!(readiness["blocker_code"], "model_not_pinned");
+        assert_eq!(readiness["model_catalog"]["status"], "model_not_found");
+    }
+
+    #[test]
+    fn pi_readiness_blocks_guarded_write_profile_until_write_guard_exists() {
+        let provider = fake_pi_list_models_command(&["openai-codex/gpt-5.5"]);
+        let entry = pi_backend_entry(&current_exe_command(), &provider);
+
+        let readiness = external_cli_backend_readiness_verdict_for_profile(
+            "pi_cli",
+            &entry,
+            Some("pi_gpt55_medium_guarded"),
+        );
+
+        assert_eq!(readiness["status"], "pi_write_scope_guard_required");
+        assert_eq!(readiness["blocked"], true);
+        assert_eq!(readiness["blocker_code"], "write_scope_guard_required");
+        assert_eq!(readiness["model_catalog"]["status"], "model_available");
+        assert_eq!(
+            readiness["write_scope_guard"]["status"],
+            "guard_required_not_active"
+        );
+    }
+
+    #[test]
+    fn pi_readiness_does_not_block_readonly_profile_on_write_guard() {
+        let provider = fake_pi_list_models_command(&["openai-codex/gpt-5.5"]);
+        let entry = pi_backend_entry(&current_exe_command(), &provider);
+
+        let readiness = external_cli_backend_readiness_verdict_for_profile(
+            "pi_cli",
+            &entry,
+            Some("pi_gpt55_high_readonly"),
+        );
+
+        assert_eq!(readiness["status"], "carrier_ready");
+        assert_eq!(readiness["blocked"], false);
+        assert_eq!(readiness["write_scope_guard"]["status"], "not_blocking");
+        assert_eq!(
+            readiness["write_scope_guard"]["selected_profile_requires_guard"],
+            false
+        );
+    }
 
     #[test]
     fn internal_host_without_enabled_external_backends_does_not_require_external_cli() {

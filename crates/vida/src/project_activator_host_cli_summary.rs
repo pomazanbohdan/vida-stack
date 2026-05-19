@@ -5,7 +5,44 @@ use crate::project_activator_surface::{
     host_cli_system_enabled, host_cli_system_execution_class, host_cli_system_materialization_mode,
     host_cli_system_runtime_root, host_cli_system_runtime_surface, normalize_host_cli_system,
     resolve_host_cli_template_source, HOST_CLI_PLACEHOLDER, HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE,
+    PI_AGENT_PROJECTION_RENDER_MODE,
 };
+
+fn pi_projection_path(
+    project_root: &Path,
+    entry: &serde_yaml::Value,
+    key: &str,
+    default_path: &str,
+) -> PathBuf {
+    let configured = crate::yaml_string(crate::yaml_lookup(entry, &["app", key]))
+        .unwrap_or_else(|| default_path.to_string());
+    project_root.join(configured)
+}
+
+fn pi_projection_materialized(
+    project_root: &Path,
+    runtime_surface: &str,
+    entry: &serde_yaml::Value,
+) -> bool {
+    let base = runtime_surface.trim_end_matches('/');
+    let settings_path = pi_projection_path(
+        project_root,
+        entry,
+        "settings_path",
+        &format!("{base}/settings.json"),
+    );
+    let agents_dir =
+        pi_projection_path(project_root, entry, "agents_dir", &format!("{base}/agents"));
+    settings_path.is_file()
+        && agents_dir.is_dir()
+        && agents_dir.read_dir().ok().is_some_and(|mut entries| {
+            entries.any(|entry| {
+                entry.is_ok_and(|entry| {
+                    entry.path().extension().and_then(|value| value.to_str()) == Some("md")
+                })
+            })
+        })
+}
 
 pub(crate) struct ProjectActivatorHostCliSummary {
     pub(crate) supported_host_cli_systems: Vec<String>,
@@ -88,6 +125,11 @@ pub(crate) fn build_project_activator_host_cli_summary(
         (Some(root), Some(HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE)) => {
             root.join("config.toml").is_file() && root.join("agents").is_dir()
         }
+        (Some(_root), Some(PI_AGENT_PROJECTION_RENDER_MODE)) => {
+            host_cli_system_entry.is_some_and(|entry| {
+                pi_projection_materialized(project_root, &host_cli_runtime_template_root, entry)
+            })
+        }
         (Some(root), Some("copy_tree_only")) => root.exists(),
         _ => false,
     };
@@ -95,12 +137,28 @@ pub(crate) fn build_project_activator_host_cli_summary(
         !host_cli_selection_required && !host_cli_template_materialized;
     let host_cli_template_source_root = selected_host_cli_system
         .as_deref()
-        .and_then(|system| resolve_host_cli_template_source(system, host_cli_system_entry).ok())
+        .and_then(|system| {
+            host_cli_system_entry.and_then(|entry| {
+                if host_cli_system_materialization_mode(entry, system)
+                    == PI_AGENT_PROJECTION_RENDER_MODE
+                {
+                    None
+                } else {
+                    resolve_host_cli_template_source(system, Some(entry)).ok()
+                }
+            })
+        })
         .or_else(|| {
             supported_host_cli_systems.first().and_then(|system| {
-                host_cli_system_registry
-                    .get(system)
-                    .and_then(|entry| resolve_host_cli_template_source(system, Some(entry)).ok())
+                host_cli_system_registry.get(system).and_then(|entry| {
+                    if host_cli_system_materialization_mode(entry, system)
+                        == PI_AGENT_PROJECTION_RENDER_MODE
+                    {
+                        None
+                    } else {
+                        resolve_host_cli_template_source(system, Some(entry)).ok()
+                    }
+                })
             })
         });
     let catalog_system = selected_host_cli_system

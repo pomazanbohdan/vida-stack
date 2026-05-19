@@ -279,6 +279,58 @@ host_environment:
             - worker
           task_classes:
             - implementation
+    pi:
+      enabled: true
+      execution_class: external
+      materialization_mode: pi_agent_projection_render
+      template_root: .pi
+      runtime_root: .pi
+      authority: config_projection_only
+      source_of_truth: vida.config.yaml
+      app:
+        enabled: true
+        settings_path: .pi/settings.json
+        agents_dir: .pi/agents
+        chains_dir: .pi/chains
+        internal_agent_projection: true
+        projection_owner: vida
+        local_files_are_authority: false
+      dispatch:
+        command: vida-pi-agent
+        adapter_command: vida-pi-agent
+        provider_command: pi
+        static_args:
+          - --mode
+          - rpc
+        model_flag: --model
+        thinking_level_flag: --thinking-level
+        workdir_flag: --workdir
+        output_mode: vida_result_json
+        prompt_mode: stdin
+        one_process_per_dispatch: true
+        session_policy: no_long_lived_session
+      carriers:
+        pi-primary:
+          tier: pi
+          rate: 4
+          reasoning_band: medium
+          default_runtime_role: worker
+          runtime_roles:
+            - worker
+            - business_analyst
+            - coach
+            - verifier
+          task_classes:
+            - implementation
+            - delivery_task
+            - execution_block
+            - specification
+            - planning
+            - analysis
+            - review
+            - coach
+            - verification
+          authority: config_projection_only
 
 protocol_activation:
   agent_system: true
@@ -552,8 +604,199 @@ agent_system:
   mode: native
   state_owner: orchestrator_only
   max_parallel_agents: 4
-  routing: {}
-  scoring: {}
+  pricing:
+    normalized_cost_units_basis: model_profile_relative_units
+    default_price_source_kind: provider_catalog
+    freshness_defaults:
+      required: false
+      max_age_days: 30
+      stale_price_policy: diagnostic_only_use_normalized_cost_units
+      missing_price_policy: diagnostic_only_use_normalized_cost_units
+      diagnostic_only: true
+      enforced: false
+    vendor_basis:
+      pi: Pi provider/model catalog selected through VIDA profiles and executed through the vida-pi-agent adapter; normalized units are diagnostic until vendor/provider pricing is wired
+    providers:
+      pi:
+        price_basis: provider_configured_external_cli
+        source_paths:
+          - docs/product/spec/pi-primary-environment-and-agent-carrier-design.md
+        freshness:
+          required: false
+          max_age_days: 30
+          stale_price_policy: diagnostic_only_use_normalized_cost_units
+          missing_price_policy: diagnostic_only_use_normalized_cost_units
+          diagnostic_only: true
+          enforced: false
+  scoring:
+    rule: capability_first_then_score_guard_then_cheapest_tier
+  subagents:
+    pi_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      detect_command: vida-pi-agent
+      provider_command: pi
+      role: primary_external_implementation
+      orchestration_tier: external_write_guarded
+      cost_priority: preferred_when_admissible
+      budget_cost_units: 4
+      models_hint: openai-codex/gpt-5.5,openai-codex/gpt-5.4-mini
+      default_model: openai-codex/gpt-5.5
+      default_model_profile: pi_gpt55_medium_guarded
+      default_runtime_role: worker
+      capability_band: implementation_guarded,specification_safe,review_safe
+      write_scope: guard_required_owned_paths
+      write_readiness: guard_required_fail_closed_until_adapter_guard
+      max_runtime_seconds: 420
+      billing_tier: external_paid_or_provider_account
+      speed_tier: fast
+      quality_tier: high
+      runtime_roles:
+        - worker
+        - business_analyst
+        - coach
+        - verifier
+      task_classes:
+        - implementation
+        - delivery_task
+        - execution_block
+        - implementation_medium
+        - specification
+        - planning
+        - analysis
+        - review
+        - coach
+        - verification
+      model_profiles:
+        pi_gpt54_mini_low_guarded:
+          provider: pi
+          model_ref: openai-codex/gpt-5.4-mini
+          reasoning_effort: low
+          thinking_level: low
+          normalized_cost_units: 1
+          speed_tier: fast
+          quality_tier: medium_high
+          write_scope: guard_required_owned_paths
+          write_readiness: guard_required_fail_closed_until_adapter_guard
+          runtime_roles:
+            - worker
+          task_classes:
+            - implementation
+            - delivery_task
+            - execution_block
+          reasoning_control:
+            mode: pi_rpc_set_thinking_level
+            thinking_level: low
+          readiness:
+            mode: external_cli_profile
+            required: true
+            adapter_command_required: vida-pi-agent
+            provider_command_required: pi
+            model_catalog_required: true
+            write_scope_guard_required: true
+            fail_closed_until_write_guard: true
+        pi_gpt55_medium_guarded:
+          provider: pi
+          model_ref: openai-codex/gpt-5.5
+          reasoning_effort: medium
+          thinking_level: medium
+          normalized_cost_units: 4
+          speed_tier: fast
+          quality_tier: high
+          write_scope: guard_required_owned_paths
+          write_readiness: guard_required_fail_closed_until_adapter_guard
+          runtime_roles:
+            - worker
+            - business_analyst
+            - coach
+          task_classes:
+            - implementation_medium
+            - specification
+            - planning
+            - analysis
+            - coach
+          reasoning_control:
+            mode: pi_rpc_set_thinking_level
+            thinking_level: medium
+          readiness:
+            mode: external_cli_profile
+            required: true
+            adapter_command_required: vida-pi-agent
+            provider_command_required: pi
+            model_catalog_required: true
+            write_scope_guard_required: true
+            fail_closed_until_write_guard: true
+        pi_gpt55_high_readonly:
+          provider: pi
+          model_ref: openai-codex/gpt-5.5
+          reasoning_effort: high
+          thinking_level: high
+          normalized_cost_units: 8
+          speed_tier: medium
+          quality_tier: high
+          write_scope: none
+          runtime_roles:
+            - coach
+            - verifier
+          task_classes:
+            - review
+            - verification
+            - coach
+          reasoning_control:
+            mode: pi_rpc_set_thinking_level
+            thinking_level: high
+          readiness:
+            mode: external_cli_profile
+            required: true
+            adapter_command_required: vida-pi-agent
+            provider_command_required: pi
+            model_catalog_required: true
+            write_scope_guard_required: false
+      dispatch:
+        command: vida-pi-agent
+        static_args:
+          - --mode
+          - rpc
+          - --no-session
+        model_flag: --model
+        reasoning_effort_flag: --thinking-level
+        scope_guard_mode_flag: --scope-guard-mode
+        scope_guard_mode_value_for_write_profiles: guarded-write
+        workdir_flag: --workdir
+        output_mode: vida_result_json
+        prompt_mode: stdin
+        one_process_per_dispatch: true
+        raw_provider_dispatch_forbidden: true
+      readiness:
+        adapter:
+          mode: command_found
+          command: vida-pi-agent
+        provider:
+          mode: command_found
+          command: pi
+        model_catalog:
+          mode: pi_rpc_get_available_models
+          required: true
+        write_scope_guard:
+          mode: adapter_feature_required
+          required_for_write_profiles: true
+          fail_closed_until_available: true
+  routing:
+    implementation:
+      executor_backend: pi_cli
+      fallback_executor_backend: internal_subagents
+      profiles:
+        pi_cli: pi_gpt54_mini_low_guarded
+      max_runtime_seconds: 420
+      verification_gate: targeted_verification
+      coach_required: yes
+      coach_route_task_class: coach
+      verification_route_task_class: review_ensemble
+      independent_verification_required: yes
+      dispatch_required: external_guarded_when_admissible
+      graph_strategy: diagnostic_only_implementation_summary
+      write_scope: guard_required_owned_paths
+      write_readiness: guard_required_fail_closed_until_adapter_guard
 
 # Optional internal-only agent-system scaffold example.
 # Use this as the canonical starting point for project initialization and

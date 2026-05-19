@@ -2641,6 +2641,35 @@ fn configured_external_dispatch_pin_args(
         }
     }
 
+    if let Some(reasoning_effort_flag) =
+        yaml_string(yaml_lookup(dispatch, &["reasoning_effort_flag"]))
+    {
+        let selected_reasoning_effort = selected_profile["reasoning_effort"]
+            .as_str()
+            .or_else(|| selected_profile["thinking_level"].as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != "provider_default")
+            .map(str::to_string);
+        if let Some(reasoning_effort) = selected_reasoning_effort {
+            args.push(reasoning_effort_flag);
+            args.push(reasoning_effort);
+        }
+    }
+
+    if selected_profile_requires_owned_path_guard(&selected_profile) {
+        if let Some(scope_guard_mode_flag) =
+            yaml_string(yaml_lookup(dispatch, &["scope_guard_mode_flag"]))
+        {
+            let scope_guard_mode_value = yaml_string(yaml_lookup(
+                dispatch,
+                &["scope_guard_mode_value_for_write_profiles"],
+            ))
+            .unwrap_or_else(|| "guarded-write".to_string());
+            args.push(scope_guard_mode_flag);
+            args.push(scope_guard_mode_value);
+        }
+    }
+
     if let Some(variant_flag) = yaml_string(yaml_lookup(dispatch, &["variant_flag"])) {
         if let Some(variant_value) =
             yaml_string(yaml_lookup(dispatch, &["variant_value"])).filter(|value| !value.is_empty())
@@ -2651,6 +2680,23 @@ fn configured_external_dispatch_pin_args(
     }
 
     args
+}
+
+fn selected_profile_requires_owned_path_guard(selected_profile: &serde_json::Value) -> bool {
+    matches!(
+        selected_profile["write_scope"]
+            .as_str()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default()
+            .as_str(),
+        "guard_required"
+            | "guard-required"
+            | "guard_required_owned_paths"
+            | "guard-required-owned-paths"
+            | "guard_required_packet_owned_paths"
+            | "guard-required-packet-owned-paths"
+    )
 }
 
 fn configured_external_activation_command(
@@ -2754,6 +2800,7 @@ pub(crate) fn configured_external_activation_parts(
             backend_entry,
             packet_path,
         )),
+        "stdin" => {}
         other => {
             return Err(format!(
                 "Configured external backend uses unsupported prompt_mode `{other}`"
@@ -2761,6 +2808,26 @@ pub(crate) fn configured_external_activation_parts(
         }
     }
     Ok((command, args))
+}
+
+pub(crate) fn configured_external_activation_stdin_payload(
+    backend_entry: &serde_yaml::Value,
+    packet_path: &str,
+) -> Result<Option<String>, String> {
+    let dispatch = yaml_lookup(backend_entry, &["dispatch"])
+        .ok_or_else(|| "Configured external backend is missing `dispatch`".to_string())?;
+    let prompt_mode = yaml_string(yaml_lookup(dispatch, &["prompt_mode"]))
+        .unwrap_or_else(|| "positional".to_string());
+    match prompt_mode.as_str() {
+        "positional" => Ok(None),
+        "stdin" => Ok(Some(configured_external_activation_prompt(
+            backend_entry,
+            packet_path,
+        ))),
+        other => Err(format!(
+            "Configured external backend uses unsupported prompt_mode `{other}`"
+        )),
+    }
 }
 
 fn external_backend_dispatch_blocker(
@@ -2801,7 +2868,15 @@ fn external_dispatch_command_is_allowlisted(command: &str) -> bool {
     let normalized = trimmed.to_ascii_lowercase();
     matches!(
         normalized.as_str(),
-        "codex" | "qwen" | "claude" | "gemini" | "aider" | "cursor-agent" | "opencode" | "hermes"
+        "codex"
+            | "qwen"
+            | "claude"
+            | "gemini"
+            | "aider"
+            | "cursor-agent"
+            | "opencode"
+            | "hermes"
+            | "vida-pi-agent"
     ) || (cfg!(test) && normalized == "sh")
 }
 
@@ -2922,6 +2997,150 @@ dispatch:
 
         assert!(error.contains("non-allowlisted"));
         assert!(error.contains("./tools/codex"));
+    }
+
+    #[test]
+    fn configured_external_activation_parts_accepts_vida_pi_agent_but_rejects_path_like_variant() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: vida-pi-agent
+  static_args: ["--mode", "rpc"]
+  prompt_mode: stdin
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let (command, args) = configured_external_activation_parts(
+            "pi_cli",
+            &backend_entry,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            None,
+        )
+        .expect("vida-pi-agent should be trusted");
+        assert_eq!(command, "vida-pi-agent");
+        assert_eq!(args, vec!["--mode".to_string(), "rpc".to_string()]);
+
+        let path_like: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: ./vida-pi-agent
+  prompt_mode: stdin
+"#,
+        )
+        .expect("backend entry should parse");
+        let error = configured_external_activation_parts(
+            "pi_cli",
+            &path_like,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            None,
+        )
+        .expect_err("path-like vida-pi-agent must remain rejected");
+        assert!(error.contains("non-allowlisted"));
+        assert!(error.contains("./vida-pi-agent"));
+    }
+
+    #[test]
+    fn configured_external_activation_parts_supports_stdin_prompt_mode_without_positional_prompt() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: vida-pi-agent
+  static_args: ["--mode", "rpc", "--no-session"]
+  workdir_flag: --workdir
+  prompt_mode: stdin
+  prompt_template: "Process packet {packet_path}."
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let (command, args) = configured_external_activation_parts(
+            "pi_cli",
+            &backend_entry,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            None,
+        )
+        .expect("stdin dispatch parts should render");
+        assert_eq!(command, "vida-pi-agent");
+        assert_eq!(
+            args,
+            vec![
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--no-session".to_string(),
+                "--workdir".to_string(),
+                "/tmp/project".to_string(),
+            ]
+        );
+        assert_eq!(
+            configured_external_activation_stdin_payload(
+                &backend_entry,
+                "/tmp/project/.vida/dispatch.json"
+            )
+            .expect("stdin payload should render")
+            .as_deref(),
+            Some("Process packet /tmp/project/.vida/dispatch.json.")
+        );
+    }
+
+    #[test]
+    fn configured_external_activation_parts_injects_pi_model_and_thinking_level() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+default_model_profile: pi_gpt55_medium_guarded
+model_profiles:
+  pi_gpt54_mini_low_guarded:
+    provider: pi
+    model_ref: openai-codex/gpt-5.4-mini
+    reasoning_effort: low
+    normalized_cost_units: 1
+    write_scope: guard_required_owned_paths
+    runtime_roles: [worker]
+    task_classes: [implementation]
+  pi_gpt55_medium_guarded:
+    provider: pi
+    model_ref: openai-codex/gpt-5.5
+    reasoning_effort: medium
+    normalized_cost_units: 4
+    runtime_roles: [worker]
+    task_classes: [implementation]
+dispatch:
+  command: vida-pi-agent
+  static_args: ["--mode", "rpc"]
+  model_flag: --model
+  reasoning_effort_flag: --thinking-level
+  scope_guard_mode_flag: --scope-guard-mode
+  scope_guard_mode_value_for_write_profiles: guarded-write
+  prompt_mode: stdin
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let (command, args) = configured_external_activation_parts(
+            "pi_cli",
+            &backend_entry,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            Some("pi_gpt54_mini_low_guarded"),
+        )
+        .expect("pi dispatch parts should render");
+        assert_eq!(command, "vida-pi-agent");
+        assert_eq!(
+            args,
+            vec![
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--model".to_string(),
+                "openai-codex/gpt-5.4-mini".to_string(),
+                "--thinking-level".to_string(),
+                "low".to_string(),
+                "--scope-guard-mode".to_string(),
+                "guarded-write".to_string(),
+            ]
+        );
     }
 
     #[test]

@@ -66,6 +66,14 @@ jobs:
           set -euo pipefail
           cargo test --workspace --locked -- --test-threads=1
 
+      - name: Run external CLI carrier smoke script
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p vida-pi-agent --bins --locked
+          bash -n scripts/external-cli-carrier-smoke.sh
+          VIDA_EXTERNAL_CLI_SMOKE_ONLY_PI=1 PATH="$PWD/target/debug:$PATH" bash scripts/external-cli-carrier-smoke.sh
+
       - name: Build release assets and verify runtime-only package
         shell: bash
         run: |
@@ -79,13 +87,13 @@ jobs:
           manifests = sorted(Path("dist").glob("vida-stack-v*.manifest.json"))
           assert manifests, "release manifest was not generated"
           data = json.loads(manifests[0].read_text())
-          expected_roots = ["AGENTS.md", "AGENTS.sidecar.md", ".codex/", ".qwen/", ".kilo/", ".opencode/", "bin/vida", "bin/taskflow", "bin/docflow", "install/assets/", "vida/"]
+          expected_roots = ["AGENTS.md", "AGENTS.sidecar.md", ".codex/", ".qwen/", ".kilo/", ".opencode/", "bin/vida", "bin/taskflow", "bin/docflow", "bin/vida-pi-agent", "install/assets/", "vida/"]
           assert data["included_roots"] == expected_roots, data["included_roots"]
-          assert data["installed_entrypoints"] == ["vida", "taskflow", "docflow", "vida docflow", "vida taskflow"], data["installed_entrypoints"]
+          assert data["installed_entrypoints"] == ["vida", "taskflow", "docflow", "vida-pi-agent", "vida docflow", "vida taskflow"], data["installed_entrypoints"]
           assert data["installed_compatibility_contracts"]["taskflow"] == "canonical taskflow runtime", data["installed_compatibility_contracts"]
           assert data["installed_compatibility_contracts"]["docflow"] == "canonical docflow runtime", data["installed_compatibility_contracts"]
-          assert data["bundled_binaries"] == ["bin/vida", "bin/taskflow", "bin/docflow"], data["bundled_binaries"]
-          assert data["installer_managed_runtimes"] == ["vida", "taskflow", "docflow"], data["installer_managed_runtimes"]
+          assert data["bundled_binaries"] == ["bin/vida", "bin/taskflow", "bin/docflow", "bin/vida-pi-agent"], data["bundled_binaries"]
+          assert data["installer_managed_runtimes"] == ["vida", "taskflow", "docflow", "vida-pi-agent"], data["installer_managed_runtimes"]
 
           archive = sorted(Path("dist").glob("vida-stack-v*.tar.gz"))[0]
           with tarfile.open(archive, "r:gz") as tf:
@@ -96,6 +104,7 @@ jobs:
           assert any(name.endswith("/bin/vida") for name in names), names[:20]
           assert any(name.endswith("/bin/taskflow") for name in names), names[:20]
           assert any(name.endswith("/bin/docflow") for name in names), names[:20]
+          assert any(name.endswith("/bin/vida-pi-agent") for name in names), names[:20]
           assert any("/.codex/config.toml" in name for name in names), names[:20]
           assert any("/vida/root-map.md" in name for name in names), names[:20]
           assert any("/install/assets/vida.config.yaml.template" in name for name in names), names[:20]
@@ -144,6 +153,7 @@ jobs:
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor --state-dir "$TMP_STATE" --json >/tmp/vida-doctor-json.txt
           PATH="$TMP_BIN:$PATH" taskflow help >/tmp/taskflow-help.txt
           PATH="$TMP_BIN:$PATH" docflow --help >/tmp/docflow-help.txt
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$INSTALL_ROOT/current/bin:$TMP_BIN:$PATH" vida-pi-agent --help >/tmp/vida-pi-agent-help.txt
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida taskflow help >/tmp/vida-taskflow-help.txt
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida docflow help >/tmp/vida-docflow-help.txt
 
@@ -157,6 +167,7 @@ jobs:
 
           grep -q "TaskFlow CLI" /tmp/taskflow-help.txt
           grep -q "Standalone DocFlow CLI" /tmp/docflow-help.txt
+          grep -q "VIDA adapter for one-shot Pi RPC dispatch" /tmp/vida-pi-agent-help.txt
           grep -q "mode: agent_bootstrap" /tmp/docflow-init.txt
           grep -q '"mode":"agent_bootstrap"' /tmp/docflow-init.json
           grep -q "$INSTALL_ROOT/current" /tmp/vida-root.txt
@@ -249,6 +260,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "taskflow help failed" }
           docflow --help | Out-File -FilePath (Join-Path $tmpRoot "docflow-help.txt") -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw "docflow help failed" }
+          vida-pi-agent --help | Out-File -FilePath (Join-Path $tmpRoot "vida-pi-agent-help.txt") -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "vida-pi-agent help failed" }
 
           Push-Location $projectDir
           try {
@@ -260,6 +273,7 @@ jobs:
 
           Select-String -LiteralPath (Join-Path $tmpRoot "taskflow-help.txt") -Pattern "TaskFlow CLI"
           Select-String -LiteralPath (Join-Path $tmpRoot "docflow-help.txt") -Pattern "Standalone DocFlow CLI"
+          Select-String -LiteralPath (Join-Path $tmpRoot "vida-pi-agent-help.txt") -Pattern "VIDA adapter for one-shot Pi RPC dispatch"
           Select-String -LiteralPath (Join-Path $tmpRoot "vida-version.txt") -Pattern "vida "
           if (-not (Test-Path -LiteralPath (Join-Path $projectDir "AGENTS.md"))) { throw "AGENTS.md was not bootstrapped" }
           if (-not (Test-Path -LiteralPath (Join-Path $projectDir "AGENTS.sidecar.md"))) { throw "AGENTS.sidecar.md was not bootstrapped" }

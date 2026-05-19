@@ -5704,6 +5704,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vida-pi-agent"
+version = "0.9.7"
+dependencies = [
+ "clap",
+ "serde_json",
+]
+
+[[package]]
 name = "vida-test-support"
 version = "0.9.7"
 

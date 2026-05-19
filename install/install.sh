@@ -40,7 +40,7 @@ Options:
   --archive PATH     Local release archive instead of GitHub download.
   --target TARGET    Release asset target: auto|linux-default|macos-arm64|windows-x86_64.
   --bin-dir PATH     Legacy launcher directory to clean up. Direct binaries are exposed from <root>/current/bin.
-  --bins LIST        Comma-separated direct binaries to expose: vida,taskflow,docflow,all.
+  --bins LIST        Comma-separated direct binaries to expose: vida,taskflow,docflow,vida-pi-agent,all.
   --root PATH        Install root. Defaults to ~/.local/share/vida-stack.
   --force            Overwrite an already installed release of the same version.
   --dry-run          Print planned actions without changing files.
@@ -52,7 +52,7 @@ Examples:
   bash install/install.sh use --version <tag>
   bash install/install.sh install --bins taskflow
   bash install/install.sh install --bins docflow
-  bash install/install.sh install --bins vida,taskflow,docflow
+  bash install/install.sh install --bins vida,taskflow,docflow,vida-pi-agent
   bash install/install.sh doctor
 EOF
 }
@@ -107,6 +107,11 @@ EOF
   if install_bin_selected docflow; then
     cat <<EOF
   docflow help
+EOF
+  fi
+  if install_bin_selected vida-pi-agent; then
+    cat <<EOF
+  vida-pi-agent --help
 EOF
   fi
   if install_bin_selected vida; then
@@ -367,7 +372,7 @@ normalize_install_bins() {
   local raw="${INSTALL_BINS:-all}"
   raw="${raw// /}"
   if [[ "$raw" == "all" ]]; then
-    INSTALL_BINS="vida,taskflow,docflow"
+    INSTALL_BINS="vida,taskflow,docflow,vida-pi-agent"
     return 0
   fi
   local IFS=','
@@ -375,13 +380,13 @@ normalize_install_bins() {
   local normalized=()
   for bin in $raw; do
     case "$bin" in
-      vida|taskflow|docflow)
+      vida|taskflow|docflow|vida-pi-agent)
         normalized+=("$bin")
         ;;
       "")
         ;;
       *)
-        fail "Unsupported --bins entry: ${bin}. Allowed: vida,taskflow,docflow,all"
+        fail "Unsupported --bins entry: ${bin}. Allowed: vida,taskflow,docflow,vida-pi-agent,all"
         ;;
     esac
   done
@@ -399,7 +404,7 @@ install_bin_selected() {
 
 selected_launcher_paths() {
   local values=()
-  for launcher in vida taskflow docflow; do
+  for launcher in vida taskflow docflow vida-pi-agent; do
     if install_bin_selected "$launcher"; then
       values+=("${INSTALL_ROOT}/current/bin/${launcher}")
     fi
@@ -623,7 +628,7 @@ install_profile_hooks() {
 }
 
 remove_legacy_wrappers() {
-  for launcher in vida taskflow docflow; do
+  for launcher in vida taskflow docflow vida-pi-agent; do
     if ! install_bin_selected "$launcher"; then
       continue
     fi
@@ -932,6 +937,9 @@ doctor() {
   if install_bin_selected docflow; then
     [[ -x "${current_link}/bin/docflow" ]] || { log "Missing direct runtime binary: ${current_link}/bin/docflow"; missing=1; }
   fi
+  if install_bin_selected vida-pi-agent; then
+    [[ -x "${current_link}/bin/vida-pi-agent" ]] || { log "Missing direct runtime binary: ${current_link}/bin/vida-pi-agent"; missing=1; }
+  fi
   [[ -f "${INSTALL_ROOT}/env.sh" ]] || { log "Missing env file: ${INSTALL_ROOT}/env.sh"; missing=1; }
   [[ -x "${INSTALL_ROOT}/installer/install.sh" ]] || { log "Missing installer management script: ${INSTALL_ROOT}/installer/install.sh"; missing=1; }
 
@@ -939,6 +947,7 @@ doctor() {
     [[ -x "${current_link}/bin/vida" ]] || { log "Missing bundled vida binary"; missing=1; }
     [[ -x "${current_link}/bin/taskflow" ]] || { log "Missing bundled taskflow binary"; missing=1; }
     [[ -x "${current_link}/bin/docflow" ]] || { log "Missing bundled docflow binary"; missing=1; }
+    [[ -x "${current_link}/bin/vida-pi-agent" ]] || { log "Missing bundled vida-pi-agent binary"; missing=1; }
     [[ -f "${current_link}/.codex/config.toml" ]] || { log "Missing bundled .codex config: ${current_link}/.codex/config.toml"; missing=1; }
     [[ -d "${current_link}/.codex/agents" ]] || { log "Missing bundled .codex agents directory: ${current_link}/.codex/agents"; missing=1; }
     [[ -f "${current_link}/AGENTS.sidecar.md" ]] || { log "Missing packaged project sidecar scaffold"; missing=1; }

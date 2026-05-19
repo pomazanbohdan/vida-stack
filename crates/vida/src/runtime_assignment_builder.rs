@@ -660,14 +660,42 @@ fn task_class_requires_write_scope(task_class: &str) -> bool {
     )
 }
 
-fn write_scope_allows_task_class(write_scope: &str, task_class: &str) -> bool {
+fn write_scope_allows_task_class(
+    write_scope: &str,
+    task_class: &str,
+    external_backend_readiness: Option<&serde_json::Value>,
+) -> bool {
     if !task_class_requires_write_scope(task_class) {
         return true;
     }
-    !matches!(
-        write_scope.trim().to_ascii_lowercase().as_str(),
+    let normalized = write_scope.trim().to_ascii_lowercase();
+    if matches!(
+        normalized.as_str(),
         "" | "none" | "read-only" | "read_only" | "readorreview" | "read_or_review"
-    )
+    ) {
+        return false;
+    }
+
+    if matches!(
+        normalized.as_str(),
+        "guard_required"
+            | "guard-required"
+            | "guard_required_owned_paths"
+            | "guard-required-owned-paths"
+            | "guard_required_packet_owned_paths"
+            | "guard-required-packet-owned-paths"
+    ) {
+        return external_backend_readiness
+            .and_then(|readiness| readiness.pointer("/write_scope_guard/pre_write_enforcement"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            && external_backend_readiness
+                .and_then(|readiness| readiness.pointer("/write_scope_guard/status"))
+                .and_then(serde_json::Value::as_str)
+                == Some("active");
+    }
+
+    true
 }
 
 fn reasoning_control_mode(profile: &serde_json::Value) -> Option<&'static str> {
@@ -1242,7 +1270,11 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
             .as_str()
             .or_else(|| candidate.role["write_scope"].as_str())
             .unwrap_or_default();
-        if !write_scope_allows_task_class(write_scope, task_class) {
+        if !write_scope_allows_task_class(
+            write_scope,
+            task_class,
+            candidate.external_backend_readiness.as_ref(),
+        ) {
             reasons.push("write_scope_inadmissible_for_task_class".to_string());
         }
         if let Some(floor) = quality_floor.as_deref() {
@@ -2520,6 +2552,235 @@ mod tests {
                             reason.as_str() == Some("write_scope_inadmissible_for_task_class")
                         })
             }));
+    }
+
+    #[test]
+    fn guard_required_write_scope_is_rejected_for_implementation_until_guard_is_active() {
+        let compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "internal_subagents",
+                "tier": "senior",
+                "rate": 1,
+                "normalized_cost_units": 1,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "low",
+                "default_model_profile": "codex_gpt54_low_write",
+                "model_profiles": {
+                    "codex_gpt54_low_write": {
+                        "profile_id": "codex_gpt54_low_write",
+                        "model_ref": "gpt-5.4",
+                        "provider": "openai",
+                        "reasoning_effort": "low",
+                        "normalized_cost_units": 1,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "workspace-write",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "pi_cli",
+                "tier": "external_write_guarded",
+                "rate": 0,
+                "normalized_cost_units": 0,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "low",
+                "default_model_profile": "pi_gpt54_mini_low_guarded",
+                "backend_class": "external_cli",
+                "model_profiles": {
+                    "pi_gpt54_mini_low_guarded": {
+                        "profile_id": "pi_gpt54_mini_low_guarded",
+                        "model_ref": "openai-codex/gpt-5.4-mini",
+                        "provider": "pi",
+                        "reasoning_effort": "low",
+                        "normalized_cost_units": 0,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "guard_required_owned_paths",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "internal_subagents");
+        assert_eq!(
+            assignment["selected_model_profile_id"],
+            "codex_gpt54_low_write"
+        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "pi_cli"
+                    && row["model_profile_id"] == "pi_gpt54_mini_low_guarded"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| {
+                            reason.as_str() == Some("write_scope_inadmissible_for_task_class")
+                        })
+            }));
+    }
+
+    #[test]
+    fn guard_required_write_scope_is_admitted_when_pi_prewrite_guard_is_active() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "internal_subagents",
+                "tier": "senior",
+                "rate": 4,
+                "normalized_cost_units": 4,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "low",
+                "default_model_profile": "codex_gpt54_low_write",
+                "model_profiles": {
+                    "codex_gpt54_low_write": {
+                        "profile_id": "codex_gpt54_low_write",
+                        "model_ref": "gpt-5.4",
+                        "provider": "openai",
+                        "reasoning_effort": "low",
+                        "normalized_cost_units": 4,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "workspace-write",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "pi_cli",
+                "tier": "external_write_guarded",
+                "rate": 1,
+                "normalized_cost_units": 1,
+                "default_runtime_role": "worker",
+                "runtime_roles": ["worker"],
+                "task_classes": ["implementation"],
+                "reasoning_band": "low",
+                "default_model_profile": "pi_gpt54_mini_low_guarded",
+                "backend_class": "external_cli",
+                "subagent_backend_class": "external_cli",
+                "dispatch": { "command": "sh" },
+                "readiness": {
+                    "adapter": { "mode": "command_found", "command": "sh" },
+                    "provider": { "mode": "command_found", "command": "sh" },
+                    "write_scope_guard": {
+                        "mode": "adapter_feature_required",
+                        "required_for_write_profiles": true,
+                        "fail_closed_until_available": true
+                    }
+                },
+                "model_profiles": {
+                    "pi_gpt54_mini_low_guarded": {
+                        "profile_id": "pi_gpt54_mini_low_guarded",
+                        "model_ref": "provider-configured/test",
+                        "provider": "pi",
+                        "reasoning_effort": "low",
+                        "normalized_cost_units": 1,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "guard_required_owned_paths",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        let pi_backend_entry = compiled_bundle["carrier_runtime"]["roles"][1].clone();
+        compiled_bundle.as_object_mut().unwrap().insert(
+            "agent_system".to_string(),
+            serde_json::json!({"subagents": {"pi_cli": pi_backend_entry}}),
+        );
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "pi_cli");
+        assert_eq!(
+            assignment["selected_model_profile_id"],
+            "pi_gpt54_mini_low_guarded"
+        );
+        assert_eq!(
+            assignment["selected_external_backend_readiness"]["write_scope_guard"]["status"],
+            "active"
+        );
+    }
+
+    #[test]
+    fn write_scope_none_remains_admissible_for_review_task_class() {
+        let compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "readonly_review",
+            "tier": "review",
+            "rate": 0,
+            "normalized_cost_units": 0,
+            "default_runtime_role": "coach",
+            "runtime_roles": ["coach"],
+            "task_classes": ["review"],
+            "reasoning_band": "medium",
+            "default_model_profile": "readonly_review_profile",
+            "model_profiles": {
+                "readonly_review_profile": {
+                    "profile_id": "readonly_review_profile",
+                    "model_ref": "review/model",
+                    "provider": "review",
+                    "reasoning_effort": "medium",
+                    "normalized_cost_units": 0,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "none",
+                    "runtime_roles": ["coach"],
+                    "task_classes": ["review"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "coach",
+            "review",
+            "coach",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "readonly_review");
+        assert_eq!(
+            assignment["selected_model_profile_id"],
+            "readonly_review_profile"
+        );
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .is_empty());
     }
 
     #[test]

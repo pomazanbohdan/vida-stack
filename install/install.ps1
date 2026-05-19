@@ -79,7 +79,7 @@ Options:
   -Archive PATH     Local release zip instead of GitHub download.
   -Target TARGET    Release asset target: auto|windows-x86_64.
   -BinDir PATH      Legacy launcher directory to clean up. Direct binaries are exposed from %LOCALAPPDATA%\vida-stack\current\bin.
-  -Bins LIST        Comma-separated direct binaries to expose: vida,taskflow,docflow,all.
+  -Bins LIST        Comma-separated direct binaries to expose: vida,taskflow,docflow,vida-pi-agent,all.
   -Root PATH        Install root. Defaults to %LOCALAPPDATA%\vida-stack.
   -Force            Overwrite an already installed release of the same version.
   -DryRun           Print planned actions without changing files.
@@ -98,14 +98,14 @@ function Normalize-Bins {
     param([string] $Raw)
     $clean = ($Raw -replace "\s+", "")
     if ($clean -eq "all") {
-        return @("vida", "taskflow", "docflow")
+        return @("vida", "taskflow", "docflow", "vida-pi-agent")
     }
     $values = @()
     foreach ($item in ($clean -split ",")) {
         if (-not $item) { continue }
         if ($item -eq "textflow") { $item = "taskflow" }
-        if ($item -notin @("vida", "taskflow", "docflow")) {
-            Fail "Unsupported -Bins entry: $item. Allowed: vida,taskflow,docflow,textflow,all"
+        if ($item -notin @("vida", "taskflow", "docflow", "vida-pi-agent")) {
+            Fail "Unsupported -Bins entry: $item. Allowed: vida,taskflow,docflow,vida-pi-agent,textflow,all"
         }
         if ($values -notcontains $item) { $values += $item }
     }
@@ -282,7 +282,7 @@ function Test-RuntimeAvailable {
 
 function Ensure-WindowsRuntimeBinaries {
     param([string] $ReleaseRoot)
-    foreach ($runtime in @("vida", "taskflow", "docflow")) {
+    foreach ($runtime in @("vida", "taskflow", "docflow", "vida-pi-agent")) {
         $plain = Join-Path $ReleaseRoot "bin\$runtime"
         $exe = Join-Path $ReleaseRoot "bin\$runtime.exe"
         if ((Test-Path -LiteralPath $plain -PathType Leaf) -and -not (Test-Path -LiteralPath $exe -PathType Leaf)) {
@@ -338,7 +338,7 @@ function Install-PathHook {
 }
 
 function Remove-LegacyWrappers {
-    foreach ($launcher in @("vida", "taskflow", "docflow")) {
+    foreach ($launcher in @("vida", "taskflow", "docflow", "vida-pi-agent")) {
         if (-not (Test-BinSelected $launcher)) { continue }
         $wrapper = Join-Path $BinDir "$launcher.cmd"
         if ($DryRun) {
@@ -504,6 +504,7 @@ function Install-Release {
         if (Test-BinSelected "vida") { Write-Host "  vida doctor" }
         if (Test-BinSelected "taskflow") { Write-Host "  taskflow help" }
         if (Test-BinSelected "docflow") { Write-Host "  docflow help" }
+        if (Test-BinSelected "vida-pi-agent") { Write-Host "  vida-pi-agent --help" }
     } finally {
         Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -516,7 +517,7 @@ function Invoke-Doctor {
         Write-Log "Missing active release link: $current"
         $missing = $true
     }
-    foreach ($launcher in @("vida", "taskflow", "docflow")) {
+    foreach ($launcher in @("vida", "taskflow", "docflow", "vida-pi-agent")) {
         if (Test-BinSelected $launcher) {
             $direct = Join-Path $RuntimeBinDir "$launcher.exe"
             if (-not (Test-Path -LiteralPath $direct -PathType Leaf)) {
@@ -532,7 +533,7 @@ function Invoke-Doctor {
         }
     }
     if (Test-Path -LiteralPath $current -PathType Container) {
-        foreach ($runtime in @("vida", "taskflow", "docflow")) {
+        foreach ($runtime in @("vida", "taskflow", "docflow", "vida-pi-agent")) {
             if (-not (Test-RuntimeAvailable $current $runtime)) {
                 Write-Log "Missing bundled $runtime binary"
                 $missing = $true

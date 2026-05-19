@@ -43,11 +43,33 @@ infer_version() {
   printf 'v%s\n' "$cargo_version"
 }
 
-require_cmd python3
+infer_cargo_host_triple() {
+  cargo -vV | awk '/^host:/ { print $2; exit }'
+}
+
+select_python() {
+  local candidate
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" --version >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  fail "Missing working Python command: tried python3, python"
+}
+
 require_cmd cargo
+PYTHON_BIN="$(select_python)"
 
 if [[ -z "$VERSION" ]]; then
   VERSION="$(infer_version)"
+fi
+
+if [[ -z "$RELEASE_SUFFIX" ]]; then
+  CARGO_HOST_TRIPLE="$(infer_cargo_host_triple || true)"
+  if [[ "$CARGO_HOST_TRIPLE" == *windows* ]]; then
+    RELEASE_SUFFIX="windows-x86_64"
+  fi
 fi
 
 ARCHIVE_BASE="vida-stack-${VERSION}"
@@ -64,10 +86,12 @@ if [[ "$WINDOWS_RELEASE" == "yes" ]]; then
   VIDA_BIN="$STAGE_DIR/bin/vida.exe"
   TASKFLOW_BIN="$STAGE_DIR/bin/taskflow.exe"
   DOCFLOW_BIN="$STAGE_DIR/bin/docflow.exe"
+  PI_AGENT_BIN="$STAGE_DIR/bin/vida-pi-agent.exe"
 else
   VIDA_BIN="$STAGE_DIR/bin/vida"
   TASKFLOW_BIN="$STAGE_DIR/bin/taskflow"
   DOCFLOW_BIN="$STAGE_DIR/bin/docflow"
+  PI_AGENT_BIN="$STAGE_DIR/bin/vida-pi-agent"
 fi
 INSTALL_ASSETS_DIR="$STAGE_DIR/install/assets"
 INSTALLER_ASSET="$DIST_DIR/vida-install.sh"
@@ -95,15 +119,15 @@ cp -R "$ROOT_DIR/vida" "$STAGE_DIR/vida"
 find "$STAGE_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$STAGE_DIR" -type f -name '*.pyc' -delete
 
-cargo build --release -p vida -p taskflow-cli -p docflow-cli
+cargo build --release -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
 copy_runtime_binary() {
   local binary_name="$1"
   local destination="$2"
   local source="$ROOT_DIR/target/release/$binary_name"
-  if [[ "$WINDOWS_RELEASE" == "yes" && -f "$ROOT_DIR/target/release/${binary_name}.exe" ]]; then
+  if [[ "$WINDOWS_RELEASE" == "yes" ]]; then
     source="$ROOT_DIR/target/release/${binary_name}.exe"
   fi
-  [[ -f "$source" ]] || fail "Missing built runtime binary: $source"
+  [[ -f "$source" ]] || fail "Missing built runtime binary for release target ${RELEASE_SUFFIX:-default}: $source"
   cp "$source" "$destination"
   chmod +x "$destination"
   if [[ -f "${source}.version" ]]; then
@@ -129,10 +153,12 @@ verify_runtime_binary_version() {
 copy_runtime_binary vida "$VIDA_BIN"
 copy_runtime_binary taskflow "$TASKFLOW_BIN"
 copy_runtime_binary docflow "$DOCFLOW_BIN"
+copy_runtime_binary vida-pi-agent "$PI_AGENT_BIN"
 verify_runtime_binary_version vida "$VIDA_BIN"
 verify_runtime_binary_version taskflow "$TASKFLOW_BIN"
 verify_runtime_binary_version docflow "$DOCFLOW_BIN"
-rm -f "${VIDA_BIN}.version" "${TASKFLOW_BIN}.version" "${DOCFLOW_BIN}.version"
+"$PI_AGENT_BIN" --help >/dev/null 2>&1 || fail "Packaged vida-pi-agent help check failed: $PI_AGENT_BIN"
+rm -f "${VIDA_BIN}.version" "${TASKFLOW_BIN}.version" "${DOCFLOW_BIN}.version" "${PI_AGENT_BIN}.version"
 cp "$ROOT_DIR/docs/framework/templates/vida.config.yaml.template" "$INSTALL_ASSETS_DIR/vida.config.yaml.template"
 cp "$ROOT_DIR/docs/product/spec/templates/feature-design-document.template.md" "$INSTALL_ASSETS_DIR/feature-design-document.template.md"
 
@@ -142,7 +168,7 @@ PY_DIST_DIR="$(normalize_path_for_python "$DIST_DIR")"
 PY_INSTALLER_ASSET="$(normalize_path_for_python "$INSTALLER_ASSET")"
 PY_WINDOWS_INSTALLER_ASSET="$(normalize_path_for_python "$WINDOWS_INSTALLER_ASSET")"
 
-MANIFEST_OUT="$PY_MANIFEST_OUT" ARCHIVE_BASE="$ARCHIVE_BASE" VERSION="$VERSION" WINDOWS_RELEASE="$WINDOWS_RELEASE" python3 - <<'PY'
+MANIFEST_OUT="$PY_MANIFEST_OUT" ARCHIVE_BASE="$ARCHIVE_BASE" VERSION="$VERSION" WINDOWS_RELEASE="$WINDOWS_RELEASE" "$PYTHON_BIN" - <<'PY'
 import json
 import os
 from datetime import datetime, timezone
@@ -152,7 +178,7 @@ manifest_path = Path(os.environ["MANIFEST_OUT"])
 archive_base = os.environ["ARCHIVE_BASE"]
 version = os.environ["VERSION"]
 windows_release = os.environ["WINDOWS_RELEASE"] == "yes"
-binary_roots = ["bin/vida.exe", "bin/taskflow.exe", "bin/docflow.exe"] if windows_release else ["bin/vida", "bin/taskflow", "bin/docflow"]
+binary_roots = ["bin/vida.exe", "bin/taskflow.exe", "bin/docflow.exe", "bin/vida-pi-agent.exe"] if windows_release else ["bin/vida", "bin/taskflow", "bin/docflow", "bin/vida-pi-agent"]
 manifest = {
     "artifact_name": archive_base,
     "version": version,
@@ -173,6 +199,7 @@ manifest = {
         "vida",
         "taskflow",
         "docflow",
+        "vida-pi-agent",
         "vida docflow",
         "vida taskflow",
     ],
@@ -181,6 +208,7 @@ manifest = {
         "vida",
         "taskflow",
         "docflow",
+        "vida-pi-agent",
     ],
     "launcher_contracts": {
         "taskflow": "vida taskflow",
@@ -196,7 +224,7 @@ manifest = {
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 PY
 
-PACKAGE_ROOT="$PY_PACKAGE_ROOT" ARCHIVE_BASE="$ARCHIVE_BASE" DIST_DIR="$PY_DIST_DIR" python3 - <<'PY'
+PACKAGE_ROOT="$PY_PACKAGE_ROOT" ARCHIVE_BASE="$ARCHIVE_BASE" DIST_DIR="$PY_DIST_DIR" "$PYTHON_BIN" - <<'PY'
 import tarfile
 import zipfile
 import os
@@ -232,7 +260,7 @@ else
   ' "$ROOT_DIR/README.md" > "$RELEASE_NOTES_OUT"
 fi
 
-DIST_DIR="$PY_DIST_DIR" ARCHIVE_BASE="$ARCHIVE_BASE" INSTALLER_ASSET="$PY_INSTALLER_ASSET" WINDOWS_INSTALLER_ASSET="$PY_WINDOWS_INSTALLER_ASSET" python3 - <<'PY'
+DIST_DIR="$PY_DIST_DIR" ARCHIVE_BASE="$ARCHIVE_BASE" INSTALLER_ASSET="$PY_INSTALLER_ASSET" WINDOWS_INSTALLER_ASSET="$PY_WINDOWS_INSTALLER_ASSET" "$PYTHON_BIN" - <<'PY'
 import hashlib
 import os
 from pathlib import Path

@@ -1,0 +1,23 @@
+[package]
+name = "vida-pi-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+clap.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "vida-pi-agent"
+path = "src/main.rs"
+
+[[bin]]
+name = "vida-pi-agent-fake-pi"
+path = "src/bin/fake_pi.rs"

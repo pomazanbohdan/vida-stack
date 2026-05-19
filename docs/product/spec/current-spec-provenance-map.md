@@ -219,6 +219,8 @@ Companion rule:
    Sources: user task `audit-p0-model-price-design-spec` on 2026-04-24; current config evidence in `vida.config.yaml` for `agent_system.pricing.vendor_basis`, `agent_system.model_selection`, carrier/backend `model_profiles`, and profile-level `normalized_cost_units`; validated status/query/runtime evidence in `crates/vida/src/{runtime_assignment_builder,status_surface_external_cli,taskflow_routing,runtime_dispatch_state,root_command_router}.rs`; and adjacent owner-law docs `docs/product/spec/{project-activation-and-configurator-model,status-families-and-query-surface-model,carrier-model-profile-selection-runtime-design,unified-hybrid-runtime-selection-policy-design,implementation-backend-admissibility-and-selection-truth-design}.md`
 41. [closure-admission-evidence-table-design.md](closure-admission-evidence-table-design.md)
    Sources: packet `github-123-closure-admission-evidence-table`; active closure law in `docs/product/spec/release-1-closure-contract.md`; active artifact-shape law in `docs/product/spec/release-1-canonical-artifact-schemas.md`; release-admission snapshot selection design in `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`; conformance evidence posture in `docs/product/spec/release-1-conformance-matrix.md`; and current runtime owner code in `crates/vida/src/{runtime_consumption_state,status_surface,doctor_surface,release1_contracts}.rs`
+42. [pi-primary-environment-and-agent-carrier-design.md](pi-primary-environment-and-agent-carrier-design.md)
+   Sources: user request on 2026-05-19 to make Pi a VIDA primary environment and agent backend; local Pi CLI/RPC/JSON behavior evidence from the installed `pi` command and Pi README/RPC/JSON/extensions docs; current carrier/runtime law in `docs/product/spec/{external-cli-carrier-hardening-design,carrier-model-profile-selection-runtime-design,unified-hybrid-runtime-selection-policy-design,implementation-backend-admissibility-and-selection-truth-design,host-agent-layer-status-matrix,hybrid-host-executor-semantics-host-environment-design}.md`; current process guidance in `docs/process/{agent-system.md,external-cli-carrier-operator-procedure.md,team-development-and-orchestration-protocol.md}`; current config/template obligations in `vida.config.yaml` and `docs/framework/templates/vida.config.yaml.template`; and planned TaskFlow epic `feature-vida-pi-agent-primary-environment`.
 
 ## Routing Pointers
 
@@ -269,5 +271,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-provenance-map.md
 created_at: '2026-03-16T09:05:00+02:00'
-updated_at: 2026-05-15T09:13:16.5263495Z
+updated_at: 2026-05-19T15:29:37.4470781Z
 changelog_ref: current-spec-provenance-map.changelog.jsonl

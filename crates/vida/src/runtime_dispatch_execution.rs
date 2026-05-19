@@ -575,6 +575,10 @@ fn external_provider_output_indicates_error(output: &ParsedExternalProviderOutpu
         return true;
     }
 
+    if external_provider_scope_guard_indicates_violation(&output.raw_json) {
+        return true;
+    }
+
     if output
         .error_message
         .as_ref()
@@ -607,6 +611,115 @@ fn external_provider_output_indicates_error(output: &ParsedExternalProviderOutpu
     ]
     .iter()
     .any(|needle| normalized.contains(needle))
+}
+
+fn external_provider_scope_guard_indicates_violation(raw_json: &serde_json::Value) -> bool {
+    external_provider_scope_guard(raw_json).is_some_and(|scope_guard| {
+        scope_guard
+            .get("valid")
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
+            || scope_guard
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|status| {
+                    matches!(
+                        status.trim().to_ascii_lowercase().as_str(),
+                        "violation"
+                            | "scope_violation"
+                            | "owned_path_invalid"
+                            | "missing_owned_paths"
+                    )
+                })
+    })
+}
+
+fn external_provider_scope_guard(raw_json: &serde_json::Value) -> Option<&serde_json::Value> {
+    match raw_json {
+        serde_json::Value::Object(_) => raw_json.get("scope_guard"),
+        serde_json::Value::Array(rows) => rows.iter().rev().find_map(|row| row.get("scope_guard")),
+        _ => None,
+    }
+}
+
+fn external_provider_reported_paths(raw_json: &serde_json::Value) -> Option<serde_json::Value> {
+    let mut touched_paths = std::collections::BTreeSet::new();
+    let mut changed_files = std::collections::BTreeSet::new();
+    collect_external_provider_reported_paths(raw_json, &mut touched_paths, &mut changed_files);
+    let mut body = serde_json::Map::new();
+    if !touched_paths.is_empty() {
+        body.insert(
+            "touched_paths".to_string(),
+            serde_json::json!(touched_paths.into_iter().collect::<Vec<_>>()),
+        );
+    }
+    if !changed_files.is_empty() {
+        body.insert(
+            "changed_files".to_string(),
+            serde_json::json!(changed_files.into_iter().collect::<Vec<_>>()),
+        );
+    }
+    if body.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(body))
+    }
+}
+
+fn collect_external_provider_reported_paths(
+    raw_json: &serde_json::Value,
+    touched_paths: &mut std::collections::BTreeSet<String>,
+    changed_files: &mut std::collections::BTreeSet<String>,
+) {
+    match raw_json {
+        serde_json::Value::Object(entries) => {
+            if let Some(paths) = entries.get("touched_paths") {
+                collect_external_provider_path_values(paths, touched_paths);
+            }
+            if let Some(paths) = entries.get("changed_files") {
+                collect_external_provider_path_values(paths, changed_files);
+            }
+            for value in entries.values() {
+                collect_external_provider_reported_paths(value, touched_paths, changed_files);
+            }
+        }
+        serde_json::Value::Array(rows) => {
+            for row in rows {
+                collect_external_provider_reported_paths(row, touched_paths, changed_files);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_external_provider_path_values(
+    value: &serde_json::Value,
+    paths: &mut std::collections::BTreeSet<String>,
+) {
+    match value {
+        serde_json::Value::String(path) => {
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                paths.insert(trimmed.to_string());
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_external_provider_path_values(value, paths);
+            }
+        }
+        serde_json::Value::Object(entries) => {
+            for key in ["path", "file", "filename"] {
+                if let Some(path) = entries.get(key).and_then(serde_json::Value::as_str) {
+                    let trimmed = path.trim();
+                    if !trimmed.is_empty() {
+                        paths.insert(trimmed.to_string());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn external_provider_output_confirms_execution(
@@ -1994,6 +2107,11 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         dispatch_packet_path,
         selected_model_profile_id.as_deref(),
     )?;
+    let stdin_payload =
+        crate::runtime_dispatch_state::configured_external_activation_stdin_payload(
+            &backend_entry,
+            dispatch_packet_path,
+        )?;
     let wall_timeout_seconds = configured_external_dispatch_wall_timeout_seconds(&backend_entry);
     let wrapped_command =
         wrap_command_with_optional_timeout(command.clone(), args.clone(), wall_timeout_seconds);
@@ -2039,24 +2157,32 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     let output = if let Some(output) = emulated_test_shell_output(&wrapped_command) {
         output
     } else {
-        execute_wrapped_command_async(process, wrapped_command.clone(), None)
-            .await
-            .map_err(|error| {
-                format!(
-                    "Failed to execute configured external backend `{backend_id}` via `{}`: {error}",
-                    wrapped_command.command
-                )
-            })?
-    };
-    #[cfg(not(test))]
-    let output = execute_wrapped_command_async(process, wrapped_command.clone(), None)
+        execute_wrapped_command_async(
+            process,
+            wrapped_command.clone(),
+            stdin_payload.clone().map(String::into_bytes),
+        )
         .await
         .map_err(|error| {
             format!(
                 "Failed to execute configured external backend `{backend_id}` via `{}`: {error}",
                 wrapped_command.command
             )
-        })?;
+        })?
+    };
+    #[cfg(not(test))]
+    let output = execute_wrapped_command_async(
+        process,
+        wrapped_command.clone(),
+        stdin_payload.map(String::into_bytes),
+    )
+    .await
+    .map_err(|error| {
+        format!(
+            "Failed to execute configured external backend `{backend_id}` via `{}`: {error}",
+            wrapped_command.command
+        )
+    })?;
     let activation_view = bounded_activation_view(
         state_root,
         project_root,
@@ -2143,6 +2269,12 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
                 .clone()
                 .unwrap_or(serde_json::Value::Null),
         );
+        if let Some(scope_guard) = external_provider_scope_guard(&parsed_output.raw_json) {
+            body.insert("provider_scope_guard".to_string(), scope_guard.clone());
+        }
+        if let Some(paths) = external_provider_reported_paths(&parsed_output.raw_json) {
+            body.insert("provider_reported_paths".to_string(), paths);
+        }
         body.insert(
             "provider_is_error".to_string(),
             parsed_output
@@ -2299,6 +2431,35 @@ mod tests {
 
         assert!(!super::external_provider_output_indicates_error(&parsed));
         assert!(external_provider_output_confirms_execution(Some(&parsed)));
+    }
+
+    #[test]
+    fn parse_external_provider_output_blocks_scope_guard_violation() {
+        let parsed = parse_external_provider_output(
+            r#"{"type":"result","subtype":"success","is_error":false,"result":"OK","scope_guard":{"status":"violation","valid":false,"touched_paths":["docs/spec.md"]}}"#,
+        )
+        .expect("adapter json output should parse");
+
+        assert!(super::external_provider_output_indicates_error(&parsed));
+        assert!(!external_provider_output_confirms_execution(Some(&parsed)));
+        assert_eq!(
+            super::external_provider_scope_guard(&parsed.raw_json)
+                .expect("scope guard should be preserved")["status"],
+            "violation"
+        );
+    }
+
+    #[test]
+    fn parse_external_provider_output_exposes_reported_paths() {
+        let parsed = parse_external_provider_output(
+            r#"{"type":"result","subtype":"success","is_error":false,"result":"OK","raw_provider":{"provider_result_json":{"touched_paths":["src/lib.rs"],"changed_files":["src/main.rs"]}}}"#,
+        )
+        .expect("adapter json output should parse");
+
+        let paths = super::external_provider_reported_paths(&parsed.raw_json)
+            .expect("reported paths should be preserved");
+        assert_eq!(paths["touched_paths"][0], "src/lib.rs");
+        assert_eq!(paths["changed_files"][0], "src/main.rs");
     }
 
     #[test]
@@ -3802,6 +3963,224 @@ agent_system:
             .contains("SHOULD_NOT_LAUNCH"));
 
         let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn execute_external_agent_lane_dispatch_executes_stdin_prompt_success_result() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-external-dispatch-stdin-success-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: pi
+  systems:
+    pi:
+      enabled: true
+      execution_class: external
+      external_backend_id: pi_cli
+agent_system:
+  subagents:
+    pi_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      dispatch:
+        command: sh
+        static_args:
+          - -lc
+          - |
+            input=$(cat)
+            printf '{"type":"result","is_error":false,"result":"%s"}' "$input"
+        prompt_mode: stdin
+        prompt_template: "STDIN_OK"
+"#,
+        )
+        .expect("write overlay");
+
+        let role_selection = external_test_role_selection("pi_cli");
+        let receipt = external_test_receipt("pi_cli");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let result = runtime
+            .block_on(async {
+                execute_external_agent_lane_dispatch(
+                    project_root.join("missing-state").as_path(),
+                    &project_root,
+                    "/tmp/dispatch-packet.json",
+                    Some("pi_cli"),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "external"
+                    }),
+                )
+                .await
+            })
+            .expect("dispatch should execute");
+
+        assert_eq!(result["status"], "pass");
+        assert_eq!(result["execution_state"], "executed");
+        assert_eq!(result["provider_result"], "STDIN_OK");
+        assert_eq!(result["blocker_code"], serde_json::Value::Null);
+        let activation_command = result["activation_command"]
+            .as_str()
+            .expect("activation command should render");
+        assert!(!activation_command.contains("STDIN_OK"));
+
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn execute_external_agent_lane_dispatch_blocks_parseable_adapter_error_json() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-external-dispatch-stdin-error-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: pi
+  systems:
+    pi:
+      enabled: true
+      execution_class: external
+      external_backend_id: pi_cli
+agent_system:
+  subagents:
+    pi_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      dispatch:
+        command: sh
+        static_args:
+          - -lc
+          - |
+            cat >/dev/null
+            printf '{"type":"result","subtype":"error_during_execution","is_error":true,"error":{"message":"adapter boom"}}'
+            exit 1
+        prompt_mode: stdin
+        prompt_template: "STDIN_ERROR"
+"#,
+        )
+        .expect("write overlay");
+
+        let role_selection = external_test_role_selection("pi_cli");
+        let receipt = external_test_receipt("pi_cli");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let result = runtime
+            .block_on(async {
+                execute_external_agent_lane_dispatch(
+                    project_root.join("missing-state").as_path(),
+                    &project_root,
+                    "/tmp/dispatch-packet.json",
+                    Some("pi_cli"),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "external"
+                    }),
+                )
+                .await
+            })
+            .expect("dispatch should return blocked result");
+
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["blocker_code"], "configured_backend_dispatch_failed");
+        assert_eq!(result["provider_is_error"], true);
+        assert_eq!(result["provider_error_message"], "adapter boom");
+        assert_eq!(result["blocker_reason"], "adapter boom");
+
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    fn external_test_role_selection(backend_id: &str) -> RuntimeConsumptionLaneSelection {
+        RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Run the bounded external dispatch".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": backend_id,
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ],
+                "development_flow": {
+                    "implementation": {
+                        "executor_backend": backend_id
+                    }
+                },
+                "runtime_assignment": {
+                    "selected_backend_id": backend_id
+                }
+            }),
+            reason: "test".to_string(),
+        }
+    }
+
+    fn external_test_receipt(backend_id: &str) -> crate::state_store::RunGraphDispatchReceipt {
+        crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-1".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("worker".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some(backend_id.to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        }
     }
 
     #[test]

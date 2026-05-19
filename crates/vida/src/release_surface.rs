@@ -182,55 +182,47 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
 
     let mut installed_targets = Vec::new();
     for (target, path) in target_paths {
-        if let Some(parent) = path.parent() {
-            if let Err(error) = fs::create_dir_all(parent) {
-                let io_error = io_error_detail("create_dir", Some(parent), None, &error);
-                return blocked_receipt(
-                    requested_target,
-                    source_binary_path,
-                    build,
-                    BlockedRelease {
-                        blocker_code: release_install_error_blocker_code(&io_error.error_kind),
-                        next_action: io_error.next_action_hint.clone(),
-                        io_error: Some(io_error),
-                    },
-                );
-            }
+        if let Err(blocked) =
+            install_release_binary_target(&source_binary, &path, target, &mut installed_targets)
+        {
+            return blocked_receipt(requested_target, source_binary_path, build, blocked);
         }
-        if let Err(io_error) = install_binary(&source_binary, &path) {
+    }
+
+    if args.source_binary.is_none() {
+        let companion_targets = match companion_runtime_install_target_paths(
+            &requested_target,
+            args.install_root.as_deref(),
+        ) {
+            Ok(paths) => paths,
+            Err(blocked) => {
+                return blocked_receipt(requested_target, source_binary_path, build, blocked);
+            }
+        };
+        let pi_agent_source = default_pi_agent_source_binary_path();
+        if !companion_targets.is_empty() && !pi_agent_source.is_file() {
             return blocked_receipt(
                 requested_target,
                 source_binary_path,
                 build,
                 BlockedRelease {
-                    blocker_code: release_install_error_blocker_code(&io_error.error_kind),
-                    next_action: io_error.next_action_hint.clone(),
-                    io_error: Some(io_error),
+                    blocker_code: "missing_source_binary",
+                    next_action: "Run `cargo build -p vida-pi-agent --release`, or rerun without `--skip-build`."
+                        .to_string(),
+                    io_error: None,
                 },
             );
         }
-        let fingerprint = match binary_fingerprint(&path) {
-            Ok(fingerprint) => fingerprint,
-            Err(io_error) => {
-                let blocker_code = release_install_error_blocker_code(&io_error.error_kind);
-                return blocked_receipt(
-                    requested_target,
-                    source_binary_path,
-                    build,
-                    BlockedRelease {
-                        blocker_code,
-                        next_action: io_error.next_action_hint.clone(),
-                        io_error: Some(io_error),
-                    },
-                );
+        for (target, path) in companion_targets {
+            if let Err(blocked) = install_release_binary_target(
+                &pi_agent_source,
+                &path,
+                target,
+                &mut installed_targets,
+            ) {
+                return blocked_receipt(requested_target, source_binary_path, build, blocked);
             }
-        };
-        installed_targets.push(ReleaseInstalledTarget {
-            target,
-            path: path.display().to_string(),
-            fingerprint: fingerprint.clone(),
-        });
-        let _ = write_binary_fingerprint_metadata(&path, &fingerprint);
+        }
     }
 
     let asset_update = if installed_targets
@@ -297,6 +289,55 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
     }
 }
 
+fn install_release_binary_target(
+    source: &Path,
+    destination: &Path,
+    target: String,
+    installed_targets: &mut Vec<ReleaseInstalledTarget>,
+) -> Result<(), BlockedRelease> {
+    if let Some(parent) = destination.parent() {
+        if let Err(error) = fs::create_dir_all(parent) {
+            let io_error = io_error_detail("create_dir", Some(parent), None, &error);
+            return Err(BlockedRelease {
+                blocker_code: release_install_error_blocker_code(&io_error.error_kind),
+                next_action: io_error.next_action_hint.clone(),
+                io_error: Some(io_error),
+            });
+        }
+    }
+    if let Err(io_error) = install_binary(source, destination) {
+        return Err(BlockedRelease {
+            blocker_code: release_install_error_blocker_code(&io_error.error_kind),
+            next_action: io_error.next_action_hint.clone(),
+            io_error: Some(io_error),
+        });
+    }
+    let fingerprint = binary_fingerprint(destination).map_err(|io_error| BlockedRelease {
+        blocker_code: release_install_error_blocker_code(&io_error.error_kind),
+        next_action: io_error.next_action_hint.clone(),
+        io_error: Some(io_error),
+    })?;
+    installed_targets.push(ReleaseInstalledTarget {
+        target,
+        path: destination.display().to_string(),
+        fingerprint: fingerprint.clone(),
+    });
+    let _ = write_binary_fingerprint_metadata(destination, &fingerprint);
+    Ok(())
+}
+
+fn release_build_command() -> Vec<String> {
+    vec![
+        "cargo".to_string(),
+        "build".to_string(),
+        "-p".to_string(),
+        "vida".to_string(),
+        "-p".to_string(),
+        "vida-pi-agent".to_string(),
+        "--release".to_string(),
+    ]
+}
+
 pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
     if skip_build {
         return ReleaseBuildReceipt {
@@ -307,15 +348,9 @@ pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
         };
     }
 
-    let command = vec![
-        "cargo".to_string(),
-        "build".to_string(),
-        "-p".to_string(),
-        "vida".to_string(),
-        "--release".to_string(),
-    ];
+    let command = release_build_command();
     match Command::new("cargo")
-        .args(["build", "-p", "vida", "--release"])
+        .args(command.iter().skip(1).map(String::as_str))
         .current_dir(trusted_workspace_root())
         .status()
     {
@@ -381,6 +416,13 @@ fn default_source_binary_path() -> PathBuf {
         .join("target")
         .join("release")
         .join(vida_binary_file_name())
+}
+
+fn default_pi_agent_source_binary_path() -> PathBuf {
+    trusted_workspace_root()
+        .join("target")
+        .join("release")
+        .join(pi_agent_binary_file_name())
 }
 
 fn release_asset_source_root() -> PathBuf {
@@ -563,6 +605,25 @@ fn install_target_paths(
     }
 }
 
+fn companion_runtime_install_target_paths(
+    requested_target: &str,
+    install_root: Option<&Path>,
+) -> Result<Vec<(String, PathBuf)>, BlockedRelease> {
+    match requested_target {
+        "current" | "all" | "local" | "cargo" => {
+            let root = release_install_root(install_root).ok_or_else(unresolved_install_target)?;
+            Ok(vec![(
+                "current:vida-pi-agent".to_string(),
+                root.join("current")
+                    .join("bin")
+                    .join(pi_agent_binary_file_name()),
+            )])
+        }
+        "path" => Ok(Vec::new()),
+        _ => Ok(Vec::new()),
+    }
+}
+
 pub(crate) fn release_install_layout(install_root: Option<&Path>) -> Option<ReleaseInstallLayout> {
     let root = release_install_root(install_root)?;
     let current_root = root.join("current");
@@ -640,6 +701,10 @@ fn unresolved_install_target() -> BlockedRelease {
 
 pub(crate) fn vida_binary_file_name() -> String {
     format!("vida{}", std::env::consts::EXE_SUFFIX)
+}
+
+fn pi_agent_binary_file_name() -> String {
+    format!("vida-pi-agent{}", std::env::consts::EXE_SUFFIX)
 }
 
 fn vida_path_candidate_names() -> Vec<String> {
@@ -923,6 +988,49 @@ mod tests {
                     .join("bin")
                     .join(vida_binary_file_name())
             )]
+        );
+    }
+
+    #[test]
+    fn release_install_current_target_includes_pi_agent_companion_destination() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let paths = companion_runtime_install_target_paths("current", Some(harness.path()))
+            .expect("current companion install target should resolve");
+
+        assert_eq!(
+            paths,
+            vec![(
+                "current:vida-pi-agent".to_string(),
+                harness
+                    .path()
+                    .join("current")
+                    .join("bin")
+                    .join(pi_agent_binary_file_name())
+            )]
+        );
+    }
+
+    #[test]
+    fn release_install_path_target_does_not_guess_pi_agent_companion_destination() {
+        let paths = companion_runtime_install_target_paths("path", None)
+            .expect("path companion target should be a no-op");
+
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn release_install_build_command_includes_pi_agent_companion_package() {
+        assert_eq!(
+            release_build_command(),
+            vec![
+                "cargo".to_string(),
+                "build".to_string(),
+                "-p".to_string(),
+                "vida".to_string(),
+                "-p".to_string(),
+                "vida-pi-agent".to_string(),
+                "--release".to_string(),
+            ]
         );
     }
 
