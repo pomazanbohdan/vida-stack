@@ -300,6 +300,46 @@ fn find_rejected_candidate<'a>(
         .unwrap_or_else(|| panic!("rejected candidate `{task_id}` missing"))
 }
 
+fn task_ids_from_rows(rows: &Value, label: &str) -> Vec<String> {
+    rows.as_array()
+        .unwrap_or_else(|| panic!("{label} missing or not an array"))
+        .iter()
+        .map(|row| {
+            row["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{label} row id missing"))
+                .to_string()
+        })
+        .collect()
+}
+
+fn blocked_task_ids_from_rows(rows: &Value, label: &str) -> Vec<String> {
+    rows.as_array()
+        .unwrap_or_else(|| panic!("{label} missing or not an array"))
+        .iter()
+        .map(|row| {
+            row["task"]["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{label} row task id missing"))
+                .to_string()
+        })
+        .collect()
+}
+
+fn next_lawful_candidate_ids(next_lawful: &Value) -> Vec<String> {
+    next_lawful["ready_task_candidates"]
+        .as_array()
+        .expect("next-lawful ready_task_candidates should be an array")
+        .iter()
+        .map(|candidate| {
+            candidate["task_id"]
+                .as_str()
+                .expect("next-lawful candidate task_id should render")
+                .to_string()
+        })
+        .collect()
+}
+
 fn normalize_json_fixture(value: &str) -> String {
     let parsed: serde_json::Value = serde_json::from_str(value).expect("json output should parse");
     serde_json::to_string_pretty(&parsed).expect("json output should pretty render")
@@ -4519,6 +4559,279 @@ fn task_adaptive_preview_json_emits_receipt_and_fail_closed_blockers() {
     assert_eq!(
         invalid_json["operator_truth"]["valid_input_does_not_mutate_task_graph"],
         true
+    );
+}
+
+#[test]
+fn taskflow_adaptive_replan_preview_dry_run_and_apply_ordering() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let source_task_id = "case-03-source";
+    let blocker_task_id = "case-03-proof-blocker";
+    let source = run_command_json(
+        &[
+            "task",
+            "create",
+            source_task_id,
+            "Case 03 source",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(source["status"], "pass");
+
+    let ready_before = run_command_json(&["task", "ready", "--json"], &state_dir);
+    assert_eq!(ready_before["ready_count"], 1);
+    assert_eq!(
+        task_ids_from_rows(&ready_before["tasks"], "ready before"),
+        vec![source_task_id.to_string()]
+    );
+    let blocked_before = run_command_json(&["task", "blocked", "--json"], &state_dir);
+    assert_eq!(blocked_before["blocked_count"], 0);
+    assert!(blocked_task_ids_from_rows(&blocked_before["tasks"], "blocked before").is_empty());
+    let next_lawful_before = run_command_json(&["task", "next-lawful", "--json"], &state_dir);
+    assert_eq!(next_lawful_before["status"], "pass");
+    assert_eq!(
+        next_lawful_before["active_bounded_unit"]["task_id"],
+        source_task_id
+    );
+    assert_eq!(
+        next_lawful_candidate_ids(&next_lawful_before),
+        vec![source_task_id.to_string()]
+    );
+
+    let finding_json = serde_json::json!({
+        "finding_kind": "proof_gap",
+        "source_task_id": source_task_id,
+        "summary": "proof target did not cover adaptive ordering",
+        "evidence_refs": ["case-03-receipt-b", "case-03-receipt-a"]
+    })
+    .to_string();
+    let adaptive_preview = run_command_json(
+        &[
+            "task",
+            "adaptive-preview",
+            "--finding-json",
+            &finding_json,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(adaptive_preview["status"], "pass");
+    assert_eq!(adaptive_preview["dry_run"], true);
+    assert_eq!(adaptive_preview["applied"], false);
+    assert_eq!(
+        adaptive_preview["planned_mutation_kind"],
+        "spawn_blocker_task"
+    );
+    assert_eq!(
+        adaptive_preview["operator_truth"]["preview_receipt_emitted"],
+        true
+    );
+    assert_eq!(
+        adaptive_preview["operator_truth"]["graph_state_mutated"],
+        false
+    );
+    assert_eq!(
+        adaptive_preview["preview_receipt"]["receipt_kind"],
+        "adaptive_replan_finding_preview_receipt"
+    );
+    assert_eq!(
+        adaptive_preview["preview_receipt"]["receipt_id"],
+        "adaptive-replan-preview:case-03-source:proof_gap:blocker_resolution:spawn_blocker_task:evidence=case-03-receipt-a+case-03-receipt-b"
+    );
+    assert_eq!(
+        adaptive_preview["preview_receipt"]["operator_truth"]["preview_receipt_emitted"],
+        true
+    );
+    assert_eq!(
+        adaptive_preview["preview_receipt"]["operator_truth"]["graph_state_mutated"],
+        false
+    );
+
+    let ready_after_preview = run_command_json(&["task", "ready", "--json"], &state_dir);
+    assert_eq!(
+        ready_after_preview["ready_count"],
+        ready_before["ready_count"]
+    );
+    assert_eq!(
+        task_ids_from_rows(
+            &ready_after_preview["tasks"],
+            "ready after adaptive preview"
+        ),
+        vec![source_task_id.to_string()]
+    );
+    let blocked_after_preview = run_command_json(&["task", "blocked", "--json"], &state_dir);
+    assert_eq!(
+        blocked_after_preview["blocked_count"],
+        blocked_before["blocked_count"]
+    );
+    let next_lawful_after_preview =
+        run_command_json(&["task", "next-lawful", "--json"], &state_dir);
+    assert_eq!(
+        next_lawful_after_preview["active_bounded_unit"]["task_id"],
+        source_task_id
+    );
+    assert_eq!(
+        next_lawful_candidate_ids(&next_lawful_after_preview),
+        vec![source_task_id.to_string()]
+    );
+
+    let dry_run = run_command_json(
+        &[
+            "taskflow",
+            "replan",
+            "spawn-blocker",
+            source_task_id,
+            blocker_task_id,
+            "Case 03 proof blocker",
+            "--reason",
+            "adaptive preview proof gap",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dry_run["status"], "dry_run");
+    assert_eq!(dry_run["mutation_kind"], "spawn_blocker_task");
+    assert_eq!(dry_run["dry_run"], true);
+    assert_eq!(dry_run["applied"], false);
+    assert_eq!(dry_run["created_task_ids"], serde_json::json!([]));
+    let dry_run_receipt = &dry_run["graph_mutation_receipt"];
+    assert_eq!(
+        dry_run_receipt["receipt_kind"],
+        "task_graph_mutation_receipt"
+    );
+    assert_eq!(dry_run_receipt["mutation_kind"], "spawn_blocker_task");
+    assert_eq!(dry_run_receipt["source_task_id"], source_task_id);
+    assert_eq!(dry_run_receipt["dry_run"], true);
+    assert_eq!(dry_run_receipt["applied"], false);
+    assert_eq!(dry_run_receipt["before_validation"]["status"], "pass");
+    assert_eq!(dry_run_receipt["after_validation"]["status"], "pass");
+    assert_eq!(dry_run_receipt["before_task_count"], 1);
+    assert_eq!(dry_run_receipt["after_task_count"], 2);
+    assert_eq!(
+        dry_run_receipt["planned_task_ids"],
+        serde_json::json!([blocker_task_id])
+    );
+    assert_eq!(
+        dry_run_receipt["planned_dependency_edges"][0]["issue_id"],
+        source_task_id
+    );
+    assert_eq!(
+        dry_run_receipt["planned_dependency_edges"][0]["depends_on_id"],
+        blocker_task_id
+    );
+    assert_eq!(
+        dry_run_receipt["planned_dependency_edges"][0]["edge_type"],
+        "blocks"
+    );
+    assert_eq!(
+        dry_run_receipt["operator_truth"]["applied_mutation_requires_after_validation_pass"],
+        true
+    );
+
+    let missing_blocker_after_dry_run =
+        run_command_capture(&["task", "show", blocker_task_id, "--json"], &state_dir);
+    assert!(
+        !missing_blocker_after_dry_run.status.success(),
+        "dry-run replan must not create blocker task"
+    );
+    let ready_after_dry_run = run_command_json(&["task", "ready", "--json"], &state_dir);
+    assert_eq!(
+        ready_after_dry_run["ready_count"],
+        ready_before["ready_count"]
+    );
+    assert_eq!(
+        task_ids_from_rows(&ready_after_dry_run["tasks"], "ready after dry-run"),
+        vec![source_task_id.to_string()]
+    );
+    let blocked_after_dry_run = run_command_json(&["task", "blocked", "--json"], &state_dir);
+    assert_eq!(
+        blocked_after_dry_run["blocked_count"],
+        blocked_before["blocked_count"]
+    );
+    let next_lawful_after_dry_run =
+        run_command_json(&["task", "next-lawful", "--json"], &state_dir);
+    assert_eq!(
+        next_lawful_after_dry_run["active_bounded_unit"]["task_id"],
+        source_task_id
+    );
+    assert_eq!(
+        next_lawful_candidate_ids(&next_lawful_after_dry_run),
+        vec![source_task_id.to_string()]
+    );
+
+    let applied = run_command_json(
+        &[
+            "taskflow",
+            "replan",
+            "spawn-blocker",
+            source_task_id,
+            blocker_task_id,
+            "Case 03 proof blocker",
+            "--reason",
+            "adaptive preview proof gap",
+            "--apply",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(applied["status"], "pass");
+    assert_eq!(applied["mutation_kind"], "spawn_blocker_task");
+    assert_eq!(applied["dry_run"], false);
+    assert_eq!(applied["applied"], true);
+    assert_eq!(
+        applied["created_task_ids"],
+        serde_json::json!([blocker_task_id])
+    );
+    assert_eq!(applied["graph_mutation_receipt"]["applied"], true);
+    assert_eq!(applied["graph_mutation_receipt"]["dry_run"], false);
+
+    let ready_after_apply = run_command_json(&["task", "ready", "--json"], &state_dir);
+    assert_eq!(ready_after_apply["ready_count"], 1);
+    assert_eq!(
+        task_ids_from_rows(&ready_after_apply["tasks"], "ready after apply"),
+        vec![blocker_task_id.to_string()]
+    );
+    let blocked_after_apply = run_command_json(&["task", "blocked", "--json"], &state_dir);
+    assert_eq!(blocked_after_apply["blocked_count"], 1);
+    assert_eq!(
+        blocked_task_ids_from_rows(&blocked_after_apply["tasks"], "blocked after apply"),
+        vec![source_task_id.to_string()]
+    );
+    assert_eq!(
+        blocked_after_apply["tasks"][0]["blockers"][0]["depends_on_id"],
+        blocker_task_id
+    );
+    assert_eq!(
+        blocked_after_apply["tasks"][0]["blockers"][0]["edge_type"],
+        "blocks"
+    );
+    assert_eq!(
+        blocked_after_apply["tasks"][0]["blockers"][0]["dependency_status"],
+        "open"
+    );
+
+    let next_lawful_after_apply = run_command_json(&["task", "next-lawful", "--json"], &state_dir);
+    assert_eq!(next_lawful_after_apply["status"], "pass");
+    assert_eq!(
+        next_lawful_after_apply["active_bounded_unit"]["task_id"],
+        blocker_task_id
+    );
+    assert_eq!(
+        next_lawful_candidate_ids(&next_lawful_after_apply),
+        vec![blocker_task_id.to_string()]
+    );
+    assert_eq!(
+        next_lawful_after_apply["sequential_vs_parallel_posture"],
+        "sequential_only_single_candidate"
     );
 }
 

@@ -316,6 +316,11 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "readiness blockers",
             "readiness blocker",
             "blocker coverage",
+            "spawn-blocker ordering",
+            "blocked task projections",
+            "blocked task projection",
+            "blocked projections",
+            "blocked projection",
             "blocked coverage",
             "blocked path coverage",
             "blocked-path coverage",
@@ -1208,6 +1213,29 @@ mod tests {
     }
 
     #[test]
+    fn canonical_close_status_ignores_passed_blocked_projection_wording() {
+        let reason = "CASE-03 applied spawn-blocker ordering through next-lawful and blocked task projections; proof commands passed.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        let ignored = inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render");
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "spawn-blocker ordering"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "blocked task projections"));
+    }
+
+    #[test]
     fn close_feedback_inference_ignores_blocked_fix_description_meta_language() {
         let reason = "Fixed false canonical close feedback derivation: classifier strips audit and fix-description phrases before keyword matching while preserving concrete blocked reason detection. Task close JSON now exposes deferred canonical-close telemetry as actionable blocked output only when the close reason is genuinely blocked. Proofs: canonical_close_status_ignores_readiness_blockers_audit_language, canonical_close_status_ignores_fix_description_meta_blocked_phrases, canonical_close_status_preserves_concrete_blocked_reasons, task_close_feedback_blocker_summary_surfaces_deferred_canonical_close, cargo fmt --check.";
         let outcome = super::infer_feedback_outcome_from_close_reason(reason);
@@ -1284,6 +1312,32 @@ mod tests {
         assert_eq!(score, 35);
         assert_eq!(inference["outcome"], "failure");
         assert_eq!(inference["failure_markers"], serde_json::json!(["blocked"]));
+    }
+
+    #[test]
+    fn close_feedback_inference_preserves_concrete_blocked_outcomes() {
+        for reason in [
+            "Task remains blocked pending operator evidence.",
+            "Blocked: cargo test failed",
+            "The lane is blocked pending a verifier receipt.",
+        ] {
+            let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+            let score = super::default_feedback_score(outcome, "verification");
+            let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+            assert_eq!(
+                super::canonical_close_status_from_reason(reason),
+                Some(("blocked", "blocked"))
+            );
+            assert_eq!(outcome, "failure");
+            assert_eq!(score, 35);
+            assert_eq!(inference["outcome"], "failure");
+            assert!(inference["failure_markers"]
+                .as_array()
+                .expect("failure markers should render")
+                .iter()
+                .any(|marker| marker == "blocked"));
+        }
     }
 
     #[test]
