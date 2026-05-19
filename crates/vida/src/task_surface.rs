@@ -2958,6 +2958,16 @@ fn task_status_for_binding<'a>(
         .map(|task| task.status.as_str())
 }
 
+fn continuation_binding_has_live_unit(
+    tasks: &[state_store::TaskRecord],
+    binding: &state_store::RunGraphContinuationBinding,
+) -> bool {
+    if !continuation_binding_requires_open_task(binding) {
+        return true;
+    }
+    task_status_for_binding(tasks, binding).is_some_and(|status| status != "closed")
+}
+
 fn task_exists_for_binding(
     tasks: &[state_store::TaskRecord],
     binding: &state_store::RunGraphContinuationBinding,
@@ -2988,14 +2998,18 @@ fn select_task_next_lawful_binding<'a>(
 ) -> Result<Option<&'a state_store::RunGraphContinuationBinding>, TaskNextLawfulReceipt> {
     match (explicit_binding, current_binding) {
         (Some(explicit), Some(current)) if !continuation_bindings_same_unit(explicit, current) => {
-            if continuation_binding_is_historical_task_close_reconcile(explicit, current) {
-                return Ok(Some(current));
-            }
-            let explicit_status = task_status_for_binding(tasks, explicit);
-            if continuation_binding_requires_open_task(explicit)
-                && matches!(explicit_status, Some("closed"))
+            let explicit_live = continuation_binding_has_live_unit(tasks, explicit);
+            let current_live = continuation_binding_has_live_unit(tasks, current);
+            if continuation_binding_is_historical_task_close_reconcile(explicit, current)
+                && current_live
             {
                 return Ok(Some(current));
+            }
+            match (explicit_live, current_live) {
+                (false, false) => return Ok(None),
+                (false, true) => return Ok(Some(current)),
+                (true, false) => return Ok(Some(explicit)),
+                (true, true) => {}
             }
             Err(blocked_task_next_lawful_receipt(
                 explicit.active_bounded_unit.clone(),
@@ -5461,6 +5475,75 @@ mod tests {
             .next_actions
             .iter()
             .any(|action| action.contains("consume_continue_after_downstream_chain")));
+    }
+
+    #[test]
+    fn task_next_lawful_ignores_both_stale_source_drift_bindings() {
+        let explicit = test_continuation_binding(
+            "old-run",
+            "missing-explicit-task",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+        let current = test_continuation_binding(
+            "current-run",
+            "missing-current-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+
+        let selected = select_task_next_lawful_binding(&[], Some(&explicit), Some(&current))
+            .expect("stale explicit/current disagreement should defer to TaskFlow selection");
+
+        assert!(selected.is_none());
+    }
+
+    #[test]
+    fn task_next_lawful_selects_live_explicit_over_missing_current_binding() {
+        let explicit_task = owned_task_record("explicit-task", vec![]);
+        let explicit = test_continuation_binding(
+            "old-run",
+            "explicit-task",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+        let current = test_continuation_binding(
+            "current-run",
+            "missing-current-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+
+        let selected =
+            select_task_next_lawful_binding(&[explicit_task], Some(&explicit), Some(&current))
+                .expect("live explicit binding should win over stale current binding")
+                .expect("explicit binding should select");
+
+        assert_eq!(selected.task_id, "explicit-task");
+        assert_eq!(selected.binding_source, "explicit_continuation_bind_task");
+    }
+
+    #[test]
+    fn task_next_lawful_keeps_downstream_dispatch_target_live_during_source_drift() {
+        let explicit = test_continuation_binding(
+            "old-run",
+            "closed-feature-task",
+            "task_close_reconcile",
+            "downstream_dispatch_target",
+        );
+        let current = test_continuation_binding(
+            "current-run",
+            "missing-current-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+
+        let selected = select_task_next_lawful_binding(&[], Some(&explicit), Some(&current))
+            .expect("downstream dispatch target should remain live without an open task")
+            .expect("explicit downstream dispatch target should select");
+
+        assert_eq!(selected.task_id, "closed-feature-task");
+        assert_eq!(selected.binding_source, "task_close_reconcile");
     }
 
     #[test]

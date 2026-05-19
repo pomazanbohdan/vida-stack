@@ -2045,6 +2045,145 @@ fn missing_task_stale_blocked_run_can_retire_without_ambiguous_next_action() {
 }
 
 #[test]
+fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_drift() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let active_task_id = "autonomy-active-task";
+    let active = run_command_json(
+        &[
+            "task",
+            "create",
+            active_task_id,
+            "Autonomy active task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(active["status"], "pass");
+    assert_eq!(active["task"]["status"], "in_progress");
+
+    let explicit_run_id = "stale-explicit-run";
+    let explicit_task_id = "stale-explicit-task";
+    let current_run_id = "stale-current-task";
+    let current_task_id = "stale-current-task";
+    assert_ne!(explicit_run_id, current_run_id);
+    assert_ne!(explicit_task_id, current_task_id);
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            current_task_id,
+            "implementation",
+        ],
+        &state_dir,
+    );
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let explicit_binding = serde_json::json!({
+            "run_id": explicit_run_id,
+            "task_id": explicit_task_id,
+            "status": "bound",
+            "active_bounded_unit": {
+                "kind": "run_graph_task",
+                "task_id": explicit_task_id,
+                "run_id": explicit_run_id,
+                "active_node": "implementation"
+            },
+            "binding_source": "explicit_continuation_bind_task",
+            "why_this_unit": "stale explicit continuation references a missing task",
+            "primary_path": "normal_delivery_path",
+            "sequential_vs_parallel_posture": "sequential_only_open_cycle",
+            "recorded_at": "2026-05-19T00:00:02Z"
+        });
+        db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
+            .bind(("run", explicit_run_id))
+            .bind(("binding", explicit_binding))
+            .await
+            .expect("seed stale explicit continuation binding");
+        let current_binding = serde_json::json!({
+            "run_id": current_run_id,
+            "task_id": current_task_id,
+            "status": "bound",
+            "active_bounded_unit": {
+                "kind": "run_graph_task",
+                "task_id": current_task_id,
+                "run_id": current_run_id,
+                "active_node": "implementation"
+            },
+            "binding_source": "latest_run_graph_status",
+            "why_this_unit": "stale latest-run continuation references a different missing task",
+            "primary_path": "normal_delivery_path",
+            "sequential_vs_parallel_posture": "sequential_only_open_cycle",
+            "recorded_at": "2026-05-19T00:00:01Z"
+        });
+        db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
+            .bind(("run", current_run_id))
+            .bind(("binding", current_binding))
+            .await
+            .expect("seed stale current continuation binding");
+        drop(db);
+    });
+
+    for missing_task_id in [explicit_task_id, current_task_id] {
+        let missing = run_command_capture(&["task", "show", missing_task_id, "--json"], &state_dir);
+        assert!(
+            !missing.status.success(),
+            "seeded stale continuation task `{missing_task_id}` must be absent"
+        );
+    }
+
+    let next_lawful_output = run_command_capture(&["task", "next-lawful", "--json"], &state_dir);
+    let next_lawful: serde_json::Value = serde_json::from_slice(&next_lawful_output.stdout)
+        .unwrap_or_else(|error| {
+            panic!(
+                "next-lawful json should parse: {error}; stdout={} stderr={}",
+                String::from_utf8_lossy(&next_lawful_output.stdout),
+                String::from_utf8_lossy(&next_lawful_output.stderr)
+            )
+        });
+    assert!(
+        !next_lawful
+            .to_string()
+            .contains("continuation_source_drift"),
+        "stale missing-task source drift must not block authoritative active task: {next_lawful}"
+    );
+    assert!(
+        next_lawful_output.status.success(),
+        "next-lawful stdout={} stderr={}",
+        String::from_utf8_lossy(&next_lawful_output.stdout),
+        String::from_utf8_lossy(&next_lawful_output.stderr)
+    );
+    assert_eq!(next_lawful["status"], "pass");
+    assert_eq!(
+        next_lawful["active_bounded_unit"]["task_id"],
+        active_task_id
+    );
+    assert!(next_lawful["blocker_codes"]
+        .as_array()
+        .expect("next-lawful blocker_codes should render")
+        .is_empty());
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_list_show_ready_prefer_authoritative_state_over_stale_snapshot() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
