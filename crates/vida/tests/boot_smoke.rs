@@ -3494,6 +3494,9 @@ fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
     let dispatch_packet_path = initial_json["payload"]["dispatch_receipt"]["dispatch_packet_path"]
         .as_str()
         .expect("dispatch packet path should be present");
+    let run_id = initial_json["payload"]["dispatch_receipt"]["run_id"]
+        .as_str()
+        .expect("dispatch receipt run id should be present");
 
     let output = vida()
         .args([
@@ -3512,6 +3515,46 @@ fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
     let parsed: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("agent-init dispatch json should parse");
     assert_eq!(parsed["selection"]["mode"], "dispatch_packet");
+    assert_eq!(
+        parsed["dispatch_mode"]["mode"],
+        "packet_activation_view_only"
+    );
+    assert_eq!(parsed["dispatch_mode"]["requested_execute_dispatch"], false);
+    assert_eq!(parsed["dispatch_mode"]["has_packet_source"], true);
+    assert_eq!(parsed["dispatch_mode"]["activation_view_only"], true);
+    assert_eq!(parsed["dispatch_mode"]["execution_dispatch"], false);
+    assert_eq!(
+        parsed["dispatch_mode"]["activation_view_is_execution_evidence"],
+        false
+    );
+    assert_eq!(
+        parsed["dispatch_mode"]["activation_view_completes_delegated_work"],
+        false
+    );
+    assert_eq!(
+        parsed["dispatch_mode"]["execution_evidence_required_for_completion"],
+        true
+    );
+    assert_eq!(
+        parsed["dispatch_mode"]["completion_requires_receipt_backed_execution"],
+        true
+    );
+    assert_eq!(
+        parsed["dispatch_mode"]["required_completion_evidence"],
+        "receipt_backed_execution_evidence"
+    );
+    assert_eq!(
+        parsed["dispatch_mode"]["missing_execution_evidence_semantics"],
+        "non_executing_bridge_blocker"
+    );
+    assert_eq!(
+        parsed["dispatch_mode"]["root_session_write_authority_granted"],
+        false
+    );
+    assert_eq!(
+        parsed["dispatch_mode"]["continuation_authority_granted"],
+        false
+    );
     assert_eq!(parsed["activation_semantics"]["view_only"], true);
     assert_eq!(parsed["activation_semantics"]["executes_packet"], false);
     assert_eq!(
@@ -3527,6 +3570,26 @@ fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
         .as_str()
         .unwrap_or_default()
         .contains("receipt-backed evidence"));
+
+    let resumed = project_bound_taskflow_consume_continue_once_with_timeout(
+        &project_root,
+        &state_dir,
+        &["--run-id", run_id, "--json"],
+    );
+    assert!(
+        !resumed.status.success(),
+        "agent-init activation view must not satisfy continuation gates without execution evidence"
+    );
+    let resumed_stderr = String::from_utf8_lossy(&resumed.stderr);
+    assert!(
+        resumed_stderr.contains("Run-graph resume gate denied"),
+        "{resumed_stderr}"
+    );
+    assert!(
+        resumed_stderr.contains("recovery_ready is false"),
+        "{resumed_stderr}"
+    );
+
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
 
