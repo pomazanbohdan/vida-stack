@@ -950,6 +950,30 @@ fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
         "parent-child"
     );
 
+    let child_after_create =
+        run_command_json(&["task", "show", "sandbox-child", "--json"], &state_dir);
+    assert_eq!(child_after_create["status"], "pass");
+    assert_eq!(child_after_create["task"]["status"], "open");
+    assert_eq!(
+        child_after_create["task"]["dependencies"][0]["depends_on_id"],
+        "sandbox-parent"
+    );
+    assert_eq!(
+        child_after_create["task"]["dependencies"][0]["edge_type"],
+        "parent-child"
+    );
+
+    let parent_children = run_command_json(
+        &["task", "children", "sandbox-parent", "--json"],
+        &state_dir,
+    );
+    assert_eq!(parent_children["status"], "pass");
+    assert_eq!(parent_children["surface"], "vida task children");
+    assert_eq!(parent_children["root_task_id"], "sandbox-parent");
+    assert_eq!(parent_children["child_count"], 1);
+    assert_eq!(parent_children["children"][0]["child_id"], "sandbox-child");
+    assert_eq!(parent_children["children"][0]["child_status"], "open");
+
     let graph = run_command_json(&["task", "validate-graph", "--json"], &state_dir);
     assert_eq!(graph["status"], "pass");
     assert_eq!(graph["valid"], true);
@@ -980,6 +1004,39 @@ fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
     let parent_after_failed_close =
         run_command_json(&["task", "show", "sandbox-parent", "--json"], &state_dir);
     assert_eq!(parent_after_failed_close["task"]["status"], "open");
+
+    let child_closed = run_command_json(
+        &[
+            "task",
+            "close",
+            "sandbox-child",
+            "--reason",
+            "factual sandbox child complete",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(child_closed["status"], "pass");
+    assert_eq!(child_closed["task"]["status"], "closed");
+
+    let parent_closed = run_command_json(
+        &[
+            "task",
+            "close",
+            "sandbox-parent",
+            "--reason",
+            "factual sandbox parent complete after child closure",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(parent_closed["status"], "pass");
+    assert_eq!(parent_closed["task"]["status"], "closed");
+
+    let graph_after_closure = run_command_json(&["task", "validate-graph", "--json"], &state_dir);
+    assert_eq!(graph_after_closure["status"], "pass");
+    assert_eq!(graph_after_closure["valid"], true);
+    assert_eq!(graph_after_closure["issue_count"], 0);
 
     let _ = fs::remove_dir_all(&state_dir);
 }
