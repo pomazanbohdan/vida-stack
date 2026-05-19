@@ -3515,9 +3515,14 @@ fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
     assert_eq!(parsed["activation_semantics"]["view_only"], true);
     assert_eq!(parsed["activation_semantics"]["executes_packet"], false);
     assert_eq!(
+        parsed["activation_semantics"]["records_completion_receipt"],
+        false
+    );
+    assert_eq!(
         parsed["activation_semantics"]["transfers_root_session_write_authority"],
         false
     );
+    assert!(parsed["packet_activation_evidence"].is_null());
     assert!(parsed["activation_semantics"]["next_lawful_action"]
         .as_str()
         .unwrap_or_default()
@@ -8358,6 +8363,59 @@ fn taskflow_factual_sandbox_h6_h8_runtime_packet_runner() {
 }
 
 #[test]
+fn taskflow_continuation_bind_missing_run_fails_closed_with_blocker() {
+    let state_dir = unique_state_dir();
+
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+
+    let missing_bind = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "taskflow",
+                "continuation",
+                "bind",
+                "missing-run",
+                "--task-id",
+                "missing-task",
+                "--why",
+                "negative path proof",
+                "--json",
+            ])
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(!missing_bind.status.success());
+    let missing_bind_json: serde_json::Value =
+        serde_json::from_slice(&missing_bind.stdout).expect("missing bind json should parse");
+    assert_eq!(
+        missing_bind_json["surface"],
+        "vida taskflow continuation bind"
+    );
+    assert_eq!(missing_bind_json["status"], "blocked");
+    assert_eq!(missing_bind_json["run_id"], "missing-run");
+    assert_eq!(missing_bind_json["task_id"], "missing-task");
+    assert!(missing_bind_json["shared_fields"]["blocker_codes"]
+        .as_array()
+        .expect("missing bind blocker codes should render")
+        .iter()
+        .any(|code| code == "continuation_binding_run_graph_missing"));
+    assert_eq!(
+        missing_bind_json["operator_contracts"]["status"],
+        missing_bind_json["shared_fields"]["status"]
+    );
+    assert!(missing_bind_json["shared_fields"]["next_actions"]
+        .as_array()
+        .expect("missing bind next actions should render")
+        .iter()
+        .any(|action| action
+            .as_str()
+            .is_some_and(|value| value.contains("fail-closed"))));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+#[test]
 fn taskflow_run_graph_bridge_syncs_non_empty_latest_flow_surfaces() {
     let state_dir = unique_state_dir();
 
@@ -11831,6 +11889,146 @@ fn installed_vida_ready_orders_multiple_rows_and_filters_blocked_siblings() {
     assert_eq!(rows[2]["id"], "vida-ready");
     assert!(!rows.iter().any(|row| row["id"] == "vida-blocked"));
     assert!(!stderr.contains("delegated-taskflow-binary-ran"));
+}
+
+#[test]
+fn taskflow_testing_h17_h20_projection_consistency_after_child_mutation() {
+    let state_dir = unique_state_dir();
+    let boot = boot_with_retry(&state_dir);
+    assert!(
+        boot.status.success(),
+        "boot stdout={}\nboot stderr={}",
+        String::from_utf8_lossy(&boot.stdout),
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    let task = |args: &[&str]| {
+        run_with_state_lock_retry(|| {
+            let mut command = vida();
+            command
+                .args(args)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+            command
+                .output()
+                .expect("task projection command should run")
+        })
+    };
+    let show_task = |task_id: &str| {
+        let output = task(&["task", "show", task_id, "--json"]);
+        assert!(
+            output.status.success(),
+            "show {task_id} stdout={}\nstderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("task show json should parse");
+        parsed.get("task").unwrap_or(&parsed).clone()
+    };
+    let list_task = |task_id: &str| {
+        let output = task(&["task", "list", "--all", "--json"]);
+        assert!(
+            output.status.success(),
+            "list stdout={}\nstderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("task list json should parse");
+        task_rows_from_payload(&parsed, "task list")
+            .iter()
+            .find(|row| row["id"] == task_id)
+            .unwrap_or_else(|| panic!("task list should include {task_id}"))
+            .clone()
+    };
+
+    let create_parent = task(&[
+        "task",
+        "create",
+        "h17-h20-parent",
+        "Projection Parent",
+        "--type",
+        "epic",
+        "--display-id",
+        "vida-h17",
+        "--json",
+    ]);
+    assert!(
+        create_parent.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create_parent.stderr)
+    );
+
+    let create_child = task(&[
+        "task",
+        "create",
+        "h17-h20-child",
+        "Projection Child",
+        "--parent-id",
+        "h17-h20-parent",
+        "--display-id",
+        "vida-h17.1",
+        "--json",
+    ]);
+    assert!(
+        create_child.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create_child.stderr)
+    );
+
+    for task_id in ["h17-h20-parent", "h17-h20-child"] {
+        let shown = show_task(task_id);
+        let listed = list_task(task_id);
+        assert_eq!(listed["id"], shown["id"]);
+        assert_eq!(listed["display_id"], shown["display_id"]);
+        assert_eq!(listed["status"], shown["status"]);
+    }
+    let child_listed_before = list_task("h17-h20-child");
+    assert!(child_listed_before["dependencies"]
+        .as_array()
+        .is_some_and(|deps| {
+            deps.iter().any(|dep| {
+                dep["edge_type"] == "parent-child" && dep["depends_on_id"] == "h17-h20-parent"
+            })
+        }));
+
+    let close_child = task(&[
+        "task",
+        "close",
+        "h17-h20-child",
+        "--reason",
+        "projection consistency close",
+        "--json",
+    ]);
+    assert!(
+        close_child.status.success(),
+        "{}",
+        String::from_utf8_lossy(&close_child.stderr)
+    );
+
+    for (task_id, expected_status) in [("h17-h20-parent", "closed"), ("h17-h20-child", "closed")] {
+        let shown = show_task(task_id);
+        let listed = list_task(task_id);
+        assert_eq!(listed["id"], shown["id"]);
+        assert_eq!(listed["display_id"], shown["display_id"]);
+        assert_eq!(listed["status"], shown["status"]);
+        assert_eq!(shown["status"], expected_status);
+    }
+
+    let validate = task(&["task", "validate-graph", "--json"]);
+    assert!(
+        validate.status.success(),
+        "validate stdout={}\nstderr={}",
+        String::from_utf8_lossy(&validate.stdout),
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    let validate_json: serde_json::Value =
+        serde_json::from_slice(&validate.stdout).expect("validate graph json should parse");
+    assert_eq!(validate_json["status"], "pass");
+    assert_eq!(validate_json["valid"], true);
+    assert_eq!(validate_json["issue_count"], 0);
 }
 
 #[test]

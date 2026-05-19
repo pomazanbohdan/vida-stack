@@ -4547,11 +4547,15 @@ fn build_agent_init_surface_payload(
     let execution_truth = agent_init_execution_truth(&selection);
     let backend_truth =
         agent_init_backend_truth(&selection, &execution_truth, &effective_activation_bundle);
-    let packet_activation_evidence = selection
-        .get("packet")
-        .and_then(|packet| packet.get("activation_evidence"))
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
+    let packet_activation_evidence = if activation_semantics["view_only"].as_bool() == Some(true) {
+        serde_json::Value::Null
+    } else {
+        selection
+            .get("packet")
+            .and_then(|packet| packet.get("activation_evidence"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null)
+    };
     let dev_team_readiness = enrich_dev_team_readiness_with_agent_selection(
         dev_team_readiness,
         &selection,

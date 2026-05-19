@@ -42,6 +42,59 @@ impl StateStore {
         reopened
     }
 
+    fn close_parent_chain_without_active_children(
+        tasks: &mut [TaskRecord],
+        parent_id: Option<&str>,
+        now: &str,
+        reason: &str,
+    ) -> Vec<TaskRecord> {
+        let mut closed = Vec::new();
+        let mut current_parent_id = parent_id.map(ToOwned::to_owned);
+        let mut visited = BTreeSet::new();
+
+        while let Some(parent_id) = current_parent_id {
+            if !visited.insert(parent_id.clone()) {
+                break;
+            }
+
+            let Some(parent_index) = tasks.iter().position(|task| task.id == parent_id) else {
+                break;
+            };
+            let child_indices = tasks
+                .iter()
+                .enumerate()
+                .filter_map(|(index, task)| {
+                    task.dependencies
+                        .iter()
+                        .any(|dependency| {
+                            dependency.edge_type == "parent-child"
+                                && dependency.depends_on_id == parent_id
+                        })
+                        .then_some(index)
+                })
+                .collect::<Vec<_>>();
+            if child_indices.is_empty()
+                || child_indices
+                    .iter()
+                    .any(|index| matches!(tasks[*index].status.as_str(), "open" | "in_progress"))
+            {
+                break;
+            }
+
+            let next_parent_id = Self::parent_id_for_task(&tasks[parent_index]);
+            if matches!(tasks[parent_index].status.as_str(), "open" | "in_progress") {
+                tasks[parent_index].status = "closed".to_string();
+                tasks[parent_index].updated_at = now.to_string();
+                tasks[parent_index].closed_at = Some(now.to_string());
+                tasks[parent_index].close_reason = Some(reason.to_string());
+                closed.push(tasks[parent_index].clone());
+            }
+            current_parent_id = next_parent_id;
+        }
+
+        closed
+    }
+
     async fn validate_task_display_id_alias(
         &self,
         task_id: &str,
@@ -1284,16 +1337,28 @@ impl StateStore {
             .position(|existing| existing.id == task.id)
             .expect("updated task should exist in authoritative state");
         tasks[task_index] = task.clone();
-        let parent_id = if task.status == "closed" {
-            None
+        let (reopened_parents, closed_parents) = if task.status == "closed" {
+            let parent_id = Self::parent_id_for_task(&task);
+            (
+                Vec::new(),
+                Self::close_parent_chain_without_active_children(
+                    &mut tasks,
+                    parent_id.as_deref(),
+                    &task.updated_at,
+                    &format!("all direct child tasks closed after closing `{task_id}`"),
+                ),
+            )
         } else {
-            Self::parent_id_for_task(&task)
+            let parent_id = Self::parent_id_for_task(&task);
+            (
+                Self::reopen_closed_parent_chain_for_extension(
+                    &mut tasks,
+                    parent_id.as_deref(),
+                    &task.updated_at,
+                ),
+                Vec::new(),
+            )
         };
-        let reopened_parents = Self::reopen_closed_parent_chain_for_extension(
-            &mut tasks,
-            parent_id.as_deref(),
-            &task.updated_at,
-        );
         let issues = Self::validate_task_graph_rows(&tasks);
         if let Some(first) = issues.first() {
             return Err(StateStoreError::InvalidTaskRecord {
@@ -1307,6 +1372,15 @@ impl StateStore {
             self.persist_task_record(parent).await?;
         }
         self.persist_task_record(task.clone()).await?;
+        for parent in &closed_parents {
+            self.persist_task_record(parent.clone()).await?;
+            self.refresh_run_graph_continuation_after_task_close(&parent.id)
+                .await?;
+        }
+        if task.status == "closed" {
+            self.refresh_run_graph_continuation_after_task_close(task_id)
+                .await?;
+        }
         Ok(task)
     }
 
@@ -1468,7 +1542,34 @@ impl StateStore {
         task.updated_at = now.clone();
         task.closed_at = Some(now);
         task.close_reason = Some(reason.to_string());
+        let mut reconciled_tasks = tasks;
+        let task_index = reconciled_tasks
+            .iter()
+            .position(|existing| existing.id == task.id)
+            .expect("closed task should exist in authoritative state");
+        reconciled_tasks[task_index] = task.clone();
+        let parent_id = Self::parent_id_for_task(&task);
+        let closed_parents = Self::close_parent_chain_without_active_children(
+            &mut reconciled_tasks,
+            parent_id.as_deref(),
+            &task.updated_at,
+            &format!("all direct child tasks closed after closing `{task_id}`"),
+        );
+        let issues = Self::validate_task_graph_rows(&reconciled_tasks);
+        if let Some(first) = issues.first() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "task close would create invalid graph: {} on {}",
+                    first.issue_type, first.issue_id
+                ),
+            });
+        }
         self.persist_task_record(task.clone()).await?;
+        for parent in &closed_parents {
+            self.persist_task_record(parent.clone()).await?;
+            self.refresh_run_graph_continuation_after_task_close(&parent.id)
+                .await?;
+        }
         self.refresh_run_graph_continuation_after_task_close(task_id)
             .await?;
         Ok(task)
@@ -1740,6 +1841,78 @@ mod tests {
         let parent = store.show_task("closed-parent").await.expect("load parent");
         assert_eq!(parent.status, "in_progress");
         assert!(parent.closed_at.is_none());
+        assert!(store
+            .validate_task_graph()
+            .await
+            .expect("validate")
+            .is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn update_task_status_closed_closes_parent_without_active_children() {
+        let root = unique_task_store_temp_root("vida-update-child-closes-parent");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, title, issue_type, parent_id) in [
+            ("update-close-parent", "Update close parent", "epic", None),
+            (
+                "update-close-child",
+                "Update close child",
+                "task",
+                Some("update-close-parent"),
+            ),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id: None,
+                    description: "",
+                    issue_type,
+                    status: "open",
+                    priority: 1,
+                    parent_id,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create task pair");
+        }
+
+        store
+            .update_task(UpdateTaskRequest {
+                task_id: "update-close-child",
+                title: None,
+                status: Some("closed"),
+                priority: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: None,
+            })
+            .await
+            .expect("close child through update");
+
+        let parent = store
+            .show_task("update-close-parent")
+            .await
+            .expect("load parent");
+        assert_eq!(parent.status, "closed");
+        assert_eq!(
+            parent.close_reason.as_deref(),
+            Some("all direct child tasks closed after closing `update-close-child`")
+        );
         assert!(store
             .validate_task_graph()
             .await

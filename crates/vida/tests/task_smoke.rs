@@ -3,7 +3,7 @@ use std::fs;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::Surreal;
 use tokio::runtime::Runtime;
@@ -256,6 +256,17 @@ where
 fn assert_json_status_pass(output: &str) {
     let parsed: serde_json::Value = serde_json::from_str(output).expect("json output should parse");
     assert_eq!(parsed["status"], "pass");
+}
+
+fn assert_task_graph_valid_after(state_dir: &str, mutation: &str) {
+    let validate = run_command_json(&["task", "validate-graph", "--json"], state_dir);
+    assert_eq!(
+        validate["surface"], "vida task validate-graph",
+        "{mutation}"
+    );
+    assert_eq!(validate["status"], "pass", "{mutation}");
+    assert_eq!(validate["valid"], true, "{mutation}");
+    assert_eq!(validate["issue_count"], 0, "{mutation}");
 }
 
 fn write_single_task_snapshot(path: &str, task_id: &str, title: &str, status: &str, priority: u32) {
@@ -1160,6 +1171,283 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
 }
 
 #[test]
+fn taskflow_factual_sandbox_h12_h16_invariant_matrix() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let create_parent = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-h13-parent",
+            "Sandbox H13 parent",
+            "--type",
+            "epic",
+            "--status",
+            "closed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(create_parent["status"], "pass");
+    assert_eq!(create_parent["task"]["status"], "closed");
+    assert_task_graph_valid_after(&state_dir, "create closed H13 parent");
+
+    let create_open_child = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-h13-open-defect",
+            "Sandbox H13 open defect",
+            "--type",
+            "defect",
+            "--parent-id",
+            "sandbox-h13-parent",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(create_open_child["status"], "pass");
+    assert_eq!(create_open_child["task"]["status"], "open");
+    assert_task_graph_valid_after(&state_dir, "create open H13 child");
+    let parent_after_create = run_command_json(
+        &["task", "show", "sandbox-h13-parent", "--json"],
+        &state_dir,
+    );
+    assert_eq!(parent_after_create["task"]["status"], "in_progress");
+    assert!(parent_after_create["task"]["closed_at"].is_null());
+    assert!(parent_after_create["task"]["close_reason"].is_null());
+
+    let rejected_create_parent_close = run_command_capture(
+        &[
+            "task",
+            "close",
+            "sandbox-h13-parent",
+            "--reason",
+            "must fail while defect child is open",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !rejected_create_parent_close.status.success(),
+        "H13/H15 parent close with open defect child must fail closed"
+    );
+    let rejected_create_parent_close_stderr =
+        String::from_utf8_lossy(&rejected_create_parent_close.stderr);
+    assert!(
+        rejected_create_parent_close_stderr.contains("open child tasks exist")
+            && rejected_create_parent_close_stderr.contains("sandbox-h13-open-defect"),
+        "{rejected_create_parent_close_stderr}"
+    );
+    assert_task_graph_valid_after(&state_dir, "reject H13 parent close");
+    let parent_after_create_close_reject = run_command_json(
+        &["task", "show", "sandbox-h13-parent", "--json"],
+        &state_dir,
+    );
+    assert_eq!(
+        parent_after_create_close_reject["task"]["status"],
+        "in_progress"
+    );
+
+    let update_parent = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-h14-parent",
+            "Sandbox H14 parent",
+            "--type",
+            "epic",
+            "--status",
+            "closed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(update_parent["status"], "pass");
+    assert_eq!(update_parent["task"]["status"], "closed");
+    assert_task_graph_valid_after(&state_dir, "create closed H14 parent");
+
+    let closed_child = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-h14-child",
+            "Sandbox H14 child",
+            "--parent-id",
+            "sandbox-h14-parent",
+            "--status",
+            "closed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed_child["status"], "pass");
+    assert_eq!(closed_child["task"]["status"], "closed");
+    assert_task_graph_valid_after(&state_dir, "create closed H14 child");
+
+    let update_open_child = run_command_json(
+        &[
+            "task",
+            "update",
+            "sandbox-h14-child",
+            "--status",
+            "open",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(update_open_child["status"], "pass");
+    assert_eq!(update_open_child["task"]["status"], "open");
+    assert_task_graph_valid_after(&state_dir, "update H14 child back to open");
+    let parent_after_update = run_command_json(
+        &["task", "show", "sandbox-h14-parent", "--json"],
+        &state_dir,
+    );
+    assert_eq!(parent_after_update["task"]["status"], "in_progress");
+    assert!(parent_after_update["task"]["closed_at"].is_null());
+    assert!(parent_after_update["task"]["close_reason"].is_null());
+
+    let rejected_update_parent_close = run_command_capture(
+        &[
+            "task",
+            "close",
+            "sandbox-h14-parent",
+            "--reason",
+            "must fail while updated child is open",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !rejected_update_parent_close.status.success(),
+        "H14 parent close with reopened child must fail closed"
+    );
+    let rejected_update_parent_close_stderr =
+        String::from_utf8_lossy(&rejected_update_parent_close.stderr);
+    assert!(
+        rejected_update_parent_close_stderr.contains("open child tasks exist")
+            && rejected_update_parent_close_stderr.contains("sandbox-h14-child"),
+        "{rejected_update_parent_close_stderr}"
+    );
+    assert_task_graph_valid_after(&state_dir, "reject H14 parent close");
+    let parent_after_update_close_reject = run_command_json(
+        &["task", "show", "sandbox-h14-parent", "--json"],
+        &state_dir,
+    );
+    assert_eq!(
+        parent_after_update_close_reject["task"]["status"],
+        "in_progress"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn taskflow_testing_h24_operator_budget_guard() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let root = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-h24-root",
+            "Sandbox H24 root",
+            "--type",
+            "epic",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    let ready = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-h24-ready",
+            "Sandbox H24 ready",
+            "--parent-id",
+            "sandbox-h24-root",
+            "--priority",
+            "2",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(ready["status"], "pass");
+
+    let blocked = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-h24-blocked",
+            "Sandbox H24 blocked",
+            "--parent-id",
+            "sandbox-h24-root",
+            "--priority",
+            "3",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(blocked["status"], "pass");
+
+    let dep = run_command_json(
+        &[
+            "task",
+            "dep",
+            "add",
+            "sandbox-h24-blocked",
+            "sandbox-h24-ready",
+            "blocks",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dep["edge_type"], "blocks");
+
+    const READ_MODEL_SURFACE_BUDGET: Duration = Duration::from_secs(5);
+    let surfaces = [
+        (
+            "task show",
+            vec!["task", "show", "sandbox-h24-ready", "--json"],
+        ),
+        ("task ready", vec!["task", "ready", "--json"]),
+        (
+            "task validate-graph",
+            vec!["task", "validate-graph", "--json"],
+        ),
+        ("status --json", vec!["status", "--json"]),
+    ];
+
+    for (surface, args) in surfaces {
+        let started_at = Instant::now();
+        let output = run_command_capture(&args, &state_dir);
+        let elapsed = started_at.elapsed();
+        let elapsed_ms = elapsed.as_millis();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("H24 operator budget: {surface} elapsed={elapsed_ms}ms");
+        assert!(
+            output.status.success(),
+            "{surface} should succeed within the H24 operator budget guard; elapsed={elapsed_ms}ms; status={:?}; stdout={stdout}; stderr={stderr}",
+            output.status.code()
+        );
+        assert!(
+            elapsed <= READ_MODEL_SURFACE_BUDGET,
+            "{surface} exceeded H24 operator hard budget; elapsed={elapsed_ms}ms; budget={}ms; normal target is <=2000ms; stdout={stdout}; stderr={stderr}",
+            READ_MODEL_SURFACE_BUDGET.as_millis()
+        );
+    }
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_create_update_close_round_trip_supports_planning_graph_views() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
@@ -1601,6 +1889,157 @@ fn run_graph_update_canonicalizes_conflicting_resume_meta() {
     assert_eq!(resume_target.as_deref(), Some("dispatch.coach"));
     assert_eq!(next_node.as_deref(), Some("coach"));
     assert_eq!(handoff_state.as_deref(), Some("awaiting_coach"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn missing_task_stale_blocked_run_can_retire_without_ambiguous_next_action() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let run_id = "h22-missing-task";
+    let task_id = run_id;
+    let _ = run_and_assert_success(
+        &["taskflow", "run-graph", "init", task_id, "implementation"],
+        &state_dir,
+    );
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "update",
+            task_id,
+            "implementation",
+            "implementation",
+            "blocked",
+            "implementation",
+            "{\"policy_gate\":\"validation_report_required\",\"context_state\":\"sealed\",\"resume_target\":\"none\",\"recovery_ready\":false}",
+        ],
+        &state_dir,
+    );
+
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    fs::create_dir_all(&packet_dir).expect("create packet dir");
+    let packet_path = format!("{packet_dir}/{run_id}.json");
+    fs::write(&packet_path, format!("{{\"run_id\":\"{run_id}\"}}")).expect("write packet");
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": run_id,
+            "dispatch_target": "implementation",
+            "dispatch_status": "blocked",
+            "lane_status": "lane_running",
+            "dispatch_kind": "test_dispatch",
+            "dispatch_surface": "vida taskflow run-graph dispatch-init",
+            "dispatch_command": "vida taskflow run-graph dispatch-init h22-missing-task --json",
+            "dispatch_packet_path": packet_path,
+            "blocker_code": "tool_execution_failed",
+            "downstream_dispatch_ready": false,
+            "downstream_dispatch_blockers": [],
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "worker",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-05-19T00:00:00Z"
+        });
+        db.query("UPSERT type::record('run_graph_dispatch_receipt', $run) CONTENT $receipt")
+            .bind(("run", run_id))
+            .bind(("receipt", receipt))
+            .await
+            .expect("seed blocked dispatch receipt");
+        let binding = serde_json::json!({
+            "run_id": run_id,
+            "task_id": task_id,
+            "status": "bound",
+            "active_bounded_unit": {
+                "kind": "run_graph_task",
+                "task_id": task_id,
+                "run_id": run_id,
+                "active_node": "implementation"
+            },
+            "binding_source": "h22_regression_seed",
+            "why_this_unit": "stale missing-task run was blocking continuation",
+            "primary_path": "normal_delivery_path",
+            "sequential_vs_parallel_posture": "sequential_only_open_cycle",
+            "recorded_at": "2026-05-19T00:00:00Z"
+        });
+        db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
+            .bind(("run", run_id))
+            .bind(("binding", binding))
+            .await
+            .expect("seed stale continuation binding");
+        drop(db);
+    });
+
+    let retire = run_command_capture(
+        &[
+            "lane",
+            "retire",
+            run_id,
+            "--receipt-id",
+            "h22-retire-missing-task",
+            "--reason",
+            "missing task stale blocked run",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        retire.status.success(),
+        "retire stdout={} stderr={}",
+        String::from_utf8_lossy(&retire.stdout),
+        String::from_utf8_lossy(&retire.stderr)
+    );
+    let retired: serde_json::Value =
+        serde_json::from_slice(&retire.stdout).expect("retire json should parse");
+    assert_eq!(retired["run_id"], run_id);
+    assert_eq!(retired["status"], "pass");
+    assert_eq!(retired["lane_status"], "lane_completed");
+    assert_eq!(retired["dispatch_status"], "executed");
+    assert!(retired["blocker_codes"].as_array().unwrap().is_empty());
+    assert!(retired["next_actions"].as_array().unwrap().is_empty());
+
+    let recovery = run_command_json(
+        &["taskflow", "recovery", "status", run_id, "--json"],
+        &state_dir,
+    );
+    assert_eq!(recovery["run_id"], run_id);
+    assert_eq!(recovery["status"], "pass");
+    assert_eq!(recovery["recovery"]["resume_status"], "completed");
+    assert_eq!(recovery["recovery"]["lifecycle_stage"], "closure_complete");
+    assert_eq!(recovery["recovery"]["recovery_ready"], false);
+
+    let next_lawful_output = run_command_capture(&["task", "next-lawful", "--json"], &state_dir);
+    assert!(
+        !next_lawful_output.status.success(),
+        "empty sandbox should fail closed after retiring stale missing-task run"
+    );
+    let next_lawful: serde_json::Value = serde_json::from_slice(&next_lawful_output.stdout)
+        .expect("next-lawful blocked json should parse");
+    assert_eq!(next_lawful["status"], "blocked");
+    assert!(next_lawful["blocker_codes"]
+        .as_array()
+        .expect("next-lawful blocker_codes should render")
+        .iter()
+        .any(|code| code == "no_ready_task_candidates"));
+    assert_ne!(
+        next_lawful["binding_source"], "h22_regression_seed",
+        "retired missing-task run must not remain as the next lawful continuation"
+    );
+    assert!(
+        !next_lawful.to_string().contains("h22-missing-task"),
+        "retired missing-task run must not leak into next action"
+    );
 
     let _ = fs::remove_dir_all(&state_dir);
 }
