@@ -800,8 +800,12 @@ fn closure_admission_row_class(row: &serde_json::Map<String, serde_json::Value>)
 }
 
 fn closure_admission_row_is_pass(row: &serde_json::Map<String, serde_json::Value>) -> bool {
-    Release1ContractStatus::from_str(row["status"].as_str().unwrap_or_default())
-        == Some(Release1ContractStatus::Pass)
+    let status = row
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+
+    Release1ContractStatus::from_str(status) == Some(Release1ContractStatus::Pass)
         && string_array_has_evidence_ref(row.get("evidence_refs"))
 }
 
@@ -2148,6 +2152,32 @@ mod tests {
         ExceptionTakeoverState, GateLevel, LaneStatus, Release1ContractStatus,
         Release1ContractType, Release1SchemaVersion, RiskTier, WorkflowClass,
     };
+
+
+    #[test]
+    fn release_admission_snapshot_with_missing_row_status_is_not_accepted() {
+        let snapshot = serde_json::json!({
+            "status": "pass",
+            "operator_contracts": { "status": "pass" },
+            "closure_admission": {
+                "admitted": true,
+                "status": "pass",
+                "closure_decision": "admit",
+                "decision_owner": "closure_surface",
+                "decision_at": "2026-05-19T00:00:00Z",
+                "evidence_bundle_refs": ["bundle-1"],
+                "blockers": [],
+                "evidence_table": [
+                    {
+                        "requirement": "docflow_readiness",
+                        "evidence_refs": ["proof-1"]
+                    }
+                ]
+            }
+        });
+
+        assert!(!super::release_admission_operator_evidence_snapshot(&snapshot));
+    }
 
     #[test]
     fn blocker_code_normalization_round_trips_to_canonical_values() {
