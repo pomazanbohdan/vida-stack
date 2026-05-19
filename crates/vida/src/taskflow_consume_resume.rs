@@ -2213,41 +2213,19 @@ async fn reconcile_terminal_closure_lineage_for_resume(
         && dispatch_receipt.downstream_dispatch_ready
         && dispatch_receipt.downstream_dispatch_blockers.is_empty()
         && resume_from_persisted_final_snapshot(store, &dispatch_receipt.run_id)?;
-    let packet_lineage_closure_ready = dispatch_receipt
-        .dispatch_packet_path
-        .as_deref()
-        .map(read_dispatch_packet)
-        .transpose()?
-        .is_some_and(|packet| {
-            packet
-                .get("downstream_dispatch_ready")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-                && matches!(
-                    packet
-                        .get("downstream_dispatch_status")
-                        .and_then(serde_json::Value::as_str),
-                    Some("packet_ready") | Some("executed")
-                )
-                && packet
-                    .get("downstream_dispatch_result_path")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|value| !value.trim().is_empty())
-        });
-    if !terminal_closure_complete && !final_lineage_closure_ready && !packet_lineage_closure_ready {
+    if !terminal_closure_complete && !final_lineage_closure_ready {
         return Ok(false);
     }
 
     let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
         super::downstream_activation_fields(role_selection, "closure");
     dispatch_receipt.dispatch_target = "closure".to_string();
-    dispatch_receipt.dispatch_status = if terminal_closure_complete || packet_lineage_closure_ready
-    {
+    dispatch_receipt.dispatch_status = if terminal_closure_complete {
         "executed".to_string()
     } else {
         "packet_ready".to_string()
     };
-    dispatch_receipt.lane_status = if terminal_closure_complete || packet_lineage_closure_ready {
+    dispatch_receipt.lane_status = if terminal_closure_complete {
         super::LaneStatus::LaneCompleted.as_str().to_string()
     } else {
         "packet_ready".to_string()
