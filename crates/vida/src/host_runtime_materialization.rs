@@ -10,6 +10,12 @@ fn escape_toml_basic_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+fn escape_toml_multiline_basic_string_body(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace("\"\"\"", "\\\"\\\"\\\"")
+}
+
 fn is_safe_role_id(role_id: &str) -> bool {
     !role_id.trim().is_empty()
         && role_id
@@ -147,6 +153,7 @@ fn extract_toml_multiline_string(contents: &str, key: &str) -> Option<String> {
 
 fn set_toml_multiline_string(contents: &str, key: &str, body: &str) -> String {
     let marker = format!("{key} = \"\"\"");
+    let escaped_body = escape_toml_multiline_basic_string_body(body);
     let mut lines = Vec::new();
     let mut replaced = false;
     let mut source = contents.lines();
@@ -154,7 +161,7 @@ fn set_toml_multiline_string(contents: &str, key: &str, body: &str) -> String {
     while let Some(line) = source.next() {
         if line.trim_start().starts_with(&marker) && !replaced {
             lines.push(marker.clone());
-            lines.extend(body.lines().map(ToString::to_string));
+            lines.extend(escaped_body.lines().map(ToString::to_string));
             lines.push("\"\"\"".to_string());
             replaced = true;
             for next_line in &mut source {
@@ -172,7 +179,7 @@ fn set_toml_multiline_string(contents: &str, key: &str, body: &str) -> String {
             lines.push(String::new());
         }
         lines.push(marker);
-        lines.extend(body.lines().map(ToString::to_string));
+        lines.extend(escaped_body.lines().map(ToString::to_string));
         lines.push("\"\"\"".to_string());
     }
 
@@ -498,6 +505,7 @@ fn render_host_runtime_agent_toml(
         runtime_developer_instructions,
         developer_instructions_override,
     ) {
+        let instructions = escape_toml_multiline_basic_string_body(&instructions);
         let mut body = format!(
             "name = \"{}\"\ndescription = \"{}\"\nmodel = \"{model}\"\nmodel_reasoning_effort = \"{reasoning_effort}\"\nsandbox_mode = \"{sandbox_mode}\"\ndeveloper_instructions = \"\"\"\n{instructions}\n\"\"\"\n",
             escape_toml_basic_string(role_id),
@@ -1041,8 +1049,14 @@ mod tests {
             assert!(rendered.contains(&format!("name = \"{role}\"")));
             assert!(rendered.contains("description = \""));
             assert!(
-                rendered.contains(bootstrap.trim()),
-                "rendered {role} should carry configured host runtime bootstrap instructions"
+                rendered.contains(&super::escape_toml_multiline_basic_string_body(
+                    bootstrap.trim()
+                )),
+                "rendered {role} should carry TOML-escaped configured host runtime bootstrap instructions"
+            );
+            assert!(
+                !rendered.contains(r"LOCALAPPDATA\vida-stack\current\bin\vida.exe"),
+                "rendered {role} should not contain raw Windows backslashes inside TOML basic strings"
             );
             assert!(rendered.contains("[shell_environment_policy]"));
             assert!(rendered.contains(&format!("inherit = \"{expected_shell_inherit}\"")));
