@@ -254,6 +254,8 @@ fn main() -> ExitCode {
                 .enable_all()
                 .build()
                 .expect("tokio runtime should initialize");
+            let _runtime_state_dir_parse_guard =
+                root_command_router::normalize_runtime_state_dir_env_for_parse();
             runtime.block_on(run_root_command(Cli::parse_from(args)))
         }) {
         Ok(handle) => match handle.join() {

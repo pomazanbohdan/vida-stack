@@ -52,11 +52,6 @@ fn exception_takeover_state_label(
     if !has_nonempty_value(receipt.exception_path_receipt_id.as_deref()) {
         return None;
     }
-    if receipt.lane_status == "lane_exception_takeover"
-        && has_nonempty_value(receipt.supersedes_receipt_id.as_deref())
-    {
-        return Some("active");
-    }
     let takeover_state = crate::release1_contracts::exception_takeover_state(
         receipt.exception_path_receipt_id.as_deref(),
         receipt.supersedes_receipt_id.as_deref(),
@@ -67,10 +62,10 @@ fn exception_takeover_state_label(
                 .as_str()
         }),
     );
-    if receipt.lane_status == "lane_exception_takeover" && takeover_state.is_active() {
+    if takeover_state.is_active() {
         return Some("active");
     }
-    if takeover_state.is_active() {
+    if receipt.lane_status == "lane_exception_takeover" {
         return Some("admissible_not_active");
     }
     Some("receipt_recorded")
@@ -557,7 +552,6 @@ mod tests {
     fn merge_live_exception_takeover_write_guard_marks_superseded_exception_takeover_active() {
         let guard = canonical_root_session_write_guard_defaults();
         let mut receipt = sample_receipt();
-        receipt.lane_status = "lane_exception_takeover".to_string();
         receipt.supersedes_receipt_id = Some("supersede-1".to_string());
 
         let merged = merge_live_exception_takeover_write_guard(

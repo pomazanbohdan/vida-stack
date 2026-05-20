@@ -1044,6 +1044,9 @@ pub(crate) fn derive_lane_status(
     supersedes_receipt_id: Option<&str>,
     exception_path_receipt_id: Option<&str>,
 ) -> LaneStatus {
+    if has_evidence_id(exception_path_receipt_id) && has_evidence_id(supersedes_receipt_id) {
+        return LaneStatus::LaneExceptionTakeover;
+    }
     if has_evidence_id(exception_path_receipt_id) {
         return LaneStatus::LaneExceptionRecorded;
     }
@@ -2935,6 +2938,10 @@ mod tests {
         assert_eq!(
             super::derive_lane_status("executed", None, Some("receipt-1")),
             LaneStatus::LaneExceptionRecorded
+        );
+        assert_eq!(
+            super::derive_lane_status("blocked", Some("supersede-1"), Some("receipt-1")),
+            LaneStatus::LaneExceptionTakeover
         );
     }
 

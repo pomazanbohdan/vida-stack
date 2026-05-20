@@ -146,7 +146,7 @@ pub(crate) fn command_needs_project_root_state_dir(command: &Option<Command>) ->
     }
 }
 
-struct RuntimeStateDirGuard {
+pub(crate) struct RuntimeStateDirGuard {
     previous: Option<std::ffi::OsString>,
     active: bool,
 }
@@ -168,7 +168,7 @@ fn prepare_runtime_state_dir(
     command: &Option<Command>,
 ) -> Result<Option<RuntimeStateDirGuard>, String> {
     if std::env::var_os("VIDA_STATE_DIR").is_some() {
-        return Ok(None);
+        return Ok(normalize_runtime_state_dir_env_for_parse());
     }
 
     if !command_needs_project_root_state_dir(command) {
@@ -191,12 +191,41 @@ fn prepare_runtime_state_dir(
     }
 }
 
+pub(crate) fn normalize_runtime_state_dir_env_for_parse() -> Option<RuntimeStateDirGuard> {
+    let existing = std::env::var_os("VIDA_STATE_DIR")?;
+    let existing_path = std::path::PathBuf::from(&existing);
+    let normalized = normalize_runtime_state_dir_override(&existing_path)?;
+    if normalized == existing_path {
+        return None;
+    }
+    std::env::set_var("VIDA_STATE_DIR", normalized);
+    Some(RuntimeStateDirGuard {
+        previous: Some(existing),
+        active: true,
+    })
+}
+
+fn normalize_runtime_state_dir_override(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let file_name = path.file_name().and_then(|value| value.to_str())?;
+    if file_name != ".vida" {
+        return None;
+    }
+    let canonical_state = path.join("data").join("state");
+    canonical_state.is_dir().then_some(canonical_state)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{command_needs_project_root_state_dir, prepare_runtime_state_dir, Cli};
+    use super::{
+        command_needs_project_root_state_dir, normalize_runtime_state_dir_env_for_parse,
+        prepare_runtime_state_dir, Cli,
+    };
     use crate::temp_state::TempStateHarness;
+    use crate::Command;
     use clap::Parser;
     use std::fs;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     struct EnvVarGuard {
         key: &'static str,
@@ -204,6 +233,12 @@ mod tests {
     }
 
     impl EnvVarGuard {
+        fn set(key: &'static str, value: &std::path::Path) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+
         fn unset(key: &'static str) -> Self {
             let previous = std::env::var_os(key);
             std::env::remove_var(key);
@@ -232,8 +267,11 @@ mod tests {
 
     #[test]
     fn prepare_runtime_state_dir_normalizes_project_bound_status_surface() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
         let harness = TempStateHarness::new().expect("temp harness should initialize");
         make_project_root(harness.path());
+        fs::create_dir_all(harness.path().join(crate::state_store::default_state_dir()))
+            .expect("canonical state dir should exist");
         let _cwd = crate::test_cli_support::guard_current_dir(harness.path());
         let _env_guard = EnvVarGuard::unset("VIDA_STATE_DIR");
         let cli = Cli::try_parse_from(["vida", "status"]).expect("status cli should parse");
@@ -251,7 +289,62 @@ mod tests {
     }
 
     #[test]
+    fn prepare_runtime_state_dir_normalizes_legacy_project_vida_env_override() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        make_project_root(harness.path());
+        fs::create_dir_all(harness.path().join(crate::state_store::default_state_dir()))
+            .expect("canonical state dir should exist");
+        let legacy_state_dir = harness.path().join(".vida");
+        let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", &legacy_state_dir);
+        let cli = Cli::try_parse_from(["vida", "status"]).expect("status cli should parse");
+
+        let guard =
+            prepare_runtime_state_dir(&cli.command).expect("state dir preparation should succeed");
+
+        assert!(guard.is_some());
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(harness.path().join(crate::state_store::default_state_dir()))
+        );
+        drop(guard);
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(legacy_state_dir)
+        );
+    }
+
+    #[test]
+    fn normalize_runtime_state_dir_env_for_parse_updates_clap_env_args() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        make_project_root(harness.path());
+        fs::create_dir_all(harness.path().join(crate::state_store::default_state_dir()))
+            .expect("canonical state dir should exist");
+        let legacy_state_dir = harness.path().join(".vida");
+        let _env_guard = EnvVarGuard::set("VIDA_STATE_DIR", &legacy_state_dir);
+
+        let guard = normalize_runtime_state_dir_env_for_parse()
+            .expect("legacy project .vida env override should normalize before parse");
+        let cli = Cli::try_parse_from(["vida", "status"]).expect("status cli should parse");
+
+        match cli.command {
+            Some(Command::Status(args)) => assert_eq!(
+                args.state_dir,
+                Some(harness.path().join(crate::state_store::default_state_dir()))
+            ),
+            other => panic!("expected status command, got {other:?}"),
+        }
+        drop(guard);
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(legacy_state_dir)
+        );
+    }
+
+    #[test]
     fn prepare_runtime_state_dir_keeps_boot_permissive_for_temp_roots() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
         let _env_guard = EnvVarGuard::unset("VIDA_STATE_DIR");
         let cli = Cli::try_parse_from(["vida", "boot"]).expect("boot cli should parse");
 
@@ -264,6 +357,7 @@ mod tests {
 
     #[test]
     fn prepare_runtime_state_dir_skips_project_root_for_explicit_task_state_dir() {
+        let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
         let _env_guard = EnvVarGuard::unset("VIDA_STATE_DIR");
         let cli = Cli::try_parse_from([
             "vida",

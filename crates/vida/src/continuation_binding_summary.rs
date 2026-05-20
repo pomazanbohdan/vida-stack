@@ -70,8 +70,14 @@ fn active_exception_takeover_evidence_matches_status(
     if terminal_continue_run_id == Some(status.run_id.as_str()) {
         return false;
     }
+    let exception_takeover_state = crate::release1_contracts::exception_takeover_state(
+        dispatch.exception_path_receipt_id.as_deref(),
+        dispatch.supersedes_receipt_id.as_deref(),
+        None,
+    );
     dispatch.run_id == status.run_id
-        && dispatch.lane_status == "lane_exception_takeover"
+        && (dispatch.lane_status == "lane_exception_takeover"
+            || exception_takeover_state.is_active())
         && dispatch
             .exception_path_receipt_id
             .as_deref()
@@ -1195,6 +1201,42 @@ mod tests {
                     .is_some_and(|value| value.contains("vida lane show"))
             })
         }));
+    }
+
+    #[test]
+    fn blocked_latest_run_graph_status_accepts_superseded_exception_even_when_lane_status_is_stale_recorded(
+    ) {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-stale-lane-status",
+            "run-stale-lane-status",
+            "analysis",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+        let mut dispatch = exception_takeover_dispatch("run-stale-lane-status");
+        dispatch.lane_status = "lane_exception_recorded".to_string();
+        dispatch.supersedes_receipt_id = Some("takeover-receipt".to_string());
+        dispatch.exception_path_receipt_id = Some("takeover-receipt".to_string());
+
+        let summary = build_continuation_binding_summary(
+            None,
+            Some(&status),
+            None,
+            Some(&dispatch),
+            None,
+            false,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["active_exception_takeover"], true);
+        assert_eq!(
+            summary["binding_source"],
+            "latest_run_graph_exception_takeover_dispatch"
+        );
+        assert_eq!(
+            summary["active_bounded_unit"]["run_id"],
+            "run-stale-lane-status"
+        );
     }
 
     #[test]

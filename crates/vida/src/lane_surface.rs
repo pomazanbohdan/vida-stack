@@ -235,23 +235,6 @@ impl ExceptionTakeoverMetadata {
             ));
         }
 
-        let metadata_packet = self
-            .dispatch_packet_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let receipt_packet = receipt
-            .dispatch_packet_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if metadata_packet != receipt_packet {
-            return Err(format!(
-                "exception takeover metadata dispatch_packet_path does not match current lane packet path for `{}`",
-                receipt.run_id
-            ));
-        }
-
         Ok(())
     }
 
@@ -282,20 +265,7 @@ impl ExceptionTakeoverMetadata {
                     .as_deref()
                     .is_some_and(|summary_value| value == summary_value)
             });
-        let metadata_packet = self
-            .dispatch_packet_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let summary_packet = summary
-            .dispatch_packet_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        run_id_matches
-            && target_matches
-            && source_receipt_matches
-            && metadata_packet == summary_packet
+        run_id_matches && target_matches && source_receipt_matches
     }
 }
 
@@ -674,9 +644,12 @@ fn active_exception_write_scope(
     summary: &crate::state_store::RunGraphDispatchReceiptSummary,
     exception_path_metadata: Option<&ExceptionTakeoverMetadata>,
 ) -> Vec<String> {
-    if summary.lane_status != crate::LaneStatus::LaneExceptionTakeover.as_str()
-        || !crate::release1_contracts::has_evidence_id(summary.exception_path_receipt_id.as_deref())
-        || !crate::release1_contracts::has_evidence_id(summary.supersedes_receipt_id.as_deref())
+    if !crate::release1_contracts::exception_takeover_state(
+        summary.exception_path_receipt_id.as_deref(),
+        summary.supersedes_receipt_id.as_deref(),
+        None,
+    )
+    .is_active()
     {
         return Vec::new();
     }
@@ -820,9 +793,7 @@ fn derive_lane_show_truth(
         recovery_takeover_gate(recovery),
     );
 
-    if summary.lane_status == crate::LaneStatus::LaneExceptionTakeover.as_str()
-        && takeover_state.is_active()
-    {
+    if takeover_state.is_active() {
         let recovery_open = recovery_delegated_cycle_open(recovery);
         if recovery_open {
             let mut blocker_codes = lane_summary_raw_blocker_codes(summary, true);
@@ -2838,6 +2809,34 @@ mod tests {
             .next_actions
             .iter()
             .any(|value| value.contains("finish the bounded exception unit")));
+    }
+
+    #[test]
+    fn derive_lane_show_truth_accepts_superseded_exception_with_stale_recorded_lane_status() {
+        let mut receipt = sample_receipt("blocked");
+        receipt.lane_status = crate::LaneStatus::LaneExceptionRecorded
+            .as_str()
+            .to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-1".to_string());
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-lane-test",
+            "implementation",
+            "analysis",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+        let mut recovery = crate::state_store::RunGraphRecoverySummary::from_status(status);
+        recovery.delegation_gate.local_exception_takeover_gate =
+            "delegated_cycle_clear".to_string();
+        recovery.delegation_gate.delegated_cycle_open = false;
+
+        let truth = derive_lane_show_truth(&summary, Some(&recovery));
+
+        assert!(!truth.blocked);
+        assert!(truth.blocker_codes.is_empty());
+        assert!(truth.next_actions.is_empty());
     }
 
     #[test]
