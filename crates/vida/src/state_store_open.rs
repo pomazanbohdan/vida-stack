@@ -29,7 +29,12 @@ fn local_process_liveness(process_id: u32) -> ProcessLiveness {
     if process_id == std::process::id() {
         return ProcessLiveness::Alive;
     }
-    let Ok(output) = std::process::Command::new("tasklist")
+    let tasklist_path = std::env::var_os("SystemRoot")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"))
+        .join("System32")
+        .join("tasklist.exe");
+    let Ok(output) = std::process::Command::new(tasklist_path)
         .args(["/FI", &format!("PID eq {process_id}"), "/FO", "CSV", "/NH"])
         .output()
     else {
