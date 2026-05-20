@@ -4789,7 +4789,9 @@ fn task_list_json_ignores_render_color_emoji_styling() {
         serde_json::from_str(&stdout).expect("json output should parse");
     assert_eq!(parsed["status"], "pass");
     assert_eq!(parsed["surface"], "vida task list");
-    assert_eq!(parsed["view"], "full");
+    assert_eq!(parsed["view"], "summary");
+    assert_eq!(parsed["output_policy"]["mode"], "summary");
+    assert_eq!(parsed["output_policy"]["explicit_full"], false);
     assert!(
         parsed["tasks"].is_array(),
         "task list tasks should be json array"

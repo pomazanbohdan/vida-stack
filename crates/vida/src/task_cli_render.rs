@@ -119,18 +119,34 @@ fn print_task_record(render: RenderMode, title: &str, task: &TaskRecord) {
     }
 }
 
+fn task_list_output_policy(summary_only: bool, explicit_full: bool) -> serde_json::Value {
+    let max_inline_items = if summary_only {
+        serde_json::json!(100)
+    } else {
+        serde_json::Value::Null
+    };
+    serde_json::json!({
+        "mode": if summary_only { "summary" } else { "full" },
+        "explicit_full": explicit_full,
+        "max_inline_items": max_inline_items,
+    })
+}
+
 pub(crate) fn print_task_list(
     render: RenderMode,
     tasks: &[TaskRecord],
     summary_only: bool,
+    explicit_full: bool,
     as_json: bool,
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
 ) {
+    let output_policy = task_list_output_policy(summary_only, explicit_full);
     let payload = if summary_only {
         build_pass_operator_surface_payload(
             "vida task list",
             serde_json::json!({
                 "state_access": task_read_metadata_value(read_metadata),
+                "output_policy": output_policy,
                 "view": "summary",
                 "task_count": tasks.len(),
                 "tasks": tasks.iter().map(|task| serde_json::json!({
@@ -148,6 +164,7 @@ pub(crate) fn print_task_list(
             "vida task list",
             serde_json::json!({
                 "state_access": task_read_metadata_value(read_metadata),
+                "output_policy": output_policy,
                 "view": "full",
                 "task_count": tasks.len(),
                 "tasks": tasks,
@@ -940,6 +957,7 @@ mod tests {
         let payload = build_pass_operator_surface_payload(
             "vida task list",
             serde_json::json!({
+                "output_policy": super::task_list_output_policy(true, false),
                 "view": "summary",
                 "task_count": tasks.len(),
                 "tasks": [{
@@ -957,6 +975,40 @@ mod tests {
         assert_eq!(payload["shared_fields"]["status"], "pass");
         assert_eq!(payload["operator_contracts"]["status"], "pass");
         assert_eq!(payload["artifact_refs"]["surface"], "vida task list");
+        assert_eq!(payload["output_policy"]["mode"], "summary");
+        assert_eq!(payload["output_policy"]["explicit_full"], false);
+        assert_eq!(payload["output_policy"]["max_inline_items"], 100);
+        let row = payload["tasks"][0].as_object().expect("summary task row");
+        assert_eq!(row.len(), 6);
+        assert!(row.contains_key("id"));
+        assert!(!row.contains_key("description"));
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_list_full_payload_keeps_release1_operator_contract_parity() {
+        let tasks = vec![sample_task("task-1")];
+        let payload = build_pass_operator_surface_payload(
+            "vida task list",
+            serde_json::json!({
+                "output_policy": super::task_list_output_policy(false, true),
+                "view": "full",
+                "task_count": tasks.len(),
+                "tasks": tasks,
+            }),
+        );
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["shared_fields"]["status"], "pass");
+        assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(payload["artifact_refs"]["surface"], "vida task list");
+        assert_eq!(payload["output_policy"]["mode"], "full");
+        assert_eq!(payload["output_policy"]["explicit_full"], true);
+        assert!(payload["output_policy"]["max_inline_items"].is_null());
+        let row = payload["tasks"][0].as_object().expect("full task row");
+        assert!(row.contains_key("description"));
+        assert!(row.contains_key("execution_semantics"));
+        assert!(row.len() > 6);
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 

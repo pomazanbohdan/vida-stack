@@ -3453,10 +3453,12 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .await
             {
                 Ok((tasks, metadata)) => {
+                    let summary_only = command.summary || !command.all;
                     print_task_list(
                         command.render,
                         &tasks,
-                        command.summary,
+                        summary_only,
+                        command.all,
                         command.json,
                         Some(&metadata),
                     );

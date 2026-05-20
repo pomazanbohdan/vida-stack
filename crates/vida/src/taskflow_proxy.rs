@@ -692,10 +692,19 @@ fn scheduler_reservation_preview(
 fn scheduler_execute_runtime_gate_blocker_codes(
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    latest_run_graph_task_missing: bool,
 ) -> SchedulerRuntimeGateBlockerSignals {
     let mut blocker_codes = Vec::new();
     let mut open_delegated_cycle = false;
     let mut active_reservation = false;
+
+    if latest_run_graph_task_missing {
+        return SchedulerRuntimeGateBlockerSignals {
+            blocker_codes,
+            open_delegated_cycle,
+            active_reservation,
+        };
+    }
 
     if recovery_holds_unresolved_active_bound_run(recovery, dispatch) {
         if let Some(code) = crate::release1_contracts::blocker_code_value(
@@ -1164,19 +1173,20 @@ async fn build_scheduler_packet_backed_execution_gate_for_task(
 ) -> Result<crate::taskflow_run_graph::RunGraphPacketBackedExecutionGate, String> {
     let status = match store.run_graph_status(selected_task_id).await {
         Ok(status) => Some(status),
-        Err(_) => None,
+        Err(_) => {
+            let artifacts = crate::taskflow_run_graph::prepare_run_graph_dispatch_init_artifacts(
+                store,
+                selected_task_id,
+            )
+            .await?;
+            Some(store.run_graph_status(&artifacts.run_id).await.map_err(|error| {
+                format!(
+                    "Failed to read seeded scheduler packet-backed run-graph status for `{}`: {error}",
+                    artifacts.run_id
+                )
+            })?)
+        }
     };
-    if status.is_none() {
-        return Ok(
-            crate::taskflow_run_graph::evaluate_run_graph_packet_backed_execution_gate(
-                Some(selected_task_id),
-                None,
-                None,
-                None,
-                None,
-            ),
-        );
-    }
     let context = match status.as_ref() {
         Some(status) => store
             .run_graph_dispatch_context(&status.run_id)
@@ -2566,6 +2576,7 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
         dispatch.as_ref(),
         latest_run_graph.as_ref(),
         latest_run_graph_task_closed,
+        latest_run_graph_task_missing,
         latest_run_graph_legacy_ownerless,
         explicit_binding.as_ref(),
         terminal_consume_continue_run_id.as_deref(),
@@ -2701,6 +2712,7 @@ fn build_taskflow_next_decision(
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
     latest_run_graph_task_closed: bool,
+    latest_run_graph_task_missing: bool,
     latest_run_graph_legacy_ownerless: bool,
     explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     terminal_consume_continue_run_id: Option<&str>,
@@ -2708,18 +2720,21 @@ fn build_taskflow_next_decision(
     let ready_head = ready_head.map(graph_summary_task_ref);
     let latest_run_graph_status_is_blocked =
         latest_run_graph_status_blocks_normal_continuation(latest_run_graph_status);
-    let active_exception_takeover_binding = active_exception_takeover_binding_matches_status(
-        explicit_binding,
-        latest_run_graph_status,
-        dispatch,
-    );
+    let stale_missing_task_run_graph = latest_run_graph_task_missing;
+    let active_exception_takeover_binding = !stale_missing_task_run_graph
+        && active_exception_takeover_binding_matches_status(
+            explicit_binding,
+            latest_run_graph_status,
+            dispatch,
+        );
     let active_exception_takeover_evidence = active_exception_takeover_evidence_matches_status(
         latest_run_graph_status,
         dispatch,
         terminal_consume_continue_run_id,
     );
-    let active_exception_takeover_continuation =
-        active_exception_takeover_evidence && latest_run_graph_status_is_blocked;
+    let active_exception_takeover_continuation = active_exception_takeover_evidence
+        && latest_run_graph_status_is_blocked
+        && !stale_missing_task_run_graph;
     let explicit_next_task_binding = explicit_task_binding_matches_status(
         explicit_binding,
         latest_run_graph_status,
@@ -2730,19 +2745,24 @@ fn build_taskflow_next_decision(
         && latest_run_graph_status
             .zip(ready_head.as_ref())
             .is_some_and(|(status, task)| status.task_id != task.id);
-    let latest_run_graph_status_blocked =
-        latest_run_graph_status_is_blocked && !legacy_ownerless_latest_run_nonblocking;
+    let latest_run_graph_status_blocked = latest_run_graph_status_is_blocked
+        && !legacy_ownerless_latest_run_nonblocking
+        && !stale_missing_task_run_graph;
+    let recovery_holds_current_active_bound_run =
+        recovery_holds_active_bound_run && !stale_missing_task_run_graph;
     let terminal_consume_continue_without_next_unit = latest_run_graph_status
         .zip(terminal_consume_continue_run_id)
         .is_some_and(|(status, run_id)| status.run_id == run_id)
-        && !explicit_next_task_binding;
+        && !explicit_next_task_binding
+        && !stale_missing_task_run_graph;
     let latest_run_graph_status_blocks_admission = latest_run_graph_status_blocked
         && !active_exception_takeover_evidence
         && !terminal_consume_continue_without_next_unit;
     let completed_without_explicit_next_unit =
         terminal_completed_without_next_unit(latest_run_graph_status)
-            && !explicit_next_task_binding;
-    let admissibility_gate = if recovery_holds_active_bound_run {
+            && !explicit_next_task_binding
+            && !stale_missing_task_run_graph;
+    let admissibility_gate = if recovery_holds_current_active_bound_run {
         "delegated_cycle_runtime_gate".to_string()
     } else if active_exception_takeover_continuation {
         "active_exception_takeover_continuation".to_string()
@@ -2761,7 +2781,7 @@ fn build_taskflow_next_decision(
     let mut next_actions = Vec::<String>::new();
     let candidate_task_context = TaskflowNextCandidateContext {
         ready_head: ready_head.clone(),
-        admissible_now: !(recovery_holds_active_bound_run
+        admissible_now: !(recovery_holds_current_active_bound_run
             || active_exception_takeover_binding
             || active_exception_takeover_continuation
             || terminal_consume_continue_without_next_unit
@@ -2771,7 +2791,7 @@ fn build_taskflow_next_decision(
     };
 
     let (recommended_command, recommended_surface, primary_ready_task, why_not_now, next_action) =
-        if recovery_holds_active_bound_run {
+        if recovery_holds_current_active_bound_run {
             if let Some(code) = crate::release1_contracts::blocker_code_value(
                 crate::release1_contracts::BlockerCode::OpenDelegatedCycle,
             ) {
@@ -3716,19 +3736,20 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
 
     let recovery_holds_active_bound_run =
         recovery_holds_unresolved_active_bound_run(recovery.as_ref(), dispatch.as_ref());
-    let latest_run_graph_task_closed = match (store.as_ref(), latest_run_graph.as_ref()) {
-        (Some(store), Some(status)) => match store.list_tasks(None, true).await {
-            Ok(tasks) => tasks
-                .iter()
-                .find(|task| task.id == status.task_id)
-                .is_some_and(|task| task.status == "closed"),
-            Err(error) => {
-                eprintln!("Failed to read tasks for latest run-graph task state: {error}");
-                return ExitCode::from(1);
-            }
-        },
-        _ => false,
-    };
+    let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
+        match (store.as_ref(), latest_run_graph.as_ref()) {
+            (Some(store), Some(status)) => match store.list_tasks(None, true).await {
+                Ok(tasks) => match tasks.iter().find(|task| task.id == status.task_id) {
+                    Some(task) => (task.status == "closed", false),
+                    None => (false, true),
+                },
+                Err(error) => {
+                    eprintln!("Failed to read tasks for latest run-graph task state: {error}");
+                    return ExitCode::from(1);
+                }
+            },
+            _ => (false, false),
+        };
     let latest_run_graph_legacy_ownerless = match (store.as_ref(), latest_run_graph.as_ref()) {
         (Some(store), Some(status)) => match store.run_graph_legacy_ownerless(&status.run_id).await
         {
@@ -3749,6 +3770,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         dispatch.as_ref(),
         latest_run_graph.as_ref(),
         latest_run_graph_task_closed,
+        latest_run_graph_task_missing,
         latest_run_graph_legacy_ownerless,
         explicit_binding.as_ref(),
         crate::latest_terminal_consume_continue_snapshot_run_id(&state_dir)
@@ -4016,10 +4038,14 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-    let latest_run_graph_task_closed = latest_run_graph
-        .as_ref()
-        .and_then(|status| all_tasks.iter().find(|task| task.id == status.task_id))
-        .is_some_and(|task| task.status == "closed");
+    let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
+        match latest_run_graph.as_ref() {
+            Some(status) => match all_tasks.iter().find(|task| task.id == status.task_id) {
+                Some(task) => (task.status == "closed", false),
+                None => (false, true),
+            },
+            None => (false, false),
+        };
     let latest_run_graph_legacy_ownerless = match latest_run_graph.as_ref() {
         Some(status) => match store.run_graph_legacy_ownerless(&status.run_id).await {
             Ok(ownerless) => ownerless,
@@ -4044,12 +4070,13 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         dispatch.as_ref(),
         latest_run_graph.as_ref(),
         latest_run_graph_task_closed,
+        latest_run_graph_task_missing,
         latest_run_graph_legacy_ownerless,
         explicit_binding.as_ref(),
         terminal_consume_continue_run_id.as_deref(),
     );
     let continuation_binding_summary =
-        crate::continuation_binding_summary::build_continuation_binding_summary_with_idle_policy(
+        crate::continuation_binding_summary::build_continuation_binding_summary_with_task_authority(
             explicit_binding.as_ref(),
             latest_run_graph.as_ref(),
             recovery.as_ref(),
@@ -4058,6 +4085,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             evidence_ambiguous,
             false,
             latest_run_graph_task_closed,
+            latest_run_graph_task_missing,
         );
 
     let primary_ready_task = if continuation_decision.primary_ready_task.is_some() {
@@ -4732,10 +4760,31 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
     } else {
         None
     };
+    let latest_run_graph_task_missing = if execute_requested && !dry_run {
+        match store.latest_run_graph_status().await {
+            Ok(Some(status)) => {
+                match store.list_tasks(None, true).await {
+                    Ok(tasks) => !tasks.iter().any(|task| task.id == status.task_id),
+                    Err(error) => {
+                        eprintln!("Failed to read tasks for latest scheduler run-graph task state: {error}");
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+            Ok(None) => false,
+            Err(error) => {
+                eprintln!("Failed to read latest run-graph status for scheduler gate: {error}");
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        false
+    };
 
     let runtime_gate_blockers = scheduler_execute_runtime_gate_blocker_codes(
         recovery.as_ref().and_then(|summary| summary.as_ref()),
         dispatch.as_ref().and_then(|summary| summary.as_ref()),
+        latest_run_graph_task_missing,
     );
     if execute_requested && !dry_run && runtime_gate_blockers.blocker_codes.is_empty() {
         match build_scheduler_packet_backed_execution_gate(&store, &plan).await {
@@ -6361,6 +6410,7 @@ mod tests {
             Some(&terminal_status),
             true,
             false,
+            false,
             None,
             None,
         );
@@ -6400,6 +6450,7 @@ mod tests {
             None,
             Some(&terminal_status),
             true,
+            false,
             false,
             Some(&explicit_binding),
             None,
@@ -6489,6 +6540,7 @@ mod tests {
             None,
             Some(&blocked_status),
             false,
+            false,
             true,
             Some(&explicit_binding),
             None,
@@ -6547,6 +6599,7 @@ mod tests {
             None,
             Some(&blocked_status),
             false,
+            false,
             true,
             Some(&explicit_binding),
             None,
@@ -6558,6 +6611,59 @@ mod tests {
             "latest_run_graph_status_blocked"
         );
         assert!(decision.primary_ready_task.is_none());
+    }
+
+    #[test]
+    fn taskflow_next_admits_ready_head_when_latest_blocked_run_graph_task_is_missing() {
+        let ready = task(
+            "runtime-defect-stale-rungraph-authority-cascade",
+            "task",
+            "open",
+            1,
+            &[],
+            Vec::new(),
+        );
+        let mut blocked_status = crate::taskflow_run_graph::default_run_graph_status(
+            "runtime-probe-closure",
+            "implementation",
+            "implementation",
+        );
+        blocked_status.task_id = "runtime-probe-closure".to_string();
+        blocked_status.status = "blocked".to_string();
+        blocked_status.lifecycle_stage = "analysis_blocked".to_string();
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&ready),
+            true,
+            true,
+            Some("final"),
+            None,
+            None,
+            Some(&blocked_status),
+            false,
+            true,
+            false,
+            None,
+            None,
+        );
+
+        assert_eq!(decision.status, "pass");
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "ready_now"
+        );
+        assert!(decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision
+                .primary_ready_task
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("runtime-defect-stale-rungraph-authority-cascade")
+        );
+        assert!(!decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "open_delegated_cycle"));
     }
 
     #[test]
@@ -8287,8 +8393,11 @@ mod tests {
             Some(&recovery),
             Some(&dispatch)
         ));
-        let blocker_codes =
-            super::scheduler_execute_runtime_gate_blocker_codes(Some(&recovery), Some(&dispatch));
+        let blocker_codes = super::scheduler_execute_runtime_gate_blocker_codes(
+            Some(&recovery),
+            Some(&dispatch),
+            false,
+        );
         assert!(!blocker_codes
             .blocker_codes
             .iter()
@@ -8399,8 +8508,11 @@ mod tests {
             effective_execution_posture: serde_json::Value::Null,
             route_policy: serde_json::Value::Null,
         };
-        let blocker_codes =
-            super::scheduler_execute_runtime_gate_blocker_codes(Some(&recovery), Some(&dispatch));
+        let blocker_codes = super::scheduler_execute_runtime_gate_blocker_codes(
+            Some(&recovery),
+            Some(&dispatch),
+            false,
+        );
 
         assert_eq!(blocker_codes.blocker_codes.len(), 2);
         assert!(blocker_codes
@@ -8450,7 +8562,7 @@ mod tests {
         };
 
         let blocker_codes =
-            super::scheduler_execute_runtime_gate_blocker_codes(None, Some(&dispatch));
+            super::scheduler_execute_runtime_gate_blocker_codes(None, Some(&dispatch), false);
 
         assert_eq!(blocker_codes.blocker_codes.len(), 2);
         assert!(blocker_codes
@@ -8547,6 +8659,7 @@ mod tests {
             None,
             None,
             Some(&status),
+            false,
             false,
             false,
             None,
@@ -8735,6 +8848,7 @@ mod tests {
             None,
             false,
             false,
+            false,
             None,
             None,
         );
@@ -8823,6 +8937,7 @@ mod tests {
             None,
             false,
             false,
+            false,
             None,
             None,
         );
@@ -8871,6 +8986,7 @@ mod tests {
             None,
             None,
             Some(&latest_status),
+            false,
             false,
             false,
             None,
@@ -8977,6 +9093,7 @@ mod tests {
             Some(&latest_status),
             false,
             false,
+            false,
             Some(&stale_binding),
             None,
         );
@@ -9058,6 +9175,7 @@ mod tests {
             None,
             Some(&dispatch),
             Some(&latest_status),
+            false,
             false,
             false,
             None,
@@ -9161,6 +9279,7 @@ mod tests {
             Some(&latest_status),
             false,
             false,
+            false,
             Some(&binding),
             Some("closed-run"),
         );
@@ -9242,6 +9361,7 @@ mod tests {
             Some(&latest_status),
             false,
             false,
+            false,
             None,
             Some("closed-run"),
         );
@@ -9315,6 +9435,7 @@ mod tests {
             Some("epic-1"),
             None,
             None,
+            false,
             false,
             false,
             None,
@@ -9393,6 +9514,7 @@ mod tests {
             None,
             false,
             false,
+            false,
             None,
             None,
         );
@@ -9427,6 +9549,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             false,
             false,
             None,
@@ -9486,6 +9609,7 @@ mod tests {
             None,
             Some(&dispatch),
             Some(&latest_status),
+            false,
             false,
             false,
             Some(&stale_binding),
@@ -9560,6 +9684,7 @@ mod tests {
             None,
             None,
             Some(&status),
+            false,
             false,
             false,
             None,
