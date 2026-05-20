@@ -178,17 +178,13 @@ fn build_carrier_selection_api_descriptor(
             if api_id.is_empty() || runtime_role.is_empty() {
                 return None;
             }
-            let assignment = crate::build_runtime_assignment_from_resolved_constraints(
-                activation_bundle,
-                "orchestrator",
-                task_class,
-                runtime_role,
-            );
             Some(serde_json::json!({
                 "api_id": api_id,
                 "runtime_role": runtime_role,
                 "task_class": task_class,
-                "selection": assignment,
+                "selection_surface": "vida agent select",
+                "selection_materialized": false,
+                "selection_reason": "dispatch_next_preview_exposes_selection_api_without_embedding_full_assignment",
                 "command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class} --json")
             }))
         })
@@ -221,17 +217,13 @@ fn build_carrier_selection_api_descriptor(
                 if api_id.is_empty() || runtime_role.is_empty() || task_class.is_empty() {
                     return None;
                 }
-                let assignment = crate::build_runtime_assignment_from_resolved_constraints(
-                    activation_bundle,
-                    "orchestrator",
-                    task_class,
-                    runtime_role,
-                );
                 Some(serde_json::json!({
                     "api_id": api_id,
                     "runtime_role": runtime_role,
                     "task_class": task_class,
-                    "selection": assignment,
+                    "selection_surface": "vida agent select",
+                    "selection_materialized": false,
+                    "selection_reason": "dispatch_next_preview_exposes_selection_api_without_embedding_full_assignment",
                     "command": format!("vida agent select --runtime-role {runtime_role} --task-class {task_class} --json")
                 }))
             })
@@ -250,6 +242,8 @@ fn build_carrier_selection_api_descriptor(
         },
         "first_class_carriers": first_class,
         "manual_host_tool_choice_required": false,
+        "embedded_assignment_diagnostics": false,
+        "diagnostics_note": "Run the listed `vida agent select` command for full carrier/model/cost assignment diagnostics.",
     })
 }
 
@@ -407,6 +401,19 @@ fn configured_max_parallel_agents_from_activation_bundle(
         .unwrap_or(1)
 }
 
+fn dev_team_required_task_steps_to_preview(
+    activation_bundle: &serde_json::Value,
+    lanes_requested: usize,
+    configured_max_parallel_agents: usize,
+) -> usize {
+    let effective_max_parallel_agents = lanes_requested.min(configured_max_parallel_agents.max(1));
+    dev_team_sequence(activation_bundle)
+        .into_iter()
+        .take(effective_max_parallel_agents)
+        .filter(|step| step.requires_task)
+        .count()
+}
+
 fn agent_init_command(
     task_id: &str,
     state_dir: Option<&std::path::Path>,
@@ -462,7 +469,7 @@ fn selection_truth_for_task_with_role_and_class(
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| crate::runtime_role_for_task_class(&task_class).to_string());
-    let assignment = crate::build_runtime_assignment_from_resolved_constraints(
+    let assignment = crate::build_runtime_assignment_preview_from_resolved_constraints(
         activation_bundle,
         conversation_role,
         &task_class,
@@ -1212,8 +1219,8 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
     match StateStore::open_existing_read_only(state_dir.clone()).await {
         Ok(store) => {
             let mut activation_bundle =
-                match crate::build_taskflow_consume_bundle_payload(&store).await {
-                    Ok(payload) => payload.activation_bundle,
+                match crate::read_or_sync_launcher_activation_snapshot(&store).await {
+                    Ok(snapshot) => snapshot.compiled_bundle,
                     Err(error) => {
                         eprintln!(
                             "Failed to load activation bundle for agent dispatch preview: {error}"
@@ -1244,6 +1251,32 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                 if let Some(object) = activation_bundle.as_object_mut() {
                     object.insert("dev_team_readiness".to_string(), readiness);
                 }
+                let required_task_steps = dev_team_required_task_steps_to_preview(
+                    &activation_bundle,
+                    command.lanes,
+                    configured_max_parallel_agents,
+                );
+                let continuation_gate_required = command.current_task_id.is_none()
+                    && required_task_steps > 0
+                    && projection.ready.len() >= required_task_steps;
+                let continuation_gate = if continuation_gate_required {
+                    match crate::taskflow_proxy::build_taskflow_continuation_dispatch_gate_from_store(
+                        &store,
+                        &state_dir,
+                        command.scope.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(gate) => gate,
+                        Err(error) => {
+                            eprintln!("Failed to compute agent continuation gate: {error}");
+                            return ExitCode::from(1);
+                        }
+                    }
+                } else {
+                    None
+                };
+                drop(store);
                 let mut preview = build_agent_dispatch_next_preview(
                     &activation_bundle,
                     &projection,
@@ -1252,23 +1285,8 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                     explicit_state_dir,
                     true,
                 );
-                if command.current_task_id.is_none() {
-                    match crate::taskflow_proxy::build_taskflow_continuation_dispatch_gate_from_store(
-                        &store,
-                        &state_dir,
-                        command.scope.as_deref(),
-                    )
-                    .await
-                    {
-                        Ok(Some(gate)) => {
-                            apply_continuation_dispatch_gate_to_preview(&mut preview, &gate);
-                        }
-                        Ok(None) => {}
-                        Err(error) => {
-                            eprintln!("Failed to compute agent continuation gate: {error}");
-                            return ExitCode::from(1);
-                        }
-                    }
+                if let Some(gate) = continuation_gate {
+                    apply_continuation_dispatch_gate_to_preview(&mut preview, &gate);
                 }
                 preview
             } else {
@@ -1291,6 +1309,7 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
+                drop(store);
                 build_agent_dispatch_next_preview_from_scheduler_plan(
                     &activation_bundle,
                     plan,

@@ -676,15 +676,7 @@ fn write_scope_allows_task_class(
         return false;
     }
 
-    if matches!(
-        normalized.as_str(),
-        "guard_required"
-            | "guard-required"
-            | "guard_required_owned_paths"
-            | "guard-required-owned-paths"
-            | "guard_required_packet_owned_paths"
-            | "guard-required-packet-owned-paths"
-    ) {
+    if write_scope_requires_live_guard(&normalized) {
         return external_backend_readiness
             .and_then(|readiness| readiness.pointer("/write_scope_guard/pre_write_enforcement"))
             .and_then(serde_json::Value::as_bool)
@@ -696,6 +688,19 @@ fn write_scope_allows_task_class(
     }
 
     true
+}
+
+fn write_scope_requires_live_guard(write_scope: &str) -> bool {
+    let normalized = write_scope.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "guard_required"
+            | "guard-required"
+            | "guard_required_owned_paths"
+            | "guard-required-owned-paths"
+            | "guard_required_packet_owned_paths"
+            | "guard-required-packet-owned-paths"
+    )
 }
 
 fn reasoning_control_mode(profile: &serde_json::Value) -> Option<&'static str> {
@@ -756,6 +761,28 @@ impl ProfileCandidate {
         max_budget_units
             .map(|max_budget_units| self.rate > max_budget_units)
             .unwrap_or(false)
+    }
+}
+
+fn load_external_cli_readiness_for_candidate(
+    compiled_bundle: &serde_json::Value,
+    candidate: &mut ProfileCandidate,
+) {
+    if candidate.external_backend_readiness.is_some() {
+        return;
+    }
+    candidate.external_backend_readiness = external_cli_readiness_verdict_for_candidate(
+        compiled_bundle,
+        &candidate.role,
+        &candidate.profile,
+    );
+    if let Some(status) = candidate
+        .external_backend_readiness
+        .as_ref()
+        .and_then(|verdict| verdict["status"].as_str())
+        .map(str::to_string)
+    {
+        candidate.readiness_status = status;
     }
 }
 
@@ -917,6 +944,37 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
     conversation_role: &str,
     task_class: &str,
     execution_runtime_role: &str,
+) -> serde_json::Value {
+    build_runtime_assignment_from_resolved_constraints_with_readiness(
+        compiled_bundle,
+        conversation_role,
+        task_class,
+        execution_runtime_role,
+        true,
+    )
+}
+
+pub(crate) fn build_runtime_assignment_preview_from_resolved_constraints(
+    compiled_bundle: &serde_json::Value,
+    conversation_role: &str,
+    task_class: &str,
+    execution_runtime_role: &str,
+) -> serde_json::Value {
+    build_runtime_assignment_from_resolved_constraints_with_readiness(
+        compiled_bundle,
+        conversation_role,
+        task_class,
+        execution_runtime_role,
+        false,
+    )
+}
+
+fn build_runtime_assignment_from_resolved_constraints_with_readiness(
+    compiled_bundle: &serde_json::Value,
+    conversation_role: &str,
+    task_class: &str,
+    execution_runtime_role: &str,
+    probe_external_readiness: bool,
 ) -> serde_json::Value {
     let carrier_runtime = carrier_runtime_section(compiled_bundle);
     let selection_rule = selection_rule_for_runtime(carrier_runtime);
@@ -1107,16 +1165,6 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
                         .as_str()
                         .or_else(|| role["quality_tier"].as_str())
                         .unwrap_or_default();
-                    let external_backend_readiness = external_cli_readiness_verdict_for_candidate(
-                        compiled_bundle,
-                        role,
-                        &profile,
-                    );
-                    let readiness_status = external_backend_readiness
-                        .as_ref()
-                        .and_then(|verdict| verdict["status"].as_str())
-                        .map(str::to_string)
-                        .unwrap_or_else(|| profile_readiness_status(&profile));
                     ProfileCandidate {
                         supports_runtime_role: profile_supports_runtime_role(
                             role,
@@ -1141,8 +1189,8 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
                         lifecycle_state: lifecycle_state.clone(),
                         quality_rank: quality_tier_rank(quality_tier),
                         reasoning_rank: reasoning_effort_rank(reasoning_effort),
-                        readiness_status,
-                        external_backend_readiness,
+                        readiness_status: profile_readiness_status(&profile),
+                        external_backend_readiness: None,
                         role: role.clone(),
                         profile,
                     }
@@ -1173,7 +1221,7 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         });
     }
 
-    candidates.retain(|candidate| {
+    candidates.retain_mut(|candidate| {
         let mut reasons = Vec::new();
         let mut metadata_source_paths = serde_json::Map::new();
         let profile_id = candidate.profile["profile_id"]
@@ -1247,6 +1295,16 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         {
             reasons.push("over_budget".to_string());
         }
+        let write_scope = candidate.profile["write_scope"]
+            .as_str()
+            .or_else(|| candidate.role["write_scope"].as_str())
+            .unwrap_or_default()
+            .to_string();
+        let live_guard_required = task_class_requires_write_scope(task_class)
+            && write_scope_requires_live_guard(&write_scope);
+        if reasons.is_empty() && (probe_external_readiness || live_guard_required) {
+            load_external_cli_readiness_for_candidate(compiled_bundle, candidate);
+        }
         if candidate.readiness_status == "blocked" {
             reasons.push("profile_not_ready".to_string());
         }
@@ -1266,12 +1324,8 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
                 reasons.push("route_profile_mapping_mismatch".to_string());
             }
         }
-        let write_scope = candidate.profile["write_scope"]
-            .as_str()
-            .or_else(|| candidate.role["write_scope"].as_str())
-            .unwrap_or_default();
         if !write_scope_allows_task_class(
-            write_scope,
+            &write_scope,
             task_class,
             candidate.external_backend_readiness.as_ref(),
         ) {

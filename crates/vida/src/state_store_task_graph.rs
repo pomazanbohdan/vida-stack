@@ -185,7 +185,7 @@ impl StateStore {
         let mut rows = self.all_tasks().await?;
         rows.sort_by(task_sort_key);
         let mut critical_path_ids = BTreeSet::new();
-        if let Ok(path) = self.critical_path().await {
+        if let Ok(path) = Self::critical_path_from_rows(&rows) {
             critical_path_ids.extend(path.nodes.into_iter().map(|node| node.id));
         }
 
