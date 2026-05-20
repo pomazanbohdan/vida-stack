@@ -19329,7 +19329,7 @@ pub(crate) fn stale_in_flight_dispatch_timeout_seconds_for_receipt(
     {
         return seconds;
     }
-    if stale_in_flight_dispatch_preserves_internal_activation_view(receipt, result) {
+    if crate::runtime_dispatch_receipt_helpers::stale_in_flight_dispatch_preserves_internal_activation_view(receipt, result) {
         let project_root = runtime_dispatch_project_root_from_state_root(state_root);
         return configured_internal_host_handoff_timeout_seconds(project_root.as_ref())
             .unwrap_or(DEFAULT_INTERNAL_HOST_HANDOFF_TIMEOUT_SECONDS)
@@ -19427,98 +19427,6 @@ pub(crate) fn apply_internal_activation_view_only_to_receipt(
     Ok(())
 }
 
-fn stale_in_flight_dispatch_preserves_internal_activation_view(
-    receipt: &crate::state_store::RunGraphDispatchReceipt,
-    result: &serde_json::Value,
-) -> bool {
-    let explicit_external_dispatch_evidence = receipt
-        .dispatch_surface
-        .as_deref()
-        .is_some_and(|value| value.starts_with("external_cli:"))
-        || result["surface"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("external_cli:"))
-        || result["backend_dispatch"]["backend_class"].as_str() == Some("external_cli");
-    if explicit_external_dispatch_evidence {
-        return false;
-    }
-    let result_selected_backend_class = result["route_policy"]["selected_backend_class"]
-        .as_str()
-        .or_else(|| result["mixed_posture"]["selected_backend_class"].as_str())
-        .or_else(|| result["effective_execution_posture"]["selected_backend_class"].as_str());
-    backend_class_is_internal(result_selected_backend_class)
-        || receipt
-            .selected_backend
-            .as_deref()
-            .is_some_and(|value| value == "internal_subagents" || value.starts_with("internal_"))
-        || receipt
-            .dispatch_surface
-            .as_deref()
-            .is_some_and(|value| value.starts_with("internal_cli:"))
-        || result["surface"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("internal_cli:"))
-        || result["backend_dispatch"]["backend_class"].as_str() == Some("internal")
-        || dispatch_packet_indicates_internal_activation_view(
-            receipt.dispatch_packet_path.as_deref(),
-            result,
-        )
-}
-
-fn dispatch_packet_indicates_internal_activation_view(
-    dispatch_packet_path: Option<&str>,
-    result: &serde_json::Value,
-) -> bool {
-    let packet_path = dispatch_packet_path
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            result
-                .get("source_dispatch_packet_path")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        });
-    let Some(packet_path) = packet_path else {
-        return false;
-    };
-    let Some(packet) = crate::read_json_file_if_present(std::path::Path::new(packet_path)) else {
-        return false;
-    };
-    packet["host_runtime"]["selected_cli_execution_class"].as_str() == Some("internal")
-        || packet["effective_execution_posture"]["effective_posture_kind"].as_str()
-            == Some("internal")
-        || packet["mixed_posture"]["effective_posture_kind"].as_str() == Some("internal")
-        || packet["effective_execution_posture"]["selected_execution_class"].as_str()
-            == Some("internal")
-}
-
-fn dispatch_packet_uses_downstream_carrier(
-    dispatch_packet_path: Option<&str>,
-    result: &serde_json::Value,
-) -> bool {
-    let packet_path = dispatch_packet_path
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            result
-                .get("source_dispatch_packet_path")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        });
-    let Some(packet_path) = packet_path else {
-        return false;
-    };
-    let Some(packet) = crate::read_json_file_if_present(std::path::Path::new(packet_path)) else {
-        return false;
-    };
-    packet
-        .get("packet_kind")
-        .and_then(serde_json::Value::as_str)
-        == Some("runtime_downstream_dispatch_packet")
-}
-
 pub(crate) fn normalize_stale_in_flight_dispatch_receipt(
     state_root: &Path,
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
@@ -19540,7 +19448,7 @@ pub(crate) fn normalize_stale_in_flight_dispatch_receipt(
         return Ok(false);
     };
     let preserves_internal_activation_view =
-        stale_in_flight_dispatch_preserves_internal_activation_view(receipt, &result);
+        crate::runtime_dispatch_receipt_helpers::stale_in_flight_dispatch_preserves_internal_activation_view(receipt, &result);
     if timeout_blocked_receipt
         && preserves_internal_activation_view
         && result["blocker_code"].as_str() == Some("timeout_without_takeover_authority")
@@ -19581,7 +19489,10 @@ pub(crate) fn normalize_stale_in_flight_dispatch_receipt(
     if result["execution_state"].as_str() != Some("executing") {
         return Ok(false);
     }
-    if dispatch_packet_uses_downstream_carrier(receipt.dispatch_packet_path.as_deref(), &result) {
+    if crate::runtime_dispatch_receipt_helpers::dispatch_packet_uses_downstream_carrier(
+        receipt.dispatch_packet_path.as_deref(),
+        &result,
+    ) {
         let timeout_seconds = dispatch_result_stale_after_seconds(&result) as u64;
         apply_dispatch_execution_timeout_to_receipt(state_root, receipt, timeout_seconds)?;
         return Ok(true);

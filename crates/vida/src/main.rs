@@ -65,6 +65,7 @@ mod runtime_dispatch_downstream_packets;
 mod runtime_dispatch_execution;
 mod runtime_dispatch_packet_text;
 mod runtime_dispatch_packets;
+mod runtime_dispatch_receipt_helpers;
 mod runtime_dispatch_state;
 mod runtime_dispatch_status;
 mod runtime_lane_summary;
