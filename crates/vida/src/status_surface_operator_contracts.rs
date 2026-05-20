@@ -30,6 +30,7 @@ pub(crate) struct StatusOperatorContractInputs<'a> {
     pub(crate) root_local_write_allowed_for_only_these_paths: &'a serde_json::Value,
     pub(crate) activation_view_only_dispatch_blocker_active: bool,
     pub(crate) blocking_dispatch_blocker_code: Option<&'a str>,
+    pub(crate) operator_session_projection: &'a serde_json::Value,
 }
 
 pub(crate) fn build_status_operator_contracts(
@@ -132,6 +133,11 @@ pub(crate) fn build_status_operator_contracts(
         }
         _ => {}
     }
+    operator_blocker_codes.extend(
+        crate::operator_session_projection::projection_operator_blocker_codes(
+            inputs.operator_session_projection,
+        ),
+    );
     operator_blocker_codes = canonical_blocker_codes(&operator_blocker_codes);
     let mut operator_next_actions: Vec<String> = Vec::new();
     if operator_blocker_codes
@@ -289,6 +295,11 @@ pub(crate) fn build_status_operator_contracts(
                 .to_string(),
         );
     }
+    operator_next_actions.extend(
+        crate::operator_session_projection::projection_operator_next_actions(
+            &operator_blocker_codes,
+        ),
+    );
     let operator_artifact_refs = serde_json::json!({
         "runtime_consumption_latest_snapshot_path": inputs.latest_final_snapshot_path
             .or(inputs.runtime_consumption.latest_snapshot_path.as_deref()),
@@ -312,6 +323,9 @@ pub(crate) fn build_status_operator_contracts(
         "root_local_write_allowed": inputs.root_local_write_allowed,
         "root_local_write_allowed_for_only_these_paths": inputs.root_local_write_allowed_for_only_these_paths,
         "blocking_dispatch_blocker_code": inputs.blocking_dispatch_blocker_code,
+        "operator_session_projection": crate::operator_session_projection::projection_operator_artifact_refs(
+            inputs.operator_session_projection
+        ),
     });
     let finalized = crate::operator_contracts::finalize_release1_operator_truth(
         operator_blocker_codes,
@@ -379,6 +393,14 @@ mod tests {
             root_local_write_allowed_for_only_these_paths: &serde_json::json!([]),
             activation_view_only_dispatch_blocker_active: true,
             blocking_dispatch_blocker_code: Some("internal_activation_view_only"),
+            operator_session_projection: &serde_json::json!({
+                "schema_version": "operator-session-projection-v1",
+                "current_session": {"session_id": "session-current"},
+                "project_foreign_runs": [],
+                "project_foreign_blockers": [],
+                "global_blockers": [],
+                "claim_conflicts": [],
+            }),
         })
         .expect("operator contracts should render");
 
@@ -460,6 +482,14 @@ mod tests {
             root_local_write_allowed_for_only_these_paths: &serde_json::json!([]),
             activation_view_only_dispatch_blocker_active: false,
             blocking_dispatch_blocker_code: None,
+            operator_session_projection: &serde_json::json!({
+                "schema_version": "operator-session-projection-v1",
+                "current_session": {"session_id": "session-current"},
+                "project_foreign_runs": [],
+                "project_foreign_blockers": [],
+                "global_blockers": [],
+                "claim_conflicts": [],
+            }),
         })
         .expect("operator contracts should render");
 
@@ -476,6 +506,102 @@ mod tests {
             value
                 .as_str()
                 .is_some_and(|text| text.contains("do not continue by heuristic"))
+        }));
+    }
+
+    #[test]
+    fn claim_conflicts_block_status_operator_contracts() {
+        let runtime_consumption = crate::runtime_consumption_state::RuntimeConsumptionSummary {
+            total_snapshots: 0,
+            bundle_snapshots: 0,
+            bundle_check_snapshots: 0,
+            final_snapshots: 0,
+            latest_kind: None,
+            latest_snapshot_path: Some("snapshot.json".to_string()),
+        };
+        let protocol_binding = crate::state_store::ProtocolBindingSummary {
+            active_bindings: 0,
+            blocking_issue_count: 0,
+            fully_runtime_bound_count: 0,
+            latest_receipt_id: Some("binding-receipt".to_string()),
+            latest_recorded_at: None,
+            latest_scenario: None,
+            primary_state_authority: None,
+            rust_bound_count: 0,
+            script_bound_count: 0,
+            total_bindings: 0,
+            total_receipts: 0,
+            unbound_count: 0,
+        };
+        let truth = crate::project_activator_surface::ProjectActivationStatusTruth {
+            status: "ready_enough_for_normal_work".to_string(),
+            activation_pending: false,
+            next_steps: vec![],
+        };
+        let operator_session_projection = serde_json::json!({
+            "schema_version": "operator-session-projection-v1",
+            "current_session": {"session_id": "session-current"},
+            "project_foreign_runs": [],
+            "project_foreign_blockers": [],
+            "global_blockers": [],
+            "claim_conflicts": [{
+                "claim_id": "claim-foreign",
+                "orchestrator_session_id": "foreign-session",
+                "task_id": "task-a",
+                "run_id": "run-a",
+                "conflict_domain": "path:crates/vida/src/status_surface.rs",
+                "owned_paths": ["crates/vida/src/status_surface.rs"],
+                "lease_mode": "exclusive",
+                "status": "active",
+                "blocker_codes": [],
+            }],
+        });
+
+        let contracts = build_status_operator_contracts(StatusOperatorContractInputs {
+            boot_compatibility: None,
+            migration_state: None,
+            protocol_binding: &protocol_binding,
+            runtime_consumption: &runtime_consumption,
+            latest_final_snapshot_path: Some("snapshot.json"),
+            latest_run_graph_dispatch_receipt_id: Some("run-1"),
+            latest_run_graph_gate_present: false,
+            latest_run_graph_dispatch_receipt_matches_status: true,
+            latest_run_graph_snapshot_inconsistent: false,
+            latest_run_graph_dispatch_receipt_signal_ambiguous: false,
+            latest_run_graph_dispatch_receipt_summary_inconsistent: false,
+            latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
+            continuation_binding_ambiguous: false,
+            incomplete_release_admission_operator_evidence: false,
+            activation_truth: Some(&truth),
+            project_activation_pending: false,
+            latest_task_reconciliation: None,
+            effective_bundle_receipt: None,
+            root_session_write_guard_status: "blocked_by_default",
+            root_local_write_allowed: false,
+            root_local_write_allowed_for_only_these_paths: &serde_json::json!([]),
+            activation_view_only_dispatch_blocker_active: false,
+            blocking_dispatch_blocker_code: None,
+            operator_session_projection: &operator_session_projection,
+        })
+        .expect("operator contracts should render");
+
+        let blockers = contracts["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should be an array");
+        assert!(blockers
+            .iter()
+            .any(|value| value == "conflict_domain_collision"));
+        assert_eq!(
+            contracts["artifact_refs"]["operator_session_projection"]["claim_conflict_count"],
+            1
+        );
+        let next_actions = contracts["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array");
+        assert!(next_actions.iter().any(|value| {
+            value
+                .as_str()
+                .is_some_and(|text| text.contains("claim_conflicts"))
         }));
     }
 }

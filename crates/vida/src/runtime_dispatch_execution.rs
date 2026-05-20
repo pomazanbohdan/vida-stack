@@ -94,6 +94,17 @@ fn backend_is_internal_host_bridge(
         .is_some_and(|backend_class| matches!(backend_class, "internal" | "internal_cli"))
 }
 
+fn backend_is_external_cli_bridge(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    overlay: Option<&serde_yaml::Value>,
+    backend_id: &str,
+) -> bool {
+    execution_plan_backend_class(role_selection, backend_id)
+        .or_else(|| configured_backend_class(overlay, backend_id))
+        .as_deref()
+        .is_some_and(|backend_class| backend_class == "external_cli")
+}
+
 fn default_activation_view(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -188,6 +199,153 @@ fn readiness_fallback_internal_backend(
         dispatch_target,
     )
     .then_some(fallback_backend)
+}
+
+fn push_unique_backend_candidate(candidates: &mut Vec<String>, candidate: Option<String>) {
+    let Some(candidate) = candidate
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    if !candidates.iter().any(|existing| existing == &candidate) {
+        candidates.push(candidate);
+    }
+}
+
+pub(crate) fn internal_codex_external_fallback_backend(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    dispatch_target: &str,
+    blocked_backend_id: &str,
+    overlay: &serde_yaml::Value,
+) -> Option<String> {
+    let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
+        &role_selection.execution_plan,
+        dispatch_target,
+    )?;
+    let mut candidates = Vec::new();
+    push_unique_backend_candidate(
+        &mut candidates,
+        crate::taskflow_routing::fallback_executor_backend_from_route(route),
+    );
+    push_unique_backend_candidate(
+        &mut candidates,
+        crate::taskflow_routing::runtime_assignment_backend_for_route(
+            &role_selection.execution_plan,
+            route,
+        ),
+    );
+    push_unique_backend_candidate(
+        &mut candidates,
+        crate::taskflow_routing::route_primary_backend_hint_from_route(route),
+    );
+    for candidate in crate::taskflow_routing::fanout_executor_backends_from_route(route) {
+        push_unique_backend_candidate(&mut candidates, Some(candidate));
+    }
+
+    candidates.into_iter().find(|candidate| {
+        if candidate == blocked_backend_id {
+            return false;
+        }
+        if !backend_is_external_cli_bridge(role_selection, Some(overlay), candidate) {
+            return false;
+        }
+        if !backend_is_admissible_for_dispatch_target(
+            &role_selection.execution_plan,
+            candidate,
+            dispatch_target,
+        ) {
+            return false;
+        }
+        let Some(backend_entry) =
+            crate::runtime_dispatch_state::configured_external_backend_entry(overlay, candidate)
+        else {
+            return false;
+        };
+        let selected_model_profile_id =
+            crate::runtime_dispatch_state::preferred_selected_model_profile_for_dispatch_target(
+                role_selection,
+                dispatch_target,
+                Some(candidate),
+            );
+        let readiness =
+            crate::status_surface_external_cli::external_cli_backend_readiness_verdict_for_profile(
+                candidate,
+                backend_entry,
+                selected_model_profile_id.as_deref(),
+            );
+        !readiness["blocked"].as_bool().unwrap_or(false)
+    })
+}
+
+fn ready_external_readiness_fallback_backend(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    dispatch_target: &str,
+    blocked_backend_id: &str,
+    overlay: &serde_yaml::Value,
+    inherited_selected_backend: Option<&str>,
+) -> Option<String> {
+    let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
+        &role_selection.execution_plan,
+        dispatch_target,
+    )?;
+    let mut candidates = Vec::new();
+    push_unique_backend_candidate(
+        &mut candidates,
+        inherited_selected_backend.map(str::to_string),
+    );
+    push_unique_backend_candidate(
+        &mut candidates,
+        crate::taskflow_routing::runtime_assignment_backend_for_route(
+            &role_selection.execution_plan,
+            route,
+        ),
+    );
+    push_unique_backend_candidate(
+        &mut candidates,
+        crate::taskflow_routing::route_primary_backend_hint_from_route(route),
+    );
+    push_unique_backend_candidate(
+        &mut candidates,
+        crate::taskflow_routing::fallback_executor_backend_from_route(route),
+    );
+    for candidate in crate::taskflow_routing::fanout_executor_backends_from_route(route) {
+        push_unique_backend_candidate(&mut candidates, Some(candidate));
+    }
+
+    candidates.into_iter().find(|candidate| {
+        if candidate == blocked_backend_id {
+            return false;
+        }
+        if !backend_is_external_cli_bridge(role_selection, Some(overlay), candidate) {
+            return false;
+        }
+        if !backend_is_admissible_for_dispatch_target(
+            &role_selection.execution_plan,
+            candidate,
+            dispatch_target,
+        ) {
+            return false;
+        }
+        let Some(backend_entry) =
+            crate::runtime_dispatch_state::configured_external_backend_entry(overlay, candidate)
+        else {
+            return false;
+        };
+        let selected_model_profile_id =
+            crate::runtime_dispatch_state::preferred_selected_model_profile_for_dispatch_target(
+                role_selection,
+                dispatch_target,
+                Some(candidate),
+            );
+        let readiness =
+            crate::status_surface_external_cli::external_cli_backend_readiness_verdict_for_profile(
+                candidate,
+                backend_entry,
+                selected_model_profile_id.as_deref(),
+            );
+        !readiness["blocked"].as_bool().unwrap_or(false)
+    })
 }
 
 fn configured_external_dispatch_wall_timeout_seconds(
@@ -307,6 +465,39 @@ fn emulated_test_shell_output(wrapped_command: &WrappedCommand) -> Option<Observ
         .into_bytes();
         return Some(ObservedCommandOutput {
             status: test_exit_status(0),
+            stdout,
+            stderr: Vec::new(),
+            timed_out: false,
+        });
+    }
+    if script.contains("input=$(cat)") {
+        let stdout = serde_json::json!({
+            "type": "result",
+            "result": "STDIN_OK",
+            "is_error": false
+        })
+        .to_string()
+        .into_bytes();
+        return Some(ObservedCommandOutput {
+            status: test_exit_status(0),
+            stdout,
+            stderr: Vec::new(),
+            timed_out: false,
+        });
+    }
+    if script.contains("adapter boom") {
+        let stdout = serde_json::json!({
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": true,
+            "error": {
+                "message": "adapter boom"
+            }
+        })
+        .to_string()
+        .into_bytes();
+        return Some(ObservedCommandOutput {
+            status: test_exit_status(1),
             stdout,
             stderr: Vec::new(),
             timed_out: false,
@@ -1623,6 +1814,37 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         &command,
         &args,
     ) {
+        if let Some(fallback_backend) = internal_codex_external_fallback_backend(
+            role_selection,
+            &receipt.dispatch_target,
+            backend_id,
+            &overlay,
+        ) {
+            let mut result = Box::pin(execute_external_agent_lane_dispatch(
+                state_root,
+                project_root,
+                dispatch_packet_path,
+                Some(&fallback_backend),
+                role_selection,
+                receipt,
+                host_runtime.clone(),
+            ))
+            .await?;
+            if let Some(body) = result.as_object_mut() {
+                body.insert(
+                    "internal_codex_external_fallback".to_string(),
+                    serde_json::json!({
+                        "blocked_backend": backend_id,
+                        "blocker_code": "internal_codex_carrier_unavailable",
+                        "blocker_reason": blocker_reason,
+                        "fallback_backend": fallback_backend,
+                        "fallback_source": "route_admissible_external_backend",
+                        "selected_cli_system": selected_cli_system,
+                    }),
+                );
+            }
+            return Ok(Some(result));
+        }
         let activation_view = bounded_activation_view(
             state_root,
             project_root,
@@ -2026,6 +2248,35 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             selected_model_profile_id.as_deref(),
         );
     if readiness_verdict["blocked"].as_bool().unwrap_or(false) {
+        if let Some(fallback_backend) = ready_external_readiness_fallback_backend(
+            role_selection,
+            &receipt.dispatch_target,
+            &backend_id,
+            &overlay,
+            receipt.selected_backend.as_deref(),
+        ) {
+            let mut result = Box::pin(execute_external_agent_lane_dispatch(
+                state_root,
+                project_root,
+                dispatch_packet_path,
+                Some(&fallback_backend),
+                role_selection,
+                receipt,
+                host_runtime.clone(),
+            ))
+            .await?;
+            if let Some(body) = result.as_object_mut() {
+                body.insert(
+                    "external_readiness_external_fallback".to_string(),
+                    serde_json::json!({
+                        "blocked_backend": backend_id,
+                        "fallback_backend": fallback_backend,
+                        "readiness": readiness_verdict,
+                    }),
+                );
+            }
+            return Ok(result);
+        }
         if let Some(fallback_backend) = readiness_fallback_internal_backend(
             role_selection,
             &receipt.dispatch_target,
@@ -2386,6 +2637,7 @@ mod tests {
         internal_codex_app_bridge_requires_fail_closed, internal_codex_output_confirms_execution,
         internal_host_activation_only_blocker_code, mark_dispatch_result_execution_evidence,
         parse_external_provider_output, parse_internal_codex_exec_output,
+        ready_external_readiness_fallback_backend,
         should_render_store_backed_activation_view_for_internal_failure,
         wrap_command_with_optional_timeout, CommandTimeoutWrapper,
     };
@@ -2850,6 +3102,451 @@ agent_system:
             internal_codex_app_bridge_requires_fail_closed("codex", &overlay, "fake-codex", &args),
             None
         );
+    }
+
+    #[test]
+    fn internal_codex_exec_falls_back_to_ready_admissible_external_route_backend() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-internal-codex-external-fallback-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        std::fs::write(
+            project_root.join("dispatch.json"),
+            r#"{"prompt":"FALLBACK_OK"}"#,
+        )
+        .expect("write dispatch packet");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            internal_codex_external_fallback_overlay(),
+        )
+        .expect("write overlay");
+
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "analysis": true,
+                        "implementation": true
+                    }
+                },
+                {
+                    "backend_id": "qwen_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "analysis": true,
+                        "implementation": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "analysis": {
+                    "executor_backend": "internal_subagents",
+                    "fallback_executor_backend": "qwen_cli",
+                    "fanout_executor_backends": ["qwen_cli"]
+                }
+            },
+            "runtime_assignment": {
+                "activation_agent_type": "middle",
+                "selected_tier": "middle"
+            }
+        }));
+        let receipt = internal_codex_fallback_receipt(
+            project_root
+                .join("dispatch.json")
+                .to_str()
+                .expect("dispatch path should render"),
+        );
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let result = runtime
+            .block_on(async {
+                super::execute_internal_agent_lane_dispatch(
+                    project_root.join("missing-state").as_path(),
+                    &project_root,
+                    receipt
+                        .dispatch_packet_path
+                        .as_deref()
+                        .expect("receipt dispatch packet path"),
+                    Some("internal_subagents"),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "internal"
+                    }),
+                )
+                .await
+            })
+            .expect("dispatch should return")
+            .expect("internal dispatch should return fallback result");
+
+        assert_eq!(result["status"], "pass");
+        assert_eq!(result["execution_state"], "executed");
+        assert_eq!(result["surface"], "external_cli:qwen_cli");
+        assert_eq!(result["blocker_code"], serde_json::Value::Null);
+        assert_eq!(result["backend_dispatch"]["backend_id"], "qwen_cli");
+        assert_eq!(
+            result["internal_codex_external_fallback"]["blocked_backend"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            result["internal_codex_external_fallback"]["fallback_backend"],
+            "qwen_cli"
+        );
+        assert_ne!(result["blocker_code"], "internal_codex_carrier_unavailable");
+
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn external_readiness_fallback_prefers_ready_inherited_external_backend() {
+        let overlay = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    hermes_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      dispatch:
+        command: vida-missing-hermes-test-command
+        prompt_mode: positional
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      dispatch:
+        command: cargo
+        static_args: ["--version"]
+        prompt_mode: positional
+"#,
+        )
+        .expect("overlay should parse");
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "hermes_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "coach": true,
+                        "review": true
+                    }
+                },
+                {
+                    "backend_id": "qwen_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "coach": true,
+                        "review": true
+                    }
+                },
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "coach": true,
+                        "review": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "coach": {
+                    "executor_backend": "hermes_cli",
+                    "fallback_executor_backend": "internal_subagents"
+                }
+            }
+        }));
+
+        assert_eq!(
+            ready_external_readiness_fallback_backend(
+                &role_selection,
+                "coach",
+                "hermes_cli",
+                &overlay,
+                Some("qwen_cli")
+            )
+            .as_deref(),
+            Some("qwen_cli")
+        );
+    }
+
+    #[test]
+    fn external_readiness_fallback_prefers_ready_runtime_assignment_backend() {
+        let overlay = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    hermes_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      dispatch:
+        command: vida-missing-hermes-test-command
+        prompt_mode: positional
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      dispatch:
+        command: cargo
+        static_args: ["--version"]
+        prompt_mode: positional
+"#,
+        )
+        .expect("overlay should parse");
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "runtime_assignment": {
+                "selected_backend_id": "qwen_cli",
+                "selected_tier": "external_write_guarded",
+                "activation_agent_type": "qwen_cli"
+            },
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "hermes_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "coach": true,
+                        "review": true
+                    }
+                },
+                {
+                    "backend_id": "qwen_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "coach": true,
+                        "review": true
+                    }
+                },
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "coach": true,
+                        "review": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "coach": {
+                    "executor_backend": "hermes_cli",
+                    "fallback_executor_backend": "internal_subagents"
+                }
+            }
+        }));
+
+        assert_eq!(
+            ready_external_readiness_fallback_backend(
+                &role_selection,
+                "coach",
+                "hermes_cli",
+                &overlay,
+                None
+            )
+            .as_deref(),
+            Some("qwen_cli")
+        );
+    }
+
+    #[test]
+    fn internal_codex_exec_preserves_blocker_when_no_admissible_external_fallback_exists() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-internal-codex-no-external-fallback-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        std::fs::write(
+            project_root.join("dispatch.json"),
+            r#"{"prompt":"NO_FALLBACK"}"#,
+        )
+        .expect("write dispatch packet");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            internal_codex_external_fallback_overlay(),
+        )
+        .expect("write overlay");
+
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "analysis": true,
+                        "implementation": true
+                    }
+                },
+                {
+                    "backend_id": "qwen_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "analysis": false,
+                        "implementation": false
+                    }
+                }
+            ],
+            "development_flow": {
+                "analysis": {
+                    "executor_backend": "internal_subagents",
+                    "fallback_executor_backend": "qwen_cli",
+                    "fanout_executor_backends": ["qwen_cli"]
+                }
+            },
+            "runtime_assignment": {
+                "activation_agent_type": "middle",
+                "selected_tier": "middle"
+            }
+        }));
+        let receipt = internal_codex_fallback_receipt(
+            project_root
+                .join("dispatch.json")
+                .to_str()
+                .expect("dispatch path should render"),
+        );
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let result = runtime
+            .block_on(async {
+                super::execute_internal_agent_lane_dispatch(
+                    project_root.join("missing-state").as_path(),
+                    &project_root,
+                    receipt
+                        .dispatch_packet_path
+                        .as_deref()
+                        .expect("receipt dispatch packet path"),
+                    Some("internal_subagents"),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "internal"
+                    }),
+                )
+                .await
+            })
+            .expect("dispatch should return")
+            .expect("internal dispatch should return blocked result");
+
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["blocker_code"], "internal_codex_carrier_unavailable");
+        assert!(result["internal_codex_external_fallback"].is_null());
+
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    fn internal_codex_external_fallback_overlay() -> &'static str {
+        r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      dispatch:
+        command: codex
+        static_args: ["exec", "--json"]
+        prompt_mode: positional
+      carriers:
+        middle:
+          model: gpt-5.4
+          model_reasoning_effort: medium
+          sandbox_mode: workspace-write
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+      default_model_profile: internal_fast
+      model_profiles:
+        internal_fast:
+          provider: internal
+          model_ref: gpt-5.4
+          reasoning_effort: medium
+          normalized_cost_units: 4
+          write_scope: orchestrator_native
+          runtime_roles: [business_analyst]
+          task_classes: [analysis]
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      dispatch:
+        command: sh
+        static_args:
+          - -lc
+          - |
+            printf '{"type":"result","is_error":false,"result":"external-dispatch:%s"}' "$*"
+          - vida-dispatch
+        prompt_mode: positional
+        prompt_template: "FALLBACK_OK"
+"#
+    }
+
+    fn internal_codex_fallback_role_selection(
+        execution_plan: serde_json::Value,
+    ) -> RuntimeConsumptionLaneSelection {
+        RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Analyze the bounded handoff".to_string(),
+            selected_role: "verifier".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan,
+            reason: "test".to_string(),
+        }
+    }
+
+    fn internal_codex_fallback_receipt(
+        dispatch_packet_path: &str,
+    ) -> crate::state_store::RunGraphDispatchReceipt {
+        crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-internal-codex-fallback".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some(dispatch_packet_path.to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        }
     }
 
     #[test]

@@ -8,6 +8,7 @@ const CLAIM_ACQUIRE_GUARD_RETRY_DELAY_MS: u64 = 25;
 const CLAIM_ACQUIRE_GUARD_MAX_WAIT_MS: u64 = 30_000;
 const CLAIM_ACQUIRE_GUARD_RETRY_COUNT: usize =
     (CLAIM_ACQUIRE_GUARD_MAX_WAIT_MS / CLAIM_ACQUIRE_GUARD_RETRY_DELAY_MS) as usize;
+const DEFAULT_ORCHESTRATOR_CLAIM_LEASE_SECONDS: i64 = 60;
 
 struct ClaimAcquireGuard {
     file: std::fs::File,
@@ -167,7 +168,11 @@ fn claim_timestamp(time: OffsetDateTime) -> String {
 }
 
 fn claim_expiry(now: OffsetDateTime, lease_seconds: i64) -> String {
-    let bounded_seconds = if lease_seconds == 0 { 1 } else { lease_seconds };
+    let bounded_seconds = if lease_seconds == 0 {
+        DEFAULT_ORCHESTRATOR_CLAIM_LEASE_SECONDS
+    } else {
+        lease_seconds
+    };
     claim_timestamp(now + time::Duration::seconds(bounded_seconds))
 }
 
@@ -524,6 +529,21 @@ impl StateStore {
         if !claim_is_active(&claim.status) || claim_is_expired(&claim, &now_text) {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!("orchestrator_claim_not_active_for_heartbeat:{claim_id}"),
+            });
+        }
+        if crate::orchestrator_session_surface::orchestrator_session_liveness(
+            self.root(),
+            &claim.orchestrator_session_id,
+        )
+        .map_err(|reason| StateStoreError::InvalidTaskRecord {
+            reason: format!("orchestrator_claim_owner_session_liveness_unavailable:{reason}"),
+        })? == crate::orchestrator_session_surface::OrchestratorSessionLiveness::Stale
+        {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "orchestrator_claim_owner_session_stale_for_heartbeat:{claim_id}:{}",
+                    claim.orchestrator_session_id
+                ),
             });
         }
         if claim.resource_revision != expected_resource_revision {
@@ -989,6 +1009,81 @@ mod tests {
         assert!(released_heartbeat
             .to_string()
             .contains("orchestrator_claim_not_active_for_heartbeat:claim-1"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn zero_second_claim_lease_uses_safe_default_window() {
+        let root = temp_state_dir("zero-lease");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let claim = store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                lease_seconds: 0,
+                ..claim_request(
+                    "claim-1",
+                    "session-1",
+                    "task-1",
+                    "run-1",
+                    "domain-a",
+                    &["crates/vida/src/a.rs"],
+                )
+            })
+            .await
+            .expect("zero lease should use default");
+        let created_at = time::OffsetDateTime::parse(&claim.created_at, &Rfc3339)
+            .expect("created_at should parse");
+        let lease_expires_at = time::OffsetDateTime::parse(&claim.lease_expires_at, &Rfc3339)
+            .expect("lease_expires_at should parse");
+
+        assert!(
+            (lease_expires_at - created_at).whole_seconds()
+                >= DEFAULT_ORCHESTRATOR_CLAIM_LEASE_SECONDS
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_rejects_claim_owned_by_stale_session() {
+        let root = temp_state_dir("stale-session-heartbeat");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let claim = store
+            .acquire_orchestrator_claim(claim_request(
+                "claim-1",
+                "stale-session",
+                "task-1",
+                "run-1",
+                "domain-a",
+                &["crates/vida/src/a.rs"],
+            ))
+            .await
+            .expect("claim");
+        let sessions_dir = root.join("orchestrator-sessions");
+        fs::create_dir_all(&sessions_dir).expect("session dir");
+        let stale_heartbeat = (claim_time() - time::Duration::hours(3)).unix_timestamp();
+        let payload = serde_json::json!({
+            "schema_version": "runtime-owner-evidence-v1",
+            "sessions": [
+                {
+                    "session_id": "stale-session",
+                    "state": "stale",
+                    "process_id": 12345,
+                    "last_heartbeat_epoch_seconds": stale_heartbeat,
+                }
+            ],
+        });
+        fs::write(
+            sessions_dir.join("sessions.json"),
+            serde_json::to_string_pretty(&payload).expect("serialize sessions"),
+        )
+        .expect("write sessions");
+
+        let error = store
+            .heartbeat_orchestrator_claim("claim-1", claim.resource_revision, 60)
+            .await
+            .expect_err("stale owner session should block heartbeat");
+        assert!(error.to_string().contains(
+            "orchestrator_claim_owner_session_stale_for_heartbeat:claim-1:stale-session"
+        ));
         let _ = fs::remove_dir_all(root);
     }
 

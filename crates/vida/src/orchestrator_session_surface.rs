@@ -10,8 +10,17 @@ use crate::{
 };
 
 const SESSION_TTL_SECONDS: i64 = 2 * 60 * 60;
+const STALE_SESSION_PURGE_AFTER_SECONDS: i64 = SESSION_TTL_SECONDS * 2;
 const UPSTREAM_VIDA_ISSUE_OWNER: &str = "pomazanbohdan/vida-stack";
 const MAX_SESSION_STORE_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OrchestratorSessionLiveness {
+    Current,
+    LiveOther,
+    Stale,
+    Unknown,
+}
 
 fn now_epoch_seconds() -> i64 {
     SystemTime::now()
@@ -167,6 +176,11 @@ fn write_sessions(path: &Path, sessions: &[serde_json::Value]) -> Result<(), Str
     });
     let body = serde_json::to_string_pretty(&payload)
         .map_err(|error| format!("serialize orchestrator sessions: {error}"))?;
+    if body.len() as u64 > MAX_SESSION_STORE_BYTES {
+        return Err(format!(
+            "orchestrator sessions payload exceeds {MAX_SESSION_STORE_BYTES} bytes"
+        ));
+    }
     let mut file = OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -370,6 +384,16 @@ fn classify_sessions_with_liveness(
     (live_other, stale)
 }
 
+fn purgeable_stale_session(session: &serde_json::Value, now: i64) -> bool {
+    let heartbeat = session["last_heartbeat_epoch_seconds"]
+        .as_i64()
+        .unwrap_or(0);
+    if heartbeat <= 0 || heartbeat > now {
+        return false;
+    }
+    now.saturating_sub(heartbeat) > STALE_SESSION_PURGE_AFTER_SECONDS
+}
+
 pub(crate) fn build_runtime_owner_evidence(
     state_dir: &Path,
     persist_current: bool,
@@ -389,11 +413,17 @@ pub(crate) fn build_runtime_owner_evidence(
         .unwrap_or(current);
     let (live_other_sessions, stale_sessions) = classify_sessions(&sessions, &current_id);
     if persist_current {
+        let now = now_epoch_seconds();
         let mut normalized_sessions =
             Vec::with_capacity(1 + live_other_sessions.len() + stale_sessions.len());
         normalized_sessions.push(current.clone());
         normalized_sessions.extend(live_other_sessions.iter().cloned());
-        normalized_sessions.extend(stale_sessions.iter().cloned());
+        normalized_sessions.extend(
+            stale_sessions
+                .iter()
+                .filter(|session| !purgeable_stale_session(session, now))
+                .cloned(),
+        );
         write_sessions(&path, &normalized_sessions)?;
     }
     let has_live_other = !live_other_sessions.is_empty();
@@ -438,6 +468,47 @@ pub(crate) fn build_runtime_owner_evidence(
         "next_actions": next_actions,
         "session_store_path": path.display().to_string(),
     }))
+}
+
+fn session_array_contains_id(array: &serde_json::Value, session_id: &str) -> bool {
+    array
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|session| session["session_id"].as_str() == Some(session_id))
+}
+
+pub(crate) fn stale_orchestrator_session_ids_from_evidence(
+    evidence: &serde_json::Value,
+) -> std::collections::BTreeSet<String> {
+    evidence["stale_sessions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|session| session["session_id"].as_str())
+        .map(str::to_string)
+        .collect()
+}
+
+pub(crate) fn orchestrator_session_liveness(
+    state_dir: &Path,
+    session_id: &str,
+) -> Result<OrchestratorSessionLiveness, String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Ok(OrchestratorSessionLiveness::Unknown);
+    }
+    let evidence = build_runtime_owner_evidence(state_dir, false)?;
+    if evidence["current_session"]["session_id"].as_str() == Some(session_id) {
+        return Ok(OrchestratorSessionLiveness::Current);
+    }
+    if session_array_contains_id(&evidence["live_other_sessions"], session_id) {
+        return Ok(OrchestratorSessionLiveness::LiveOther);
+    }
+    if session_array_contains_id(&evidence["stale_sessions"], session_id) {
+        return Ok(OrchestratorSessionLiveness::Stale);
+    }
+    Ok(OrchestratorSessionLiveness::Unknown)
 }
 
 fn print_or_plain(payload: &serde_json::Value, as_json: bool) {
@@ -598,7 +669,8 @@ mod tests {
     use super::{
         build_runtime_owner_evidence, classify_sessions_with_liveness, context_summary_map,
         current_session_id, current_session_record, merge_current_session, now_epoch_seconds,
-        read_sessions, stable_local_session_id, ProcessLiveness, MAX_SESSION_STORE_BYTES,
+        read_sessions, stable_local_session_id, OrchestratorSessionLiveness, ProcessLiveness,
+        MAX_SESSION_STORE_BYTES, STALE_SESSION_PURGE_AFTER_SECONDS,
     };
     use crate::temp_state::TempStateHarness;
     use std::sync::{Mutex, OnceLock};
@@ -933,5 +1005,103 @@ mod tests {
         unix_fs::symlink(&target, &sessions_path).expect("symlink should create");
 
         assert!(read_sessions(&sessions_path).is_empty());
+    }
+
+    #[test]
+    fn persist_current_purges_stale_sessions_after_retention_window() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved = saved_session_env();
+        clear_session_env();
+        unsafe {
+            std::env::set_var("VIDA_ORCHESTRATOR_SESSION_ID", "current-session");
+        }
+
+        let harness = TempStateHarness::new().expect("temp state should initialize");
+        let sessions_path = harness
+            .path()
+            .join("orchestrator-sessions")
+            .join("sessions.json");
+        std::fs::create_dir_all(sessions_path.parent().unwrap()).expect("parent should create");
+        let now = now_epoch_seconds();
+        let retained_stale = serde_json::json!({
+            "session_id": "recent-stale",
+            "state": "stale",
+            "process_id": 12345,
+            "last_heartbeat_epoch_seconds": now.saturating_sub(super::SESSION_TTL_SECONDS + 1),
+        });
+        let purged_stale = serde_json::json!({
+            "session_id": "old-stale",
+            "state": "stale",
+            "process_id": 23456,
+            "last_heartbeat_epoch_seconds": now.saturating_sub(STALE_SESSION_PURGE_AFTER_SECONDS + 1),
+        });
+        let payload = serde_json::json!({
+            "schema_version": "runtime-owner-evidence-v1",
+            "sessions": [retained_stale, purged_stale],
+        });
+        std::fs::write(
+            &sessions_path,
+            serde_json::to_string_pretty(&payload).expect("serialize sessions"),
+        )
+        .expect("write sessions");
+
+        let evidence = build_runtime_owner_evidence(harness.path(), true)
+            .expect("owner evidence should persist");
+        let sessions = read_sessions(&sessions_path);
+        assert!(sessions
+            .iter()
+            .any(|session| session["session_id"] == "recent-stale"));
+        assert!(!sessions
+            .iter()
+            .any(|session| session["session_id"] == "old-stale"));
+        assert!(evidence["stale_sessions"]
+            .as_array()
+            .expect("stale evidence")
+            .iter()
+            .any(|session| session["session_id"] == "old-stale"));
+
+        restore_session_env(saved);
+    }
+
+    #[test]
+    fn session_liveness_reports_stale_owner_from_evidence() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved = saved_session_env();
+        clear_session_env();
+        unsafe {
+            std::env::set_var("VIDA_ORCHESTRATOR_SESSION_ID", "current-session");
+        }
+
+        let harness = TempStateHarness::new().expect("temp state should initialize");
+        let first = build_runtime_owner_evidence(harness.path(), true)
+            .expect("owner evidence should persist");
+        let session_store_path = first["session_store_path"]
+            .as_str()
+            .expect("session store path");
+        let now = now_epoch_seconds();
+        let payload = serde_json::json!({
+            "schema_version": "runtime-owner-evidence-v1",
+            "sessions": [
+                first["current_session"].clone(),
+                {
+                    "session_id": "stale-owner",
+                    "state": "stale",
+                    "process_id": 12345,
+                    "last_heartbeat_epoch_seconds": now.saturating_sub(super::SESSION_TTL_SECONDS + 1),
+                }
+            ],
+        });
+        std::fs::write(
+            session_store_path,
+            serde_json::to_string_pretty(&payload).expect("serialize sessions"),
+        )
+        .expect("write sessions");
+
+        assert_eq!(
+            super::orchestrator_session_liveness(harness.path(), "stale-owner").expect("liveness"),
+            OrchestratorSessionLiveness::Stale
+        );
+
+        restore_session_env(saved);
     }
 }

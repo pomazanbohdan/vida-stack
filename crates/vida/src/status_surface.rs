@@ -501,6 +501,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             blocking_dispatch_blocker_code: root_session_write_guard
                                 ["blocking_dispatch_blocker_code"]
                                 .as_str(),
+                            operator_session_projection: &operator_session_projection,
                         }) {
                             Ok(value) => value,
                             Err(error) => {

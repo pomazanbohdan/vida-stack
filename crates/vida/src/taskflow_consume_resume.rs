@@ -1,4 +1,6 @@
-use crate::taskflow_run_graph::validate_run_graph_resume_gate;
+use crate::taskflow_run_graph::{
+    status_with_active_exception_dispatch_replay, validate_run_graph_resume_gate,
+};
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, UNIX_EPOCH};
@@ -10,7 +12,6 @@ const DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS: [&str; 3] = [
 ];
 const CONSUME_RESUME_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const CONSUME_RESUME_PREPARATION_GATE_TIMEOUT: Duration = Duration::from_secs(10);
-const CONSUME_RESUME_HANDOFF_TIMEOUT: Duration = Duration::from_secs(25);
 
 async fn consume_continue_handoff_with_timeout<F>(
     label: &str,
@@ -51,6 +52,18 @@ where
             "consume continue failed fast: {label} blocking worker exited before returning a result"
         )),
     }
+}
+
+fn consume_continue_dispatch_handoff_timeout(
+    state_root: &Path,
+    role_selection: &crate::RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Duration {
+    Duration::from_secs(super::dispatch_handoff_timeout_seconds_for_state_root(
+        state_root,
+        role_selection,
+        receipt,
+    ))
 }
 
 async fn fail_fast_state_store_open(
@@ -672,6 +685,14 @@ async fn validate_run_graph_resume_state(
     if active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await {
         return Ok(());
     }
+    if active_receipt
+        .as_ref()
+        .and_then(|receipt| status_with_active_exception_dispatch_replay(&status, receipt))
+        .as_ref()
+        .is_some_and(|replay_status| validate_run_graph_resume_gate(replay_status).is_ok())
+    {
+        return Ok(());
+    }
     match validate_run_graph_resume_gate(&status) {
         Ok(()) => Ok(()),
         Err(_error) if resume_from_persisted_final_snapshot(store, run_id)? => Ok(()),
@@ -709,6 +730,14 @@ async fn validate_run_graph_resume_state_strict(
         .ok()
         .flatten();
     if active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await {
+        return Ok(());
+    }
+    if active_receipt
+        .as_ref()
+        .and_then(|receipt| status_with_active_exception_dispatch_replay(&status, receipt))
+        .as_ref()
+        .is_some_and(|replay_status| validate_run_graph_resume_gate(replay_status).is_ok())
+    {
         return Ok(());
     }
     validate_run_graph_resume_gate(&status).map_err(|error| {
@@ -3420,6 +3449,78 @@ fn dispatch_packet_uses_downstream_carrier(
         == Some("runtime_downstream_dispatch_packet")
 }
 
+fn terminal_execution_result_for_in_flight_receipt(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    result_path: &str,
+) -> Option<(String, serde_json::Value)> {
+    let result_dir = std::path::Path::new(result_path).parent()?;
+    let dispatch_packet_path = receipt.dispatch_packet_path.as_deref().map(str::trim);
+    let mut matches = std::fs::read_dir(result_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let result = crate::read_json_file_if_present(&path)?;
+            let execution_state = result["execution_state"].as_str()?;
+            if execution_state != "executed" {
+                return None;
+            }
+            let same_run = result["run_id"].as_str() == Some(receipt.run_id.as_str());
+            let same_target = result["dispatch_target"].as_str()
+                == Some(receipt.dispatch_target.as_str())
+                || result["completed_target"].as_str() == Some(receipt.dispatch_target.as_str());
+            let same_packet = match dispatch_packet_path {
+                Some(expected) => {
+                    result["source_dispatch_packet_path"]
+                        .as_str()
+                        .map(str::trim)
+                        == Some(expected)
+                        || result["dispatch_packet_path"].as_str().map(str::trim) == Some(expected)
+                }
+                None => true,
+            };
+            (same_run && same_target && same_packet).then(|| {
+                let recorded_at = result["recorded_at"]
+                    .as_str()
+                    .or_else(|| result["lane_execution_receipt_artifact"]["finished_at"].as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                (recorded_at, path.display().to_string(), result)
+            })
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| left.0.cmp(&right.0));
+    matches
+        .pop()
+        .map(|(_recorded_at, path, result)| (path, result))
+}
+
+fn promote_receipt_to_terminal_execution_result(
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+    result_path: String,
+    result: &serde_json::Value,
+) {
+    receipt.dispatch_result_path = Some(result_path);
+    receipt.dispatch_status = result["execution_state"]
+        .as_str()
+        .unwrap_or("executed")
+        .to_string();
+    receipt.lane_status = super::derive_lane_status(
+        &receipt.dispatch_status,
+        receipt.supersedes_receipt_id.as_deref(),
+        receipt.exception_path_receipt_id.as_deref(),
+    )
+    .as_str()
+    .to_string();
+    receipt.blocker_code = None;
+    if let Some(dispatch_surface) = result["surface"].as_str().map(str::to_string) {
+        receipt.dispatch_surface = Some(dispatch_surface);
+    }
+    if let Some(dispatch_command) = result["activation_command"].as_str().map(str::to_string) {
+        receipt.dispatch_command = Some(dispatch_command);
+    }
+}
+
 fn normalize_stale_in_flight_dispatch_receipt(
     state_root: &std::path::Path,
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
@@ -3447,6 +3548,18 @@ fn normalize_stale_in_flight_dispatch_receipt(
     };
     let preserves_internal_activation_view =
         stale_in_flight_dispatch_preserves_internal_activation_view(receipt, &result);
+    if receipt.dispatch_status == "executing" {
+        if let Some((terminal_result_path, terminal_result)) =
+            terminal_execution_result_for_in_flight_receipt(receipt, result_path)
+        {
+            promote_receipt_to_terminal_execution_result(
+                receipt,
+                terminal_result_path,
+                &terminal_result,
+            );
+            return Ok(true);
+        }
+    }
     if blocked_external_dispatch_artifact_mismatched_as_internal_activation(receipt, &result) {
         let timeout_seconds = super::dispatch_result_stale_after_seconds(&result) as u64;
         super::apply_dispatch_execution_timeout_to_receipt(state_root, receipt, timeout_seconds)?;
@@ -5137,10 +5250,16 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     || super::taskflow_task_bridge::infer_project_root_from_state_root(&state_root)
                         .is_some();
                 if allow_taskflow_pack_execution {
+                    let resumed_dispatch_handoff_timeout =
+                        consume_continue_dispatch_handoff_timeout(
+                            &state_root,
+                            &role_selection,
+                            &dispatch_receipt,
+                        );
                     drop(store);
                     if let Err(error) = consume_continue_handoff_with_timeout(
                         "resumed runtime dispatch handoff",
-                        CONSUME_RESUME_HANDOFF_TIMEOUT,
+                        resumed_dispatch_handoff_timeout,
                         super::execute_and_record_dispatch_receipt(
                             &state_root,
                             &role_selection,
@@ -5155,7 +5274,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                                 &state_root,
                                 &role_selection,
                                 &mut dispatch_receipt,
-                                CONSUME_RESUME_HANDOFF_TIMEOUT.as_secs(),
+                                resumed_dispatch_handoff_timeout.as_secs(),
                             )
                         {
                             if emit_output {
@@ -5253,9 +5372,14 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 }
                 drop(store);
             }
+            let downstream_dispatch_handoff_timeout = consume_continue_dispatch_handoff_timeout(
+                &state_root,
+                &role_selection,
+                &dispatch_receipt,
+            );
             if let Err(error) = consume_continue_handoff_with_timeout(
                 "downstream dispatch chain",
-                CONSUME_RESUME_HANDOFF_TIMEOUT,
+                downstream_dispatch_handoff_timeout,
                 super::execute_downstream_dispatch_chain(
                     &state_root,
                     &role_selection,
@@ -5270,7 +5394,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         &state_root,
                         &role_selection,
                         &mut dispatch_receipt,
-                        CONSUME_RESUME_HANDOFF_TIMEOUT.as_secs(),
+                        downstream_dispatch_handoff_timeout.as_secs(),
                     )
                 {
                     if emit_output {
@@ -5563,11 +5687,11 @@ mod tests {
         build_failure_control_evidence, canonical_resume_dispatch_status,
         canonical_resume_lane_status, canonical_resume_string_array_entries,
         consume_advance_success_payload, consume_continue_blocking_step_with_timeout,
-        consume_continue_handoff_with_timeout, consume_continue_resume_error_blocker_code,
-        consume_continue_resume_error_payload, consume_continue_state_access_blocker_payload,
-        dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
-        dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
-        enforce_consume_continue_execution_preparation_gate,
+        consume_continue_dispatch_handoff_timeout, consume_continue_handoff_with_timeout,
+        consume_continue_resume_error_blocker_code, consume_continue_resume_error_payload,
+        consume_continue_state_access_blocker_payload, dispatch_receipt_internal_retry_eligible,
+        dispatch_receipt_primary_rebind_eligible, dispatch_receipt_retry_eligible,
+        emit_runtime_consumption_resume_json, enforce_consume_continue_execution_preparation_gate,
         fail_fast_state_store_open_read_only_with_timeout, normalize_runtime_dispatch_packet,
         normalize_stale_in_flight_dispatch_receipt, packet_path_components_for_platform,
         persisted_dispatch_packet_lineage_task_id,
@@ -5585,7 +5709,7 @@ mod tests {
         should_refresh_resumed_downstream_preview, sync_run_graph_after_retry_artifact,
         validate_receipt_packet_pair, validate_run_graph_resume_state,
         validate_run_graph_resume_state_for_downstream_packet,
-        validate_run_graph_resume_state_strict, PacketPathPlatform, CONSUME_RESUME_HANDOFF_TIMEOUT,
+        validate_run_graph_resume_state_strict, PacketPathPlatform,
         DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
@@ -5876,9 +6000,96 @@ mod tests {
     }
 
     #[test]
-    fn consume_continue_handoff_timeout_stays_inside_operator_window() {
-        assert!(CONSUME_RESUME_HANDOFF_TIMEOUT <= Duration::from_secs(25));
-        assert!(CONSUME_RESUME_HANDOFF_TIMEOUT * 2 < Duration::from_secs(60));
+    fn consume_continue_dispatch_handoff_timeout_uses_external_backend_runtime_window() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-external-timeout-window-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&root).expect("temp root");
+        fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+agent_system:
+  subagents:
+    pi_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      max_runtime_seconds: 420
+      dispatch:
+        no_output_timeout_seconds: 180
+"#,
+        )
+        .expect("config");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Verify CASE-13 analysis.".to_string(),
+            selected_role: "verifier".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["analysis".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "analysis": {
+                        "executor_backend": "pi_cli"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-external-pi-timeout-window".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: Some("case13-analysis-timeout-takeover".to_string()),
+            exception_path_receipt_id: Some("case13-analysis-timeout-takeover".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:pi_cli".to_string()),
+            dispatch_command: Some("vida-pi-agent --mode rpc".to_string()),
+            dispatch_packet_path: Some(root.join("packet.json").display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("pi_cli".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("pi_cli".to_string()),
+            recorded_at: "2026-05-20T14:50:04Z".to_string(),
+        };
+
+        assert_eq!(
+            consume_continue_dispatch_handoff_timeout(&root, &role_selection, &receipt),
+            Duration::from_secs(422)
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -7569,6 +7780,112 @@ agent_system:
                 .downstream_dispatch_last_target
                 .as_deref(),
             Some("coach")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn normalize_stale_in_flight_dispatch_receipt_promotes_terminal_execution_sibling() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-stale-in-flight-terminal-sibling-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let result_dir = root.join("runtime-consumption/dispatch-results");
+        fs::create_dir_all(&result_dir).expect("create result dir");
+        let packet_path =
+            root.join("runtime-consumption/dispatch-packets/run-terminal-packet.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent")).expect("packet dir");
+        fs::write(&packet_path, "{}").expect("packet");
+        let in_flight_path = result_dir.join("run-terminal-started.json");
+        fs::write(
+            &in_flight_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "run_id": "run-terminal-sibling",
+                "dispatch_target": "analysis",
+                "status": "pass",
+                "execution_state": "executing",
+                "source_dispatch_packet_path": packet_path.display().to_string(),
+                "stale_after_seconds": 422,
+                "recorded_at": "2026-05-20T15:09:18Z"
+            })
+            .to_string(),
+        )
+        .expect("write in-flight result");
+        let terminal_path = result_dir.join("run-terminal-executed.json");
+        fs::write(
+            &terminal_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_lane_completion_result",
+                "run_id": "run-terminal-sibling",
+                "dispatch_target": "analysis",
+                "completed_target": "analysis",
+                "status": "pass",
+                "execution_state": "executed",
+                "source_dispatch_packet_path": packet_path.display().to_string(),
+                "activation_command": "vida-pi-agent --mode rpc",
+                "surface": "external_cli:pi_cli",
+                "recorded_at": "2026-05-20T15:10:12Z",
+                "execution_evidence": {
+                    "status": "recorded",
+                    "receipt_backed": true,
+                    "backend_id": "pi_cli"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write terminal result");
+
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-terminal-sibling".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: Some("case13-analysis-timeout-takeover".to_string()),
+            exception_path_receipt_id: Some("case13-analysis-timeout-takeover".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:pi_cli".to_string()),
+            dispatch_command: Some("vida-pi-agent --mode rpc".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: Some(in_flight_path.display().to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("pi_cli".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("pi_cli".to_string()),
+            recorded_at: "2026-05-20T13:14:08Z".to_string(),
+        };
+
+        assert!(
+            normalize_stale_in_flight_dispatch_receipt(&root, &mut receipt)
+                .expect("terminal sibling should normalize")
+        );
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.blocker_code, None);
+        assert_eq!(
+            receipt.dispatch_result_path.as_deref(),
+            Some(terminal_path.to_str().unwrap())
+        );
+        assert_eq!(
+            receipt.dispatch_surface.as_deref(),
+            Some("external_cli:pi_cli")
         );
 
         let _ = fs::remove_dir_all(&root);
@@ -9633,6 +9950,154 @@ agent_system:
         validate_run_graph_resume_state_strict(&store, run_id)
             .await
             .expect("strict resume validation should also allow retry-eligible receipts");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn validate_run_graph_resume_state_accepts_superseded_exception_takeover_replay() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-exception-replay-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-exception-takeover-replay";
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "analysis",
+            "implementation",
+        );
+        status.task_id = run_id.to_string();
+        status.active_node = "analysis".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist status");
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("case13-analysis-timeout-takeover".to_string()),
+            exception_path_receipt_id: Some("case13-analysis-timeout-takeover".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --dispatch-packet packet.json".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: Some("internal_codex_carrier_unavailable".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("pi_cli".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("pi_cli".to_string()),
+            recorded_at: "2026-05-20T13:40:47Z".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist receipt");
+
+        validate_run_graph_resume_state(&store, run_id)
+            .await
+            .expect("superseded exception takeover should replay a dispatch resume gate");
+        validate_run_graph_resume_state_strict(&store, run_id)
+            .await
+            .expect("strict resume validation should accept superseded exception replay");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn validate_run_graph_resume_state_rejects_unsuperseded_exception_takeover_replay() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-exception-replay-unsuperseded-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-exception-takeover-unsuperseded";
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "analysis",
+            "implementation",
+        );
+        status.task_id = run_id.to_string();
+        status.active_node = "analysis".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist status");
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("case13-analysis-timeout-takeover".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --dispatch-packet packet.json".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: Some("internal_codex_carrier_unavailable".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("pi_cli".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("pi_cli".to_string()),
+            recorded_at: "2026-05-20T13:40:47Z".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist receipt");
+
+        let error = validate_run_graph_resume_state(&store, run_id)
+            .await
+            .expect_err("unsuperseded exception takeover must still fail closed");
+        assert!(error.contains("recovery_ready is false"));
 
         let _ = fs::remove_dir_all(&root);
     }

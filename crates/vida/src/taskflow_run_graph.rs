@@ -19,7 +19,7 @@ use std::process::ExitCode;
 use time::format_description::well_known::Rfc3339;
 
 const STALE_PROJECTION_DISPATCH_TIMEOUT_SECONDS: i64 = 10;
-const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS: u64 = 25;
+const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS: u64 = 60;
 const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER: &str = "run_graph_dispatch_init_timeout";
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -3059,7 +3059,7 @@ fn dispatch_replay_node_from_receipt(receipt: &RunGraphDispatchReceipt) -> Optio
         .map(|value| value.strip_suffix("_lane").unwrap_or(value).to_string())
 }
 
-fn status_with_active_exception_dispatch_replay(
+pub(crate) fn status_with_active_exception_dispatch_replay(
     status: &RunGraphStatus,
     receipt: &RunGraphDispatchReceipt,
 ) -> Option<RunGraphStatus> {
@@ -5952,6 +5952,14 @@ mod tests {
             serde_json::json!([RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER])
         );
         assert!(run_graph_dispatch_init_error_evidence("unrelated dispatch-init error").is_none());
+    }
+
+    #[test]
+    fn dispatch_init_timeout_window_covers_live_activation_snapshot_seed() {
+        assert!(
+            RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS >= 60,
+            "dispatch-init seeds open TaskFlow tasks by compiling the live activation snapshot before a run row exists; keep the bounded window above the observed Windows live seed path"
+        );
     }
 
     #[tokio::test]

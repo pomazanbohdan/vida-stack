@@ -261,6 +261,7 @@ fn doctor_operator_blocker_codes(
     latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
     memory_governance: Option<&crate::state_store::RunGraphMemoryGovernanceProjection>,
+    operator_session_projection: &serde_json::Value,
     no_active_taskflow_work: bool,
     latest_run_graph_task_missing: bool,
     trace_evidence_blocker_codes: Vec<String>,
@@ -368,6 +369,11 @@ fn doctor_operator_blocker_codes(
         principal_delegation,
         memory_governance,
     ));
+    operator_blocker_codes.extend(
+        crate::operator_session_projection::projection_operator_blocker_codes(
+            operator_session_projection,
+        ),
+    );
     operator_blocker_codes.extend(trace_evidence_blocker_codes);
     canonical_blocker_code_list(operator_blocker_codes.iter().map(String::as_str))
 }
@@ -494,6 +500,11 @@ fn doctor_operator_next_actions(
         principal_delegation,
         memory_governance,
     ));
+    operator_next_actions.extend(
+        crate::operator_session_projection::projection_operator_next_actions(
+            operator_blocker_codes,
+        ),
+    );
     operator_next_actions
 }
 
@@ -805,6 +816,18 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 let evidence_snapshot_path = latest_final_snapshot_path
                     .as_deref()
                     .or(runtime_consumption.latest_snapshot_path.as_deref());
+                let operator_session_projection =
+                    match crate::operator_session_projection::build_operator_session_projection(
+                        &store,
+                    )
+                    .await
+                    {
+                        Ok(value) => value,
+                        Err(error) => {
+                            eprintln!("doctor json: operator session projection failed ({error})");
+                            return ExitCode::from(1);
+                        }
+                    };
                 let operator_blocker_codes = doctor_operator_blocker_codes(
                     &dependency_graph,
                     &boot_compatibility,
@@ -819,6 +842,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     latest_run_graph_dispatch_receipt.as_ref(),
                     latest_principal_delegation.as_ref(),
                     latest_memory_governance.as_ref(),
+                    &operator_session_projection,
                     no_active_taskflow_work,
                     latest_run_graph_task_missing,
                     trace_evidence_blocker_codes,
@@ -848,6 +872,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     "latest_memory_governance": latest_memory_governance,
                     "effective_instruction_bundle_receipt_id": effective_bundle_receipt_id,
                     "root_session_write_guard_status": root_session_write_guard["status"].clone(),
+                    "operator_session_projection": crate::operator_session_projection::projection_operator_artifact_refs(
+                        &operator_session_projection
+                    ),
                 });
                 let finalized = match crate::operator_contracts::finalize_release1_operator_truth(
                     operator_blocker_codes,
@@ -861,7 +888,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     }
                 };
                 let operator_contracts = finalized.operator_contracts;
-                let summary_json = if summary_only {
+                let mut summary_json = if summary_only {
                     serde_json::json!({
                         "surface": "vida doctor",
                         "view": "summary",
@@ -988,6 +1015,32 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         "storage_metadata_display": storage_metadata_display,
                     })
                 };
+                if let Some(object) = summary_json.as_object_mut() {
+                    object.insert(
+                        "operator_session_projection".to_string(),
+                        operator_session_projection.clone(),
+                    );
+                    object.insert(
+                        "current_session".to_string(),
+                        operator_session_projection["current_session"].clone(),
+                    );
+                    object.insert(
+                        "project_foreign_runs".to_string(),
+                        operator_session_projection["project_foreign_runs"].clone(),
+                    );
+                    object.insert(
+                        "project_foreign_blockers".to_string(),
+                        operator_session_projection["project_foreign_blockers"].clone(),
+                    );
+                    object.insert(
+                        "global_blockers".to_string(),
+                        operator_session_projection["global_blockers"].clone(),
+                    );
+                    object.insert(
+                        "claim_conflicts".to_string(),
+                        operator_session_projection["claim_conflicts"].clone(),
+                    );
+                }
                 if let Some(error) = shared_operator_output_contract_parity_error(&summary_json) {
                     eprintln!("doctor json contract: failed ({error})");
                     return ExitCode::from(1);
@@ -1200,8 +1253,8 @@ fn doctor_json_projection_name(summary_only: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_trace_evidence_summary, final_snapshot_missing_release_admission_evidence,
-        selected_effective_bundle_receipt_id,
+        build_trace_evidence_summary, doctor_operator_blocker_codes,
+        final_snapshot_missing_release_admission_evidence, selected_effective_bundle_receipt_id,
     };
     use crate::contract_profile_adapter::{
         operator_contracts_consistency_error, shared_operator_output_contract_parity_error,
@@ -1523,6 +1576,90 @@ mod tests {
             trace_evidence["evaluation_evidence"]["effective_instruction_bundle"]["receipt_id"],
             "effective-bundle-receipt-1"
         );
+    }
+
+    #[test]
+    fn claim_conflicts_block_doctor_operator_contracts() {
+        let runtime_consumption = crate::runtime_consumption_state::RuntimeConsumptionSummary {
+            total_snapshots: 1,
+            bundle_snapshots: 0,
+            bundle_check_snapshots: 0,
+            final_snapshots: 1,
+            latest_kind: Some("final".to_string()),
+            latest_snapshot_path: Some("snapshot.json".to_string()),
+        };
+        let boot_compatibility = crate::state_store::BootCompatibilitySummary {
+            classification: "backward_compatible".to_string(),
+            reasons: vec![],
+            next_step: "none".to_string(),
+        };
+        let migration_preflight = crate::state_store::MigrationPreflightSummary {
+            contract_type: "operator_contracts".to_string(),
+            schema_version: "release-1-v1".to_string(),
+            compatibility_classification: "backward_compatible".to_string(),
+            migration_state: "no_migration_required".to_string(),
+            blockers: vec![],
+            source_version_tuple: vec![],
+            next_step: "none".to_string(),
+        };
+        let protocol_binding = crate::state_store::ProtocolBindingSummary {
+            total_receipts: 1,
+            total_bindings: 1,
+            active_bindings: 1,
+            script_bound_count: 0,
+            rust_bound_count: 1,
+            fully_runtime_bound_count: 1,
+            unbound_count: 0,
+            blocking_issue_count: 0,
+            latest_receipt_id: Some("protocol-binding-receipt-1".to_string()),
+            latest_scenario: Some("runtime_assurance".to_string()),
+            latest_recorded_at: Some("2026-03-08T00:00:00Z".to_string()),
+            primary_state_authority: Some("state_store".to_string()),
+        };
+        let root_session_write_guard = serde_json::json!({
+            "status": "blocked_by_default",
+            "activation_view_only_dispatch_blocker_active": false,
+        });
+        let operator_session_projection = serde_json::json!({
+            "schema_version": "operator-session-projection-v1",
+            "current_session": {"session_id": "session-current"},
+            "project_foreign_runs": [],
+            "project_foreign_blockers": [],
+            "global_blockers": [],
+            "claim_conflicts": [{
+                "claim_id": "claim-foreign",
+                "orchestrator_session_id": "foreign-session",
+                "task_id": "task-a",
+                "run_id": "run-a",
+                "conflict_domain": "path:crates/vida/src/doctor_surface.rs",
+                "owned_paths": ["crates/vida/src/doctor_surface.rs"],
+                "lease_mode": "exclusive",
+                "status": "active",
+                "blocker_codes": [],
+            }],
+        });
+
+        let blockers = doctor_operator_blocker_codes(
+            &[],
+            &boot_compatibility,
+            &migration_preflight,
+            &protocol_binding,
+            Some("snapshot.json"),
+            &runtime_consumption,
+            None,
+            &root_session_write_guard,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &operator_session_projection,
+            true,
+            false,
+            vec![],
+        );
+
+        assert_eq!(blockers, vec!["conflict_domain_collision"]);
     }
 
     #[test]

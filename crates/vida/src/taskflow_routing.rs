@@ -157,8 +157,13 @@ pub(crate) fn dispatch_target_for_runtime_role(
 }
 
 fn carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<String> {
-    json_string(assignment.get("selected_tier"))
+    json_string(assignment.get("selected_backend_id"))
+        .or_else(|| json_string(assignment.get("selected_backend")))
+        .or_else(|| json_string(assignment.get("selected_carrier_id")))
+        .or_else(|| json_string(assignment.get("selected_carrier_agent_id")))
+        .or_else(|| json_string(assignment.get("selected_agent_id")))
         .or_else(|| json_string(assignment.get("activation_agent_type")))
+        .or_else(|| json_string(assignment.get("selected_tier")))
         .filter(|value| !value.is_empty())
 }
 
