@@ -3615,7 +3615,7 @@ agent_system:
                 &receipt,
                 false,
             ),
-            "internal_activation_view_only"
+            crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
         );
     }
 

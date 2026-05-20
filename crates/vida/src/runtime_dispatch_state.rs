@@ -345,14 +345,8 @@ pub(crate) fn internal_host_activation_view_only_blocker_code(
 ) -> &'static str {
     if internal_codex_app_bridge_requires_prelaunch_blocker(project_root, role_selection, receipt) {
         INTERNAL_CODEX_CARRIER_UNAVAILABLE
-    } else if internal_host_activation_view_only_requires_terminal_blocker(
-        project_root,
-        role_selection,
-        receipt,
-    ) {
-        INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
     } else {
-        "internal_activation_view_only"
+        INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
     }
 }
 
@@ -14337,7 +14331,7 @@ mod tests {
         assert_eq!(receipt.lane_status, "lane_blocked");
         assert_eq!(
             receipt.blocker_code.as_deref(),
-            Some("internal_activation_view_only")
+            Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
         );
         assert_eq!(
             receipt.exception_path_receipt_id.as_deref(),
@@ -15804,7 +15798,7 @@ agent_system:
         assert_eq!(receipt.lane_status, "lane_blocked");
         assert_eq!(
             receipt.blocker_code.as_deref(),
-            Some("internal_activation_view_only")
+            Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
         );
         let dispatch_result_path = receipt
             .dispatch_result_path
@@ -15815,11 +15809,14 @@ agent_system:
         )
         .expect("dispatch result should parse");
         assert_eq!(parsed["execution_state"], "blocked");
-        assert_eq!(parsed["blocker_code"], "internal_activation_view_only");
+        assert_eq!(
+            parsed["blocker_code"],
+            INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
+        );
         assert!(parsed["provider_error"]
             .as_str()
             .expect("provider_error should render")
-            .contains("activation-view-only"));
+            .contains("receipt-backed completion"));
     }
 
     #[test]
@@ -16396,7 +16393,7 @@ host_environment:
         assert_eq!(receipt.dispatch_status, "blocked");
         assert_eq!(
             receipt.blocker_code.as_deref(),
-            Some("internal_activation_view_only")
+            Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
         );
         let artifact: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(
@@ -16408,7 +16405,10 @@ host_environment:
             .expect("dispatch result should be readable"),
         )
         .expect("dispatch result should decode");
-        assert_eq!(artifact["blocker_code"], "internal_activation_view_only");
+        assert_eq!(
+            artifact["blocker_code"],
+            INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
+        );
         assert!(artifact["provider_error"]
             .as_str()
             .expect("provider error should render")
@@ -19372,7 +19372,7 @@ pub(crate) fn apply_internal_activation_timeout_to_receipt(
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     timeout_seconds: u64,
 ) -> Result<(), String> {
-    let blocker_code = "internal_activation_view_only";
+    let blocker_code = INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT;
     let execution_result =
         runtime_dispatch_internal_activation_timeout_result(receipt, timeout_seconds, blocker_code);
     let dispatch_result_path =

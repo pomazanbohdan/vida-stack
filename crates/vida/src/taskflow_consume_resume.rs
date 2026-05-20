@@ -2602,6 +2602,9 @@ fn allow_downstream_resume_lineage(
     role_selection: Option<&super::RuntimeConsumptionLaneSelection>,
     dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
+    if activation_view_only_dispatch_blocker_is_terminal(dispatch_receipt.blocker_code.as_deref()) {
+        return false;
+    }
     !dispatch_receipt_effective_retry_eligible(project_root, role_selection, dispatch_receipt)
 }
 
@@ -2609,6 +2612,9 @@ fn retry_backend_for_dispatch_receipt(
     role_selection: &super::RuntimeConsumptionLaneSelection,
     dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Option<String> {
+    if activation_view_only_dispatch_blocker_is_terminal(dispatch_receipt.blocker_code.as_deref()) {
+        return None;
+    }
     let current_backend = dispatch_receipt
         .selected_backend
         .as_deref()
@@ -2620,35 +2626,7 @@ fn retry_backend_for_dispatch_receipt(
     );
     let route_fallback =
         route.and_then(crate::taskflow_routing::fallback_executor_backend_from_route);
-    let internal_timeout_like_blocker = matches!(
-        dispatch_receipt.blocker_code.as_deref(),
-        Some("internal_activation_view_only")
-            | Some(super::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
-    );
     if dispatch_receipt.blocker_code.as_deref() == Some("timeout_without_takeover_authority") {
-        if let Some(packet_retry_backend) = dispatch_receipt
-            .dispatch_packet_path
-            .as_deref()
-            .filter(|path| !path.trim().is_empty())
-            .and_then(|path| {
-                retry_backend_from_dispatch_packet(
-                    path,
-                    &dispatch_receipt.dispatch_target,
-                    current_backend,
-                )
-            })
-            .filter(|fallback| Some(fallback.as_str()) != current_backend)
-        {
-            return Some(packet_retry_backend);
-        }
-        if let Some(fallback) = route_fallback.clone() {
-            if Some(fallback.as_str()) != current_backend {
-                return Some(fallback);
-            }
-        }
-        return None;
-    }
-    if internal_timeout_like_blocker {
         if let Some(packet_retry_backend) = dispatch_receipt
             .dispatch_packet_path
             .as_deref()
@@ -2695,6 +2673,14 @@ fn retry_backend_for_dispatch_receipt(
                 })
         })
         .filter(|fallback| Some(fallback.as_str()) != current_backend)
+}
+
+fn activation_view_only_dispatch_blocker_is_terminal(blocker_code: Option<&str>) -> bool {
+    matches!(
+        blocker_code,
+        Some("internal_activation_view_only")
+            | Some(crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
+    )
 }
 
 fn retry_backend_from_dispatch_packet(
@@ -2831,6 +2817,9 @@ fn dispatch_receipt_internal_retry_eligible(
             .as_deref()
             .is_some_and(|path| !path.trim().is_empty())
     {
+        return false;
+    }
+    if activation_view_only_dispatch_blocker_is_terminal(dispatch_receipt.blocker_code.as_deref()) {
         return false;
     }
     if super::internal_host_activation_view_only_requires_terminal_blocker(
@@ -6800,7 +6789,7 @@ agent_system:
     }
 
     #[test]
-    fn internal_activation_view_only_on_internal_codex_host_is_retry_eligible() {
+    fn internal_activation_view_only_on_internal_codex_host_is_not_retry_eligible() {
         let root = std::env::temp_dir().join(format!(
             "vida-internal-retry-{}",
             SystemTime::now()
@@ -6879,7 +6868,7 @@ agent_system:
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
-        assert!(dispatch_receipt_internal_retry_eligible(
+        assert!(!dispatch_receipt_internal_retry_eligible(
             &root,
             &role_selection,
             &receipt
@@ -6889,7 +6878,7 @@ agent_system:
     }
 
     #[test]
-    fn internal_activation_view_only_on_internal_non_codex_host_is_retry_eligible() {
+    fn internal_activation_view_only_on_internal_non_codex_host_is_not_retry_eligible() {
         let root = std::env::temp_dir().join(format!(
             "vida-internal-retry-non-codex-{}",
             SystemTime::now()
@@ -6968,7 +6957,7 @@ agent_system:
             recorded_at: "2026-04-10T00:00:00Z".to_string(),
         };
 
-        assert!(dispatch_receipt_internal_retry_eligible(
+        assert!(!dispatch_receipt_internal_retry_eligible(
             &root,
             &role_selection,
             &receipt
@@ -7062,6 +7051,74 @@ agent_system:
         ));
 
         fs::remove_dir_all(root).expect("cleanup temp root");
+    }
+
+    #[test]
+    fn internal_activation_view_only_terminal_blockers_do_not_select_retry_backend() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Review bounded runtime dispatch behavior.".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "coach": {
+                                "backend_id": "internal_subagents",
+                                "fallback_executor_backend": "hermes_cli"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        for blocker_code in [
+            "internal_activation_view_only",
+            crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT,
+        ] {
+            let receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: format!("run-{blocker_code}"),
+                dispatch_target: "coach".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_blocked".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
+                blocker_code: Some(blocker_code.to_string()),
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("coach".to_string()),
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("coach".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-05-21T00:00:00Z".to_string(),
+            };
+            assert!(retry_backend_for_dispatch_receipt(&role_selection, &receipt).is_none());
+        }
     }
 
     #[test]
@@ -7959,7 +8016,7 @@ agent_system:
         assert_eq!(receipt.dispatch_status, "blocked");
         assert_eq!(
             receipt.blocker_code.as_deref(),
-            Some("internal_activation_view_only")
+            Some(crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
         );
         assert_eq!(receipt.lane_status, "lane_exception_recorded");
         let normalized_result_path = receipt
@@ -7973,7 +8030,7 @@ agent_system:
         assert_eq!(normalized_result["execution_state"], "blocked");
         assert_eq!(
             normalized_result["blocker_code"],
-            "internal_activation_view_only"
+            crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
         );
         assert!(normalized_result["provider_error"]
             .as_str()
@@ -8229,7 +8286,7 @@ agent_system:
         );
         assert_eq!(
             receipt.blocker_code.as_deref(),
-            Some("internal_activation_view_only")
+            Some(crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
         );
         let normalized_result_path = receipt
             .dispatch_result_path
@@ -8242,7 +8299,7 @@ agent_system:
         assert_eq!(normalized_result["execution_state"], "blocked");
         assert_eq!(
             normalized_result["blocker_code"],
-            "internal_activation_view_only"
+            crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
         );
         assert!(normalized_result["provider_error"]
             .as_str()
@@ -8337,7 +8394,7 @@ agent_system:
         assert_eq!(persisted.dispatch_status, "blocked");
         assert_eq!(
             persisted.blocker_code.as_deref(),
-            Some("internal_activation_view_only")
+            Some(crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
         );
         assert_eq!(persisted.lane_status, "lane_exception_recorded");
 
@@ -8492,7 +8549,7 @@ agent_system:
         );
         assert_eq!(
             receipt.blocker_code.as_deref(),
-            Some("internal_activation_view_only")
+            Some(crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
         );
         let normalized_result = crate::read_json_file_if_present(std::path::Path::new(
             receipt
@@ -8503,7 +8560,7 @@ agent_system:
         .expect("normalized result should exist");
         assert_eq!(
             normalized_result["blocker_code"],
-            "internal_activation_view_only"
+            crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
         );
 
         let _ = fs::remove_dir_all(&root);
@@ -8694,7 +8751,7 @@ agent_system:
         assert_eq!(receipt.dispatch_status, "blocked");
         assert_eq!(
             receipt.blocker_code.as_deref(),
-            Some("internal_activation_view_only")
+            Some(crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
         );
         let normalized_result = crate::read_json_file_if_present(std::path::Path::new(
             receipt
@@ -8706,7 +8763,7 @@ agent_system:
         assert_eq!(normalized_result["execution_state"], "blocked");
         assert_eq!(
             normalized_result["blocker_code"],
-            "internal_activation_view_only"
+            crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
         );
 
         let _ = fs::remove_dir_all(&root);
@@ -8815,7 +8872,7 @@ agent_system:
     }
 
     #[test]
-    fn normalize_stale_internal_receipt_preserves_retry_eligibility() {
+    fn normalize_stale_internal_receipt_blocks_retry_eligibility() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -8919,9 +8976,9 @@ agent_system:
         );
         assert_eq!(
             receipt.blocker_code.as_deref(),
-            Some("internal_activation_view_only")
+            Some(crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
         );
-        assert!(dispatch_receipt_internal_retry_eligible(
+        assert!(!dispatch_receipt_internal_retry_eligible(
             &root,
             &role_selection,
             &receipt
@@ -10385,7 +10442,7 @@ agent_system:
             dispatch_command: Some("vida agent-init".to_string()),
             dispatch_packet_path: Some("previous-verifier-packet".to_string()),
             dispatch_result_path: None,
-            blocker_code: Some("internal_activation_view_only".to_string()),
+            blocker_code: Some("pending_review_clean_evidence".to_string()),
             downstream_dispatch_target: Some("closure".to_string()),
             downstream_dispatch_command: Some("vida agent-init".to_string()),
             downstream_dispatch_note: Some("no additional downstream lane is required".to_string()),
@@ -10873,7 +10930,7 @@ agent_system:
             serde_json::json!({
                 "surface": "internal_cli:qwen",
                 "execution_state": "blocked",
-                "blocker_code": "internal_activation_view_only",
+                "blocker_code": "pending_review_clean_evidence",
                 "dispatch_packet_path": stale_packet_path.display().to_string(),
                 "activation_command": "vida agent-init --downstream-packet coach.json --json",
                 "backend_dispatch": {
@@ -10896,7 +10953,7 @@ agent_system:
             dispatch_command: Some("vida agent-init".to_string()),
             dispatch_packet_path: Some("/tmp/verification-packet.json".to_string()),
             dispatch_result_path: None,
-            blocker_code: Some("internal_activation_view_only".to_string()),
+            blocker_code: Some("pending_review_clean_evidence".to_string()),
             downstream_dispatch_target: Some("closure".to_string()),
             downstream_dispatch_command: Some("vida agent-init".to_string()),
             downstream_dispatch_note: Some("bounded closure handoff is required".to_string()),
@@ -12025,7 +12082,7 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn rewrite_retry_dispatch_packet_rotates_internal_activation_view_only_when_effective_retry_gate_is_satisfied(
+    async fn rewrite_retry_dispatch_packet_does_not_rotate_internal_activation_view_only_even_when_fallback_exists(
     ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -12168,30 +12225,13 @@ agent_system:
         )
         .expect("rewrite should succeed");
         assert!(
-            rewritten,
-            "internal_activation_view_only must rotate only when the unified effective-retry gate is satisfied"
+            !rewritten,
+            "internal_activation_view_only is terminal and must not rotate to a retry backend"
         );
-
-        let rewritten_path = receipt
-            .dispatch_packet_path
-            .clone()
-            .expect("rewritten dispatch packet path");
-        assert_ne!(rewritten_path, packet_path.display().to_string());
+        assert_eq!(receipt.selected_backend.as_deref(), Some("hermes_cli"));
         assert_eq!(
-            receipt.selected_backend.as_deref(),
-            Some("internal_subagents")
-        );
-
-        let rewritten_packet =
-            crate::read_json_file_if_present(std::path::Path::new(&rewritten_path))
-                .expect("rewritten packet should exist");
-        assert_eq!(
-            rewritten_packet["packet_kind"].as_str(),
-            Some("runtime_dispatch_packet")
-        );
-        assert_eq!(
-            rewritten_packet["selected_backend"].as_str(),
-            Some("internal_subagents")
+            receipt.dispatch_packet_path.as_deref(),
+            Some(packet_path.display().to_string().as_str())
         );
 
         let _ = fs::remove_dir_all(&root);
