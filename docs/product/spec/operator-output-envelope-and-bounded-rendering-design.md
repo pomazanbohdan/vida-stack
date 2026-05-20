@@ -164,3 +164,15 @@ Will implement / choose:
 - `docs/product/spec/release-1-operator-surface-contract.md`
 - `docs/process/documentation-tooling-map.md`
 - `docs/framework/templates/feature-design-document.template.md`
+
+-----
+artifact_path: product/spec/operator-output-envelope-and-bounded-rendering-design
+artifact_type: document
+artifact_version: 1
+artifact_revision: 2026-05-20
+schema_version: 1
+status: canonical
+source_path: docs/product/spec/operator-output-envelope-and-bounded-rendering-design.md
+created_at: 2026-05-20T13:04:57.8354806Z
+updated_at: 2026-05-20T13:04:57.8354806Z
+changelog_ref: operator-output-envelope-and-bounded-rendering-design.changelog.jsonl

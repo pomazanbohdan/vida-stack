@@ -219,6 +219,9 @@ Companion rule:
 24. [release-1-shared-operator-envelope-closure-design.md](release-1-shared-operator-envelope-closure-design.md)
    Config families: bounded Release-1 closure for shared operator-envelope fields, canonical compatibility-field emission, registry-backed blocker validation, and installed-launcher alignment
    Registered path: `docs/product/spec/release-1-shared-operator-envelope-closure-design.md`
+25. [operator-output-envelope-and-bounded-rendering-design.md](operator-output-envelope-and-bounded-rendering-design.md)
+   Config families: bounded operator-output policy/envelope seam, default-summary task list JSON, explicit full export through `--all`, and Release-1 envelope parity for task inspection surfaces
+   Registered path: `docs/product/spec/operator-output-envelope-and-bounded-rendering-design.md`
 25. [clarify-enforce-immediate-project-agent-first-design.md](clarify-enforce-immediate-project-agent-first-design.md)
    Config families: bounded clarification and enforcement for project agent-first delegated execution, anti-pause continuation law, valid release-admission snapshot selection, and packet-minimum fail-closed runtime behavior
    Registered path: `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`

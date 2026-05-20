@@ -1111,6 +1111,25 @@ fn assignment_selects_backend(assignment: &serde_json::Value, backend_id: &str) 
     .any(|value| value.trim() == backend_id)
 }
 
+fn assignment_selects_explicit_dispatch_backend(
+    execution_plan: &serde_json::Value,
+    assignment: &serde_json::Value,
+    backend_id: &str,
+) -> bool {
+    let explicit_match = [
+        "selected_backend_id",
+        "selected_carrier_id",
+        "selected_agent_id",
+        "selected_carrier_agent_id",
+    ]
+    .iter()
+    .filter_map(|key| json_string(assignment.get(*key)))
+    .any(|value| value.trim() == backend_id);
+    explicit_match
+        && (backend_policy_from_execution_plan(execution_plan, backend_id).is_some()
+            || backend_id.ends_with("_cli"))
+}
+
 fn assignment_is_internal_host_carrier(
     execution_plan: &serde_json::Value,
     assignment: &serde_json::Value,
@@ -1149,13 +1168,17 @@ pub(crate) fn backend_is_admissible_or_runtime_selected_carrier_for_dispatch_tar
             .filter(|assignment| !assignment.is_null())
             .is_some_and(|assignment| {
                 assignment_is_internal_host_carrier(execution_plan, assignment, backend_id)
+                    || assignment_selects_explicit_dispatch_backend(
+                        execution_plan,
+                        assignment,
+                        backend_id,
+                    )
             });
-    route_assignment_match
-        || assignment_is_internal_host_carrier(
-            execution_plan,
-            runtime_assignment_from_execution_plan(execution_plan),
-            backend_id,
-        )
+    route_assignment_match || {
+        let assignment = runtime_assignment_from_execution_plan(execution_plan);
+        assignment_is_internal_host_carrier(execution_plan, assignment, backend_id)
+            || assignment_selects_explicit_dispatch_backend(execution_plan, assignment, backend_id)
+    }
 }
 
 #[cfg(test)]
@@ -1194,7 +1217,16 @@ fn admissible_backend_candidates_for_dispatch_target(
     let mut candidates = Vec::new();
     let inherited = inherited_selected_backend.map(str::to_string);
     let activation = activation_agent_type.map(str::to_string);
-    let runtime_assignment_backend = runtime_assignment_backend_for_route(execution_plan, route);
+    let explicit_runtime_assignment_backend =
+        runtime_assignment_selected_backend_for_target(execution_plan, dispatch_target).filter(
+            |backend_id| {
+                backend_policy_from_execution_plan(execution_plan, backend_id).is_some()
+                    || backend_id.ends_with("_cli")
+            },
+        );
+    let runtime_assignment_backend = explicit_runtime_assignment_backend.or_else(|| {
+        (!strict_required).then(|| runtime_assignment_backend_for_route(execution_plan, route))?
+    });
     let route_primary = route_primary_backend_hint_from_route(route);
     let route_fallback = fallback_executor_backend_from_route(route);
     let route_fanout = fanout_executor_backends_from_route(route);
@@ -1204,8 +1236,8 @@ fn admissible_backend_candidates_for_dispatch_target(
         .chain(route_fanout.iter())
         .any(|backend_id| backend_policy_from_execution_plan(execution_plan, backend_id).is_some());
     let prefer_route_backends_first =
-        !route_is_backend_agnostic && (!strict_required || route_backends_have_policy);
-    if !strict_required {
+        !route_is_backend_agnostic && (strict_required || route_backends_have_policy);
+    if !strict_required && !prefer_route_backends_first {
         if let Some(inherited) = inherited.as_ref() {
             candidates.push(inherited.clone());
         }
@@ -1219,6 +1251,11 @@ fn admissible_backend_candidates_for_dispatch_target(
         if let Some(primary) = route_primary.as_ref() {
             candidates.push(primary.clone());
         }
+        if strict_required {
+            if let Some(runtime_assignment_backend) = runtime_assignment_backend.as_ref() {
+                candidates.push(runtime_assignment_backend.clone());
+            }
+        }
         if let Some(fallback) = route_fallback.as_ref() {
             candidates.push(fallback.clone());
         }
@@ -1227,6 +1264,9 @@ fn admissible_backend_candidates_for_dispatch_target(
     if !strict_required && prefer_route_backends_first {
         if let Some(runtime_assignment_backend) = runtime_assignment_backend.as_ref() {
             candidates.push(runtime_assignment_backend.clone());
+        }
+        if let Some(inherited) = inherited.as_ref() {
+            candidates.push(inherited.clone());
         }
     }
     if strict_required {
@@ -1559,7 +1599,7 @@ pub(crate) fn canonical_selected_backend_for_receipt(
         role_selection,
         &receipt.dispatch_target,
         receipt.activation_agent_type.as_deref(),
-        receipt.selected_backend.as_deref(),
+        None,
     )
 }
 
@@ -1685,13 +1725,13 @@ pub(crate) fn preferred_selected_backend_for_receipt(
             .map(str::to_string)
         });
     selected_backend_override
+        .or_else(|| canonical_selected_backend_for_receipt(role_selection, receipt))
         .or_else(|| {
             runtime_assignment_selected_backend_for_target(
                 &role_selection.execution_plan,
                 &receipt.dispatch_target,
             )
         })
-        .or_else(|| canonical_selected_backend_for_receipt(role_selection, receipt))
         .or_else(|| receipt.selected_backend.clone())
 }
 
@@ -6077,8 +6117,8 @@ fn build_runtime_dispatch_packet_body(
     );
     let canonical_selected_backend = selected_backend_override
         .map(str::to_string)
-        .or(runtime_assignment_selected_backend)
         .or_else(|| canonical_selected_backend_for_receipt(ctx.role_selection, ctx.receipt))
+        .or(runtime_assignment_selected_backend)
         .or_else(|| receipt_selected_backend.map(str::to_string));
     let posture_selected_backend = canonical_selected_backend
         .as_deref()
@@ -6110,12 +6150,29 @@ fn build_runtime_dispatch_packet_body(
     )
     .and_then(|lane| lane["closure_class"].as_str())
     .unwrap_or("implementation");
-    let execution_truth = dispatch_execution_route_summary(
+    let mut execution_truth = dispatch_execution_route_summary(
         ctx.role_selection,
         &ctx.receipt.dispatch_target,
         posture_selected_backend,
         selected_backend_override,
     );
+    if execution_truth["selected_backend_source"].as_str() == Some("dynamic_runtime_selection")
+        && execution_truth["effective_selected_backend"].as_str()
+            == execution_truth["route_fallback_backend"].as_str()
+        && execution_truth["route_primary_backend"].as_str()
+            != execution_truth["route_fallback_backend"].as_str()
+    {
+        if let Some(object) = execution_truth.as_object_mut() {
+            object.insert(
+                "selected_backend_source".to_string(),
+                serde_json::json!("route_fallback_hint"),
+            );
+            object.insert(
+                "backend_selection_source".to_string(),
+                serde_json::json!("route_fallback_hint"),
+            );
+        }
+    }
     let (runtime_assignment, runtime_assignment_source) = dispatch_target_runtime_assignment(
         &ctx.role_selection.execution_plan,
         &ctx.receipt.dispatch_target,
@@ -6838,57 +6895,64 @@ mod tests {
 
     fn install_external_cli_test_subagents(config_path: &Path) {
         let config = fs::read_to_string(config_path).expect("config should exist");
-        let updated = config.replace(
-            "agent_system:\n  init_on_boot: true\n  mode: native\n  state_owner: orchestrator_only\n  max_parallel_agents: 4\n  routing: {}\n  scoring: {}\n",
-            concat!(
-                "agent_system:\n",
-                "  init_on_boot: true\n",
-                "  mode: native\n",
-                "  state_owner: orchestrator_only\n",
-                "  max_parallel_agents: 4\n",
-                "  subagents:\n",
-                "    internal_subagents:\n",
-                "      enabled: true\n",
-                "      subagent_backend_class: internal\n",
-                "      runtime_roles: [worker, coach, verifier]\n",
-                "      task_classes: [implementation, delivery_task, execution_block, coach, review, verification]\n",
-                "    opencode_cli:\n",
-                "      enabled: true\n",
-                "      subagent_backend_class: external_cli\n",
-                "      runtime_roles: [worker, coach, verifier]\n",
-                "      task_classes: [implementation, delivery_task, execution_block, coach, review, verification]\n",
-                "      detect_command: qwen\n",
-                "      dispatch:\n",
-                "        command: qwen\n",
-                "        static_args:\n",
-                "          - -y\n",
-                "          - -o\n",
-                "          - text\n",
-                "        model_flag: --model\n",
-                "        prompt_mode: positional\n",
-                "    hermes_cli:\n",
-                "      enabled: true\n",
-                "      subagent_backend_class: external_cli\n",
-                "      runtime_roles: [coach, verifier]\n",
-                "      task_classes: [coach, review, verification]\n",
-                "      detect_command: hermes\n",
-                "      dispatch:\n",
-                "        command: hermes\n",
-                "        static_args:\n",
-                "          - chat\n",
-                "          - -Q\n",
-                "          - -q\n",
-                "        model_flag: --model\n",
-                "        provider_flag: --provider\n",
-                "        prompt_mode: positional\n",
-                "  routing: {}\n",
-                "  scoring: {}\n",
-            ),
+        let mut document: serde_yaml::Value =
+            serde_yaml::from_str(&config).expect("config should parse as yaml");
+        let root = document
+            .as_mapping_mut()
+            .expect("config root should be a yaml mapping");
+        let agent_system_key = serde_yaml::Value::String("agent_system".to_string());
+        let agent_system = root
+            .entry(agent_system_key)
+            .or_insert_with(|| serde_yaml::Value::Mapping(Default::default()));
+        let agent_system = agent_system
+            .as_mapping_mut()
+            .expect("agent_system should be a yaml mapping");
+        let subagents: serde_yaml::Value = serde_yaml::from_str(concat!(
+            "internal_subagents:\n",
+            "  enabled: true\n",
+            "  subagent_backend_class: internal\n",
+            "  runtime_roles: [worker, coach, verifier]\n",
+            "  task_classes: [implementation, delivery_task, execution_block, coach, review, verification]\n",
+            "opencode_cli:\n",
+            "  enabled: true\n",
+            "  subagent_backend_class: external_cli\n",
+            "  runtime_roles: [worker, coach, verifier]\n",
+            "  task_classes: [implementation, delivery_task, execution_block, coach, review, verification]\n",
+            "  detect_command: qwen\n",
+            "  dispatch:\n",
+            "    command: qwen\n",
+            "    static_args:\n",
+            "      - -y\n",
+            "      - -o\n",
+            "      - text\n",
+            "    model_flag: --model\n",
+            "    prompt_mode: positional\n",
+            "hermes_cli:\n",
+            "  enabled: true\n",
+            "  subagent_backend_class: external_cli\n",
+            "  runtime_roles: [coach, verifier]\n",
+            "  task_classes: [coach, review, verification]\n",
+            "  detect_command: hermes\n",
+            "  dispatch:\n",
+            "    command: hermes\n",
+            "    static_args:\n",
+            "      - chat\n",
+            "      - -Q\n",
+            "      - -q\n",
+            "    model_flag: --model\n",
+            "    provider_flag: --provider\n",
+            "    prompt_mode: positional\n",
+        ))
+        .expect("test subagents should parse as yaml");
+        agent_system.insert(
+            serde_yaml::Value::String("subagents".to_string()),
+            subagents,
         );
-        assert_ne!(
-            updated, config,
-            "expected agent_system scaffold replacement"
+        assert!(
+            agent_system.contains_key(serde_yaml::Value::String("subagents".to_string())),
+            "expected test subagents to be installed"
         );
+        let updated = serde_yaml::to_string(&document).expect("config should serialize as yaml");
         fs::write(config_path, updated).expect("config should update");
     }
 
@@ -7342,6 +7406,46 @@ mod tests {
         assert_ne!(
             packet["effective_execution_posture"]["selected_backend_source"],
             "explicit_retry_override"
+        );
+    }
+
+    #[test]
+    fn preferred_selected_backend_prefers_route_backend_over_carrier_assignment_and_stale_receipt()
+    {
+        let mut role_selection = pi_cli_analysis_role_selection();
+        role_selection.execution_plan["development_flow"]["analysis"] = json!({
+            "executor_backend": "pi_cli",
+            "carrier_runtime_assignment": {
+                "selected_backend_id": "internal_subagents",
+                "selected_carrier_id": "internal_subagents",
+                "activation_agent_type": "internal_subagents"
+            }
+        });
+        let receipt = blocked_analysis_receipt(None);
+
+        assert_eq!(
+            canonical_selected_backend_for_receipt(&role_selection, &receipt).as_deref(),
+            Some("pi_cli")
+        );
+        assert_eq!(
+            preferred_selected_backend_for_receipt(&role_selection, &receipt).as_deref(),
+            Some("pi_cli")
+        );
+    }
+
+    #[test]
+    fn preferred_selected_backend_uses_receipt_backend_only_as_terminal_fallback() {
+        let mut role_selection = pi_cli_analysis_role_selection();
+        role_selection.execution_plan = json!({});
+        let mut receipt = blocked_analysis_receipt(None);
+        receipt.dispatch_target = "unmapped-target".to_string();
+        receipt.activation_agent_type = None;
+        receipt.selected_backend = Some("internal_subagents".to_string());
+
+        assert!(canonical_selected_backend_for_receipt(&role_selection, &receipt).is_none());
+        assert_eq!(
+            preferred_selected_backend_for_receipt(&role_selection, &receipt).as_deref(),
+            Some("internal_subagents")
         );
     }
 
@@ -14770,6 +14874,68 @@ mod tests {
                 Some("hermes_cli")
             ),
             Some("internal_subagents".to_string())
+        );
+    }
+
+    #[test]
+    fn downstream_selected_backend_prefers_explicit_runtime_assignment_over_internal_verification_fallback(
+    ) {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue verification".to_string(),
+            selected_role: "verifier".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["verification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "verification": {
+                        "executor_backend": "hermes_cli",
+                        "fallback_executor_backend": "internal_subagents",
+                        "carrier_runtime_assignment": {
+                            "selected_backend_id": "pi_cli",
+                            "selected_carrier_id": "pi_cli",
+                            "selected_model_profile_id": "pi_gpt55_high_readonly",
+                            "activation_agent_type": "pi_cli",
+                            "activation_runtime_role": "verifier"
+                        }
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "hermes_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "verification": false
+                        }
+                    },
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "verification": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+
+        assert_eq!(
+            downstream_selected_backend(
+                &role_selection,
+                "verification",
+                Some("senior"),
+                Some("hermes_cli")
+            ),
+            Some("pi_cli".to_string())
         );
     }
 

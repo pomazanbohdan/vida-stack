@@ -226,22 +226,41 @@ subagent({
 })
 ```
 
+Default agent-gated parent work strategy:
+
+1. This is the default work mode for defect analysis, architecture decisions, and preparation for code changes in this project.
+2. Before launching qwen/Pi advisory lanes, state the bounded decision, active write scope, and what evidence would change the decision.
+3. Plan the lanes explicitly: sequential for one decision path; parallel only for independent, read-only, disjoint questions or when the user explicitly asks for parallel comparison.
+4. Each lane must have a bounded prompt, artifact path, scope limit, output schema, and clear success/failure criteria.
+5. After launching advisory lanes for that decision, do not patch, finalize, or silently continue solo until every relevant lane is complete, failed, or explicitly classified as irrelevant/stale.
+6. Track run IDs, expected artifacts, completion state, and relevance to the active decision.
+7. Validate every artifact before using it: non-empty, schema-valid, evidence-backed, scoped to the prompt, and useful for the decision.
+8. Classify each result as `accepted evidence`, `partial evidence`, `conflict`, `content failure`, `process failure`, or `irrelevant/stale`.
+9. Synthesize agent findings against each other and direct parent code/runtime reads before architecture decisions or patches.
+10. If advisory findings conflict on a material point, resolve the conflict with a focused follow-up or direct parent validation before patching.
+11. Parallel analysis of future defects is allowed; parallel write fixes are not allowed unless VIDA explicitly grants disjoint lawful write ownership.
+12. Avoid advisory-agent idleness when useful safe read-only work exists: maintain a small rolling backlog of future-looking analysis lanes (normally 2-3 active) for root-cause hypotheses, affected files, spec/operator impact, test ideas, and risk ranking.
+13. Future-looking advisory lanes must remain bounded and actionable; drop or pause any lane category that produces repetitive, schema-invalid, too broad, or non-actionable artifacts.
+14. Advisory lanes do not grant write authority, completion receipts, exception takeover, or TaskFlow closure; the parent owns validation and lawful VIDA routing.
+
 Concurrency policy:
 
-1. Prefer independent single async qwen runs over grouped `tasks:[...]` parallel wrapper until the grouped wrapper is separately proven stable for the current environment.
-2. Conservative default: up to 3 active independent qwen support lanes.
-3. Aggressive rolling mode: up to 4 active independent qwen support lanes, opening a new lane only when one completes, for large read-only scopes.
-4. Rolling stress evidence on 2026-05-20: 12 total qwen delegate lanes with max 4 active completed process-wise; 10/12 produced non-empty artifacts and 2/12 produced 0 B artifacts.
-5. A 0 B artifact is process success but content failure; retry the slice with a more concrete mini-analysis prompt and required markdown sections before using it as evidence.
+1. Prefer independent single async qwen runs over grouped `tasks:[...]` parallel wrapper for qwen fallback work.
+2. Default to sequential rolling micro-lanes for active defect diagnosis: launch one qwen slice, verify the artifact, narrow the next question, and launch another slice only if useful.
+3. Use parallel qwen lanes only for independent read-only questions with disjoint evidence targets, or when the user explicitly asks for parallel comparison.
+4. A `0 B`, skeleton-only, meta-only, or schema-invalid artifact is process/content failure; retry once with a narrower focused prompt if the question remains useful.
 
 Prompt and output rules:
 
 1. Avoid pure no-op smoke prompts for real work.
-2. Give each qwen child a concrete bounded question and required markdown headings such as `## Result`, `## Findings`, and `## Blocker`.
-3. Every qwen prompt with an output path must include incremental artifact instructions: write a skeleton first, append or rewrite findings after each file/doc/code evidence chunk, and keep the artifact valid markdown even if compact, token exhaustion, stale-run reconciliation, or runner failure happens before the final answer.
-4. Accept a qwen lane as content-complete only after verifying the output artifact is non-empty and follows the requested schema.
-5. Treat a final response that says findings are “above” while the artifact lacks the requested sections as content failure, even if the process completed successfully.
-6. Store large qwen outputs under `tmp/qwen-*.md` or a lawful research/documentation artifact path selected by the parent.
+2. Use qwen in micro-iterations by default: one concrete question, one suspected seam, and at most 1-3 named files, symbols, or line ranges per child unless wider scope is explicitly required.
+3. Give each qwen child a strict session-size budget in the prompt: no broad `grep .`, no broad repository globbing, exact-symbol search only when search is needed, at most 2 evidence chunks, and a concise artifact unless the parent explicitly asks for more. Do not cap tool calls as a primary metric; allow as many reads/searches as needed inside the narrow evidence scope, but do not expand scope.
+4. Optimize for quality per unit of context, not speed alone. A qwen lane is successful only when it is evidence-backed enough for the decision being made, names uncertainty/risks, and gives an actionable next step. A faster artifact that only repeats parent assumptions is acceptable only for cheap hypothesis checks, not for code-fix authority.
+5. Use the hybrid quality prompt as the current default for complex seam audits: compact fact-pack, narrow range-read, explicit hypothesis validation, direct evidence, `accept/reject/modify` decision, risk/regression guard, minimal test implication, confidence, and next micro-step.
+6. Give each qwen child required markdown headings appropriate to the prompt, at minimum `## Result`, direct findings/evidence, `## Confidence/Risks` for evidence-backed decisions, and `## Next micro-step` when another bounded question remains.
+7. Every qwen prompt with an output path must include incremental artifact instructions: write a skeleton first, rewrite findings after each bounded evidence chunk, and keep the artifact valid markdown even if compact, token exhaustion, stale-run reconciliation, or runner failure happens before the final answer.
+8. Accept a qwen lane as content-complete only after verifying the output artifact is non-empty, schema-valid, and useful for the requested decision.
+9. Store qwen outputs under `tmp/qwen-*.md` or a lawful research/documentation artifact path selected by the parent.
 
 Write and authority boundaries:
 
@@ -253,10 +272,9 @@ Write and authority boundaries:
 
 Local process note:
 
-1. The installed local `pi-subagents` package was patched on 2026-05-20 so nested child `spawn(...)` calls include `windowsHide: true` in both background and foreground execution paths.
-2. Artifact-first diagnostic evidence on 2026-05-20 showed that the default `pi-subagents` output injection `**Output:** Write your findings to: <path>` can trigger qwen meta-output or loops near token/compact limits because it looks like a markdown response section and conflicts with older read-only prompts.
-3. Prefer non-ambiguous output-target wording in qwen prompts, such as `[PI_SUBAGENT_OUTPUT_TARGET: <path>]`, plus explicit instructions to write/update the artifact incrementally and keep the final response short.
-4. If `pi-subagents` is reinstalled or upgraded, re-check whether child processes still avoid external Windows terminal windows and whether output-target injection still avoids markdown-section ambiguity; reapply/upstream the local patches if needed.
+1. Current local `pi-subagents` behavior should keep child process windows hidden for background and foreground qwen lanes.
+2. Qwen prompts must use non-ambiguous output-target wording plus explicit artifact-first instructions; avoid markdown-section-looking output directives that can be mistaken for response content.
+3. If `pi-subagents` is reinstalled or upgraded, re-check child window behavior, output-target injection, artifact-first behavior, and Windows interrupt behavior before relying on long runs.
 
 ## Complex And Architectural Processing Contract
 
