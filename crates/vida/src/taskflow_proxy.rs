@@ -17,7 +17,6 @@ use serde::Serialize;
 use taskflow_cli::Cli as TaskflowCli;
 
 const TASKFLOW_SCHEDULER_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct GraphSummaryTaskRef {
     pub(crate) id: String,
@@ -1163,30 +1162,20 @@ async fn build_scheduler_packet_backed_execution_gate_for_task(
     store: &crate::state_store::StateStore,
     selected_task_id: &str,
 ) -> Result<crate::taskflow_run_graph::RunGraphPacketBackedExecutionGate, String> {
-    let mut status = match store.run_graph_status(selected_task_id).await {
+    let status = match store.run_graph_status(selected_task_id).await {
         Ok(status) => Some(status),
         Err(_) => None,
     };
     if status.is_none() {
-        let task = store.show_task(selected_task_id).await.map_err(|error| {
-            format!(
-                "Failed to read selected scheduler task `{selected_task_id}` for packet-backed run-graph seed: {error}"
-            )
-        })?;
-        let request_text = scheduler_task_request_text(&task).ok_or_else(|| {
-            format!(
-                "Selected scheduler task `{selected_task_id}` has no request text for packet-backed run-graph seed."
-            )
-        })?;
-        let mut payload = crate::taskflow_run_graph::derive_seeded_run_graph_status(
-            store,
-            selected_task_id,
-            &request_text,
-        )
-        .await?;
-        payload.status.recovery_ready = true;
-        crate::taskflow_run_graph::persist_seed_artifacts(store, &payload).await?;
-        status = Some(payload.status);
+        return Ok(
+            crate::taskflow_run_graph::evaluate_run_graph_packet_backed_execution_gate(
+                Some(selected_task_id),
+                None,
+                None,
+                None,
+                None,
+            ),
+        );
     }
     let context = match status.as_ref() {
         Some(status) => store

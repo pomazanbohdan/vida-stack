@@ -3484,30 +3484,6 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
         .await;
     }
 
-    if args.execute_dispatch && args.dispatch_packet.is_some() && args.downstream_packet.is_none() {
-        let packet_path = args
-            .dispatch_packet
-            .as_deref()
-            .expect("dispatch packet checked above");
-        let resume_inputs = match resume_inputs_from_dispatch_packet_without_store(packet_path) {
-            Ok(inputs) => inputs,
-            Err(error) => {
-                eprintln!("{error}");
-                return ExitCode::from(1);
-            }
-        };
-        let selection_value =
-            serde_json::to_value(&resume_inputs.role_selection).unwrap_or(serde_json::Value::Null);
-        let dispatch_mode = agent_init_dispatch_mode(&args, &selection_value);
-        return execute_agent_init_dispatch_from_resume_inputs(
-            args.json,
-            &dispatch_mode,
-            state_dir,
-            resume_inputs,
-        )
-        .await;
-    }
-
     let _read_surface_guard = if args.execute_dispatch {
         None
     } else {

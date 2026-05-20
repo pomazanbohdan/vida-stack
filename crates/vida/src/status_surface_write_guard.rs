@@ -185,10 +185,26 @@ fn exception_takeover_owned_write_scope(
 }
 
 pub(crate) fn merge_live_exception_takeover_write_guard(
+    guard: serde_json::Value,
+    state_root: &Path,
+    latest_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    latest_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+) -> serde_json::Value {
+    merge_live_exception_takeover_write_guard_with_task_authority(
+        guard,
+        state_root,
+        latest_receipt,
+        latest_recovery,
+        false,
+    )
+}
+
+pub(crate) fn merge_live_exception_takeover_write_guard_with_task_authority(
     mut guard: serde_json::Value,
     state_root: &Path,
     latest_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     latest_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    latest_run_graph_task_stale: bool,
 ) -> serde_json::Value {
     let Some(guard_obj) = guard.as_object_mut() else {
         return guard;
@@ -228,9 +244,17 @@ pub(crate) fn merge_live_exception_takeover_write_guard(
     );
     guard_obj.insert(
         "local_exception_takeover_state".to_string(),
-        exception_takeover_state_label(latest_receipt, latest_recovery)
-            .map(|state| serde_json::Value::String(state.to_string()))
-            .unwrap_or(serde_json::Value::Null),
+        if latest_run_graph_task_stale {
+            Some("stale_task_blocked")
+        } else {
+            exception_takeover_state_label(latest_receipt, latest_recovery)
+        }
+        .map(|state| serde_json::Value::String(state.to_string()))
+        .unwrap_or(serde_json::Value::Null),
+    );
+    guard_obj.insert(
+        "latest_run_graph_task_stale".to_string(),
+        serde_json::Value::Bool(latest_run_graph_task_stale),
     );
     let owned_write_scope = exception_takeover_owned_write_scope(state_root, latest_receipt);
     guard_obj.insert(
@@ -257,7 +281,20 @@ pub(crate) fn merge_live_exception_takeover_write_guard(
             ),
         );
     }
-    if exception_takeover_is_lawfully_active(latest_receipt, latest_recovery) {
+    if latest_run_graph_task_stale {
+        guard_obj.insert(
+            "status".to_string(),
+            serde_json::Value::String("blocked_by_default".to_string()),
+        );
+        guard_obj.insert(
+            "root_local_write_allowed".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        guard_obj.insert(
+            "reason".to_string(),
+            serde_json::Value::String("latest_run_graph_task_stale".to_string()),
+        );
+    } else if exception_takeover_is_lawfully_active(latest_receipt, latest_recovery) {
         guard_obj.insert(
             "status".to_string(),
             serde_json::Value::String("exception_takeover_active".to_string()),
@@ -534,5 +571,30 @@ mod tests {
         assert_eq!(merged["root_local_write_allowed"], true);
         assert_eq!(merged["required_exception_evidence"], "receipt-1");
         assert_eq!(merged["local_exception_takeover_state"], "active");
+    }
+
+    #[test]
+    fn merge_live_exception_takeover_write_guard_blocks_stale_task_authority() {
+        let guard = canonical_root_session_write_guard_defaults();
+        let mut receipt = sample_receipt();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.supersedes_receipt_id = Some("supersede-1".to_string());
+
+        let merged = merge_live_exception_takeover_write_guard_with_task_authority(
+            guard,
+            Path::new("."),
+            Some(&receipt),
+            Some(&sample_recovery("delegated_cycle_clear")),
+            true,
+        );
+
+        assert_eq!(merged["status"], "blocked_by_default");
+        assert_eq!(merged["root_local_write_allowed"], false);
+        assert_eq!(
+            merged["local_exception_takeover_state"],
+            "stale_task_blocked"
+        );
+        assert_eq!(merged["latest_run_graph_task_stale"], true);
+        assert_eq!(merged["reason"], "latest_run_graph_task_stale");
     }
 }

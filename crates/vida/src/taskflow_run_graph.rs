@@ -4068,6 +4068,14 @@ fn dispatch_init_fast_cache_payload_is_reusable(
     {
         return false;
     }
+    if payload
+        .get("authoritative_persistence")
+        .and_then(|value| value.get("status"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|status| status != "recorded")
+    {
+        return false;
+    }
     if payload["dispatch_receipt"]["dispatch_status"].as_str() != Some("routed") {
         return false;
     }
@@ -4750,16 +4758,13 @@ async fn commit_previewed_run_graph_dispatch_init_artifacts(
             )?;
 
             let authoritative_commit = async {
-                let store = StateStore::open_existing_with_timeout(
-                    state_dir.to_path_buf(),
-                    std::time::Duration::from_secs(1),
-                )
-                .await
-                .map_err(|error| {
-                    format!(
-                        "Failed to reopen authoritative state store for dispatch-init commit: {error}"
-                    )
-                })?;
+                let store = StateStore::open_existing(state_dir.to_path_buf())
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "Failed to reopen authoritative state store for dispatch-init commit: {error}"
+                        )
+                    })?;
                 if let Some(seed_payload) = prepared.seed_payload.as_ref() {
                     persist_seed_artifacts(&store, seed_payload).await?;
                 }
@@ -4783,28 +4788,19 @@ async fn commit_previewed_run_graph_dispatch_init_artifacts(
                 .await?;
                 Ok::<(), String>(())
             };
-            match tokio::time::timeout(std::time::Duration::from_secs(2), authoritative_commit)
-                .await
-            {
-                Ok(Ok(())) => {
+            match authoritative_commit.await {
+                Ok(()) => {
                     payload["authoritative_persistence"] =
                         serde_json::json!({"status": "recorded"});
                 }
-                Ok(Err(error)) if StateStore::message_is_lock_contention(&error) => {
+                Err(error) if StateStore::message_is_lock_contention(&error) => {
                     payload["authoritative_persistence"] = serde_json::json!({
                         "status": "deferred_lock_contention",
                         "reason": format!("dispatch-init packet and fast-cache receipt were written, but authoritative state-store commit could not acquire the datastore lock within the bounded operator window: {error}"),
                         "retry_surface": "vida taskflow run-graph dispatch-init"
                     });
                 }
-                Ok(Err(error)) => return Err(error),
-                Err(_) => {
-                    payload["authoritative_persistence"] = serde_json::json!({
-                        "status": "deferred_commit_timeout",
-                        "reason": "dispatch-init packet and fast-cache receipt were written, but authoritative state-store commit exceeded the bounded operator window",
-                        "retry_surface": "vida taskflow run-graph dispatch-init"
-                    });
-                }
+                Err(error) => return Err(error),
             }
             write_run_graph_dispatch_init_fast_cache(
                 state_dir,
@@ -4874,7 +4870,7 @@ async fn run_graph_dispatch_init_from_state_dir(
                     )
                 })?;
             let preview = preview_run_graph_dispatch_init_artifacts(&store, run_id).await?;
-            drop(store);
+            store.close().await;
             commit_previewed_run_graph_dispatch_init_artifacts(state_dir, preview).await
         },
     )
@@ -5314,7 +5310,27 @@ async fn run_taskflow_run_graph_dispatch_init_mutation(
     run_id: &str,
     as_json: bool,
 ) -> ExitCode {
-    match run_graph_dispatch_init_from_state_dir(state_dir, run_id).await {
+    let store = match StateStore::open_existing(state_dir.to_path_buf()).await {
+        Ok(store) => store,
+        Err(error) => {
+            let message = format!(
+                "Failed to open authoritative state store for dispatch-init mutation: {error}"
+            );
+            if as_json {
+                print_run_graph_json_error(
+                    "vida taskflow run-graph dispatch-init",
+                    run_id,
+                    &message,
+                    run_graph_dispatch_init_error_evidence(&message),
+                );
+            } else {
+                eprintln!("{message}");
+            }
+            return ExitCode::from(1);
+        }
+    };
+
+    match run_graph_dispatch_init(&store, run_id).await {
         Ok(payload) => {
             if as_json {
                 crate::print_json_pretty(&payload);

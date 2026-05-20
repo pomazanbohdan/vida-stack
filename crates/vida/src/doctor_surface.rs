@@ -692,17 +692,20 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            let latest_run_graph_task_missing = match latest_run_graph_status.as_ref() {
-                Some(status) => match store.show_task(&status.task_id).await {
-                    Ok(_) => false,
-                    Err(crate::state_store::StateStoreError::MissingTask { .. }) => true,
-                    Err(error) => {
-                        eprintln!("latest run graph task authority: failed ({error})");
-                        return ExitCode::from(1);
-                    }
-                },
-                None => false,
-            };
+            let (latest_run_graph_task_missing, latest_run_graph_task_stale) =
+                match latest_run_graph_status.as_ref() {
+                    Some(status) => match store.show_task(&status.task_id).await {
+                        Ok(task) => (false, task.status == "closed"),
+                        Err(crate::state_store::StateStoreError::MissingTask { .. }) => {
+                            (true, true)
+                        }
+                        Err(error) => {
+                            eprintln!("latest run graph task authority: failed ({error})");
+                            return ExitCode::from(1);
+                        }
+                    },
+                    None => (false, false),
+                };
             let latest_run_graph_approval_receipt = match latest_run_graph_status.as_ref() {
                 Some(status) => match store
                     .run_graph_approval_delegation_receipt(&status.run_id)
@@ -732,11 +735,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         .or(runtime_consumption.latest_snapshot_path.as_deref()),
                 );
             root_session_write_guard =
-                crate::status_surface_write_guard::merge_live_exception_takeover_write_guard(
+                crate::status_surface_write_guard::merge_live_exception_takeover_write_guard_with_task_authority(
                     root_session_write_guard,
                     store.root(),
                     latest_run_graph_dispatch_receipt.as_ref(),
                     latest_run_graph_recovery.as_ref(),
+                    latest_run_graph_task_stale,
                 );
             let effective_instruction_bundle = match store.active_instruction_root().await {
                 Ok(root_artifact_id) => match store
@@ -1327,15 +1331,37 @@ mod tests {
                         }
                     },
                     "closure_admission": {
-                        "status": "blocked",
-                        "admitted": false,
-                        "blockers": ["closure_admission_block"],
+                        "status": "pass",
+                        "admitted": true,
+                        "blockers": [],
+                        "decision_owner": "doctor-test",
+                        "decision_at": "2026-03-08T00:00:00Z",
                         "proof_surfaces": ["vida taskflow consume final"],
                         "evidence_table": [{
+                            "requirement": "taskflow_bundle_check",
+                            "status": "pass",
+                            "evidence_refs": ["vida taskflow consume bundle check"],
+                            "blockers": []
+                        }, {
                             "requirement": "docflow_readiness",
-                            "status": "blocked",
+                            "status": "pass",
                             "evidence_refs": ["vida taskflow consume final"],
-                            "blockers": ["closure_admission_block"]
+                            "blockers": []
+                        }, {
+                            "requirement": "approved_design_packet",
+                            "status": "pass",
+                            "evidence_refs": ["vida docflow readiness"],
+                            "blockers": []
+                        }, {
+                            "requirement": "spec_work_pool_dev_handoff",
+                            "status": "pass",
+                            "evidence_refs": ["vida taskflow run-graph dispatch-init"],
+                            "blockers": []
+                        }, {
+                            "requirement": "execution_preparation",
+                            "status": "pass",
+                            "evidence_refs": ["vida agent-init"],
+                            "blockers": []
                         }],
                     }
                 },

@@ -11,7 +11,10 @@ const AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT: usize = AUTHORITATIVE_DATASTORE_LOCK
 const AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS: u64 = AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS;
 const READ_ONLY_OPEN_RETRY_COUNT: usize = 800;
 const READ_ONLY_OPEN_RETRY_DELAY_MS: u64 = 25;
+const READ_ONLY_OPEN_MIN_TIMEOUT_MS: u64 = 10_000;
 const DATASTORE_CLOSE_SETTLE_MS: u64 = 250;
+const STALE_LOCK_MARKER_REMOVE_RETRY_COUNT: usize = 20;
+const STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS: u64 = 25;
 
 struct AuthoritativeOpenGuard {
     file: std::fs::File,
@@ -115,7 +118,7 @@ impl AuthoritativeOpenGuard {
         ) || error.raw_os_error().is_some_and(|code| {
             code == libc::EWOULDBLOCK
                 || code == libc::EAGAIN
-                || (cfg!(windows) && matches!(code, 32 | 33))
+                || (cfg!(windows) && matches!(code, 5 | 32 | 33))
         })
     }
 }
@@ -132,6 +135,12 @@ pub(super) fn state_schema_document() -> String {
 }
 
 impl StateStore {
+    fn effective_read_only_open_timeout(timeout: std::time::Duration) -> std::time::Duration {
+        timeout.max(std::time::Duration::from_millis(
+            READ_ONLY_OPEN_MIN_TIMEOUT_MS,
+        ))
+    }
+
     fn reclaim_recoverable_authoritative_datastore_lock_marker_with_liveness(
         root: &Path,
         process_liveness: impl Fn(u32) -> ProcessLiveness,
@@ -152,12 +161,23 @@ impl StateStore {
         if !recoverable {
             return Ok(false);
         };
-        match fs::remove_file(&lock_path) {
-            Ok(()) => Ok(true),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => Ok(false),
-            Err(error) => Err(StateStoreError::Io(error)),
+        for attempt in 0..STALE_LOCK_MARKER_REMOVE_RETRY_COUNT {
+            match fs::remove_file(&lock_path) {
+                Ok(()) => return Ok(true),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => {
+                    if attempt + 1 < STALE_LOCK_MARKER_REMOVE_RETRY_COUNT {
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS,
+                        ));
+                        continue;
+                    }
+                    return Ok(false);
+                }
+                Err(error) => return Err(StateStoreError::Io(error)),
+            }
         }
+        Ok(false)
     }
 
     pub(crate) fn reclaim_recoverable_authoritative_datastore_lock_marker(
@@ -194,6 +214,8 @@ impl StateStore {
             || normalized.contains("resource temporarily unavailable")
             || normalized.contains("os error 32")
             || normalized.contains("os error 33")
+            || normalized.contains("os error 5")
+            || normalized.contains("access is denied")
             || normalized.contains("being used by another process")
             || normalized.contains("process cannot access the file")
             || normalized.contains("portion of the file")
@@ -321,6 +343,7 @@ impl StateStore {
         root: PathBuf,
         timeout: std::time::Duration,
     ) -> Result<Self, StateStoreError> {
+        let timeout = Self::effective_read_only_open_timeout(timeout);
         match tokio::time::timeout(timeout, Self::open_existing_read_only(root)).await {
             Ok(result) => result,
             Err(_) => Err(StateStoreError::Io(std::io::Error::new(
@@ -373,7 +396,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_lock_violation_errors_are_lock_contention() {
-        for code in [32, 33] {
+        for code in [5, 32, 33] {
             let error = StateStoreError::Io(std::io::Error::from_raw_os_error(code));
             assert!(
                 StateStore::error_is_lock_contention(&error),
@@ -454,6 +477,7 @@ mod tests {
     #[test]
     fn db_wrapped_windows_lock_messages_are_lock_contention() {
         for message in [
+            "IO error: Access is denied. (os error 5)",
             "IO error: The process cannot access the file because another process has locked a portion of the file. (os error 33)",
             "IO error: The process cannot access the file because it is being used by another process. (os error 32)",
             "surrealkv: failed to open database: resource temporarily unavailable",
@@ -463,6 +487,18 @@ mod tests {
                 "DB-wrapped lock message should be retried as lock contention: {message}"
             );
         }
+    }
+
+    #[test]
+    fn read_only_timeout_has_recovery_floor() {
+        assert_eq!(
+            StateStore::effective_read_only_open_timeout(std::time::Duration::from_secs(2)),
+            std::time::Duration::from_millis(READ_ONLY_OPEN_MIN_TIMEOUT_MS)
+        );
+        assert_eq!(
+            StateStore::effective_read_only_open_timeout(std::time::Duration::from_secs(12)),
+            std::time::Duration::from_secs(12)
+        );
     }
 
     #[test]

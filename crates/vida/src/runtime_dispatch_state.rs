@@ -68,6 +68,7 @@ const INTERNAL_DISPATCH_HANDOFF_TIMEOUT_GRACE_SECONDS: u64 = 2;
 const LEGACY_STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS: i64 = 10;
 pub(crate) const INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT: &str =
     "internal_dispatch_timeout_without_receipt";
+pub(crate) const INTERNAL_CODEX_CARRIER_UNAVAILABLE: &str = "internal_codex_carrier_unavailable";
 
 fn dispatch_state_reopen_failure_message(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
@@ -342,7 +343,9 @@ pub(crate) fn internal_host_activation_view_only_blocker_code(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> &'static str {
-    if internal_host_activation_view_only_requires_terminal_blocker(
+    if internal_codex_app_bridge_requires_prelaunch_blocker(project_root, role_selection, receipt) {
+        INTERNAL_CODEX_CARRIER_UNAVAILABLE
+    } else if internal_host_activation_view_only_requires_terminal_blocker(
         project_root,
         role_selection,
         receipt,
@@ -351,6 +354,92 @@ pub(crate) fn internal_host_activation_view_only_blocker_code(
     } else {
         "internal_activation_view_only"
     }
+}
+
+fn configured_codex_cli_fallback_enabled(overlay: &serde_yaml::Value) -> bool {
+    configured_subagent_entry(overlay, "codex_cli").is_some_and(|entry| {
+        yaml_string(yaml_lookup(entry, &["subagent_backend_class"])).as_deref()
+            == Some("external_cli")
+    })
+}
+
+fn command_name(command: &str) -> String {
+    let trimmed = command.trim().trim_matches('"').trim_matches('\'');
+    Path::new(trimmed)
+        .file_stem()
+        .or_else(|| Path::new(trimmed).file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or(trimmed)
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn internal_codex_app_bridge_requires_prelaunch_blocker(
+    project_root: &Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    if receipt.dispatch_kind != "agent_lane" {
+        return false;
+    }
+    let Ok(overlay) = load_project_overlay_yaml_for_root(project_root) else {
+        return false;
+    };
+    let (selected_cli_system, selected_cli_entry) =
+        selected_host_cli_system_for_runtime_dispatch(&overlay);
+    if selected_cli_system != "codex" {
+        return false;
+    }
+    let host_runtime = runtime_host_execution_contract_for_root(project_root);
+    let host_execution_class = json_string(host_runtime.get("selected_cli_execution_class"))
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            selected_cli_entry
+                .as_ref()
+                .and_then(|entry| yaml_string(yaml_lookup(entry, &["execution_class"])))
+        })
+        .unwrap_or_default();
+    if host_execution_class != "internal" {
+        return false;
+    }
+    let selected_backend = preferred_selected_backend_for_receipt(role_selection, receipt)
+        .or_else(|| receipt.selected_backend.clone());
+    let internal_backend = selected_backend.as_deref().is_some_and(|backend_id| {
+        backend_class_is_internal(
+            backend_class_from_execution_plan(&role_selection.execution_plan, backend_id)
+                .as_deref(),
+        ) || configured_subagent_entry(&overlay, backend_id).is_some_and(|entry| {
+            yaml_string(yaml_lookup(entry, &["subagent_backend_class"]))
+                .as_deref()
+                .is_some_and(|backend_class| backend_class_is_internal(Some(backend_class)))
+        })
+    });
+    if !internal_backend {
+        return false;
+    }
+    let Some(dispatch) = selected_cli_entry
+        .as_ref()
+        .and_then(|entry| yaml_lookup(entry, &["dispatch"]))
+    else {
+        return false;
+    };
+    let Some(command) = yaml_string(yaml_lookup(dispatch, &["command"])) else {
+        return false;
+    };
+    if command_name(&command) != "codex" {
+        return false;
+    }
+    if !yaml_string_list(yaml_lookup(dispatch, &["static_args"]))
+        .iter()
+        .any(|arg| arg.trim() == "exec")
+    {
+        return false;
+    }
+    // `codex exec` is an external CLI process, not the Codex Desktop internal
+    // subagent carrier. When the runtime selected an internal Codex backend,
+    // launching it cannot produce the required host-app receipt evidence.
+    let _fallback_enabled = configured_codex_cli_fallback_enabled(&overlay);
+    true
 }
 
 fn normalize_internal_host_timeout_result_blocker(
@@ -374,7 +463,9 @@ fn normalize_internal_host_timeout_result_blocker(
 fn is_internal_activation_view_without_receipt_blocker(blocker_code: Option<&str>) -> bool {
     matches!(
         blocker_code,
-        Some("internal_activation_view_only") | Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
+        Some("internal_activation_view_only")
+            | Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
+            | Some(INTERNAL_CODEX_CARRIER_UNAVAILABLE)
     )
 }
 
@@ -15673,6 +15764,141 @@ agent_system:
     }
 
     #[test]
+    fn internal_codex_exec_bridge_blocks_before_launch_without_receipt_capability_flag() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        std::fs::create_dir_all(harness.path().join(".vida/config")).expect("config dir");
+        std::fs::create_dir_all(harness.path().join(".vida/db")).expect("db dir");
+        std::fs::create_dir_all(harness.path().join(".vida/project")).expect("project dir");
+        std::fs::write(harness.path().join("AGENTS.md"), "test").expect("agents marker");
+        std::fs::write(
+            harness.path().join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      dispatch:
+        command: codex
+        static_args:
+          - exec
+          - --json
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+    codex_cli:
+      enabled: false
+      subagent_backend_class: external_cli
+"#,
+        )
+        .expect("config should write");
+        let dispatch_packet_path = harness.path().join("codex-internal-packet.json");
+        std::fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "dispatch_target": "analysis",
+                "delivery_task_packet": {
+                    "goal": "Execute bounded implementation analysis"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Implement bounded task.".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "analysis": true,
+                            "implementation": true
+                        }
+                    }
+                ],
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "analysis": {
+                                "backend_id": "internal_subagents",
+                                "backend_class": "internal"
+                            },
+                            "implementation": {
+                                "backend_id": "internal_subagents",
+                                "backend_class": "internal"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-internal-codex-prelaunch-block".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-20T00:00:00Z".to_string(),
+        };
+
+        assert!(internal_host_dispatch_requires_prelaunch_blocker(
+            harness.path(),
+            &role_selection,
+            &receipt
+        ));
+        assert_eq!(
+            internal_host_activation_view_only_blocker_code(
+                harness.path(),
+                &role_selection,
+                &receipt
+            ),
+            INTERNAL_CODEX_CARRIER_UNAVAILABLE
+        );
+    }
+
+    #[test]
     fn stale_in_flight_dispatch_timeout_seconds_uses_internal_host_window_for_legacy_artifact() {
         let root = std::env::temp_dir().join(format!(
             "vida-legacy-internal-stale-timeout-{}",
@@ -18660,8 +18886,14 @@ fn runtime_dispatch_internal_activation_view_only_result(
     blocker_code: &str,
 ) -> serde_json::Value {
     let (provider_error, blocker_reason, note) = if blocker_code
-        == INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
+        == INTERNAL_CODEX_CARRIER_UNAVAILABLE
     {
+        (
+            "internal Codex app carrier is unavailable from this CLI execution surface",
+            "configured internal Codex backend would launch `codex exec`, which cannot provide Codex Desktop internal-carrier receipt evidence",
+            "internal Codex handoff blocked before launch to avoid a non-receipted external CLI bridge",
+        )
+    } else if blocker_code == INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT {
         (
                 "internal host dispatch was blocked before launching nested carrier execution because the configured host bridge cannot provide receipt-backed completion evidence",
                 "configured internal host bridge does not support receipt-backed completion; timeout avoided by recording a terminal blocker before launch",
@@ -18693,6 +18925,9 @@ pub(crate) fn internal_host_dispatch_requires_prelaunch_blocker(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
+    if internal_codex_app_bridge_requires_prelaunch_blocker(project_root, role_selection, receipt) {
+        return true;
+    }
     if !dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
         return false;
     }

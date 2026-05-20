@@ -387,11 +387,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let project_activation_status = status_truth_inputs.project_activation_status;
                 let project_activation_pending = status_truth_inputs.project_activation_pending;
                 root_session_write_guard =
-                    crate::status_surface_write_guard::merge_live_exception_takeover_write_guard(
+                    crate::status_surface_write_guard::merge_live_exception_takeover_write_guard_with_task_authority(
                         root_session_write_guard,
                         store.root(),
                         latest_run_graph_dispatch_receipt.as_ref(),
                         latest_run_graph_recovery.as_ref(),
+                        latest_run_graph_task_missing || latest_run_graph_task_closed,
                     );
                 let mut host_agents = host_agents;
                 if let Some(host_agents_value) = host_agents.as_mut() {
