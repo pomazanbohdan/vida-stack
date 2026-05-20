@@ -144,6 +144,7 @@ const DEFAULT_FILE_SIZE: u64 = 100 * 1024 * 1024;
 /// This struct provides configuration options for WAL segments, including
 /// file permissions, compression settings, metadata, and file size limits.
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct Options {
 	/// The permission mode for creating directories.
 	pub(crate) dir_mode: Option<u32>,

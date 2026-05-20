@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 mod activation_status;
 mod agent_dispatch_surface;
 mod agent_extension_bundle_validation;

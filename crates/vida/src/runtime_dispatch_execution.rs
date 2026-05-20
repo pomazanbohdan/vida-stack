@@ -194,10 +194,11 @@ fn configured_external_dispatch_wall_timeout_seconds(
     backend_entry: &serde_yaml::Value,
 ) -> Option<u64> {
     let dispatch = yaml_lookup(backend_entry, &["dispatch"])?;
-    yaml_lookup(dispatch, &["no_output_timeout_seconds"])
+    yaml_lookup(backend_entry, &["max_runtime_seconds"])
         .and_then(serde_yaml::Value::as_u64)
         .or_else(|| {
-            yaml_lookup(backend_entry, &["max_runtime_seconds"]).and_then(serde_yaml::Value::as_u64)
+            yaml_lookup(dispatch, &["no_output_timeout_seconds"])
+                .and_then(serde_yaml::Value::as_u64)
         })
         .filter(|seconds| *seconds > 0)
 }
@@ -2378,10 +2379,10 @@ mod tests {
     #[cfg(unix)]
     use super::execute_wrapped_command;
     use super::{
-        agent_lane_dispatch_result, configured_internal_host_activation_parts,
-        configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
-        dispatch_packet_prompt, execute_external_agent_lane_dispatch,
-        external_provider_output_confirms_execution,
+        agent_lane_dispatch_result, configured_external_dispatch_wall_timeout_seconds,
+        configured_internal_host_activation_parts, configured_internal_host_runtime_env,
+        dispatch_packet_path_should_render_as_downstream, dispatch_packet_prompt,
+        execute_external_agent_lane_dispatch, external_provider_output_confirms_execution,
         internal_codex_app_bridge_requires_fail_closed, internal_codex_output_confirms_execution,
         internal_host_activation_only_blocker_code, mark_dispatch_result_execution_evidence,
         parse_external_provider_output, parse_internal_codex_exec_output,
@@ -2458,6 +2459,23 @@ mod tests {
 
         assert!(!super::external_provider_output_indicates_error(&parsed));
         assert!(external_provider_output_confirms_execution(Some(&parsed)));
+    }
+
+    #[test]
+    fn configured_external_dispatch_wall_timeout_prefers_max_runtime_over_no_output_window() {
+        let backend_entry = serde_yaml::from_str(
+            r#"
+max_runtime_seconds: 420
+dispatch:
+  no_output_timeout_seconds: 180
+"#,
+        )
+        .expect("backend entry should parse");
+
+        assert_eq!(
+            configured_external_dispatch_wall_timeout_seconds(&backend_entry),
+            Some(420)
+        );
     }
 
     #[test]

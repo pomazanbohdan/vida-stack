@@ -518,7 +518,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(any(windows, linux))]
+    #[cfg(any(windows, target_os = "linux"))]
     #[tokio::test]
     async fn open_reclaims_dead_authoritative_lock_marker_before_database_open() {
         let nanos = SystemTime::now()

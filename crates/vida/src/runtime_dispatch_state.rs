@@ -133,10 +133,11 @@ fn configured_external_backend_handoff_timeout_seconds(
 ) -> Option<u64> {
     let overlay = load_project_overlay_yaml_for_root(project_root).ok()?;
     let backend_entry = configured_external_backend_entry(&overlay, backend_id)?;
-    yaml_lookup(backend_entry, &["dispatch", "no_output_timeout_seconds"])
+    yaml_lookup(backend_entry, &["max_runtime_seconds"])
         .and_then(serde_yaml::Value::as_u64)
         .or_else(|| {
-            yaml_lookup(backend_entry, &["max_runtime_seconds"]).and_then(serde_yaml::Value::as_u64)
+            yaml_lookup(backend_entry, &["dispatch", "no_output_timeout_seconds"])
+                .and_then(serde_yaml::Value::as_u64)
         })
         .filter(|seconds| *seconds > 0)
 }
@@ -1526,14 +1527,79 @@ fn persisted_selected_backend_override_for_packet_path(packet_path: &str) -> Opt
     })
 }
 
+fn runtime_assignment_selected_backend_for_target(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> Option<String> {
+    let (assignment, _) = dispatch_target_runtime_assignment(execution_plan, dispatch_target);
+    json_string(assignment.get("selected_backend_id"))
+        .or_else(|| json_string(assignment.get("selected_carrier_id")))
+}
+
+fn selected_backend_override_conflicts_with_runtime_assignment(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    dispatch_target: &str,
+    selected_backend_override: &str,
+) -> bool {
+    let Some(assignment_backend) = runtime_assignment_selected_backend_for_target(
+        &role_selection.execution_plan,
+        dispatch_target,
+    ) else {
+        return false;
+    };
+    if assignment_backend == selected_backend_override {
+        return false;
+    }
+    let override_backend_class = backend_class_for_execution_plan_backend(
+        &role_selection.execution_plan,
+        selected_backend_override,
+    );
+    matches!(
+        backend_execution_dimension(&override_backend_class),
+        "internal"
+    ) || selected_backend_override == "internal_subagents"
+}
+
+fn current_selected_backend_override<'a>(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    dispatch_target: &str,
+    selected_backend_override: Option<&'a str>,
+) -> Option<&'a str> {
+    selected_backend_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| {
+            !selected_backend_override_conflicts_with_runtime_assignment(
+                role_selection,
+                dispatch_target,
+                value,
+            )
+        })
+}
+
 pub(crate) fn preferred_selected_backend_for_receipt(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Option<String> {
-    receipt
+    let selected_backend_override = receipt
         .dispatch_packet_path
         .as_deref()
         .and_then(persisted_selected_backend_override_for_packet_path)
+        .and_then(|value| {
+            current_selected_backend_override(
+                role_selection,
+                &receipt.dispatch_target,
+                Some(value.as_str()),
+            )
+            .map(str::to_string)
+        });
+    selected_backend_override
+        .or_else(|| {
+            runtime_assignment_selected_backend_for_target(
+                &role_selection.execution_plan,
+                &receipt.dispatch_target,
+            )
+        })
         .or_else(|| canonical_selected_backend_for_receipt(role_selection, receipt))
         .or_else(|| receipt.selected_backend.clone())
 }
@@ -5903,25 +5969,33 @@ fn build_runtime_dispatch_packet_body(
             format!("Failed to resolve project root for dispatch packet rendering: {error}")
         })?);
     let host_runtime = runtime_host_execution_contract_for_root(&project_root);
-    let selected_backend_override = ctx
-        .selected_backend_override
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let selected_backend_override = current_selected_backend_override(
+        ctx.role_selection,
+        &ctx.receipt.dispatch_target,
+        ctx.selected_backend_override.as_deref(),
+    );
     let receipt_selected_backend = ctx
         .receipt
         .selected_backend
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let runtime_assignment_selected_backend = runtime_assignment_selected_backend_for_target(
+        &ctx.role_selection.execution_plan,
+        &ctx.receipt.dispatch_target,
+    );
     let canonical_selected_backend = selected_backend_override
         .map(str::to_string)
+        .or(runtime_assignment_selected_backend)
         .or_else(|| canonical_selected_backend_for_receipt(ctx.role_selection, ctx.receipt))
         .or_else(|| receipt_selected_backend.map(str::to_string));
+    let posture_selected_backend = canonical_selected_backend
+        .as_deref()
+        .or(receipt_selected_backend);
     let effective_execution_posture = effective_execution_posture_summary(
         &ctx.role_selection.execution_plan,
         &ctx.receipt.dispatch_target,
-        receipt_selected_backend,
+        posture_selected_backend,
         ctx.receipt.activation_agent_type.as_deref(),
         Some(&host_runtime),
         false,
@@ -5948,7 +6022,7 @@ fn build_runtime_dispatch_packet_body(
     let execution_truth = dispatch_execution_route_summary(
         ctx.role_selection,
         &ctx.receipt.dispatch_target,
-        receipt_selected_backend,
+        posture_selected_backend,
         selected_backend_override,
     );
     let (runtime_assignment, runtime_assignment_source) = dispatch_target_runtime_assignment(
@@ -7050,6 +7124,134 @@ mod tests {
             execution_plan: mixed_backend_execution_plan(),
             reason: "test".to_string(),
         }
+    }
+
+    fn pi_cli_analysis_role_selection() -> RuntimeConsumptionLaneSelection {
+        let mut role_selection = bridge_test_role_selection("feature-x-dev");
+        role_selection.execution_plan["backend_admissibility_matrix"] = json!([
+            {
+                "backend_id": "internal_subagents",
+                "backend_class": "internal",
+                "lane_admissibility": {
+                    "analysis": true,
+                    "verification": true
+                }
+            },
+            {
+                "backend_id": "pi_cli",
+                "backend_class": "external_cli",
+                "lane_admissibility": {
+                    "analysis": true,
+                    "verification": true
+                }
+            }
+        ]);
+        role_selection.execution_plan["runtime_assignment"] = json!({
+            "selected_backend_id": "pi_cli",
+            "selected_carrier_id": "pi_cli",
+            "selected_model_profile_id": "pi_gpt55_medium_guarded",
+            "activation_agent_type": "pi_cli",
+            "activation_runtime_role": "verifier",
+            "task_class": "analysis"
+        });
+        role_selection
+    }
+
+    fn blocked_analysis_receipt(packet_path: Option<String>) -> RunGraphDispatchReceipt {
+        RunGraphDispatchReceipt {
+            run_id: "run-pi-cli-analysis".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --execute-dispatch --json".to_string()),
+            dispatch_packet_path: packet_path,
+            dispatch_result_path: None,
+            blocker_code: Some("internal_dispatch_timeout_without_receipt".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: Some("analysis".to_string()),
+            activation_agent_type: Some("pi_cli".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-20T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn preferred_selected_backend_ignores_stale_internal_override_for_runtime_assignment() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("analysis-packet.json");
+        fs::write(
+            &packet_path,
+            json!({
+                "selected_backend": "internal_subagents",
+                "selected_backend_override": "internal_subagents",
+                "runtime_assignment": {
+                    "selected_backend_id": "pi_cli",
+                    "selected_carrier_id": "pi_cli",
+                    "selected_model_profile_id": "pi_gpt55_medium_guarded"
+                }
+            })
+            .to_string(),
+        )
+        .expect("packet should write");
+        let role_selection = pi_cli_analysis_role_selection();
+        let receipt = blocked_analysis_receipt(Some(packet_path.display().to_string()));
+
+        assert_eq!(
+            preferred_selected_backend_for_receipt(&role_selection, &receipt).as_deref(),
+            Some("pi_cli")
+        );
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_drops_stale_internal_override_for_pi_cli_assignment() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let role_selection = pi_cli_analysis_role_selection();
+        let receipt = blocked_analysis_receipt(None);
+        let taskflow_handoff_plan = build_taskflow_handoff_plan(&role_selection);
+        let run_graph_bootstrap = json!({ "run_id": "run-pi-cli-analysis" });
+        let ctx = RuntimeDispatchPacketContext::new(
+            &state_root,
+            &role_selection,
+            &receipt,
+            &taskflow_handoff_plan,
+            &run_graph_bootstrap,
+        )
+        .with_selected_backend_override(Some("internal_subagents".to_string()));
+
+        let packet = runtime_dispatch_packet_preview(&ctx)
+            .expect("packet preview should render")
+            .get("packet")
+            .cloned()
+            .expect("packet should exist");
+
+        assert_eq!(packet["selected_backend"], "pi_cli");
+        assert!(packet["selected_backend_override"].is_null());
+        assert_eq!(
+            packet["effective_execution_posture"]["selected_backend"],
+            "pi_cli"
+        );
+        assert_ne!(
+            packet["effective_execution_posture"]["selected_backend_source"],
+            "explicit_retry_override"
+        );
     }
 
     fn executed_agent_lane_receipt(
@@ -16807,6 +17009,109 @@ agent_system:
         assert_eq!(
             dispatch_handoff_timeout_seconds(&root, &role_selection, &receipt),
             39
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dispatch_handoff_timeout_seconds_prefers_external_max_runtime_over_no_output_window() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-handoff-timeout-external-max-runtime-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        std::fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+agent_system:
+  subagents:
+    pi_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      max_runtime_seconds: 420
+      dispatch:
+        no_output_timeout_seconds: 180
+"#,
+        )
+        .expect("config");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Analyze the bounded packet and return proof.".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "analysis": {
+                        "executor_backend": "pi_cli"
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "pi_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "analysis": true
+                        }
+                    }
+                ],
+                "runtime_assignment": {
+                    "selected_backend_id": "pi_cli",
+                    "selected_carrier_id": "pi_cli",
+                    "selected_model_profile_id": "pi_gpt55_medium_guarded"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-external-pi-timeout".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:pi_cli".to_string()),
+            dispatch_command: Some("vida-pi-agent".to_string()),
+            dispatch_packet_path: Some("/tmp/analysis-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("pi_cli".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("pi_cli".to_string()),
+            recorded_at: "2026-05-20T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            dispatch_handoff_timeout_seconds(&root, &role_selection, &receipt),
+            422
         );
 
         let _ = std::fs::remove_dir_all(&root);
