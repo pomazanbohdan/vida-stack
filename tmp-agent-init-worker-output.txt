@@ -1,0 +1,2119 @@
+{
+  "activation_semantics": {
+    "activation_kind": "activation_view",
+    "executes_packet": false,
+    "next_lawful_action": "use this bounded startup view to initialize the selected non-orchestrator lane; execution still requires a lawful packet or bounded worker request",
+    "records_completion_receipt": false,
+    "root_session_write_guard_remains_authoritative": true,
+    "tracked_flow_shaping_only": false,
+    "transfers_root_session_write_authority": false,
+    "view_only": true
+  },
+  "backend_truth": {
+    "assignment_blocker": null,
+    "assignment_source": "provisional_explicit_role",
+    "backend_selection_source": "role_task_then_readiness_then_score_then_cost_quality",
+    "dynamic_carrier_matches_effective_backend": true,
+    "dynamic_carrier_matches_route_primary_backend": null,
+    "effective_execution_posture": null,
+    "lawful_override": false,
+    "override_active": false,
+    "override_status": "not_needed",
+    "route_fallback_backend": null,
+    "route_primary_backend": null,
+    "runtime_assignment": {
+      "activation_agent_type": "internal_subagents",
+      "activation_runtime_role": "worker",
+      "budget_policy": "balanced",
+      "budget_scope": "selection_filter_only",
+      "budget_verdict": "in_budget",
+      "candidate_scope": "unified_carrier_model_profiles",
+      "complexity_multiplier": 1,
+      "conversation_role": "orchestrator",
+      "effective_score": 70,
+      "enabled": true,
+      "estimated_task_price_units": 1,
+      "lifecycle_state": "probation",
+      "max_budget_units": 5,
+      "model": "gpt-5.4",
+      "model_provider": "openai",
+      "model_reasoning_effort": "low",
+      "model_selection_enabled": true,
+      "normalized_cost_units": 1,
+      "over_budget_escalation_allowed": true,
+      "pricing_readiness": {
+        "pricing": {
+          "freshness": {
+            "diagnostic_only": true,
+            "enforced": false,
+            "max_age_days": 30,
+            "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+            "required": false,
+            "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+          },
+          "price_basis": "vendor_schedule_snapshot",
+          "source_paths": [
+            "docs/process/codex-agent-configuration-guide.md"
+          ]
+        },
+        "pricing_freshness": {
+          "diagnostic_only": true,
+          "enforced": false,
+          "max_age_days": 30,
+          "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+          "required": false,
+          "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+        },
+        "pricing_freshness_source_path": "agent_system.pricing.providers[openai].freshness",
+        "pricing_freshness_status": "ready",
+        "pricing_rejection_reasons": [],
+        "pricing_source_path": "agent_system.pricing.providers[openai]"
+      },
+      "rate": 1,
+      "rationale": [
+        "task_class=implementation",
+        "conversation_role=orchestrator",
+        "execution_runtime_role=worker",
+        "selected_tier=senior",
+        "selected_model_profile=codex_gpt55_low_write",
+        "effective_score=70",
+        "lifecycle_state=probation",
+        "selection_rule=role_task_then_readiness_then_score_then_cost_quality",
+        "budget_policy=balanced",
+        "budget_verdict=in_budget"
+      ],
+      "reasoning_band": "low",
+      "rejected_candidates": [
+        {
+          "carrier_id": "middle",
+          "carrier_tier": "middle",
+          "model_profile_id": "codex_gpt55_medium_write",
+          "model_ref": "gpt-5.4",
+          "reason": "task_class_not_supported",
+          "reasons": [
+            "task_class_not_supported"
+          ]
+        },
+        {
+          "carrier_id": "senior",
+          "carrier_tier": "senior",
+          "model_profile_id": "codex_gpt55_high_readonly",
+          "model_ref": "gpt-5.4",
+          "reason": "runtime_role_not_supported",
+          "reasons": [
+            "runtime_role_not_supported",
+            "task_class_not_supported",
+            "write_scope_inadmissible_for_task_class"
+          ]
+        },
+        {
+          "carrier_id": "architect",
+          "carrier_tier": "architect",
+          "model_profile_id": "codex_gpt55_high_arch",
+          "model_ref": "gpt-5.4",
+          "reason": "runtime_role_not_supported",
+          "reasons": [
+            "runtime_role_not_supported",
+            "task_class_not_supported",
+            "write_scope_inadmissible_for_task_class"
+          ]
+        },
+        {
+          "carrier_id": "architect",
+          "carrier_tier": "architect",
+          "model_profile_id": "codex_gpt55_xhigh_arch",
+          "model_ref": "gpt-5.4",
+          "reason": "runtime_role_not_supported",
+          "reasons": [
+            "runtime_role_not_supported",
+            "task_class_not_supported",
+            "write_scope_inadmissible_for_task_class"
+          ]
+        },
+        {
+          "carrier_id": "hermes_cli",
+          "carrier_tier": "external_free",
+          "external_backend_readiness": {
+            "backend_id": "hermes_cli",
+            "blocked": true,
+            "blocker_code": "tool_execution_failed",
+            "command_resolution": {
+              "command": "hermes",
+              "source": "dispatch.command",
+              "status": "command_not_found"
+            },
+            "current_model_ref": null,
+            "current_reasoning_effort": "provider_default",
+            "default_model_profile": "hermes_provider_configured_review",
+            "detect_command": "hermes",
+            "expected_model_ref": "hermes/provider-configured",
+            "model_profiles": {
+              "hermes_provider_configured_review": {
+                "model_ref": "hermes/provider-configured",
+                "normalized_cost_units": 0,
+                "plan_mode_reasoning_effort": "",
+                "profile_id": "hermes_provider_configured_review",
+                "provider": "hermes",
+                "quality_tier": "medium",
+                "readiness": {
+                  "mode": "external_cli_profile",
+                  "required": true
+                },
+                "reasoning_control": {
+                  "mode": "provider_default"
+                },
+                "reasoning_effort": "provider_default",
+                "runtime_roles": [
+                  "business_analyst",
+                  "coach",
+                  "verifier"
+                ],
+                "sandbox_mode": "",
+                "speed_tier": "medium",
+                "task_classes": [
+                  "analysis",
+                  "specification",
+                  "planning",
+                  "review",
+                  "coach"
+                ],
+                "write_scope": "none"
+              }
+            },
+            "next_actions": [
+              "Install or expose `hermes` on PATH, or reroute this external CLI backend before dispatch.",
+              "Rerun `vida status --json` after restoring the external CLI command."
+            ],
+            "selected_model_profile": "hermes_provider_configured_review",
+            "status": "external_cli_command_not_found"
+          },
+          "model_profile_id": "hermes_provider_configured_review",
+          "model_ref": "hermes/provider-configured",
+          "reason": "runtime_role_not_supported",
+          "reasons": [
+            "runtime_role_not_supported",
+            "task_class_not_supported",
+            "external_backend_not_ready",
+            "write_scope_inadmissible_for_task_class"
+          ]
+        },
+        {
+          "carrier_id": "internal_subagents",
+          "carrier_tier": "senior",
+          "model_profile_id": "codex_gpt55_high_readonly",
+          "model_ref": "gpt-5.4",
+          "reason": "runtime_role_not_supported",
+          "reasons": [
+            "runtime_role_not_supported",
+            "task_class_not_supported",
+            "route_profile_mapping_mismatch",
+            "write_scope_inadmissible_for_task_class"
+          ]
+        },
+        {
+          "carrier_id": "internal_subagents",
+          "carrier_tier": "senior",
+          "model_profile_id": "codex_gpt55_medium_write",
+          "model_ref": "gpt-5.4",
+          "reason": "task_class_not_supported",
+          "reasons": [
+            "task_class_not_supported",
+            "route_profile_mapping_mismatch"
+          ]
+        },
+        {
+          "carrier_id": "internal_subagents",
+          "carrier_tier": "senior",
+          "model_profile_id": "codex_gpt55_xhigh_arch",
+          "model_ref": "gpt-5.4",
+          "reason": "runtime_role_not_supported",
+          "reasons": [
+            "runtime_role_not_supported",
+            "task_class_not_supported",
+            "route_profile_mapping_mismatch"
+          ]
+        },
+        {
+          "carrier_id": "kilo_cli",
+          "carrier_tier": "external_free",
+          "external_backend_readiness": {
+            "backend_id": "kilo_cli",
+            "blocked": true,
+            "blocker_code": "tool_execution_failed",
+            "command_resolution": {
+              "command": "kilo",
+              "source": "dispatch.command",
+              "status": "command_not_found"
+            },
+            "current_model_ref": null,
+            "current_reasoning_effort": "provider_default",
+            "default_model_profile": "kilo_grok_code_fast_free",
+            "detect_command": "kilo",
+            "expected_model_ref": "kilo/x-ai/grok-code-fast-1:optimized:free",
+            "model_profiles": {
+              "kilo_grok_code_fast_free": {
+                "model_ref": "kilo/x-ai/grok-code-fast-1:optimized:free",
+                "normalized_cost_units": 0,
+                "plan_mode_reasoning_effort": "",
+                "profile_id": "kilo_grok_code_fast_free",
+                "provider": "kilo",
+                "quality_tier": "medium",
+                "readiness": {
+                  "mode": "external_cli_profile",
+                  "required": true
+                },
+                "reasoning_control": {
+                  "mode": "provider_default"
+                },
+                "reasoning_effort": "provider_default",
+                "runtime_roles": [
+                  "business_analyst",
+                  "coach",
+                  "verifier"
+                ],
+                "sandbox_mode": "",
+                "speed_tier": "fast",
+                "task_classes": [
+                  "research",
+                  "analysis",
+                  "review"
+                ],
+                "write_scope": "none"
+              }
+            },
+            "next_actions": [
+              "Install or expose `kilo` on PATH, or reroute this external CLI backend before dispatch.",
+              "Rerun `vida status --json` after restoring the external CLI command."
+            ],
+            "selected_model_profile": "kilo_grok_code_fast_free",
+            "status": "external_cli_command_not_found"
+          },
+          "model_profile_id": "kilo_grok_code_fast_free",
+          "model_ref": "kilo/x-ai/grok-code-fast-1:optimized:free",
+          "reason": "runtime_role_not_supported",
+          "reasons": [
+            "runtime_role_not_supported",
+            "task_class_not_supported",
+            "external_backend_not_ready",
+            "write_scope_inadmissible_for_task_class"
+          ]
+        },
+        {
+          "carrier_id": "opencode_cli",
+          "carrier_tier": "external_free",
+          "external_backend_readiness": {
+            "backend_id": "opencode_cli",
+            "blocked": true,
+            "blocker_code": "tool_execution_failed",
+            "command_resolution": {
+              "command": "opencode",
+              "source": "dispatch.command",
+              "status": "command_not_found"
+            },
+            "current_model_ref": null,
+            "current_reasoning_effort": "provider_default",
+            "default_model_profile": "opencode_minimax_free_review",
+            "detect_command": "opencode",
+            "expected_model_ref": "opencode/minimax-m2.5-free",
+            "model_profiles": {
+              "opencode_codex_mini_review": {
+                "model_ref": "opencode/gpt-5.1-codex-mini",
+                "normalized_cost_units": 1,
+                "plan_mode_reasoning_effort": "",
+                "profile_id": "opencode_codex_mini_review",
+                "provider": "opencode",
+                "quality_tier": "high",
+                "readiness": {
+                  "mode": "external_cli_profile",
+                  "required": true
+                },
+                "reasoning_control": {
+                  "mode": "provider_default"
+                },
+                "reasoning_effort": "low",
+                "runtime_roles": [
+                  "coach",
+                  "verifier"
+                ],
+                "sandbox_mode": "",
+                "speed_tier": "fast",
+                "task_classes": [
+                  "review",
+                  "verification",
+                  "coach"
+                ],
+                "write_scope": "none"
+              },
+              "opencode_minimax_free_review": {
+                "model_ref": "opencode/minimax-m2.5-free",
+                "normalized_cost_units": 0,
+                "plan_mode_reasoning_effort": "",
+                "profile_id": "opencode_minimax_free_review",
+                "provider": "opencode",
+                "quality_tier": "medium",
+                "readiness": {
+                  "mode": "external_cli_profile",
+                  "required": true
+                },
+                "reasoning_control": {
+                  "mode": "provider_default"
+                },
+                "reasoning_effort": "provider_default",
+                "runtime_roles": [
+                  "business_analyst",
+                  "coach",
+                  "verifier"
+                ],
+                "sandbox_mode": "",
+                "speed_tier": "fast",
+                "task_classes": [
+                  "analysis",
+                  "specification",
+                  "planning",
+                  "review",
+                  "coach"
+                ],
+                "write_scope": "none"
+              }
+            },
+            "next_actions": [
+              "Install or expose `opencode` on PATH, or reroute this external CLI backend before dispatch.",
+              "Rerun `vida status --json` after restoring the external CLI command."
+            ],
+            "selected_model_profile": "opencode_minimax_free_review",
+            "status": "external_cli_command_not_found"
+          },
+          "model_profile_id": "opencode_codex_mini_review",
+          "model_ref": "opencode/gpt-5.1-codex-mini",
+          "reason": "runtime_role_not_supported",
+          "reasons": [
+            "runtime_role_not_supported",
+            "task_class_not_supported",
+            "external_backend_not_ready",
+            "write_scope_inadmissible_for_task_class"
+          ]
+        },
+        {
+          "carrier_id": "opencode_cli",
+          "carrier_tier": "external_free",
+          "external_backend_readiness": {
+            "backend_id": "opencode_cli",
+            "blocked": true,
+            "blocker_code": "tool_execution_failed",
+            "command_resolution": {
+              "command": "opencode",
+              "source": "dispatch.command",
+              "status": "command_not_found"
+            },
+            "current_model_ref": null,
+            "current_reasoning_effort": "provider_default",
+            "default_model_profile": "opencode_minimax_free_review",
+            "detect_command": "opencode",
+            "expected_model_ref": "opencode/minimax-m2.5-free",
+            "model_profiles": {
+              "opencode_codex_mini_review": {
+                "model_ref": "opencode/gpt-5.1-codex-mini",
+                "normalized_cost_units": 1,
+                "plan_mode_reasoning_effort": "",
+                "profile_id": "opencode_codex_mini_review",
+                "provider": "opencode",
+                "quality_tier": "high",
+                "readiness": {
+                  "mode": "external_cli_profile",
+                  "required": true
+                },
+                "reasoning_control": {
+                  "mode": "provider_default"
+                },
+                "reasoning_effort": "low",
+                "runtime_roles": [
+                  "coach",
+                  "verifier"
+                ],
+                "sandbox_mode": "",
+                "speed_tier": "fast",
+                "task_classes": [
+                  "review",
+                  "verification",
+                  "coach"
+                ],
+                "write_scope": "none"
+              },
+              "opencode_minimax_free_review": {
+                "model_ref": "opencode/minimax-m2.5-free",
+                "normalized_cost_units": 0,
+                "plan_mode_reasoning_effort": "",
+                "profile_id": "opencode_minimax_free_review",
+                "provider": "opencode",
+                "quality_tier": "medium",
+                "readiness": {
+                  "mode": "external_cli_profile",
+                  "required": true
+                },
+                "reasoning_control": {
+                  "mode": "provider_default"
+                },
+                "reasoning_effort": "provider_default",
+                "runtime_roles": [
+                  "business_analyst",
+                  "coach",
+                  "verifier"
+                ],
+                "sandbox_mode": "",
+                "speed_tier": "fast",
+                "task_classes": [
+                  "analysis",
+                  "specification",
+                  "planning",
+                  "review",
+                  "coach"
+                ],
+                "write_scope": "none"
+              }
+            },
+            "next_actions": [
+              "Install or expose `opencode` on PATH, or reroute this external CLI backend before dispatch.",
+              "Rerun `vida status --json` after restoring the external CLI command."
+            ],
+            "selected_model_profile": "opencode_minimax_free_review",
+            "status": "external_cli_command_not_found"
+          },
+          "model_profile_id": "opencode_minimax_free_review",
+          "model_ref": "opencode/minimax-m2.5-free",
+          "reason": "runtime_role_not_supported",
+          "reasons": [
+            "runtime_role_not_supported",
+            "task_class_not_supported",
+            "external_backend_not_ready",
+            "write_scope_inadmissible_for_task_class"
+          ]
+        },
+        {
+          "carrier_id": "pi_cli",
+          "carrier_tier": "external_write_guarded",
+          "external_backend_readiness": {
+            "adapter": {
+              "command": "vida-pi-agent",
+              "source": "readiness.adapter.command",
+              "status": "command_found"
+            },
+            "backend_id": "pi_cli",
+            "blocked": false,
+            "blocker_code": null,
+            "current_model_ref": null,
+            "current_reasoning_effort": "medium",
+            "default_model_profile": "pi_gpt55_medium_guarded",
+            "expected_model_ref": "openai-codex/gpt-5.5",
+            "model_catalog": {
+              "expected_model_ref": "openai-codex/gpt-5.5",
+              "mode": "pi_rpc_get_available_models",
+              "status": "model_available"
+            },
+            "model_profiles": {
+              "pi_gpt54_mini_low_guarded": {
+                "model_ref": "openai-codex/gpt-5.4-mini",
+                "normalized_cost_units": 1,
+                "plan_mode_reasoning_effort": "",
+                "profile_id": "pi_gpt54_mini_low_guarded",
+                "provider": "pi",
+                "quality_tier": "medium_high",
+                "readiness": {
+                  "adapter_command_required": "vida-pi-agent",
+                  "fail_closed_until_write_guard": true,
+                  "mode": "external_cli_profile",
+                  "model_catalog_required": true,
+                  "provider_command_required": "pi",
+                  "required": true,
+                  "write_scope_guard_required": true
+                },
+                "reasoning_control": {
+                  "mode": "pi_rpc_set_thinking_level",
+                  "thinking_level": "low"
+                },
+                "reasoning_effort": "low",
+                "runtime_roles": [
+                  "worker"
+                ],
+                "sandbox_mode": "",
+                "speed_tier": "fast",
+                "task_classes": [
+                  "implementation",
+                  "delivery_task",
+                  "execution_block"
+                ],
+                "write_scope": "guard_required_owned_paths"
+              },
+              "pi_gpt55_high_readonly": {
+                "model_ref": "openai-codex/gpt-5.5",
+                "normalized_cost_units": 8,
+                "plan_mode_reasoning_effort": "",
+                "profile_id": "pi_gpt55_high_readonly",
+                "provider": "pi",
+                "quality_tier": "high",
+                "readiness": {
+                  "adapter_command_required": "vida-pi-agent",
+                  "mode": "external_cli_profile",
+                  "model_catalog_required": true,
+                  "provider_command_required": "pi",
+                  "required": true,
+                  "write_scope_guard_required": false
+                },
+                "reasoning_control": {
+                  "mode": "pi_rpc_set_thinking_level",
+                  "thinking_level": "high"
+                },
+                "reasoning_effort": "high",
+                "runtime_roles": [
+                  "coach",
+                  "verifier"
+                ],
+                "sandbox_mode": "",
+                "speed_tier": "medium",
+                "task_classes": [
+                  "review",
+                  "verification",
+                  "coach"
+                ],
+                "write_scope": "none"
+              },
+              "pi_gpt55_medium_guarded": {
+                "model_ref": "openai-codex/gpt-5.5",
+                "normalized_cost_units": 4,
+                "plan_mode_reasoning_effort": "",
+                "profile_id": "pi_gpt55_medium_guarded",
+                "provider": "pi",
+                "quality_tier": "high",
+                "readiness": {
+                  "adapter_command_required": "vida-pi-agent",
+                  "fail_closed_until_write_guard": true,
+                  "mode": "external_cli_profile",
+                  "model_catalog_required": true,
+                  "provider_command_required": "pi",
+                  "required": true,
+                  "write_scope_guard_required": true
+                },
+                "reasoning_control": {
+                  "mode": "pi_rpc_set_thinking_level",
+                  "thinking_level": "medium"
+                },
+                "reasoning_effort": "medium",
+                "runtime_roles": [
+                  "worker",
+                  "business_analyst",
+                  "coach"
+                ],
+                "sandbox_mode": "",
+                "speed_tier": "fast",
+                "task_classes": [
+                  "implementation_medium",
+                  "specification",
+                  "planning",
+                  "analysis",
+                  "coach"
+                ],
+                "write_scope": "guard_required_owned_paths"
+              }
+            },
+            "next_actions": [],
+            "provider": {
+              "command": "pi",
+              "source": "readiness.provider.command",
+              "status": "command_found"
+            },
+            "selected_model_profile": "pi_gpt55_high_readonly",
+            "status": "carrier_ready",
+            "write_scope_guard": {
+              "adapter_capabilities": {
+                "explicit_extension_arg": true,
+                "pre_write_enforcement": true,
+                "raw": {
+                  "adapter": "vida-pi-agent",
+                  "scope_guard": {
+                    "blocks_tools": [
+                      "write",
+                      "edit",
+                      "bash",
+                      "user_bash",
+                      "unknown_mutating_tools"
+                    ],
+                    "explicit_extension_arg": true,
+                    "guarded_write_mode": true,
+                    "post_execution_validation": true,
+                    "pre_write_enforcement": true,
+                    "version": 1
+                  },
+                  "type": "capabilities"
+                },
+                "status": "available"
+              },
+              "fail_closed_until_available": true,
+              "mode": "adapter_feature_required",
+              "pre_write_enforcement": true,
+              "required_for_write_profiles": true,
+              "selected_profile_requires_guard": false,
+              "status": "not_blocking"
+            }
+          },
+          "model_profile_id": "pi_gpt55_high_readonly",
+          "model_ref": "openai-codex/gpt-5.5",
+          "reason": "runtime_role_not_supported",
+          "reasons": [
+            "runtime_role_not_supported",
+            "task_class_not_supported",
+            "route_profile_mapping_mismatch",
+            "write_scope_inadmissible_for_task_class"
+          ]
+        },
+        {
+          "carrier_id": "pi_cli",
+          "carrier_tier": "external_write_guarded",
+          "external_backend_readiness": {
+            "adapter": {
+              "command": "vida-pi-agent",
+              "source": "readiness.adapter.command",
+              "status": "command_found"
+            },
+            "backend_id": "pi_cli",
+            "blocked": false,
+            "blocker_code": null,
+            "current_model_ref": null,
+            "current_reasoning_effort": "medium",
+            "default_model_profile": "pi_gpt55_medium_guarded",
+            "expected_model_ref": "openai-codex/gpt-5.5",
+            "model_catalog": {
+              "expected_model_ref": "openai-codex/gpt-5.5",
+              "mode": "pi_rpc_get_available_models",
+              "status": "model_available"
+            },
+            "model_profiles": {
+              "pi_gpt54_mini_low_guarded": {
+                "model_ref": "openai-codex/gpt-5.4-mini",
+                "normalized_cost_units": 1,
+                "plan_mode_reasoning_effort": "",
+                "profile_id": "pi_gpt54_mini_low_guarded",
+                "provider": "pi",
+                "quality_tier": "medium_high",
+                "readiness": {
+                  "adapter_command_required": "vida-pi-agent",
+                  "fail_closed_until_write_guard": true,
+                  "mode": "external_cli_profile",
+                  "model_catalog_required": true,
+                  "provider_command_required": "pi",
+                  "required": true,
+                  "write_scope_guard_required": true
+                },
+                "reasoning_control": {
+                  "mode": "pi_rpc_set_thinking_level",
+                  "thinking_level": "low"
+                },
+                "reasoning_effort": "low",
+                "runtime_roles": [
+                  "worker"
+                ],
+                "sandbox_mode": "",
+                "speed_tier": "fast",
+                "task_classes": [
+                  "implementation",
+                  "delivery_task",
+                  "execution_block"
+                ],
+                "write_scope": "guard_required_owned_paths"
+              },
+              "pi_gpt55_high_readonly": {
+                "model_ref": "openai-codex/gpt-5.5",
+                "normalized_cost_units": 8,
+                "plan_mode_reasoning_effort": "",
+                "profile_id": "pi_gpt55_high_readonly",
+                "provider": "pi",
+                "quality_tier": "high",
+                "readiness": {
+                  "adapter_command_required": "vida-pi-agent",
+                  "mode": "external_cli_profile",
+                  "model_catalog_required": true,
+                  "provider_command_required": "pi",
+                  "required": true,
+                  "write_scope_guard_required": false
+                },
+                "reasoning_control": {
+                  "mode": "pi_rpc_set_thinking_level",
+                  "thinking_level": "high"
+                },
+                "reasoning_effort": "high",
+                "runtime_roles": [
+                  "coach",
+                  "verifier"
+                ],
+                "sandbox_mode": "",
+                "speed_tier": "medium",
+                "task_classes": [
+                  "review",
+                  "verification",
+                  "coach"
+                ],
+                "write_scope": "none"
+              },
+              "pi_gpt55_medium_guarded": {
+                "model_ref": "openai-codex/gpt-5.5",
+                "normalized_cost_units": 4,
+                "plan_mode_reasoning_effort": "",
+                "profile_id": "pi_gpt55_medium_guarded",
+                "provider": "pi",
+                "quality_tier": "high",
+                "readiness": {
+                  "adapter_command_required": "vida-pi-agent",
+                  "fail_closed_until_write_guard": true,
+                  "mode": "external_cli_profile",
+                  "model_catalog_required": true,
+                  "provider_command_required": "pi",
+                  "required": true,
+                  "write_scope_guard_required": true
+                },
+                "reasoning_control": {
+                  "mode": "pi_rpc_set_thinking_level",
+                  "thinking_level": "medium"
+                },
+                "reasoning_effort": "medium",
+                "runtime_roles": [
+                  "worker",
+                  "business_analyst",
+                  "coach"
+                ],
+                "sandbox_mode": "",
+                "speed_tier": "fast",
+                "task_classes": [
+                  "implementation_medium",
+                  "specification",
+                  "planning",
+                  "analysis",
+                  "coach"
+                ],
+                "write_scope": "guard_required_owned_paths"
+              }
+            },
+            "next_actions": [],
+            "provider": {
+              "command": "pi",
+              "source": "readiness.provider.command",
+              "status": "command_found"
+            },
+            "selected_model_profile": "pi_gpt55_medium_guarded",
+            "status": "carrier_ready",
+            "write_scope_guard": {
+              "adapter_capabilities": {
+                "explicit_extension_arg": true,
+                "pre_write_enforcement": true,
+                "raw": {
+                  "adapter": "vida-pi-agent",
+                  "scope_guard": {
+                    "blocks_tools": [
+                      "write",
+                      "edit",
+                      "bash",
+                      "user_bash",
+                      "unknown_mutating_tools"
+                    ],
+                    "explicit_extension_arg": true,
+                    "guarded_write_mode": true,
+                    "post_execution_validation": true,
+                    "pre_write_enforcement": true,
+                    "version": 1
+                  },
+                  "type": "capabilities"
+                },
+                "status": "available"
+              },
+              "fail_closed_until_available": true,
+              "mode": "adapter_feature_required",
+              "pre_write_enforcement": true,
+              "required_for_write_profiles": true,
+              "selected_profile_requires_guard": true,
+              "status": "active"
+            }
+          },
+          "model_profile_id": "pi_gpt55_medium_guarded",
+          "model_ref": "openai-codex/gpt-5.5",
+          "reason": "task_class_not_supported",
+          "reasons": [
+            "task_class_not_supported",
+            "route_profile_mapping_mismatch"
+          ]
+        },
+        {
+          "carrier_id": "vibe_cli",
+          "carrier_tier": "external_free",
+          "external_backend_readiness": {
+            "backend_id": "vibe_cli",
+            "blocked": true,
+            "blocker_code": "model_not_pinned",
+            "current_model_ref": null,
+            "current_reasoning_effort": "provider_default",
+            "default_model_profile": "vibe_devstral2_review",
+            "expected_model_ref": "vibe/devstral-2",
+            "model_profiles": {
+              "vibe_devstral2_review": {
+                "model_ref": "vibe/devstral-2",
+                "normalized_cost_units": 0,
+                "plan_mode_reasoning_effort": "",
+                "profile_id": "vibe_devstral2_review",
+                "provider": "vibe",
+                "quality_tier": "medium",
+                "readiness": {
+                  "mode": "external_cli_profile",
+                  "required": true
+                },
+                "reasoning_control": {
+                  "expected_substring": "active_model = \"devstral-2\"",
+                  "mode": "config_file",
+                  "path": "~/.vibe/config.toml"
+                },
+                "reasoning_effort": "provider_default",
+                "runtime_roles": [
+                  "coach",
+                  "verifier"
+                ],
+                "sandbox_mode": "",
+                "speed_tier": "medium",
+                "task_classes": [
+                  "ui_review",
+                  "review",
+                  "analysis"
+                ],
+                "write_scope": "none"
+              }
+            },
+            "next_actions": [
+              "Fix carrier-local model selection or add dispatch-level model pinning before external dispatch."
+            ],
+            "selected_model_profile": "vibe_devstral2_review",
+            "status": "model_not_pinned"
+          },
+          "model_profile_id": "vibe_devstral2_review",
+          "model_ref": "vibe/devstral-2",
+          "reason": "runtime_role_not_supported",
+          "reasons": [
+            "runtime_role_not_supported",
+            "task_class_not_supported",
+            "external_backend_not_ready",
+            "write_scope_inadmissible_for_task_class"
+          ]
+        }
+      ],
+      "route_profile_mapping_applied": true,
+      "runtime_budget_ledger": {
+        "enforcement": "not_implemented_in_this_assignment_builder",
+        "message": "selection budget limits candidate choice only; no runtime spend ledger is debited here",
+        "scope": "runtime_spend_ledger",
+        "status": "not_tracked_by_runtime_assignment"
+      },
+      "runtime_role": "worker",
+      "sandbox_mode": "",
+      "scorecards_store": ".vida/state/worker-scorecards.json",
+      "selected_agent_id": "internal_subagents",
+      "selected_backend_id": "internal_subagents",
+      "selected_carrier_agent_id": "internal_subagents",
+      "selected_carrier_id": "internal_subagents",
+      "selected_carrier_tier": "senior",
+      "selected_external_backend_readiness": null,
+      "selected_model_profile_id": "codex_gpt55_low_write",
+      "selected_model_profile_readiness_status": "ready",
+      "selected_model_provider": "openai",
+      "selected_model_ref": "gpt-5.4",
+      "selected_over_budget": false,
+      "selected_plan_mode_reasoning_effort": "",
+      "selected_quality_tier": "medium_high",
+      "selected_reasoning_control_mode": null,
+      "selected_reasoning_effort": "low",
+      "selected_route_profile_mapping": "codex_gpt55_low_write",
+      "selected_runtime_role": "worker",
+      "selected_sandbox_mode": "",
+      "selected_speed_tier": "fast",
+      "selected_tier": "senior",
+      "selection_budget": {
+        "budget_verdict": "in_budget",
+        "enforces_candidate_rejection": false,
+        "max_budget_units": 5,
+        "max_budget_units_source_path": "agent_system.routing.implementation.max_budget_units",
+        "over_budget_escalation_allowed": true,
+        "policy": "balanced",
+        "policy_source_path": "agent_system.routing.implementation.budget_policy",
+        "prefers_in_budget_candidates": true,
+        "scope": "selection_filter_only",
+        "selected_candidate_rate": 1,
+        "selected_over_budget": false
+      },
+      "selection_override_reasons": [
+        {
+          "field": "selected_model_profile_id",
+          "reason": "route_profile_mapping_applied",
+          "selected_profile_id": "codex_gpt55_low_write",
+          "source_path": "agent_system.routing.implementation.profiles.internal_subagents"
+        },
+        {
+          "budget_policy": "balanced",
+          "field": "selected_carrier_id",
+          "max_budget_units": 5,
+          "reason": "selection_budget_preferred_in_budget_candidate",
+          "source_path": "agent_system.routing.implementation.max_budget_units"
+        }
+      ],
+      "selection_precedence": [
+        "runtime_role_and_task_class_admissibility",
+        "carrier_score_lifecycle_readiness",
+        "route_profile_mapping",
+        "write_scope",
+        "quality_and_reasoning_floors",
+        "selection_budget_policy",
+        "selection_strategy_sort"
+      ],
+      "selection_rule": "role_task_then_readiness_then_score_then_cost_quality",
+      "selection_source_paths": {
+        "budget_policy": "agent_system.routing.implementation.budget_policy",
+        "candidate_scope": "model_selection.candidate_scope",
+        "max_budget_units": "agent_system.routing.implementation.max_budget_units",
+        "selected_backend_id": "carrier_runtime.roles[internal_subagents].role_id",
+        "selected_carrier_id": "carrier_runtime.roles[internal_subagents].role_id",
+        "selected_carrier_tier": "carrier_runtime.roles[internal_subagents].tier",
+        "selected_model_profile_id": "carrier_runtime.roles[internal_subagents].model_profiles.codex_gpt55_low_write.profile_id",
+        "selected_model_ref": "carrier_runtime.roles[internal_subagents].model_profiles.codex_gpt55_low_write.model_ref",
+        "selected_pricing": "agent_system.pricing.providers[openai]",
+        "selected_pricing_freshness": "agent_system.pricing.providers[openai].freshness",
+        "selected_rate": "carrier_runtime.roles[internal_subagents].model_profiles.codex_gpt55_low_write.normalized_cost_units",
+        "selected_reasoning_effort": "carrier_runtime.roles[internal_subagents].model_profiles.codex_gpt55_low_write.reasoning_effort",
+        "selected_route_profile_mapping": "agent_system.routing.implementation.profiles.internal_subagents",
+        "selection_rule": "carrier_runtime.model_selection.selection_rule",
+        "selection_strategy": "carrier_runtime.model_selection.default_strategy"
+      },
+      "selection_strategy": "balanced_cost_quality",
+      "strategy_store": ".vida/state/worker-strategy.json",
+      "task_class": "implementation",
+      "tier_default_runtime_role": "worker"
+    },
+    "selected_backend": "internal_subagents",
+    "selected_backend_class": null,
+    "selected_backend_source": "role_task_then_readiness_then_score_then_cost_quality",
+    "selected_carrier_id": "internal_subagents",
+    "selected_model_profile_id": "codex_gpt55_low_write"
+  },
+  "dev_team_readiness": {
+    "active_selection": {
+      "selected_backend": "internal_subagents",
+      "selected_carrier_id": "internal_subagents",
+      "selected_cost_units": 1,
+      "selected_dev_team_role": "developer",
+      "selected_model": {
+        "carrier_id": "junior",
+        "model_profile_id": "codex_gpt55_low_write",
+        "model_profile_id_source_path": "carrier_runtime.roles[junior].model_profiles.codex_gpt55_low_write.profile_id",
+        "model_provider": "openai",
+        "model_reasoning_effort": "low",
+        "model_ref": "gpt-5.4",
+        "model_ref_source_path": "carrier_runtime.roles[junior].model_profiles.codex_gpt55_low_write.model_ref",
+        "pricing": {
+          "freshness": {
+            "diagnostic_only": true,
+            "enforced": false,
+            "max_age_days": 30,
+            "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+            "required": false,
+            "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+          },
+          "price_basis": "vendor_schedule_snapshot",
+          "source_paths": [
+            "docs/process/codex-agent-configuration-guide.md"
+          ]
+        },
+        "pricing_freshness": {
+          "diagnostic_only": true,
+          "enforced": false,
+          "max_age_days": 30,
+          "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+          "required": false,
+          "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+        },
+        "pricing_freshness_status": "ready",
+        "selected_rate": 1,
+        "selected_rate_source_path": "carrier_runtime.roles[junior].model_profiles.codex_gpt55_low_write.normalized_cost_units"
+      },
+      "selected_model_profile_id": "codex_gpt55_low_write",
+      "selected_runtime_role": "worker"
+    },
+    "blockers": [],
+    "configured": true,
+    "enabled": true,
+    "flows": [
+      {
+        "allow_parallel_handoffs": false,
+        "description": "System analyst produces the detailed task brief, developer implements on the cheapest write lane, duplication reviewer checks architectural reuse/no duplication, final coach reviews the completed implementation, then tester/prover gates release closure.",
+        "enabled": true,
+        "flow_id": "default_delivery",
+        "sequential": true,
+        "steps": [
+          "analyst",
+          "developer",
+          "duplication_reviewer",
+          "coach",
+          "tester",
+          "prover",
+          "release_closure"
+        ]
+      }
+    ],
+    "roles": [
+      {
+        "cost_policy": {
+          "budget_units": 4,
+          "fallback_carrier": null,
+          "selection_rule": "cheapest_eligible_specification_carrier"
+        },
+        "default_carrier": "middle",
+        "default_model": "gpt-5.4",
+        "default_model_reasoning_effort": "medium",
+        "handoff": {
+          "fail_closed_on_missing_handoff": true,
+          "next_role": "developer",
+          "required_outputs": [
+            "detailed_task_brief",
+            "architectural_context",
+            "bounded_problem_statement",
+            "acceptance_contract",
+            "owned_write_scope",
+            "stop_rules",
+            "duplication_risk_map"
+          ]
+        },
+        "role_id": "analyst",
+        "runtime_role": "business_analyst",
+        "selected_carrier": {
+          "carrier_id": "middle",
+          "model": "gpt-5.4",
+          "model_provider": "openai",
+          "normalized_cost_units": 4,
+          "rate": 4,
+          "reasoning_effort": "medium",
+          "runtime_roles": [
+            "business_analyst",
+            "pm",
+            "coach",
+            "worker"
+          ],
+          "task_classes": [
+            "specification",
+            "planning",
+            "coach",
+            "implementation_medium"
+          ]
+        },
+        "selected_model": {
+          "carrier_id": "middle",
+          "model_profile_id": "codex_gpt55_medium_write",
+          "model_profile_id_source_path": "carrier_runtime.roles[middle].model_profiles.codex_gpt55_medium_write.profile_id",
+          "model_provider": "openai",
+          "model_reasoning_effort": "medium",
+          "model_ref": "gpt-5.4",
+          "model_ref_source_path": "carrier_runtime.roles[middle].model_profiles.codex_gpt55_medium_write.model_ref",
+          "pricing": {
+            "freshness": {
+              "diagnostic_only": true,
+              "enforced": false,
+              "max_age_days": 30,
+              "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+              "required": false,
+              "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+            },
+            "price_basis": "vendor_schedule_snapshot",
+            "source_paths": [
+              "docs/process/codex-agent-configuration-guide.md"
+            ]
+          },
+          "pricing_freshness": {
+            "diagnostic_only": true,
+            "enforced": false,
+            "max_age_days": 30,
+            "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+            "required": false,
+            "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+          },
+          "pricing_freshness_status": "ready",
+          "selected_rate": 4,
+          "selected_rate_source_path": "carrier_runtime.roles[middle].model_profiles.codex_gpt55_medium_write.normalized_cost_units"
+        },
+        "task_classes": [
+          "specification",
+          "planning"
+        ]
+      },
+      {
+        "cost_policy": {
+          "budget_units": 4,
+          "fallback_carrier": null,
+          "selection_rule": "final_spec_conformance_review_after_duplication_clearance"
+        },
+        "default_carrier": "middle",
+        "default_model": "gpt-5.4",
+        "default_model_reasoning_effort": "medium",
+        "handoff": {
+          "fail_closed_on_missing_handoff": true,
+          "next_role": "tester",
+          "required_outputs": [
+            "final_implementation_review",
+            "spec_conformance_review",
+            "rework_or_approve_decision",
+            "unresolved_risks"
+          ]
+        },
+        "role_id": "coach",
+        "runtime_role": "coach",
+        "selected_carrier": {
+          "carrier_id": "middle",
+          "model": "gpt-5.4",
+          "model_provider": "openai",
+          "normalized_cost_units": 4,
+          "rate": 4,
+          "reasoning_effort": "medium",
+          "runtime_roles": [
+            "business_analyst",
+            "pm",
+            "coach",
+            "worker"
+          ],
+          "task_classes": [
+            "specification",
+            "planning",
+            "coach",
+            "implementation_medium"
+          ]
+        },
+        "selected_model": {
+          "carrier_id": "middle",
+          "model_profile_id": "codex_gpt55_medium_write",
+          "model_profile_id_source_path": "carrier_runtime.roles[middle].model_profiles.codex_gpt55_medium_write.profile_id",
+          "model_provider": "openai",
+          "model_reasoning_effort": "medium",
+          "model_ref": "gpt-5.4",
+          "model_ref_source_path": "carrier_runtime.roles[middle].model_profiles.codex_gpt55_medium_write.model_ref",
+          "pricing": {
+            "freshness": {
+              "diagnostic_only": true,
+              "enforced": false,
+              "max_age_days": 30,
+              "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+              "required": false,
+              "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+            },
+            "price_basis": "vendor_schedule_snapshot",
+            "source_paths": [
+              "docs/process/codex-agent-configuration-guide.md"
+            ]
+          },
+          "pricing_freshness": {
+            "diagnostic_only": true,
+            "enforced": false,
+            "max_age_days": 30,
+            "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+            "required": false,
+            "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+          },
+          "pricing_freshness_status": "ready",
+          "selected_rate": 4,
+          "selected_rate_source_path": "carrier_runtime.roles[middle].model_profiles.codex_gpt55_medium_write.normalized_cost_units"
+        },
+        "task_classes": [
+          "coach",
+          "review"
+        ]
+      },
+      {
+        "cost_policy": {
+          "budget_units": 1,
+          "fallback_carrier": "middle",
+          "selection_rule": "cheapest_eligible_write_carrier"
+        },
+        "default_carrier": "junior",
+        "default_model": "gpt-5.4",
+        "default_model_reasoning_effort": "low",
+        "handoff": {
+          "fail_closed_on_missing_handoff": true,
+          "next_role": "duplication_reviewer",
+          "required_outputs": [
+            "changed_files",
+            "verification_notes",
+            "residual_risks",
+            "explicit_blockers"
+          ]
+        },
+        "role_id": "developer",
+        "runtime_role": "worker",
+        "selected_carrier": {
+          "carrier_id": "junior",
+          "model": "gpt-5.4",
+          "model_provider": "openai",
+          "normalized_cost_units": 1,
+          "rate": 1,
+          "reasoning_effort": "low",
+          "runtime_roles": [
+            "worker"
+          ],
+          "task_classes": [
+            "implementation",
+            "delivery_task",
+            "execution_block"
+          ]
+        },
+        "selected_model": {
+          "carrier_id": "junior",
+          "model_profile_id": "codex_gpt55_low_write",
+          "model_profile_id_source_path": "carrier_runtime.roles[junior].model_profiles.codex_gpt55_low_write.profile_id",
+          "model_provider": "openai",
+          "model_reasoning_effort": "low",
+          "model_ref": "gpt-5.4",
+          "model_ref_source_path": "carrier_runtime.roles[junior].model_profiles.codex_gpt55_low_write.model_ref",
+          "pricing": {
+            "freshness": {
+              "diagnostic_only": true,
+              "enforced": false,
+              "max_age_days": 30,
+              "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+              "required": false,
+              "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+            },
+            "price_basis": "vendor_schedule_snapshot",
+            "source_paths": [
+              "docs/process/codex-agent-configuration-guide.md"
+            ]
+          },
+          "pricing_freshness": {
+            "diagnostic_only": true,
+            "enforced": false,
+            "max_age_days": 30,
+            "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+            "required": false,
+            "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+          },
+          "pricing_freshness_status": "ready",
+          "selected_rate": 1,
+          "selected_rate_source_path": "carrier_runtime.roles[junior].model_profiles.codex_gpt55_low_write.normalized_cost_units"
+        },
+        "task_classes": [
+          "implementation",
+          "delivery_task",
+          "execution_block"
+        ]
+      },
+      {
+        "cost_policy": {
+          "budget_units": 16,
+          "fallback_carrier": null,
+          "selection_rule": "independent_duplication_and_architecture_reuse_review"
+        },
+        "default_carrier": "senior",
+        "default_model": "gpt-5.4",
+        "default_model_reasoning_effort": "high",
+        "handoff": {
+          "fail_closed_on_missing_handoff": true,
+          "next_role": "coach",
+          "required_outputs": [
+            "duplication_review_report",
+            "reused_contracts",
+            "duplicate_risks",
+            "required_rework_or_clearance"
+          ]
+        },
+        "role_id": "duplication_reviewer",
+        "runtime_role": "verifier",
+        "selected_carrier": {
+          "carrier_id": "senior",
+          "model": "gpt-5.4",
+          "model_provider": "openai",
+          "normalized_cost_units": 16,
+          "rate": 16,
+          "reasoning_effort": "high",
+          "runtime_roles": [
+            "verifier",
+            "prover"
+          ],
+          "task_classes": [
+            "verification",
+            "review",
+            "quality_gate",
+            "release_readiness"
+          ]
+        },
+        "selected_model": {
+          "carrier_id": "senior",
+          "model_profile_id": "codex_gpt55_high_readonly",
+          "model_profile_id_source_path": "carrier_runtime.roles[senior].model_profiles.codex_gpt55_high_readonly.profile_id",
+          "model_provider": "openai",
+          "model_reasoning_effort": "high",
+          "model_ref": "gpt-5.4",
+          "model_ref_source_path": "carrier_runtime.roles[senior].model_profiles.codex_gpt55_high_readonly.model_ref",
+          "pricing": {
+            "freshness": {
+              "diagnostic_only": true,
+              "enforced": false,
+              "max_age_days": 30,
+              "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+              "required": false,
+              "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+            },
+            "price_basis": "vendor_schedule_snapshot",
+            "source_paths": [
+              "docs/process/codex-agent-configuration-guide.md"
+            ]
+          },
+          "pricing_freshness": {
+            "diagnostic_only": true,
+            "enforced": false,
+            "max_age_days": 30,
+            "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+            "required": false,
+            "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+          },
+          "pricing_freshness_status": "ready",
+          "selected_rate": 16,
+          "selected_rate_source_path": "carrier_runtime.roles[senior].model_profiles.codex_gpt55_high_readonly.normalized_cost_units"
+        },
+        "task_classes": [
+          "review",
+          "verification",
+          "quality_gate"
+        ]
+      },
+      {
+        "cost_policy": {
+          "budget_units": 16,
+          "fallback_carrier": null,
+          "selection_rule": "proof_strength_before_release"
+        },
+        "default_carrier": "senior",
+        "default_model": "gpt-5.4",
+        "default_model_reasoning_effort": "high",
+        "handoff": {
+          "fail_closed_on_missing_handoff": true,
+          "next_role": "release_closure",
+          "required_outputs": [
+            "closure_readiness_decision",
+            "proof_summary",
+            "release_risks"
+          ]
+        },
+        "role_id": "prover",
+        "runtime_role": "prover",
+        "selected_carrier": {
+          "carrier_id": "senior",
+          "model": "gpt-5.4",
+          "model_provider": "openai",
+          "normalized_cost_units": 16,
+          "rate": 16,
+          "reasoning_effort": "high",
+          "runtime_roles": [
+            "verifier",
+            "prover"
+          ],
+          "task_classes": [
+            "verification",
+            "review",
+            "quality_gate",
+            "release_readiness"
+          ]
+        },
+        "selected_model": {
+          "carrier_id": "senior",
+          "model_profile_id": "codex_gpt55_high_readonly",
+          "model_profile_id_source_path": "carrier_runtime.roles[senior].model_profiles.codex_gpt55_high_readonly.profile_id",
+          "model_provider": "openai",
+          "model_reasoning_effort": "high",
+          "model_ref": "gpt-5.4",
+          "model_ref_source_path": "carrier_runtime.roles[senior].model_profiles.codex_gpt55_high_readonly.model_ref",
+          "pricing": {
+            "freshness": {
+              "diagnostic_only": true,
+              "enforced": false,
+              "max_age_days": 30,
+              "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+              "required": false,
+              "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+            },
+            "price_basis": "vendor_schedule_snapshot",
+            "source_paths": [
+              "docs/process/codex-agent-configuration-guide.md"
+            ]
+          },
+          "pricing_freshness": {
+            "diagnostic_only": true,
+            "enforced": false,
+            "max_age_days": 30,
+            "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+            "required": false,
+            "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+          },
+          "pricing_freshness_status": "ready",
+          "selected_rate": 16,
+          "selected_rate_source_path": "carrier_runtime.roles[senior].model_profiles.codex_gpt55_high_readonly.normalized_cost_units"
+        },
+        "task_classes": [
+          "verification",
+          "quality_gate",
+          "release_readiness"
+        ]
+      },
+      {
+        "cost_policy": {
+          "budget_units": 16,
+          "fallback_carrier": null,
+          "selection_rule": "fail_closed_until_release_receipt"
+        },
+        "default_carrier": "senior",
+        "default_model": "gpt-5.4",
+        "default_model_reasoning_effort": "high",
+        "handoff": {
+          "fail_closed_on_missing_handoff": true,
+          "next_role": "terminal_closure",
+          "required_outputs": [
+            "release_or_hold_decision",
+            "closure_receipt",
+            "follow_up_actions"
+          ]
+        },
+        "role_id": "release_closure",
+        "runtime_role": "prover",
+        "selected_carrier": {
+          "carrier_id": "senior",
+          "model": "gpt-5.4",
+          "model_provider": "openai",
+          "normalized_cost_units": 16,
+          "rate": 16,
+          "reasoning_effort": "high",
+          "runtime_roles": [
+            "verifier",
+            "prover"
+          ],
+          "task_classes": [
+            "verification",
+            "review",
+            "quality_gate",
+            "release_readiness"
+          ]
+        },
+        "selected_model": {
+          "carrier_id": "senior",
+          "model_profile_id": "codex_gpt55_high_readonly",
+          "model_profile_id_source_path": "carrier_runtime.roles[senior].model_profiles.codex_gpt55_high_readonly.profile_id",
+          "model_provider": "openai",
+          "model_reasoning_effort": "high",
+          "model_ref": "gpt-5.4",
+          "model_ref_source_path": "carrier_runtime.roles[senior].model_profiles.codex_gpt55_high_readonly.model_ref",
+          "pricing": {
+            "freshness": {
+              "diagnostic_only": true,
+              "enforced": false,
+              "max_age_days": 30,
+              "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+              "required": false,
+              "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+            },
+            "price_basis": "vendor_schedule_snapshot",
+            "source_paths": [
+              "docs/process/codex-agent-configuration-guide.md"
+            ]
+          },
+          "pricing_freshness": {
+            "diagnostic_only": true,
+            "enforced": false,
+            "max_age_days": 30,
+            "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+            "required": false,
+            "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+          },
+          "pricing_freshness_status": "ready",
+          "selected_rate": 16,
+          "selected_rate_source_path": "carrier_runtime.roles[senior].model_profiles.codex_gpt55_high_readonly.normalized_cost_units"
+        },
+        "task_classes": [
+          "release_readiness",
+          "quality_gate"
+        ]
+      },
+      {
+        "cost_policy": {
+          "budget_units": 16,
+          "fallback_carrier": null,
+          "selection_rule": "independent_verification_before_closure"
+        },
+        "default_carrier": "senior",
+        "default_model": "gpt-5.4",
+        "default_model_reasoning_effort": "high",
+        "handoff": {
+          "fail_closed_on_missing_handoff": true,
+          "next_role": "prover",
+          "required_outputs": [
+            "verification_evidence",
+            "failing_or_passing_checks",
+            "residual_risks"
+          ]
+        },
+        "role_id": "tester",
+        "runtime_role": "verifier",
+        "selected_carrier": {
+          "carrier_id": "senior",
+          "model": "gpt-5.4",
+          "model_provider": "openai",
+          "normalized_cost_units": 16,
+          "rate": 16,
+          "reasoning_effort": "high",
+          "runtime_roles": [
+            "verifier",
+            "prover"
+          ],
+          "task_classes": [
+            "verification",
+            "review",
+            "quality_gate",
+            "release_readiness"
+          ]
+        },
+        "selected_model": {
+          "carrier_id": "senior",
+          "model_profile_id": "codex_gpt55_high_readonly",
+          "model_profile_id_source_path": "carrier_runtime.roles[senior].model_profiles.codex_gpt55_high_readonly.profile_id",
+          "model_provider": "openai",
+          "model_reasoning_effort": "high",
+          "model_ref": "gpt-5.4",
+          "model_ref_source_path": "carrier_runtime.roles[senior].model_profiles.codex_gpt55_high_readonly.model_ref",
+          "pricing": {
+            "freshness": {
+              "diagnostic_only": true,
+              "enforced": false,
+              "max_age_days": 30,
+              "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+              "required": false,
+              "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+            },
+            "price_basis": "vendor_schedule_snapshot",
+            "source_paths": [
+              "docs/process/codex-agent-configuration-guide.md"
+            ]
+          },
+          "pricing_freshness": {
+            "diagnostic_only": true,
+            "enforced": false,
+            "max_age_days": 30,
+            "missing_price_policy": "diagnostic_only_use_normalized_cost_units",
+            "required": false,
+            "stale_price_policy": "diagnostic_only_use_normalized_cost_units"
+          },
+          "pricing_freshness_status": "ready",
+          "selected_rate": 16,
+          "selected_rate_source_path": "carrier_runtime.roles[senior].model_profiles.codex_gpt55_high_readonly.normalized_cost_units"
+        },
+        "task_classes": [
+          "verification",
+          "review",
+          "quality_gate"
+        ]
+      }
+    ],
+    "sequence": [
+      "analyst",
+      "developer",
+      "duplication_reviewer",
+      "coach",
+      "tester",
+      "prover",
+      "release_closure"
+    ],
+    "source_paths": [
+      "C:\\project\\vida-stack\\vida.config.yaml",
+      "docs/process/team-development-and-orchestration-protocol.md"
+    ],
+    "status": "ready"
+  },
+  "dispatch_mode": {
+    "activation_view_completes_delegated_work": false,
+    "activation_view_is_execution_evidence": false,
+    "activation_view_only": true,
+    "completion_requires_receipt_backed_execution": true,
+    "continuation_authority_granted": false,
+    "execution_dispatch": false,
+    "execution_evidence_required_for_completion": true,
+    "has_packet_source": false,
+    "missing_execution_evidence_semantics": "non_executing_bridge_blocker",
+    "mode": "activation_view_only",
+    "requested_execute_dispatch": false,
+    "required_completion_evidence": "receipt_backed_execution_evidence",
+    "root_session_write_authority_granted": false,
+    "selection_mode": "explicit_role"
+  },
+  "execution_truth": null,
+  "init": {
+    "allowed_non_orchestrator_roles": [
+      "business_analyst",
+      "coach",
+      "party_chat_accessibility_ux",
+      "party_chat_architect",
+      "party_chat_data_contracts",
+      "party_chat_delivery_cost",
+      "party_chat_dx_tooling",
+      "party_chat_facilitator",
+      "party_chat_pm_process",
+      "party_chat_product_designer",
+      "party_chat_product_scope",
+      "party_chat_qa_tester",
+      "party_chat_quality_verification",
+      "party_chat_release_manager",
+      "party_chat_runtime_systems",
+      "party_chat_security_safety",
+      "party_chat_sre_observability",
+      "party_chat_system_analyst",
+      "pm",
+      "prover",
+      "solution_architect",
+      "verifier",
+      "worker"
+    ],
+    "allowed_thinking_modes": [
+      "STC",
+      "PR-CoT",
+      "MAR"
+    ],
+    "local_runtime_surface": "vida agent-init",
+    "minimum_commands": [
+      "vida agent-init --role worker --json",
+      "vida protocol view agent-definitions/entry.worker-entry",
+      "vida protocol view instruction-contracts/role.worker-thinking",
+      "vida task show <task-id> --json",
+      "vida taskflow consume bundle check --json"
+    ],
+    "mode_selection_rule": "select one worker-safe thinking mode per step inside the assigned bounded scope; do not widen into orchestrator/meta reasoning without an explicit packet trigger",
+    "operator_command_map": {
+      "families": [
+        {
+          "availability": "view_only_reference",
+          "commands": [
+            "init",
+            "boot",
+            "orchestrator-init",
+            "agent-init"
+          ],
+          "entries": [
+            {
+              "command": "init",
+              "summary": "bootstrap framework carriers into the current project"
+            },
+            {
+              "command": "boot",
+              "summary": "initialize authoritative state and instruction/framework-memory surfaces"
+            },
+            {
+              "command": "orchestrator-init",
+              "summary": "render the compiled startup view for the orchestrator lane"
+            },
+            {
+              "command": "agent-init",
+              "summary": "render the bounded startup view or packet activation view for a worker/agent lane; this surface does not itself execute the packet"
+            }
+          ],
+          "family_id": "bootstrap",
+          "label": "Bootstrap",
+          "lane_scope": "root_only",
+          "notes": "bootstrap and startup entry surfaces"
+        },
+        {
+          "availability": "view_only_reference",
+          "commands": [
+            "project-activator"
+          ],
+          "entries": [
+            {
+              "command": "project-activator",
+              "summary": "inspect project activation posture and bounded onboarding next steps"
+            }
+          ],
+          "family_id": "project_activation",
+          "label": "Project Activation",
+          "lane_scope": "root_only",
+          "notes": "project activation and onboarding posture"
+        },
+        {
+          "availability": "callable",
+          "commands": [
+            "protocol"
+          ],
+          "entries": [
+            {
+              "command": "protocol",
+              "summary": "resolve and render framework protocol/guide surfaces"
+            }
+          ],
+          "family_id": "protocol_discovery",
+          "label": "Protocol Discovery",
+          "lane_scope": "shared",
+          "notes": "protocol and guide lookup surfaces"
+        },
+        {
+          "availability": "view_only_reference",
+          "commands": [
+            "status",
+            "doctor"
+          ],
+          "entries": [
+            {
+              "command": "status",
+              "summary": "inspect backend, state spine, and latest receipts"
+            },
+            {
+              "command": "doctor",
+              "summary": "run bounded runtime integrity checks"
+            }
+          ],
+          "family_id": "runtime_status",
+          "label": "Runtime Status",
+          "lane_scope": "root_only",
+          "notes": "bounded runtime inspection and integrity checks"
+        },
+        {
+          "availability": "view_only_reference",
+          "commands": [
+            "task",
+            "consume",
+            "taskflow"
+          ],
+          "entries": [
+            {
+              "command": "task",
+              "summary": "task import/list/show/ready over the authoritative state store"
+            },
+            {
+              "command": "consume",
+              "summary": "thin root alias to the TaskFlow consume family"
+            },
+            {
+              "command": "taskflow",
+              "summary": "delegate to the TaskFlow runtime family"
+            }
+          ],
+          "family_id": "task_runtime",
+          "label": "Task Runtime",
+          "lane_scope": "shared",
+          "notes": "task authority and taskflow runtime entry surfaces"
+        },
+        {
+          "availability": "callable",
+          "commands": [
+            "docflow"
+          ],
+          "entries": [
+            {
+              "command": "docflow",
+              "summary": "delegate to the DocFlow runtime family"
+            }
+          ],
+          "family_id": "documentation",
+          "label": "Documentation",
+          "lane_scope": "shared",
+          "notes": "documentation and readiness runtime family"
+        },
+        {
+          "availability": "view_only_reference",
+          "commands": [
+            "lane",
+            "approval",
+            "recovery"
+          ],
+          "entries": [
+            {
+              "command": "lane",
+              "summary": "inspect or mutate canonical lane/takeover operator state"
+            },
+            {
+              "command": "approval",
+              "summary": "inspect approval wait/complete state over run-graph approval law"
+            },
+            {
+              "command": "recovery",
+              "summary": "thin root alias to the TaskFlow recovery family"
+            }
+          ],
+          "family_id": "lane_control",
+          "label": "Lane Control",
+          "lane_scope": "root_only",
+          "notes": "lane, approval, and recovery operator surfaces"
+        },
+        {
+          "availability": "callable",
+          "commands": [
+            "agent-feedback",
+            "memory"
+          ],
+          "entries": [
+            {
+              "command": "agent-feedback",
+              "summary": "record host-agent feedback and refresh local strategy state"
+            },
+            {
+              "command": "memory",
+              "summary": "inspect the effective instruction bundle"
+            }
+          ],
+          "family_id": "support",
+          "label": "Support",
+          "lane_scope": "shared",
+          "notes": "feedback and memory support surfaces"
+        }
+      ],
+      "projection_surface": "vida agent-init",
+      "schema_version": "v1",
+      "source_surface": "vida --help"
+    },
+    "project_activation": {
+      "activation_algorithm": {
+        "activation_receipt_glob": ".vida/receipts/project-activation*.json",
+        "allowed_activation_surfaces": [
+          "vida project-activator",
+          "vida docflow",
+          "vida protocol view bootstrap/router",
+          "vida protocol view runtime-instructions/work.host-cli-agent-setup-protocol"
+        ],
+        "docflow_first": true,
+        "docflow_surface": "vida docflow",
+        "mode": "bounded_interview_then_materialize",
+        "non_canonical_taskflow_surfaces_forbidden_while_pending": [
+          "vida taskflow",
+          "external_taskflow_runtime"
+        ],
+        "taskflow_admitted_while_pending": false
+      },
+      "activation_pending": false,
+      "host_environment": {
+        "configuration_protocols": [
+          "runtime-instructions/work.host-cli-agent-setup-protocol"
+        ],
+        "default_host_agent_templates": [
+          "junior",
+          "middle",
+          "senior",
+          "architect"
+        ],
+        "materialization_required": false,
+        "runtime_template_root": ".codex",
+        "selected_cli_execution_class": "internal",
+        "selected_cli_system": "codex",
+        "selection_required": false,
+        "supported_cli_systems": [
+          "codex",
+          "hermes",
+          "opencode",
+          "pi"
+        ],
+        "template_materialized": true,
+        "template_source_root": "C:/Users/pomaz/AppData/Local/vida-stack/current/.codex"
+      },
+      "interview": {
+        "one_shot_example": "vida project-activator --json",
+        "required_inputs": [],
+        "safe_defaults": {
+          "project_bootstrap.agent_system_doc": "docs/process/agent-system.md",
+          "project_bootstrap.architecture_doc": "docs/product/architecture.md",
+          "project_bootstrap.decisions_doc": "docs/process/decisions.md",
+          "project_bootstrap.docs_root": "docs",
+          "project_bootstrap.environments_doc": "docs/process/environments.md",
+          "project_bootstrap.process_root": "docs/process",
+          "project_bootstrap.project_operations_doc": "docs/process/project-operations.md",
+          "project_bootstrap.readme_doc": "README.md",
+          "project_bootstrap.research_root": "docs/research",
+          "project_docs.documentation_tooling_doc": "docs/process/documentation-tooling-map.md"
+        }
+      },
+      "next_steps": [
+        "activation looks ready enough for normal orchestrator and worker initialization"
+      ],
+      "normal_work_defaults": {
+        "carrier_tier_rates": {
+          "architect": 48,
+          "junior": 1,
+          "middle": 4,
+          "senior": 16
+        },
+        "default_agent_topology": [
+          "junior",
+          "middle",
+          "senior",
+          "architect"
+        ],
+        "documentation_first_for_feature_requests": true,
+        "execution_carrier_model": {
+          "agent_identity": "execution_carrier",
+          "carrier_catalog_owner": "vida.config.yaml -> host_environment.systems.codex.carriers",
+          "inspect_commands": {
+            "carrier_catalog": "vida taskflow consume agent-system --json | jq '.snapshot.carriers'",
+            "runtime_roles": "vida taskflow consume agent-system --json | jq '.snapshot.runtime_roles'",
+            "scores": "vida taskflow consume agent-system --json | jq '.snapshot.worker_strategy.agents'",
+            "selection_preview": "vida taskflow consume final \"<request>\" --json | jq '.payload.taskflow_handoff_plan.runtime_assignment'",
+            "snapshot": "vida taskflow consume agent-system --json"
+          },
+          "runtime_role_identity": "activation_state",
+          "scorecards_store": ".vida/state/worker-scorecards.json",
+          "selection_rule": "capability_first_then_score_guard_then_cheapest_tier",
+          "strategy_store": ".vida/state/worker-strategy.json"
+        },
+        "intake_runtime": "vida taskflow consume final <request> --json",
+        "local_agent_guide": "docs/process/codex-agent-configuration-guide.md",
+        "local_agent_score_state": {
+          "scorecards_store": ".vida/state/worker-scorecards.json",
+          "strategy_store": ".vida/state/worker-strategy.json"
+        },
+        "local_documentation_tooling_map": "docs/process/documentation-tooling-map.md",
+        "local_feature_design_template": "docs/product/spec/templates/feature-design-document.template.md",
+        "local_host_agent_guide": "docs/process/codex-agent-configuration-guide.md",
+        "local_product_spec_guide": "docs/product/spec/README.md",
+        "recommended_flow": [
+          "create or update one bounded design document before code execution when the request asks for research/specification/planning and implementation together",
+          "open one feature epic and one spec-pack task in vida taskflow before delegated implementation begins",
+          "use vida docflow to initialize, finalize, and validate the design document",
+          "close the spec-pack task and shape the execution packet from the bounded file set and proof targets recorded in the design document",
+          "delegate normal write-producing work through the default carrier tier ladder and let runtime pick the cheapest capable tier with a healthy local score instead of collapsing directly into root-session coding"
+        ]
+      },
+      "project_shape": "bootstrapped",
+      "status": "ready_enough_for_normal_work",
+      "triggers": {
+        "agent_extensions_invalid": false,
+        "config_state_incomplete": false,
+        "execution_posture_ambiguous": false,
+        "host_cli_unselected_or_unmaterialized": false,
+        "initial_onboarding_missing": false,
+        "sidecar_or_project_docs_too_thin": false
+      }
+    },
+    "project_root": "C:\\project\\vida-stack",
+    "project_runtime_capsules": [
+      {
+        "artifact_path": "process/project-packet-and-lane-runtime-capsule",
+        "artifact_revision": "2026-03-13",
+        "artifact_type": "process_doc",
+        "cache_partition": "lane_bundle",
+        "promotion_state": {
+          "bound": true,
+          "compiled": true,
+          "executable": true,
+          "mapped": true,
+          "registered": true,
+          "stage": "executable",
+          "validated": true
+        },
+        "protocol_id": "project_packet_and_lane_runtime_capsule",
+        "runtime_use_point": "orchestrator-init",
+        "source_path": "docs/process/project-packet-and-lane-runtime-capsule.md",
+        "status": "canonical"
+      },
+      {
+        "artifact_path": "process/project-start-readiness-runtime-capsule",
+        "artifact_revision": "2026-03-13",
+        "artifact_type": "process_doc",
+        "cache_partition": "lane_bundle",
+        "promotion_state": {
+          "bound": true,
+          "compiled": true,
+          "executable": true,
+          "mapped": true,
+          "registered": true,
+          "stage": "executable",
+          "validated": true
+        },
+        "protocol_id": "project_start_readiness_runtime_capsule",
+        "runtime_use_point": "orchestrator-init",
+        "source_path": "docs/process/project-start-readiness-runtime-capsule.md",
+        "status": "canonical"
+      },
+      {
+        "artifact_path": "process/project-packet-rendering-runtime-capsule",
+        "artifact_revision": "2026-03-13",
+        "artifact_type": "process_doc",
+        "cache_partition": "lane_bundle",
+        "promotion_state": {
+          "bound": true,
+          "compiled": true,
+          "executable": true,
+          "mapped": true,
+          "registered": true,
+          "stage": "executable",
+          "validated": true
+        },
+        "protocol_id": "project_packet_rendering_runtime_capsule",
+        "runtime_use_point": "orchestrator-init",
+        "source_path": "docs/process/project-packet-rendering-runtime-capsule.md",
+        "status": "canonical"
+      }
+    ],
+    "protocol_view_targets": [
+      "agent-definitions/entry.worker-entry",
+      "instruction-contracts/role.worker-thinking",
+      "system-maps/bootstrap.worker-boot-flow"
+    ],
+    "reporting_contract": {
+      "agent_counters_prefix": "Agents: active=<n> | working=<n> | waiting=<n>",
+      "mode_selection_note": "the reporting label must reflect the selected worker-safe per-step thinking mode without exposing hidden reasoning",
+      "required": true,
+      "scope": "worker-facing bounded status and completion reports",
+      "task_counters_prefix": "Tasks: active=<n> | in_work=<n> | blocked=<n>",
+      "thinking_mode_prefix": "Thinking mode: <STC|PR-CoT|MAR>."
+    },
+    "status": "ready_enough_for_normal_work",
+    "surface": "vida agent-init",
+    "thinking_protocol_targets": [
+      "instruction-contracts/role.worker-thinking"
+    ],
+    "worker_entry_contract": "vida/config/instructions/agent-definitions/entry.worker-entry.md",
+    "worker_lane_markers": [
+      "worker_lane_confirmed: true",
+      "lane_identity: worker"
+    ],
+    "worker_thinking_subset": "vida/config/instructions/instruction-contracts/role.worker-thinking.md"
+  },
+  "packet_activation_evidence": null,
+  "runtime_bundle_summary": {
+    "activation_source": "state_store",
+    "bundle_id": "taskflow-runtime-bundle-89e95582f5a8ddf51e0d5db018b8f099fd382766d0c63739d0a3d0fa39e4996f",
+    "launcher_runtime_paths": {
+      "active_executable_fingerprint": "3fd6b023c66f25f269c83fa80e09b7372afbcc1792bd4694d86d741fa4fe6003",
+      "active_executable_path": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\current\\bin\\vida.exe",
+      "divergent_installed_binaries": false,
+      "install_layout": {
+        "current_root": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\current",
+        "env_file": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\env.ps1",
+        "install_root": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack",
+        "platform": "windows",
+        "runtime_bin_dir": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\current\\bin"
+      },
+      "installed_binaries": [
+        {
+          "active": true,
+          "fingerprint": "3fd6b023c66f25f269c83fa80e09b7372afbcc1792bd4694d86d741fa4fe6003",
+          "path": "\\\\?\\C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\releases\\v0.9.7\\bin\\vida.exe"
+        }
+      ],
+      "next_actions": [],
+      "path_resolution": {
+        "active_executable_on_path": true,
+        "command": "vida",
+        "expected_runtime_bin_dir": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\current\\bin",
+        "expected_runtime_bin_on_path": true,
+        "resolved_path": "\\\\?\\C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\releases\\v0.9.7\\bin\\vida.exe",
+        "status": "pass"
+      },
+      "project_root": "C:\\project\\vida-stack",
+      "status": "pass",
+      "taskflow_surface": "vida taskflow",
+      "vida": "vida"
+    },
+    "state_dir": ".vida/data/state",
+    "vida_root": "C:\\project\\vida-stack"
+  },
+  "selection": {
+    "mode": "explicit_role",
+    "request_text": "Implement bounded code fix in crates/vida/src/taskflow_run_graph.rs and crates/vida/src/state_store_open.rs to reduce authoritative datastore lock contention in run-graph dispatch-init by moving read-mostly preparation outside the authoritative write lock and keeping only a short idempotent commit under lock. Verification: targeted cargo tests for dispatch-init idempotency and lock contention behavior.",
+    "selected_role": "worker"
+  },
+  "surface": "vida agent-init"
+}
+
+---STDERR---

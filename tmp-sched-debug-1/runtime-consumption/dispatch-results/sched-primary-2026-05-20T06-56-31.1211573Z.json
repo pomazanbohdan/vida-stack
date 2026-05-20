@@ -1,0 +1,57 @@
+{
+  "activation_command": "vida agent-init --dispatch-packet 'C:\\project\\vida-stack\\tmp-sched-debug-1\\runtime-consumption\\dispatch-packets\\sched-primary-2026-05-20T06-56-29.9303278Z.json' --execute-dispatch --json",
+  "activation_semantics": {
+    "activation_kind": "activation_view",
+    "executes_packet": false,
+    "records_completion_receipt": false,
+    "view_only": true
+  },
+  "activation_vs_execution_evidence": {
+    "activation_kind": "activation_view",
+    "activation_semantics": {
+      "activation_kind": "activation_view",
+      "executes_packet": false,
+      "records_completion_receipt": false,
+      "view_only": true
+    },
+    "evidence_state": "activation_view_only",
+    "execution_evidence": null,
+    "receipt_backed": false
+  },
+  "artifact_kind": "runtime_dispatch_result",
+  "blocker_code": "internal_dispatch_timeout_without_receipt",
+  "blocker_reason": "configured internal host bridge does not support receipt-backed completion; timeout avoided by recording a terminal blocker before launch",
+  "dispatch_target": "analysis",
+  "execution_evidence": null,
+  "execution_state": "blocked",
+  "lane_execution_receipt_artifact": {
+    "artifact_id": "lane-execution.sched-primary.analysis",
+    "artifact_type": "lane_execution_receipt",
+    "carrier_id": "internal_subagents",
+    "created_at": "2026-05-20T06:56:29.929252Z",
+    "evidence_status": "recorded",
+    "finished_at": "2026-05-20T06:56:31.1211858Z",
+    "lane_id": "sched-primary:analysis",
+    "lane_role": "worker",
+    "lane_status": "lane_blocked",
+    "owner_surface": "runtime_dispatch_state",
+    "packet_id": "sched-primary-2026-05-20T06-56-29.9303278Z",
+    "result_artifact_ids": [
+      "C:\\project\\vida-stack\\tmp-sched-debug-1\\runtime-consumption\\dispatch-results\\sched-primary-2026-05-20T06-56-31.1211573Z.json"
+    ],
+    "run_id": "sched-primary",
+    "schema_version": "release-1-v1",
+    "started_at": "2026-05-20T06:56:29.929252Z",
+    "status": "blocked",
+    "updated_at": "2026-05-20T06:56:31.1211858Z",
+    "workflow_class": "delegated_development_packet"
+  },
+  "note": "internal host handoff blocked before launch to avoid waiting for a configured non-receipted carrier path",
+  "provider_error": "internal host dispatch was blocked before launching nested carrier execution because the configured host bridge cannot provide receipt-backed completion evidence",
+  "recorded_at": "2026-05-20T06:56:31.1211858Z",
+  "run_id": "sched-primary",
+  "selected_backend": "internal_subagents",
+  "source_dispatch_packet_path": "C:\\project\\vida-stack\\tmp-sched-debug-1\\runtime-consumption\\dispatch-packets\\sched-primary-2026-05-20T06-56-29.9303278Z.json",
+  "status": "blocked",
+  "surface": "vida agent-init"
+}

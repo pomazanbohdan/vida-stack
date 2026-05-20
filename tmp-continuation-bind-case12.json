@@ -1,0 +1,54 @@
+{
+  "artifact_refs": {
+    "run_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+    "surface": "vida taskflow continuation bind",
+    "task_id": "taskflow-case-12-reprioritization-during-active-work"
+  },
+  "blocker_codes": [
+    "continuation_binding_lifecycle_not_closed"
+  ],
+  "error": "Explicit --task-id continuation binding is only allowed after run `runtime-bounded-fix-crates-vida-src-taskflow` reaches closure_complete with no downstream target.",
+  "next_actions": [
+    "Refresh run-graph and task evidence before recording an explicit continuation binding.",
+    "Preserve fail-closed binding semantics until the active bounded unit is unambiguous."
+  ],
+  "operator_contracts": {
+    "artifact_refs": {
+      "run_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+      "surface": "vida taskflow continuation bind",
+      "task_id": "taskflow-case-12-reprioritization-during-active-work"
+    },
+    "blocker_codes": [
+      "continuation_binding_lifecycle_not_closed"
+    ],
+    "contract_id": "release-1-operator-contracts",
+    "next_actions": [
+      "Refresh run-graph and task evidence before recording an explicit continuation binding.",
+      "Preserve fail-closed binding semantics until the active bounded unit is unambiguous."
+    ],
+    "risk_tier": null,
+    "schema_version": "release-1-v1",
+    "status": "blocked",
+    "trace_id": null,
+    "workflow_class": null
+  },
+  "run_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+  "shared_fields": {
+    "artifact_refs": {
+      "run_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+      "surface": "vida taskflow continuation bind",
+      "task_id": "taskflow-case-12-reprioritization-during-active-work"
+    },
+    "blocker_codes": [
+      "continuation_binding_lifecycle_not_closed"
+    ],
+    "next_actions": [
+      "Refresh run-graph and task evidence before recording an explicit continuation binding.",
+      "Preserve fail-closed binding semantics until the active bounded unit is unambiguous."
+    ],
+    "status": "blocked"
+  },
+  "status": "blocked",
+  "surface": "vida taskflow continuation bind",
+  "task_id": "taskflow-case-12-reprioritization-during-active-work"
+}

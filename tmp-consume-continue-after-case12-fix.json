@@ -1,0 +1,50 @@
+{
+  "artifact_refs": {
+    "run_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+    "surface": "vida taskflow consume continue"
+  },
+  "blocker_codes": [
+    "continuation_binding_ambiguous"
+  ],
+  "error": "Latest continuation binding for run `runtime-bounded-fix-crates-vida-src-taskflow` is ambiguous. Either bind the next bounded unit explicitly with `vida taskflow continuation bind runtime-bounded-fix-crates-vida-src-taskflow --task-id <task-id> --json` or pass `--run-id runtime-bounded-fix-crates-vida-src-taskflow` to refresh that specific run.",
+  "next_actions": [
+    "Bind the next bounded unit explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id> --json`.",
+    "Pass `--run-id <run-id>` only when intentionally refreshing that specific run."
+  ],
+  "operator_contracts": {
+    "artifact_refs": {
+      "run_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+      "surface": "vida taskflow consume continue"
+    },
+    "blocker_codes": [
+      "continuation_binding_ambiguous"
+    ],
+    "contract_id": "release-1-operator-contracts",
+    "next_actions": [
+      "Bind the next bounded unit explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id> --json`.",
+      "Pass `--run-id <run-id>` only when intentionally refreshing that specific run."
+    ],
+    "risk_tier": null,
+    "schema_version": "release-1-v1",
+    "status": "blocked",
+    "trace_id": null,
+    "workflow_class": null
+  },
+  "run_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+  "shared_fields": {
+    "artifact_refs": {
+      "run_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+      "surface": "vida taskflow consume continue"
+    },
+    "blocker_codes": [
+      "continuation_binding_ambiguous"
+    ],
+    "next_actions": [
+      "Bind the next bounded unit explicitly with `vida taskflow continuation bind <run-id> --task-id <task-id> --json`.",
+      "Pass `--run-id <run-id>` only when intentionally refreshing that specific run."
+    ],
+    "status": "blocked"
+  },
+  "status": "blocked",
+  "surface": "vida taskflow consume continue"
+}

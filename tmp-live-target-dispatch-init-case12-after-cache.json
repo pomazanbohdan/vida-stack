@@ -1,0 +1,12 @@
+{
+  "blockers": [
+    "run_graph_dispatch_init_timeout"
+  ],
+  "error": "Timed out preparing run-graph dispatch-init for `taskflow-case-12-reprioritization-during-active-work` after 25s; dispatch-init may have written a packet before timeout, but the surface failed closed instead of holding the state-store lock.",
+  "incident": {
+    "status": "blocked",
+    "summary": "run-graph dispatch-init timed out before returning a bounded dispatch receipt"
+  },
+  "run_id": "taskflow-case-12-reprioritization-during-active-work",
+  "surface": "vida taskflow run-graph dispatch-init"
+}

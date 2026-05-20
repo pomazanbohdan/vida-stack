@@ -1,0 +1,1019 @@
+{
+  "artifact_refs": {
+    "effective_instruction_bundle_receipt_id": "effective-bundle-framework-agent-definition-1779223299662188800",
+    "latest_memory_governance": {
+      "approval_receipt_id": null,
+      "blocker_codes": [],
+      "consent_basis": null,
+      "deletion_or_correction_ref": null,
+      "enforcement_state": "not_required",
+      "governance_required": false,
+      "memory_class": null,
+      "sensitivity_level": null,
+      "ttl_policy": null
+    },
+    "latest_principal_delegation": {
+      "approval_receipt_id": null,
+      "audit_ref": ".vida/data/state\\runtime-consumption\\dispatch-results\\runtime-bounded-fix-crates-vida-src-taskflow-2026-05-19T19-44-17.2900385Z.json",
+      "blocker_codes": [],
+      "delegatee_ref": "dispatch_target:analysis",
+      "delegation_state": "delegated_lane_blocked",
+      "delegator_ref": "node:analysis",
+      "enforcement_state": "pass",
+      "execution_backend": "pi_cli",
+      "principal_id": "run_graph:runtime-bounded-fix-crates-vida-src-taskflow:task:runtime-bounded-fix-crates-vida-src-taskflow",
+      "principal_kind": "runtime_local_bounded_principal",
+      "principal_scope": "implementation"
+    },
+    "latest_run_graph_approval_receipt_id": null,
+    "latest_run_graph_dispatch_receipt_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+    "latest_task_reconciliation_receipt_id": "task-reconciliation-1778047900201236700",
+    "protocol_binding_latest_receipt_id": "protocol-binding-1779221996130902200",
+    "retrieval_trust_signal": {
+      "acl": "protocol-binding-1779221996130902200",
+      "acl_context": "protocol_binding_receipt:protocol-binding-1779221996130902200",
+      "acl_propagation": "protocol_binding_receipt_runtime_gate",
+      "citation": ".vida/data/state/runtime-consumption/final-2026-05-19T14-09-31.378989Z.json",
+      "freshness": "final",
+      "freshness_posture": "latest_final_release_admission_snapshot",
+      "source": "runtime_consumption_snapshot_index",
+      "source_registry_ref": "runtime_consumption_snapshot_registry:latest_final_release_admission"
+    },
+    "root_session_write_guard_status": "blocked_by_default",
+    "runtime_consumption_latest_snapshot_path": ".vida/data/state/runtime-consumption/final-2026-05-19T14-09-31.378989Z.json"
+  },
+  "blocker_codes": [],
+  "boot_compatibility": {
+    "classification": "backward_compatible",
+    "next_step": "normal_boot_allowed",
+    "reasons": []
+  },
+  "dependency_graph": {
+    "issue_count": 0
+  },
+  "effective_instruction_bundle": {
+    "artifact_count": 3,
+    "mandatory_chain_order": [
+      "framework-agent-definition",
+      "framework-instruction-contract",
+      "framework-prompt-template-config"
+    ],
+    "receipt_id": "effective-bundle-framework-agent-definition-1779223299662188800",
+    "root_artifact_id": "framework-agent-definition",
+    "source_version_tuple": [
+      "framework-agent-definition@v1",
+      "framework-instruction-contract@v1",
+      "framework-prompt-template-config@v1"
+    ]
+  },
+  "latest_memory_governance": {
+    "approval_receipt_id": null,
+    "blocker_codes": [],
+    "consent_basis": null,
+    "deletion_or_correction_ref": null,
+    "enforcement_state": "not_required",
+    "governance_required": false,
+    "memory_class": null,
+    "sensitivity_level": null,
+    "ttl_policy": null
+  },
+  "latest_principal_delegation": {
+    "approval_receipt_id": null,
+    "audit_ref": ".vida/data/state\\runtime-consumption\\dispatch-results\\runtime-bounded-fix-crates-vida-src-taskflow-2026-05-19T19-44-17.2900385Z.json",
+    "blocker_codes": [],
+    "delegatee_ref": "dispatch_target:analysis",
+    "delegation_state": "delegated_lane_blocked",
+    "delegator_ref": "node:analysis",
+    "enforcement_state": "pass",
+    "execution_backend": "pi_cli",
+    "principal_id": "run_graph:runtime-bounded-fix-crates-vida-src-taskflow:task:runtime-bounded-fix-crates-vida-src-taskflow",
+    "principal_kind": "runtime_local_bounded_principal",
+    "principal_scope": "implementation"
+  },
+  "latest_run_graph_approval_receipt": null,
+  "latest_run_graph_checkpoint": null,
+  "latest_run_graph_delegation_gate": {
+    "active_node": "analysis",
+    "blocker_code": "open_delegated_cycle",
+    "continuation_signal": "continue_routing_non_blocking",
+    "delegated_cycle_open": true,
+    "delegated_cycle_state": "delegated_lane_blocked",
+    "lifecycle_stage": "analysis_blocked",
+    "local_exception_takeover_gate": "blocked_open_delegated_cycle",
+    "reporting_pause_gate": "non_blocking_only"
+  },
+  "latest_run_graph_dispatch_receipt": {
+    "activation_agent_type": "pi_cli",
+    "activation_evidence": {
+      "activation_kind": "activation_view",
+      "activation_semantics": {
+        "activation_kind": "activation_view",
+        "executes_packet": false,
+        "records_completion_receipt": false,
+        "view_only": true
+      },
+      "evidence_state": "activation_view_only",
+      "execution_evidence": null,
+      "execution_evidence_path": null,
+      "receipt_backed": false
+    },
+    "activation_runtime_role": "verifier",
+    "blocker_code": "timeout_without_takeover_authority",
+    "dispatch_command": "vida-pi-agent --mode rpc --no-session --model openai-codex/gpt-5.4-mini --thinking-level low --scope-guard-mode guarded-write --workdir 'C:\\project\\vida-stack'",
+    "dispatch_kind": "agent_lane",
+    "dispatch_packet_path": "C:\\project\\vida-stack\\.vida/data/state\\runtime-consumption\\dispatch-packets\\runtime-bounded-fix-crates-vida-src-taskflow-2026-05-19T19-24-03.3109397Z.json",
+    "dispatch_result_path": ".vida/data/state\\runtime-consumption\\dispatch-results\\runtime-bounded-fix-crates-vida-src-taskflow-2026-05-19T19-44-17.2900385Z.json",
+    "dispatch_status": "blocked",
+    "dispatch_surface": "external_cli:pi_cli",
+    "dispatch_target": "analysis",
+    "downstream_dispatch_active_target": "analysis",
+    "downstream_dispatch_blockers": [],
+    "downstream_dispatch_command": "vida agent-init",
+    "downstream_dispatch_executed_count": 0,
+    "downstream_dispatch_last_target": null,
+    "downstream_dispatch_note": "`analysis` dispatch is in flight; wait for terminal execution evidence before deriving downstream lane blockers",
+    "downstream_dispatch_packet_path": null,
+    "downstream_dispatch_ready": false,
+    "downstream_dispatch_result_path": null,
+    "downstream_dispatch_status": null,
+    "downstream_dispatch_target": null,
+    "downstream_dispatch_trace_path": null,
+    "effective_execution_posture": {
+      "activation_evidence_state": "activation_view_only",
+      "activation_kind": "activation_view",
+      "backend_selection_source": "dynamic_runtime_selection",
+      "dispatch_target": "analysis",
+      "effective_posture_kind": "mixed",
+      "execution_evidence_path": null,
+      "fallback_backend": "internal_subagents",
+      "fallback_backend_class": "internal",
+      "fanout_backend_classes": {
+        "hermes_cli": "external_cli",
+        "kilo_cli": "external_cli",
+        "opencode_cli": "external_cli"
+      },
+      "fanout_backends": [
+        "hermes_cli",
+        "opencode_cli",
+        "kilo_cli"
+      ],
+      "hybrid_host_backend_selection": true,
+      "mixed_route_backends": true,
+      "receipt_backed": false,
+      "receipt_backed_execution_evidence": false,
+      "route_contains_external_backend": true,
+      "route_contains_internal_backend": true,
+      "route_primary_backend": "opencode_cli",
+      "route_primary_backend_class": "external_cli",
+      "selected_backend": "pi_cli",
+      "selected_backend_class": "external_cli",
+      "selected_backend_source": "dynamic_runtime_selection",
+      "selected_cli_system": "codex",
+      "selected_execution_class": "internal"
+    },
+    "exception_path_receipt_id": null,
+    "lane_status": "lane_blocked",
+    "recorded_at": "2026-05-19T19:24:03.2684054Z",
+    "route_policy": {
+      "backend_selection_source": "dynamic_runtime_selection",
+      "dispatch_target": "analysis",
+      "effective_execution_posture": "hybrid",
+      "effective_selected_backend": "pi_cli",
+      "mixed_posture": true,
+      "route_fallback_backend": "internal_subagents",
+      "route_fallback_backend_class": "internal",
+      "route_fallback_backend_policy": {
+        "backend_class": "internal",
+        "backend_id": "internal_subagents",
+        "capability_band": [
+          "implementation_safe",
+          "architecture_safe",
+          "review_safe"
+        ],
+        "lane_admissibility": {
+          "analysis": true,
+          "coach": true,
+          "execution_preparation": true,
+          "implementation": true,
+          "policy_flags": {
+            "internal_only_backend": true,
+            "read_only_backend": false,
+            "review_only_backend": false,
+            "scoped_write_backend": false
+          },
+          "review": true,
+          "verification": true
+        },
+        "specialties": [
+          "implementation",
+          "architecture",
+          "integration",
+          "review",
+          "verification"
+        ],
+        "write_scope": "orchestrator_native"
+      },
+      "route_fanout_backend_classes": {
+        "hermes_cli": "external_cli",
+        "kilo_cli": "external_cli",
+        "opencode_cli": "external_cli"
+      },
+      "route_fanout_backend_policies": [
+        {
+          "backend_class": "external_cli",
+          "backend_id": "hermes_cli",
+          "capability_band": [
+            "read_only",
+            "review_safe"
+          ],
+          "lane_admissibility": {
+            "analysis": true,
+            "coach": true,
+            "execution_preparation": true,
+            "implementation": false,
+            "policy_flags": {
+              "internal_only_backend": false,
+              "read_only_backend": true,
+              "review_only_backend": true,
+              "scoped_write_backend": false
+            },
+            "review": true,
+            "verification": false
+          },
+          "specialties": [
+            "planning",
+            "spec",
+            "review"
+          ],
+          "write_scope": "none"
+        },
+        {
+          "backend_class": "external_cli",
+          "backend_id": "opencode_cli",
+          "capability_band": [
+            "read_only",
+            "review_safe"
+          ],
+          "lane_admissibility": {
+            "analysis": true,
+            "coach": true,
+            "execution_preparation": true,
+            "implementation": false,
+            "policy_flags": {
+              "internal_only_backend": false,
+              "read_only_backend": true,
+              "review_only_backend": true,
+              "scoped_write_backend": false
+            },
+            "review": true,
+            "verification": false
+          },
+          "specialties": [
+            "planning",
+            "spec",
+            "review"
+          ],
+          "write_scope": "none"
+        },
+        {
+          "backend_class": "external_cli",
+          "backend_id": "kilo_cli",
+          "capability_band": [
+            "read_only",
+            "review_safe"
+          ],
+          "lane_admissibility": {
+            "analysis": true,
+            "coach": true,
+            "execution_preparation": true,
+            "implementation": false,
+            "policy_flags": {
+              "internal_only_backend": false,
+              "read_only_backend": true,
+              "review_only_backend": true,
+              "scoped_write_backend": false
+            },
+            "review": true,
+            "verification": false
+          },
+          "specialties": [
+            "planning",
+            "spec",
+            "review"
+          ],
+          "write_scope": "none"
+        }
+      ],
+      "route_fanout_backends": [
+        "hermes_cli",
+        "opencode_cli",
+        "kilo_cli"
+      ],
+      "route_primary_backend": "opencode_cli",
+      "route_primary_backend_class": "external_cli",
+      "route_primary_backend_policy": {
+        "backend_class": "external_cli",
+        "backend_id": "opencode_cli",
+        "capability_band": [
+          "read_only",
+          "review_safe"
+        ],
+        "lane_admissibility": {
+          "analysis": true,
+          "coach": true,
+          "execution_preparation": true,
+          "implementation": false,
+          "policy_flags": {
+            "internal_only_backend": false,
+            "read_only_backend": true,
+            "review_only_backend": true,
+            "scoped_write_backend": false
+          },
+          "review": true,
+          "verification": false
+        },
+        "specialties": [
+          "planning",
+          "spec",
+          "review"
+        ],
+        "write_scope": "none"
+      },
+      "selected_backend_class": "external_cli",
+      "selected_backend_policy": {
+        "backend_class": "external_cli",
+        "backend_id": "pi_cli",
+        "capability_band": [
+          "implementation_guarded",
+          "specification_safe",
+          "review_safe"
+        ],
+        "lane_admissibility": {
+          "analysis": true,
+          "coach": true,
+          "execution_preparation": true,
+          "implementation": true,
+          "policy_flags": {
+            "internal_only_backend": false,
+            "read_only_backend": false,
+            "review_only_backend": false,
+            "scoped_write_backend": false
+          },
+          "review": true,
+          "verification": true
+        },
+        "specialties": [
+          "implementation",
+          "spec",
+          "review",
+          "verification"
+        ],
+        "write_scope": "guard_required_owned_paths"
+      },
+      "selected_backend_source": "dynamic_runtime_selection",
+      "selected_execution_class": "external_cli"
+    },
+    "run_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+    "selected_backend": "pi_cli",
+    "supersedes_receipt_id": null
+  },
+  "latest_run_graph_gate": null,
+  "latest_run_graph_recovery": null,
+  "latest_run_graph_status": {
+    "active_node": "analysis",
+    "checkpoint_kind": "none",
+    "context_state": "sealed",
+    "handoff_state": "none",
+    "lane_id": "analysis_lane",
+    "lifecycle_stage": "analysis_blocked",
+    "next_node": null,
+    "policy_gate": "validation_report_required",
+    "recovery_ready": false,
+    "resume_target": "none",
+    "route_task_class": "implementation",
+    "run_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+    "selected_backend": "pi_cli",
+    "status": "blocked",
+    "task_class": "implementation",
+    "task_id": "runtime-bounded-fix-crates-vida-src-taskflow"
+  },
+  "latest_task_reconciliation": {
+    "dependency_count": 0,
+    "operation": "consume_final",
+    "receipt_id": "task-reconciliation-1778047900201236700",
+    "recorded_at": "1778047900201238600",
+    "source_kind": "runtime_consumption_final_snapshot",
+    "source_path": "C:\\project\\vida-stack\\.vida/data/state\\runtime-consumption\\final-2026-05-04T11-48-49.8833347Z.json",
+    "stale_removed_count": 0,
+    "task_count": 0
+  },
+  "launcher_runtime_paths": {
+    "active_executable_fingerprint": "78b317997a69f67192ec94a1108a209122cb1168233326b6bc6747009c26ff99",
+    "active_executable_path": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\current\\bin\\vida.exe",
+    "divergent_installed_binaries": false,
+    "install_layout": {
+      "current_root": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\current",
+      "env_file": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\env.ps1",
+      "install_root": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack",
+      "platform": "windows",
+      "runtime_bin_dir": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\current\\bin"
+    },
+    "installed_binaries": [
+      {
+        "active": true,
+        "fingerprint": "78b317997a69f67192ec94a1108a209122cb1168233326b6bc6747009c26ff99",
+        "path": "\\\\?\\C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\releases\\v0.9.7\\bin\\vida.exe"
+      }
+    ],
+    "next_actions": [],
+    "path_resolution": {
+      "active_executable_on_path": true,
+      "command": "vida",
+      "expected_runtime_bin_dir": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\current\\bin",
+      "expected_runtime_bin_on_path": true,
+      "resolved_path": "\\\\?\\C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\releases\\v0.9.7\\bin\\vida.exe",
+      "status": "pass"
+    },
+    "project_root": "C:\\project\\vida-stack",
+    "status": "pass",
+    "taskflow_surface": "vida taskflow",
+    "vida": "vida"
+  },
+  "migration_preflight": {
+    "blockers": [],
+    "compatibility_class": "backward_compatible",
+    "migration_state": "no_migration_required",
+    "next_step": "normal_boot_allowed",
+    "source_version_tuple": [
+      "framework-agent-definition@v1",
+      "framework-instruction-contract@v1",
+      "framework-prompt-template-config@v1"
+    ]
+  },
+  "migration_receipts": {
+    "application_receipts": 0,
+    "compatibility_receipts": 1,
+    "cutover_readiness_receipts": 0,
+    "rollback_notes": 0,
+    "verification_receipts": 0
+  },
+  "next_actions": [],
+  "operator_contracts": {
+    "artifact_refs": {
+      "effective_instruction_bundle_receipt_id": "effective-bundle-framework-agent-definition-1779223299662188800",
+      "latest_memory_governance": {
+        "approval_receipt_id": null,
+        "blocker_codes": [],
+        "consent_basis": null,
+        "deletion_or_correction_ref": null,
+        "enforcement_state": "not_required",
+        "governance_required": false,
+        "memory_class": null,
+        "sensitivity_level": null,
+        "ttl_policy": null
+      },
+      "latest_principal_delegation": {
+        "approval_receipt_id": null,
+        "audit_ref": ".vida/data/state\\runtime-consumption\\dispatch-results\\runtime-bounded-fix-crates-vida-src-taskflow-2026-05-19T19-44-17.2900385Z.json",
+        "blocker_codes": [],
+        "delegatee_ref": "dispatch_target:analysis",
+        "delegation_state": "delegated_lane_blocked",
+        "delegator_ref": "node:analysis",
+        "enforcement_state": "pass",
+        "execution_backend": "pi_cli",
+        "principal_id": "run_graph:runtime-bounded-fix-crates-vida-src-taskflow:task:runtime-bounded-fix-crates-vida-src-taskflow",
+        "principal_kind": "runtime_local_bounded_principal",
+        "principal_scope": "implementation"
+      },
+      "latest_run_graph_approval_receipt_id": null,
+      "latest_run_graph_dispatch_receipt_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+      "latest_task_reconciliation_receipt_id": "task-reconciliation-1778047900201236700",
+      "protocol_binding_latest_receipt_id": "protocol-binding-1779221996130902200",
+      "retrieval_trust_signal": {
+        "acl": "protocol-binding-1779221996130902200",
+        "acl_context": "protocol_binding_receipt:protocol-binding-1779221996130902200",
+        "acl_propagation": "protocol_binding_receipt_runtime_gate",
+        "citation": ".vida/data/state/runtime-consumption/final-2026-05-19T14-09-31.378989Z.json",
+        "freshness": "final",
+        "freshness_posture": "latest_final_release_admission_snapshot",
+        "source": "runtime_consumption_snapshot_index",
+        "source_registry_ref": "runtime_consumption_snapshot_registry:latest_final_release_admission"
+      },
+      "root_session_write_guard_status": "blocked_by_default",
+      "runtime_consumption_latest_snapshot_path": ".vida/data/state/runtime-consumption/final-2026-05-19T14-09-31.378989Z.json"
+    },
+    "blocker_codes": [],
+    "contract_id": "release-1-operator-contracts",
+    "next_actions": [],
+    "risk_tier": null,
+    "schema_version": "release-1-v1",
+    "status": "pass",
+    "trace_id": null,
+    "workflow_class": null
+  },
+  "protocol_binding": {
+    "active_bindings": 5,
+    "blocking_issue_count": 0,
+    "fully_runtime_bound_count": 5,
+    "latest_receipt_id": "protocol-binding-1779221996130902200",
+    "latest_recorded_at": "1779221996130902200",
+    "latest_scenario": "v0.2.2-taskflow-wave1-primary",
+    "primary_state_authority": "taskflow_state_store",
+    "rust_bound_count": 0,
+    "script_bound_count": 0,
+    "total_bindings": 5,
+    "total_receipts": 431,
+    "unbound_count": 0
+  },
+  "risk_tier": null,
+  "root_session_write_guard": {
+    "activation_view_only_dispatch_blocker_active": false,
+    "blocking_dispatch_blocker_code": null,
+    "exception_path_receipt_id": null,
+    "explicit_user_ordered_agent_mode_is_sticky": true,
+    "hard_warning": "User requested agent-first earlier; root-local implementation is currently a policy violation unless explicitly superseded.",
+    "host_local_write_capability_is_not_authority": true,
+    "latest_dispatch_blocker_code": "timeout_without_takeover_authority",
+    "latest_lane_status": "lane_blocked",
+    "lawful_write_surface": "vida agent-init",
+    "local_exception_takeover_gate": null,
+    "local_exception_takeover_state": null,
+    "local_fallback_without_lane_recovery_forbidden": true,
+    "local_write_requires_exception_path": true,
+    "pre_write_checkpoint_required": true,
+    "reason": null,
+    "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
+    "root_local_write_allowed": false,
+    "root_local_write_allowed_for_only_these_paths": [],
+    "root_local_write_scope_warning": "Exception takeover is never blanket root-local authority; writes are limited to the active exception metadata owned_write_scope.",
+    "root_session_role": "orchestrator",
+    "saturation_recovery_required_before_local_fallback": true,
+    "status": "blocked_by_default"
+  },
+  "run_graph": {
+    "execution_plan_count": 119,
+    "governance_count": 119,
+    "reconciliation_count": 1,
+    "resumability_count": 119,
+    "routed_run_count": 119
+  },
+  "runtime_consumption": {
+    "bundle_check_snapshots": 23,
+    "bundle_snapshots": 3,
+    "final_snapshots": 177,
+    "latest_kind": "unknown",
+    "latest_snapshot_path": ".vida/data/state/runtime-consumption/agent-system-2026-05-19T16-17-54.9348415Z.json",
+    "total_snapshots": 220
+  },
+  "shared_fields": {
+    "artifact_refs": {
+      "effective_instruction_bundle_receipt_id": "effective-bundle-framework-agent-definition-1779223299662188800",
+      "latest_memory_governance": {
+        "approval_receipt_id": null,
+        "blocker_codes": [],
+        "consent_basis": null,
+        "deletion_or_correction_ref": null,
+        "enforcement_state": "not_required",
+        "governance_required": false,
+        "memory_class": null,
+        "sensitivity_level": null,
+        "ttl_policy": null
+      },
+      "latest_principal_delegation": {
+        "approval_receipt_id": null,
+        "audit_ref": ".vida/data/state\\runtime-consumption\\dispatch-results\\runtime-bounded-fix-crates-vida-src-taskflow-2026-05-19T19-44-17.2900385Z.json",
+        "blocker_codes": [],
+        "delegatee_ref": "dispatch_target:analysis",
+        "delegation_state": "delegated_lane_blocked",
+        "delegator_ref": "node:analysis",
+        "enforcement_state": "pass",
+        "execution_backend": "pi_cli",
+        "principal_id": "run_graph:runtime-bounded-fix-crates-vida-src-taskflow:task:runtime-bounded-fix-crates-vida-src-taskflow",
+        "principal_kind": "runtime_local_bounded_principal",
+        "principal_scope": "implementation"
+      },
+      "latest_run_graph_approval_receipt_id": null,
+      "latest_run_graph_dispatch_receipt_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+      "latest_task_reconciliation_receipt_id": "task-reconciliation-1778047900201236700",
+      "protocol_binding_latest_receipt_id": "protocol-binding-1779221996130902200",
+      "retrieval_trust_signal": {
+        "acl": "protocol-binding-1779221996130902200",
+        "acl_context": "protocol_binding_receipt:protocol-binding-1779221996130902200",
+        "acl_propagation": "protocol_binding_receipt_runtime_gate",
+        "citation": ".vida/data/state/runtime-consumption/final-2026-05-19T14-09-31.378989Z.json",
+        "freshness": "final",
+        "freshness_posture": "latest_final_release_admission_snapshot",
+        "source": "runtime_consumption_snapshot_index",
+        "source_registry_ref": "runtime_consumption_snapshot_registry:latest_final_release_admission"
+      },
+      "root_session_write_guard_status": "blocked_by_default",
+      "runtime_consumption_latest_snapshot_path": ".vida/data/state/runtime-consumption/final-2026-05-19T14-09-31.378989Z.json"
+    },
+    "blocker_codes": [],
+    "next_actions": [],
+    "status": "pass"
+  },
+  "state_spine": {
+    "authoritative_mutation_root": "vida task",
+    "entity_surface_count": 8,
+    "state_schema_version": 1
+  },
+  "status": "pass",
+  "storage_metadata": {
+    "backend": "kv-surrealkv",
+    "database": "primary",
+    "engine": "surrealdb",
+    "instruction_schema_version": 1,
+    "namespace": "vida",
+    "state_schema_version": 1
+  },
+  "storage_metadata_display": "kv-surrealkv state-v1 instruction-v1",
+  "surface": "vida doctor",
+  "task_reconciliation_rollup": {
+    "by_operation": {
+      "consume_final": 1
+    },
+    "by_source_kind": {
+      "runtime_consumption_final_snapshot": 1
+    },
+    "latest_recorded_at": "1778047900201238600",
+    "latest_source_path": "C:\\project\\vida-stack\\.vida/data/state\\runtime-consumption\\final-2026-05-04T11-48-49.8833347Z.json",
+    "total_dependency_rows": 0,
+    "total_receipts": 1,
+    "total_stale_removed": 0,
+    "total_task_rows": 0
+  },
+  "task_store": {
+    "closed_count": 265,
+    "epic_count": 17,
+    "in_progress_count": 0,
+    "open_count": 8,
+    "ready_count": 1,
+    "total_count": 273
+  },
+  "taskflow_snapshot_bridge": {
+    "export_receipts": 0,
+    "file_export_receipts": 0,
+    "file_import_receipts": 0,
+    "file_replace_receipts": 0,
+    "import_receipts": 0,
+    "latest_operation": "consume_final",
+    "latest_recorded_at": "1778047900201238600",
+    "latest_source_kind": "runtime_consumption_final_snapshot",
+    "latest_source_path": "C:\\project\\vida-stack\\.vida/data/state\\runtime-consumption\\final-2026-05-04T11-48-49.8833347Z.json",
+    "memory_export_receipts": 0,
+    "memory_import_receipts": 0,
+    "memory_replace_receipts": 0,
+    "object_export_receipts": 0,
+    "replace_receipts": 0,
+    "total_dependency_rows": 0,
+    "total_receipts": 1,
+    "total_stale_removed": 0,
+    "total_task_rows": 0
+  },
+  "trace_evidence": {
+    "blocker_codes": [],
+    "contract_id": "release-1-trace-evidence",
+    "evaluation_evidence": {
+      "effective_instruction_bundle": {
+        "artifact_count": 3,
+        "mandatory_chain_order": [
+          "framework-agent-definition",
+          "framework-instruction-contract",
+          "framework-prompt-template-config"
+        ],
+        "receipt_id": "effective-bundle-framework-agent-definition-1779223299662188800",
+        "root_artifact_id": "framework-agent-definition",
+        "source_version_tuple": [
+          "framework-agent-definition@v1",
+          "framework-instruction-contract@v1",
+          "framework-prompt-template-config@v1"
+        ]
+      }
+    },
+    "lane_receipts": {
+      "latest_run_graph_dispatch_receipt": {
+        "activation_agent_type": "pi_cli",
+        "activation_evidence": {
+          "activation_kind": "activation_view",
+          "activation_semantics": {
+            "activation_kind": "activation_view",
+            "executes_packet": false,
+            "records_completion_receipt": false,
+            "view_only": true
+          },
+          "evidence_state": "activation_view_only",
+          "execution_evidence": null,
+          "execution_evidence_path": null,
+          "receipt_backed": false
+        },
+        "activation_runtime_role": "verifier",
+        "blocker_code": "timeout_without_takeover_authority",
+        "dispatch_command": "vida-pi-agent --mode rpc --no-session --model openai-codex/gpt-5.4-mini --thinking-level low --scope-guard-mode guarded-write --workdir 'C:\\project\\vida-stack'",
+        "dispatch_kind": "agent_lane",
+        "dispatch_packet_path": "C:\\project\\vida-stack\\.vida/data/state\\runtime-consumption\\dispatch-packets\\runtime-bounded-fix-crates-vida-src-taskflow-2026-05-19T19-24-03.3109397Z.json",
+        "dispatch_result_path": ".vida/data/state\\runtime-consumption\\dispatch-results\\runtime-bounded-fix-crates-vida-src-taskflow-2026-05-19T19-44-17.2900385Z.json",
+        "dispatch_status": "blocked",
+        "dispatch_surface": "external_cli:pi_cli",
+        "dispatch_target": "analysis",
+        "downstream_dispatch_active_target": "analysis",
+        "downstream_dispatch_blockers": [],
+        "downstream_dispatch_command": "vida agent-init",
+        "downstream_dispatch_executed_count": 0,
+        "downstream_dispatch_last_target": null,
+        "downstream_dispatch_note": "`analysis` dispatch is in flight; wait for terminal execution evidence before deriving downstream lane blockers",
+        "downstream_dispatch_packet_path": null,
+        "downstream_dispatch_ready": false,
+        "downstream_dispatch_result_path": null,
+        "downstream_dispatch_status": null,
+        "downstream_dispatch_target": null,
+        "downstream_dispatch_trace_path": null,
+        "effective_execution_posture": {
+          "activation_evidence_state": "activation_view_only",
+          "activation_kind": "activation_view",
+          "backend_selection_source": "dynamic_runtime_selection",
+          "dispatch_target": "analysis",
+          "effective_posture_kind": "mixed",
+          "execution_evidence_path": null,
+          "fallback_backend": "internal_subagents",
+          "fallback_backend_class": "internal",
+          "fanout_backend_classes": {
+            "hermes_cli": "external_cli",
+            "kilo_cli": "external_cli",
+            "opencode_cli": "external_cli"
+          },
+          "fanout_backends": [
+            "hermes_cli",
+            "opencode_cli",
+            "kilo_cli"
+          ],
+          "hybrid_host_backend_selection": true,
+          "mixed_route_backends": true,
+          "receipt_backed": false,
+          "receipt_backed_execution_evidence": false,
+          "route_contains_external_backend": true,
+          "route_contains_internal_backend": true,
+          "route_primary_backend": "opencode_cli",
+          "route_primary_backend_class": "external_cli",
+          "selected_backend": "pi_cli",
+          "selected_backend_class": "external_cli",
+          "selected_backend_source": "dynamic_runtime_selection",
+          "selected_cli_system": "codex",
+          "selected_execution_class": "internal"
+        },
+        "exception_path_receipt_id": null,
+        "lane_status": "lane_blocked",
+        "recorded_at": "2026-05-19T19:24:03.2684054Z",
+        "route_policy": {
+          "backend_selection_source": "dynamic_runtime_selection",
+          "dispatch_target": "analysis",
+          "effective_execution_posture": "hybrid",
+          "effective_selected_backend": "pi_cli",
+          "mixed_posture": true,
+          "route_fallback_backend": "internal_subagents",
+          "route_fallback_backend_class": "internal",
+          "route_fallback_backend_policy": {
+            "backend_class": "internal",
+            "backend_id": "internal_subagents",
+            "capability_band": [
+              "implementation_safe",
+              "architecture_safe",
+              "review_safe"
+            ],
+            "lane_admissibility": {
+              "analysis": true,
+              "coach": true,
+              "execution_preparation": true,
+              "implementation": true,
+              "policy_flags": {
+                "internal_only_backend": true,
+                "read_only_backend": false,
+                "review_only_backend": false,
+                "scoped_write_backend": false
+              },
+              "review": true,
+              "verification": true
+            },
+            "specialties": [
+              "implementation",
+              "architecture",
+              "integration",
+              "review",
+              "verification"
+            ],
+            "write_scope": "orchestrator_native"
+          },
+          "route_fanout_backend_classes": {
+            "hermes_cli": "external_cli",
+            "kilo_cli": "external_cli",
+            "opencode_cli": "external_cli"
+          },
+          "route_fanout_backend_policies": [
+            {
+              "backend_class": "external_cli",
+              "backend_id": "hermes_cli",
+              "capability_band": [
+                "read_only",
+                "review_safe"
+              ],
+              "lane_admissibility": {
+                "analysis": true,
+                "coach": true,
+                "execution_preparation": true,
+                "implementation": false,
+                "policy_flags": {
+                  "internal_only_backend": false,
+                  "read_only_backend": true,
+                  "review_only_backend": true,
+                  "scoped_write_backend": false
+                },
+                "review": true,
+                "verification": false
+              },
+              "specialties": [
+                "planning",
+                "spec",
+                "review"
+              ],
+              "write_scope": "none"
+            },
+            {
+              "backend_class": "external_cli",
+              "backend_id": "opencode_cli",
+              "capability_band": [
+                "read_only",
+                "review_safe"
+              ],
+              "lane_admissibility": {
+                "analysis": true,
+                "coach": true,
+                "execution_preparation": true,
+                "implementation": false,
+                "policy_flags": {
+                  "internal_only_backend": false,
+                  "read_only_backend": true,
+                  "review_only_backend": true,
+                  "scoped_write_backend": false
+                },
+                "review": true,
+                "verification": false
+              },
+              "specialties": [
+                "planning",
+                "spec",
+                "review"
+              ],
+              "write_scope": "none"
+            },
+            {
+              "backend_class": "external_cli",
+              "backend_id": "kilo_cli",
+              "capability_band": [
+                "read_only",
+                "review_safe"
+              ],
+              "lane_admissibility": {
+                "analysis": true,
+                "coach": true,
+                "execution_preparation": true,
+                "implementation": false,
+                "policy_flags": {
+                  "internal_only_backend": false,
+                  "read_only_backend": true,
+                  "review_only_backend": true,
+                  "scoped_write_backend": false
+                },
+                "review": true,
+                "verification": false
+              },
+              "specialties": [
+                "planning",
+                "spec",
+                "review"
+              ],
+              "write_scope": "none"
+            }
+          ],
+          "route_fanout_backends": [
+            "hermes_cli",
+            "opencode_cli",
+            "kilo_cli"
+          ],
+          "route_primary_backend": "opencode_cli",
+          "route_primary_backend_class": "external_cli",
+          "route_primary_backend_policy": {
+            "backend_class": "external_cli",
+            "backend_id": "opencode_cli",
+            "capability_band": [
+              "read_only",
+              "review_safe"
+            ],
+            "lane_admissibility": {
+              "analysis": true,
+              "coach": true,
+              "execution_preparation": true,
+              "implementation": false,
+              "policy_flags": {
+                "internal_only_backend": false,
+                "read_only_backend": true,
+                "review_only_backend": true,
+                "scoped_write_backend": false
+              },
+              "review": true,
+              "verification": false
+            },
+            "specialties": [
+              "planning",
+              "spec",
+              "review"
+            ],
+            "write_scope": "none"
+          },
+          "selected_backend_class": "external_cli",
+          "selected_backend_policy": {
+            "backend_class": "external_cli",
+            "backend_id": "pi_cli",
+            "capability_band": [
+              "implementation_guarded",
+              "specification_safe",
+              "review_safe"
+            ],
+            "lane_admissibility": {
+              "analysis": true,
+              "coach": true,
+              "execution_preparation": true,
+              "implementation": true,
+              "policy_flags": {
+                "internal_only_backend": false,
+                "read_only_backend": false,
+                "review_only_backend": false,
+                "scoped_write_backend": false
+              },
+              "review": true,
+              "verification": true
+            },
+            "specialties": [
+              "implementation",
+              "spec",
+              "review",
+              "verification"
+            ],
+            "write_scope": "guard_required_owned_paths"
+          },
+          "selected_backend_source": "dynamic_runtime_selection",
+          "selected_execution_class": "external_cli"
+        },
+        "run_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+        "selected_backend": "pi_cli",
+        "supersedes_receipt_id": null
+      },
+      "latest_task_reconciliation": {
+        "dependency_count": 0,
+        "operation": "consume_final",
+        "receipt_id": "task-reconciliation-1778047900201236700",
+        "recorded_at": "1778047900201238600",
+        "source_kind": "runtime_consumption_final_snapshot",
+        "source_path": "C:\\project\\vida-stack\\.vida/data/state\\runtime-consumption\\final-2026-05-04T11-48-49.8833347Z.json",
+        "stale_removed_count": 0,
+        "task_count": 0
+      }
+    },
+    "next_actions": [],
+    "root_trace": {
+      "effective_instruction_bundle_receipt_id": "effective-bundle-framework-agent-definition-1779223299662188800",
+      "latest_run_graph_dispatch_receipt_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+      "latest_task_reconciliation_receipt_id": "task-reconciliation-1778047900201236700",
+      "protocol_binding_latest_receipt_id": "protocol-binding-1779221996130902200",
+      "runtime_consumption_latest_snapshot_path": ".vida/data/state/runtime-consumption/agent-system-2026-05-19T16-17-54.9348415Z.json",
+      "trace_id": null
+    },
+    "schema_version": "release-1-v1",
+    "side_effect_evidence": {
+      "protocol_binding": {
+        "active_bindings": 5,
+        "blocking_issue_count": 0,
+        "fully_runtime_bound_count": 5,
+        "latest_receipt_id": "protocol-binding-1779221996130902200",
+        "latest_recorded_at": "1779221996130902200",
+        "latest_scenario": "v0.2.2-taskflow-wave1-primary",
+        "primary_state_authority": "taskflow_state_store",
+        "rust_bound_count": 0,
+        "script_bound_count": 0,
+        "total_bindings": 5,
+        "total_receipts": 431,
+        "unbound_count": 0
+      },
+      "runtime_consumption": {
+        "bundle_check_snapshots": 23,
+        "bundle_snapshots": 3,
+        "final_snapshots": 177,
+        "latest_kind": "unknown",
+        "latest_snapshot_path": ".vida/data/state/runtime-consumption/agent-system-2026-05-19T16-17-54.9348415Z.json",
+        "total_snapshots": 220
+      }
+    },
+    "status": "pass"
+  },
+  "trace_id": null,
+  "workflow_class": null
+}

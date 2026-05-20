@@ -1,0 +1,6 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s
+  Executable unittests src\main.rs (target\debug\deps\vida-195b650472836b0b.exe)
+  Executable tests\boot_smoke.rs (target\debug\deps\boot_smoke-c270c4de4e37db09.exe)
+  Executable tests\doctor_surface_contract_smoke.rs (target\debug\deps\doctor_surface_contract_smoke-c67924e55905219d.exe)
+  Executable tests\project_routing_shape.rs (target\debug\deps\project_routing_shape-8b0cc880603bd26c.exe)
+  Executable tests\task_smoke.rs (target\debug\deps\task_smoke-2402c0ecca12cc95.exe)

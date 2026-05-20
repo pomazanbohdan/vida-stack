@@ -1,0 +1,9 @@
+build and install the VIDA release binary
+
+Usage: vida release <COMMAND>
+
+Commands:
+  install  build and install target/release/vida to the canonical current/bin target
+
+Options:
+  -h, --help  Print help

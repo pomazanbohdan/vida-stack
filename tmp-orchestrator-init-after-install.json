@@ -1,0 +1,120 @@
+{
+  "dev_team_readiness_summary": {
+    "active_selection": null,
+    "flow_count": 1,
+    "role_count": 7,
+    "sequence": [
+      "analyst",
+      "developer",
+      "duplication_reviewer",
+      "coach",
+      "tester",
+      "prover",
+      "release_closure"
+    ],
+    "source_paths": [
+      "C:\\project\\vida-stack\\vida.config.yaml",
+      "docs/process/team-development-and-orchestration-protocol.md"
+    ],
+    "status": "ready"
+  },
+  "full_output_available": true,
+  "full_output_command": "vida orchestrator-init --full --json",
+  "init": {
+    "boot_surface": "vida boot",
+    "continuation_binding": {
+      "active_bounded_unit": null,
+      "ambiguity_reason": null,
+      "binding_scope": "unbound",
+      "binding_source": null,
+      "continuation_allowed": false,
+      "continuation_required_now": false,
+      "next_actions": [],
+      "orthogonal_to_taskflow_active_work": false,
+      "pause_boundary_gate": "allowed_if_authoritative_taskflow_selection_exists",
+      "primary_path": "taskflow_selection_path",
+      "sequential_vs_parallel_posture": "sequential_only_taskflow_authority",
+      "stale_missing_task_run_graph_status": {
+        "active_node": "analysis",
+        "lifecycle_stage": "analysis_blocked",
+        "run_id": "runtime-bounded-fix-crates-vida-src-taskflow",
+        "status": "blocked",
+        "task_id": "runtime-bounded-fix-crates-vida-src-taskflow"
+      },
+      "status": "idle",
+      "taskflow_active_candidates": [],
+      "why_this_unit": "Latest run `runtime-bounded-fix-crates-vida-src-taskflow` is blocked but its task `runtime-bounded-fix-crates-vida-src-taskflow` is missing from authoritative TaskFlow state."
+    },
+    "local_runtime_surface": "vida orchestrator-init",
+    "project_activation": {
+      "activation_pending": false,
+      "host_environment": {
+        "materialization_required": false,
+        "selected_cli_execution_class": "internal",
+        "selected_cli_system": "codex",
+        "template_materialized": true
+      },
+      "next_steps": [
+        "activation looks ready enough for normal orchestrator and worker initialization"
+      ],
+      "project_shape": "bootstrapped",
+      "status": "ready_enough_for_normal_work"
+    },
+    "project_root": "C:\\project\\vida-stack",
+    "root_artifact_id": "framework-agent-definition",
+    "status": "ready_enough_for_normal_work"
+  },
+  "next_lawful_dispatch_action": {
+    "command": "vida agent dispatch-next --dev-team --json",
+    "reason": "review configured carrier/model/cost truth before any `vida agent-init` execution dispatch",
+    "status": "preview_required",
+    "surface": "vida agent dispatch-next"
+  },
+  "runtime_bundle_summary": {
+    "activation_source": "state_store",
+    "bundle_id": "taskflow-runtime-bundle-aab1b63b5e224dd49bcf6a0a9caa25db46e35dace1a55232243e71216405e42b",
+    "launcher_runtime_paths": {
+      "active_executable_fingerprint": "78b317997a69f67192ec94a1108a209122cb1168233326b6bc6747009c26ff99",
+      "active_executable_path": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\current\\bin\\vida.exe",
+      "divergent_installed_binaries": false,
+      "install_layout": {
+        "current_root": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\current",
+        "env_file": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\env.ps1",
+        "install_root": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack",
+        "platform": "windows",
+        "runtime_bin_dir": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\current\\bin"
+      },
+      "installed_binaries": [
+        {
+          "active": true,
+          "fingerprint": "78b317997a69f67192ec94a1108a209122cb1168233326b6bc6747009c26ff99",
+          "path": "\\\\?\\C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\releases\\v0.9.7\\bin\\vida.exe"
+        }
+      ],
+      "next_actions": [],
+      "path_resolution": {
+        "active_executable_on_path": true,
+        "command": "vida",
+        "expected_runtime_bin_dir": "C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\current\\bin",
+        "expected_runtime_bin_on_path": true,
+        "resolved_path": "\\\\?\\C:\\Users\\pomaz\\AppData\\Local\\vida-stack\\releases\\v0.9.7\\bin\\vida.exe",
+        "status": "pass"
+      },
+      "project_root": "C:\\project\\vida-stack",
+      "status": "pass",
+      "taskflow_surface": "vida taskflow",
+      "vida": "vida"
+    },
+    "root_artifact_id": "framework-agent-definition",
+    "state_dir": ".vida/data/state",
+    "vida_root": "C:\\project\\vida-stack"
+  },
+  "state_read": {
+    "fallback": "degraded_lock_contention_surface",
+    "lock_resilient": true,
+    "mode": "authoritative_open"
+  },
+  "status": "ready_enough_for_normal_work",
+  "surface": "vida orchestrator-init",
+  "view": "summary"
+}

@@ -1,0 +1,5 @@
+RC=1
+STDOUT:
+{"error":{"message":"Failed to canonicalize Pi project/workdir root `C:\\project\u000bida-stack`: The filename, directory name, or volume label syntax is incorrect. (os error 123)"},"is_error":true,"raw_provider":{"mode":"rpc","provider":"pi"},"scope_guard":{"enforcement":"validation_only_fail_closed_for_guarded_write_mode","mode":"auto","status":"configuration_error","valid":false,"violations":["Failed to canonicalize Pi project/workdir root `C:\\project\u000bida-stack`: The filename, directory name, or volume label syntax is incorrect. (os error 123)"]},"subtype":"error_during_execution","type":"result"}
+
+STDERR:

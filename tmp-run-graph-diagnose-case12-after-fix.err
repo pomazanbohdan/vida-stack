@@ -1,0 +1,1 @@
+Failed to diagnose run-graph dispatch state: invalid task record: run-graph recovery/checkpoint summary is inconsistent for `taskflow-case-12-reprioritization-during-active-work`: latest status requires both governance and resumability rows (governance_present=false, resumability_present=false)
