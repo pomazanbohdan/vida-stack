@@ -242,6 +242,7 @@ impl StateStore {
         Fut: std::future::Future<Output = Result<Self, StateStoreError>>,
     {
         for attempt in 0..AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT {
+            let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(&root)?;
             match open_once(root.clone()).await {
                 Ok(store) => return Ok(store),
                 Err(error) if Self::error_is_lock_contention(&error) => {
@@ -295,6 +296,7 @@ impl StateStore {
         }
 
         for attempt in 0..READ_ONLY_OPEN_RETRY_COUNT {
+            let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(&root)?;
             match Self::open_existing_read_only_once(root.clone()).await {
                 Ok(store) => return Ok(store),
                 Err(error) if Self::error_is_lock_contention(&error) => {
@@ -513,6 +515,34 @@ mod tests {
 
         assert!(reclaimed);
         assert!(!root.join("LOCK").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(any(windows, linux))]
+    #[tokio::test]
+    async fn open_reclaims_dead_authoritative_lock_marker_before_database_open() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-open-reclaims-dead-authoritative-lock-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create state root");
+        fs::write(root.join("LOCK"), u32::MAX.to_string()).expect("write dead foreign lock");
+
+        let store = StateStore::open(root.clone())
+            .await
+            .expect("open should reclaim dead lock marker before database open");
+        store.close().await;
+
+        let dead_pid = u32::MAX.to_string();
+        assert_ne!(
+            fs::read_to_string(root.join("LOCK")).ok().as_deref(),
+            Some(dead_pid.as_str()),
+            "dead authoritative lock marker should be reclaimed before SurrealKV open"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

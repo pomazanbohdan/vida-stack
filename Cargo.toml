@@ -51,3 +51,9 @@ walkdir = "2.5.0"
 
 [patch.crates-io]
 surrealkv = { path = "vendor/surrealkv-0.20.2" }
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
