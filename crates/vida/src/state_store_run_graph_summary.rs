@@ -121,7 +121,7 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.next_node = None;
             status.lifecycle_stage = format!("{blocked_target}_blocked");
             status.handoff_state = "none".to_string();
-            status.resume_target = "none".to_string();
+            status.resume_target = format!("dispatch.{blocked_target}");
             status.context_state = "sealed".to_string();
         }
         status.checkpoint_kind = "none".to_string();
@@ -2193,7 +2193,8 @@ impl StateStore {
     fn ensure_run_graph_recovery_surface_consistency(
         status: &RunGraphStatus,
     ) -> Result<(), StateStoreError> {
-        if status.resume_target.starts_with("dispatch.")
+        if status.recovery_ready
+            && status.resume_target.starts_with("dispatch.")
             && !is_dispatch_resume_handoff_complete(status)
         {
             return Err(StateStoreError::InvalidTaskRecord {

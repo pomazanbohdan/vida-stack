@@ -78,14 +78,16 @@ pub(crate) fn blocking_runtime_consumption_run_graph_status(
     status.handoff_state = "none".to_string();
     status.context_state = "open".to_string();
     status.checkpoint_kind = "none".to_string();
-    status.resume_target = "none".to_string();
     status.recovery_ready = false;
     status
 }
 
 #[cfg(test)]
 mod tests {
-    use super::fallback_runtime_consumption_run_graph_status;
+    use super::{
+        blocking_runtime_consumption_run_graph_status,
+        fallback_runtime_consumption_run_graph_status,
+    };
     use crate::RuntimeConsumptionLaneSelection;
 
     #[test]
@@ -125,5 +127,39 @@ mod tests {
 
         let status = fallback_runtime_consumption_run_graph_status(&role_selection, "run-test");
         assert_eq!(status.selected_backend, "middle");
+    }
+
+    #[test]
+    fn blocking_run_graph_status_preserves_dispatch_resume_target() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "implementation".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "status": "ready",
+                "runtime_assignment": {
+                    "selected_tier": "middle",
+                    "activation_agent_type": "middle"
+                },
+                "development_flow": {}
+            }),
+            reason: "test".to_string(),
+        };
+
+        let status = blocking_runtime_consumption_run_graph_status(&role_selection, "run-test");
+
+        assert_eq!(status.status, "blocked");
+        assert_eq!(status.resume_target, "dispatch.coach");
+        assert!(!status.recovery_ready);
     }
 }

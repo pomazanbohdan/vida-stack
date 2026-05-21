@@ -7051,6 +7051,7 @@ hierarchy: framework,contracts
             .expect("reconciled run graph status should load");
         assert_eq!(reconciled.status, "blocked");
         assert_eq!(reconciled.selected_backend, "hermes_cli");
+        assert_eq!(reconciled.resume_target, "dispatch.coach");
         assert!(!reconciled.recovery_ready);
 
         let recovery = store
@@ -7060,6 +7061,7 @@ hierarchy: framework,contracts
             .expect("recovery summary should exist");
         assert_eq!(recovery.run_id, "run-blocked-recovery");
         assert_eq!(recovery.resume_status, "blocked");
+        assert_eq!(recovery.resume_target, "dispatch.coach");
         assert!(!recovery.recovery_ready);
         assert!(recovery.delegation_gate.delegated_cycle_open);
         assert_eq!(
