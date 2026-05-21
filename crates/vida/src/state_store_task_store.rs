@@ -1120,52 +1120,6 @@ impl StateStore {
         let normalized_display_id = self
             .validate_task_display_id_alias(task_id, display_id)
             .await?;
-        if normalized_parent_id.is_none() && normalized_display_id.is_none() {
-            let existing: Option<TaskStorageRowStored> = self.db.select(("task", task_id)).await?;
-            if existing.is_some() {
-                return Err(StateStoreError::InvalidTaskRecord {
-                    reason: format!("task already exists: {task_id}"),
-                });
-            }
-            let execution_semantics =
-                Self::validate_execution_semantics(task_id, execution_semantics)?;
-            let planner_metadata = Self::normalize_planner_metadata(planner_metadata);
-            let now = unix_timestamp_nanos().to_string();
-            let mut normalized_labels = labels
-                .iter()
-                .map(|label| label.trim().to_string())
-                .filter(|label| !label.is_empty())
-                .collect::<Vec<_>>();
-            normalized_labels.sort();
-            normalized_labels.dedup();
-            let mut task = TaskRecord {
-                id: task_id.to_string(),
-                display_id: None,
-                title: title.to_string(),
-                description: description.to_string(),
-                status: status.to_string(),
-                priority,
-                issue_type: issue_type.to_string(),
-                created_at: now.clone(),
-                created_by: created_by.to_string(),
-                updated_at: now.clone(),
-                closed_at: None,
-                close_reason: None,
-                source_repo: source_repo.to_string(),
-                compaction_level: 0,
-                original_size: 0,
-                notes: None,
-                labels: normalized_labels,
-                execution_semantics,
-                planner_metadata,
-                dependencies: Vec::new(),
-            };
-            if status == "closed" {
-                task.closed_at = Some(now);
-            }
-            self.persist_new_task_record(task.clone()).await?;
-            return Ok(task);
-        }
         let mut tasks = self.all_tasks().await?;
         if tasks.iter().any(|task| task.id == task_id) {
             return Err(StateStoreError::InvalidTaskRecord {
