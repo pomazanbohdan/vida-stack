@@ -6709,23 +6709,64 @@ mod tests {
     }
 
     fn configure_fake_codex_dispatch(project_root: &Path, fake_codex: &Path) {
+        let config_path = project_root.join("vida.config.yaml");
+        let config = fs::read_to_string(&config_path).expect("config should exist");
+        let mut document: serde_yaml::Value =
+            serde_yaml::from_str(&config).expect("config should parse as yaml");
+        let root = document
+            .as_mapping_mut()
+            .expect("config root should be a yaml mapping");
+        let host_environment = root
+            .get_mut(serde_yaml::Value::String("host_environment".to_string()))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("host_environment should exist");
+        let systems = host_environment
+            .get_mut(serde_yaml::Value::String("systems".to_string()))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("host systems should exist");
+        let codex = systems
+            .get_mut(serde_yaml::Value::String("codex".to_string()))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("codex system should exist");
+        let dispatch = codex
+            .get_mut(serde_yaml::Value::String("dispatch".to_string()))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("codex dispatch config should exist");
         #[cfg(windows)]
-        {
-            let config_path = project_root.join("vida.config.yaml");
-            let config = fs::read_to_string(&config_path).expect("config should exist");
-            let fake_codex = fake_codex.display().to_string().replace('\'', "''");
-            let updated = config.replace(
-                "        command: codex\n        static_args:\n          - exec\n          - --json\n",
-                &format!(
-                    "        command: pwsh\n        static_args:\n          - -NoProfile\n          - -ExecutionPolicy\n          - Bypass\n          - -File\n          - '{fake_codex}'\n"
-                ),
-            );
-            fs::write(&config_path, updated).expect("config should update fake codex dispatch");
-        }
+        let (command, static_args) = (
+            "pwsh".to_string(),
+            vec![
+                "-NoProfile".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-File".to_string(),
+                fake_codex.display().to_string(),
+            ],
+        );
         #[cfg(not(windows))]
-        {
-            let _ = (project_root, fake_codex);
-        }
+        let (command, static_args) = (fake_codex.display().to_string(), Vec::<String>::new());
+        dispatch.insert(
+            serde_yaml::Value::String("command".to_string()),
+            serde_yaml::Value::String(command),
+        );
+        dispatch.insert(
+            serde_yaml::Value::String("static_args".to_string()),
+            serde_yaml::Value::Sequence(
+                static_args
+                    .into_iter()
+                    .map(serde_yaml::Value::String)
+                    .collect(),
+            ),
+        );
+        dispatch.insert(
+            serde_yaml::Value::String("receipt_backed_completion_supported".to_string()),
+            serde_yaml::Value::Bool(true),
+        );
+        fs::write(
+            &config_path,
+            serde_yaml::to_string(&document).expect("config should serialize as yaml"),
+        )
+        .expect("config should update fake codex dispatch");
     }
 
     fn write_fake_codex_success(path: &Path, message: &str) {
@@ -8255,6 +8296,24 @@ mod tests {
                 let store = runtime
                     .block_on(StateStore::open(state_root.clone()))
                     .expect("state store should open");
+                let labels: Vec<String> = Vec::new();
+                runtime
+                    .block_on(store.create_task(crate::state_store::CreateTaskRequest {
+                        task_id: "run-agent-dispatch",
+                        title: "Run agent dispatch",
+                        display_id: None,
+                        description: "test task backing the execute-dispatch run graph",
+                        issue_type: "task",
+                        status: "in_progress",
+                        priority: 1,
+                        parent_id: None,
+                        labels: &labels,
+                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                        created_by: "tester",
+                        source_repo: ".",
+                    }))
+                    .expect("run graph task should exist");
                 let dispatch_packet_path = harness.path().join("agent-dispatch.json");
                 fs::write(
                     &dispatch_packet_path,
@@ -8634,6 +8693,24 @@ mod tests {
                 let store = runtime
                     .block_on(StateStore::open(state_root.clone()))
                     .expect("state store should open");
+                let labels: Vec<String> = Vec::new();
+                runtime
+                    .block_on(store.create_task(crate::state_store::CreateTaskRequest {
+                        task_id: "run-agent-init-execute-dispatch",
+                        title: "Run agent init execute-dispatch",
+                        display_id: None,
+                        description: "test task backing the execute-dispatch run graph",
+                        issue_type: "task",
+                        status: "in_progress",
+                        priority: 1,
+                        parent_id: None,
+                        labels: &labels,
+                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                        created_by: "tester",
+                        source_repo: ".",
+                    }))
+                    .expect("run graph task should exist");
                 let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
