@@ -893,6 +893,8 @@ pub(crate) fn release_admission_operator_evidence_snapshot(snapshot: &serde_json
             .unwrap_or_default(),
     )
     .is_some();
+    let parity_ok = crate::operator_contracts::shared_operator_output_contract_parity_error(snapshot)
+        .is_none();
     let release_admission_has_complete_evidence_table =
         release_admission_record(snapshot).is_some_and(closure_admission_evidence_table_complete);
     let is_terminal_continue = snapshot.get("surface").and_then(serde_json::Value::as_str)
@@ -900,6 +902,7 @@ pub(crate) fn release_admission_operator_evidence_snapshot(snapshot: &serde_json
 
     status_ok
         && operator_status_ok
+        && parity_ok
         && release_admission_has_complete_evidence_table
         && (!is_terminal_continue || terminal_continue_closure_release_admission_evidence(snapshot))
 }
