@@ -650,14 +650,20 @@ fn agent_init_packet_execute_command(selection: &serde_json::Value) -> Option<St
     selection
         .get("dispatch_packet_path")
         .and_then(serde_json::Value::as_str)
-        .map(|path| format!("vida agent-init --dispatch-packet '{path}' --execute-dispatch --json"))
+        .map(|path| {
+            format!(
+                "vida agent-init --dispatch-packet {} --execute-dispatch --json",
+                crate::shell_quote(path)
+            )
+        })
         .or_else(|| {
             selection
                 .get("downstream_packet_path")
                 .and_then(serde_json::Value::as_str)
                 .map(|path| {
                     format!(
-                        "vida agent-init --downstream-packet '{path}' --execute-dispatch --json"
+                        "vida agent-init --downstream-packet {} --execute-dispatch --json",
+                        crate::shell_quote(path)
                     )
                 })
         })
