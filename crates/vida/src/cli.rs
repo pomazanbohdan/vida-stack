@@ -606,6 +606,12 @@ pub(crate) struct TaskCreateArgs {
     #[arg(long = "description", default_value = "")]
     pub(crate) description: String,
 
+    #[arg(long = "notes")]
+    pub(crate) notes: Option<String>,
+
+    #[arg(long = "notes-file")]
+    pub(crate) notes_file: Option<PathBuf>,
+
     #[arg(
         long = "labels",
         value_delimiter = ',',
@@ -624,6 +630,27 @@ pub(crate) struct TaskCreateArgs {
 
     #[arg(long = "conflict-domain")]
     pub(crate) conflict_domain: Option<String>,
+
+    #[arg(
+        long = "owned-path",
+        value_delimiter = ',',
+        help = "Planner metadata owned paths to set. Accepts comma-separated values and repeated flags."
+    )]
+    pub(crate) owned_paths: Vec<String>,
+
+    #[arg(
+        long = "acceptance-target",
+        value_delimiter = ',',
+        help = "Planner metadata acceptance targets to set. Accepts comma-separated values and repeated flags."
+    )]
+    pub(crate) acceptance_targets: Vec<String>,
+
+    #[arg(
+        long = "proof-target",
+        value_delimiter = ',',
+        help = "Planner metadata proof targets to set. Accepts comma-separated values and repeated flags."
+    )]
+    pub(crate) proof_targets: Vec<String>,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,

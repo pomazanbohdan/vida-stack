@@ -127,6 +127,9 @@ Companion rule:
 28. [blocked-external-coach-artifact-truth-not-reconciled-design.md](blocked-external-coach-artifact-truth-not-reconciled-design.md)
    Config families: blocked dispatch semantic-mismatch detection, run-graph projection stale truth beyond executing-only timeout cases, consume-resume continuation repair for obsolete blocked artifacts, and lane/status operator parity for mismatched blocked evidence
    Registered path: `docs/product/spec/blocked-external-coach-artifact-truth-not-reconciled-design.md`
+29. [test-first-runtime-defect-remediation-design.md](test-first-runtime-defect-remediation-design.md)
+   Config families: test-first runtime defect repair, cross-surface scenario contracts, operator actionability proof, paused defect reparenting, and one-bounded-defect-at-a-time remediation across TaskFlow runtime-family surfaces
+   Registered path: `docs/product/spec/test-first-runtime-defect-remediation-design.md`
 
 ### Project And Packaging
 

@@ -6528,6 +6528,66 @@ fn task_update_accepts_notes_file_for_shell_safe_progress_recording() {
 }
 
 #[test]
+fn task_create_accepts_metadata_one_shot_for_shell_safe_intake() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let import_path = format!("{state_dir}/tasks.jsonl");
+    let notes_path = format!("{state_dir}/create-notes.txt");
+    sample_jsonl(&import_path);
+    fs::write(&notes_path, "one-shot notes\n").expect("notes file should write");
+
+    run_and_assert_success(
+        &["task", "import-jsonl", &import_path, "--json"],
+        &state_dir,
+    );
+
+    let parsed = run_command_json(
+        &[
+            "task",
+            "create",
+            "one-shot-defect",
+            "One-shot defect intake",
+            "--type",
+            "defect",
+            "--status",
+            "open",
+            "--parent-id",
+            "vida-root",
+            "--owned-path",
+            "crates/vida/src/task_surface.rs",
+            "--acceptance-target",
+            "create sets planner metadata",
+            "--proof-target",
+            "cargo test -p vida task_create_accepts_metadata_one_shot_for_shell_safe_intake",
+            "--notes-file",
+            &notes_path,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(parsed["surface"], "vida task create");
+    assert_eq!(parsed["status"], "pass");
+    assert_eq!(parsed["task"]["notes"], "one-shot notes\n");
+    assert_eq!(
+        parsed["task"]["planner_metadata"]["owned_paths"],
+        serde_json::json!(["crates/vida/src/task_surface.rs"])
+    );
+    assert_eq!(
+        parsed["task"]["planner_metadata"]["acceptance_targets"],
+        serde_json::json!(["create sets planner metadata"])
+    );
+    assert_eq!(
+        parsed["task"]["planner_metadata"]["proof_targets"],
+        serde_json::json!([
+            "cargo test -p vida task_create_accepts_metadata_one_shot_for_shell_safe_intake"
+        ])
+    );
+
+    fs::remove_dir_all(&state_dir).expect("cleanup state dir");
+}
+
+#[test]
 fn task_update_rejects_notes_and_notes_file_together() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

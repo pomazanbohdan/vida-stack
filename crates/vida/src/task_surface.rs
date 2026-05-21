@@ -561,6 +561,15 @@ fn task_update_planner_metadata_requested(command: &crate::TaskUpdateArgs) -> bo
         || !command.proof_targets.is_empty()
 }
 
+fn task_create_planner_metadata_arg(command: &TaskCreateArgs) -> state_store::TaskPlannerMetadata {
+    state_store::TaskPlannerMetadata {
+        owned_paths: parse_label_values(&command.owned_paths),
+        acceptance_targets: parse_label_values(&command.acceptance_targets),
+        proof_targets: parse_label_values(&command.proof_targets),
+        ..state_store::TaskPlannerMetadata::default()
+    }
+}
+
 fn task_update_planner_metadata_arg(
     existing: &state_store::TaskPlannerMetadata,
     command: &crate::TaskUpdateArgs,
@@ -1871,6 +1880,18 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
             return ExitCode::from(2);
         }
     };
+    let notes = match resolve_optional_text_arg(
+        "notes",
+        command.notes.as_deref(),
+        command.notes_file.as_deref(),
+    ) {
+        Ok(notes) => notes,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    let planner_metadata = task_create_planner_metadata_arg(&command);
     let state_dir = command
         .state_dir
         .clone()
@@ -2003,13 +2024,43 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                     parent_id: parent_id.as_deref(),
                     labels: &labels,
                     execution_semantics: task_execution_semantics_from_create_args(&command),
-                    planner_metadata: state_store::TaskPlannerMetadata::default(),
+                    planner_metadata: planner_metadata.clone(),
                     created_by: "vida task",
                     source_repo: &source_repo,
                 })
                 .await
             {
                 Ok(task) => {
+                    let task = if let Some(notes) = notes.as_deref() {
+                        match store
+                            .update_task(state_store::UpdateTaskRequest {
+                                task_id: &command.task_id,
+                                title: None,
+                                status: None,
+                                priority: None,
+                                notes: Some(notes),
+                                description: None,
+                                parent_id: None,
+                                add_labels: &[],
+                                remove_labels: &[],
+                                set_labels: None,
+                                execution_mode: None,
+                                order_bucket: None,
+                                parallel_group: None,
+                                conflict_domain: None,
+                                planner_metadata: None,
+                            })
+                            .await
+                        {
+                            Ok(task) => task,
+                            Err(error) => {
+                                eprintln!("Failed to apply task notes after create: {error}");
+                                return ExitCode::from(1);
+                            }
+                        }
+                    } else {
+                        task
+                    };
                     if let Err(code) = refresh_task_snapshot_for_task_after_mutation(
                         &store,
                         &task,
@@ -4892,11 +4943,16 @@ mod tests {
             parent_display_id: None,
             auto_display_from: None,
             description: String::new(),
+            notes: None,
+            notes_file: None,
             labels: Vec::new(),
             execution_mode: None,
             order_bucket: None,
             parallel_group: None,
             conflict_domain: None,
+            owned_paths: Vec::new(),
+            acceptance_targets: Vec::new(),
+            proof_targets: Vec::new(),
             state_dir: None,
             render: crate::RenderMode::Plain,
             json: false,

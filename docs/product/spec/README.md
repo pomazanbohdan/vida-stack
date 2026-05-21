@@ -58,6 +58,7 @@ Active design docs:
 - `docs/product/spec/vida-migration-gap-repair-design.md`
 - `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
 - `docs/product/spec/fix-status-surface-external-cli-readiness-design.md`
+- `docs/product/spec/test-first-runtime-defect-remediation-design.md`
 
 Current promoted runtime-control specs:
 
