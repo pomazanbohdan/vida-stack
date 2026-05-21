@@ -3271,6 +3271,17 @@ fn runtime_binding_task_closed_next_action(
     )
 }
 
+fn runtime_binding_task_paused_next_action(
+    binding: &state_store::RunGraphContinuationBinding,
+) -> String {
+    let task_id = crate::shell_quote(&binding.task_id);
+    let run_id = crate::shell_quote(&binding.run_id);
+    format!(
+        "Runtime binding points to paused task `{}`. Resume it with `vida task update {} --status in_progress --json`, or bind a different lawful unit with `vida taskflow continuation bind {} --task-id <task-id> --json` if the pause is still intentional.",
+        binding.task_id, task_id, run_id
+    )
+}
+
 fn runtime_binding_task_missing_next_action(
     binding: &state_store::RunGraphContinuationBinding,
 ) -> String {
@@ -3388,6 +3399,14 @@ fn task_next_lawful_receipt(
                         ready_task_candidates,
                         "runtime_binding_task_closed",
                         &runtime_binding_task_closed_next_action(binding),
+                    );
+                }
+                if task.status == "paused" {
+                    return blocked_task_next_lawful_receipt(
+                        binding.active_bounded_unit.clone(),
+                        ready_task_candidates,
+                        "runtime_binding_task_paused",
+                        &runtime_binding_task_paused_next_action(binding),
                     );
                 }
             }
@@ -3974,13 +3993,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
             if command.json && command.scope.is_none() {
-                if let Some(cached) =
-                    crate::operator_projection_cache::read_state_recent_json_projection(
-                        &state_dir,
-                        task_next_lawful_projection_name(),
-                        TASK_NEXT_LAWFUL_RECENT_PROJECTION_MAX_AGE,
-                    )
-                {
+                if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
+                    &state_dir,
+                    task_next_lawful_projection_name(),
+                    TASK_NEXT_LAWFUL_RECENT_PROJECTION_MAX_AGE,
+                ) {
                     println!("{cached}");
                     return ExitCode::SUCCESS;
                 }
@@ -5762,7 +5779,7 @@ mod tests {
     fn task_next_lawful_prefers_live_explicit_binding_over_unrelated_ready_candidates() {
         let mut explicit_task =
             owned_task_record("taskflow-case-18-rollout-regression-gate", vec![]);
-        explicit_task.status = "paused".to_string();
+        explicit_task.status = "open".to_string();
         let mut ready_task = owned_task_record(
             "agent-mode-defect-model-not-pinned-after-dispatch-init",
             vec![],
@@ -5789,6 +5806,29 @@ mod tests {
             receipt.binding_source,
             Some("explicit_continuation_bind_task".to_string())
         );
+    }
+
+    #[test]
+    fn task_next_lawful_blocks_paused_runtime_binding_with_concrete_resume_action() {
+        let mut explicit_task =
+            owned_task_record("taskflow-case-18-rollout-regression-gate", vec![]);
+        explicit_task.status = "paused".to_string();
+        let explicit = test_continuation_binding(
+            "codebase-audit-runtime-helper-dedup-refactor",
+            "taskflow-case-18-rollout-regression-gate",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+
+        let receipt = task_next_lawful_receipt(&[explicit_task], Vec::new(), Some(&explicit));
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["runtime_binding_task_paused"]);
+        assert!(receipt.next_action.as_deref().is_some_and(|action| {
+            action.contains(
+                "vida task update taskflow-case-18-rollout-regression-gate --status in_progress --json",
+            ) && action.contains("vida taskflow continuation bind codebase-audit-runtime-helper-dedup-refactor --task-id <task-id> --json")
+        }));
     }
 
     #[test]
