@@ -159,44 +159,6 @@ fn diagnostic_exit_code(payload: &serde_json::Value) -> ExitCode {
     }
 }
 
-fn refresh_cached_post_commit_diagnostics(payload: &str) -> Option<serde_json::Value> {
-    let mut payload = serde_json::from_str::<serde_json::Value>(payload).ok()?;
-    let git_status = git_status_summary();
-    let mut blocker_codes = payload["blocker_codes"]
-        .as_array()
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                .filter(|code| code != "git_status_blocked")
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if git_status["status"] != "pass" {
-        blocker_codes.push("git_status_blocked".to_string());
-    }
-    blocker_codes.sort();
-    blocker_codes.dedup();
-    let status = status_from_blockers(&blocker_codes);
-    let project_local_clean_completion = git_status["status"] == "pass";
-    payload["git_status"] = git_status;
-    payload["blocker_codes"] = serde_json::json!(blocker_codes);
-    payload["status"] = serde_json::json!(status);
-    if let Some(workflow) = payload
-        .get_mut("recommended_issue_workflow")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        workflow.insert(
-            "project_local_clean_completion".to_string(),
-            serde_json::json!(project_local_clean_completion),
-        );
-        workflow.insert(
-            "upstream_runtime_defect".to_string(),
-            serde_json::json!(status == "blocked"),
-        );
-    }
-    Some(payload)
-}
-
 fn compact_counted_json_member(value: &serde_json::Value) -> serde_json::Value {
     let count = value
         .as_array()
@@ -390,20 +352,6 @@ async fn run_post_commit(args: DiagnosticsPostCommitArgs) -> ExitCode {
     let state_dir = args
         .state_dir
         .unwrap_or_else(crate::state_store::default_state_dir);
-    if args.json {
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &state_dir,
-                POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
-                POST_COMMIT_DIAGNOSTICS_RECENT_PROJECTION_MAX_AGE,
-            )
-        {
-            if let Some(payload) = refresh_cached_post_commit_diagnostics(&cached) {
-                crate::print_json_pretty(&payload);
-                return diagnostic_exit_code(&payload);
-            }
-        }
-    }
     match build_post_commit_diagnostics(state_dir.clone()).await {
         Ok(payload) => {
             if args.json {
