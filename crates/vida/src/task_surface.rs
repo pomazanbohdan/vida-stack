@@ -3130,6 +3130,16 @@ fn continuation_binding_is_superseded_same_task_explicit(
         && explicit.task_id == current.task_id
 }
 
+fn continuation_binding_is_unscoped_dispatch_init_projection(
+    explicit: &state_store::RunGraphContinuationBinding,
+    current: &state_store::RunGraphContinuationBinding,
+) -> bool {
+    explicit.binding_source == "explicit_continuation_bind_task"
+        && current.binding_source == "run_graph_dispatch_init"
+        && explicit.run_id != current.run_id
+        && explicit.task_id != current.task_id
+}
+
 fn select_task_next_lawful_binding<'a>(
     tasks: &[state_store::TaskRecord],
     explicit_binding: Option<&'a state_store::RunGraphContinuationBinding>,
@@ -3148,6 +3158,11 @@ fn select_task_next_lawful_binding<'a>(
                 && current_live
             {
                 return Ok(Some(current));
+            }
+            if continuation_binding_is_unscoped_dispatch_init_projection(explicit, current)
+                && explicit_live
+            {
+                return Ok(Some(explicit));
             }
             match (explicit_live, current_live) {
                 (false, false) => return Ok(None),
@@ -3357,6 +3372,7 @@ fn task_next_lawful_receipt(
                 .iter()
                 .any(|candidate| candidate.task_id != binding.task_id);
             if ready_conflict
+                && binding.binding_source != "explicit_continuation_bind_task"
                 && !ready_task_candidates
                     .iter()
                     .any(|candidate| candidate.task_id == binding.task_id)
@@ -5654,6 +5670,71 @@ mod tests {
         assert_eq!(
             selected.binding_source,
             "consume_continue_deferred_agent_handoff"
+        );
+    }
+
+    #[test]
+    fn task_next_lawful_prefers_live_explicit_over_unscoped_dispatch_init_projection() {
+        let explicit_task = owned_task_record("taskflow-case-18-rollout-regression-gate", vec![]);
+        let current_task =
+            owned_task_record("agent-mode-dev-team-test-first-operating-model", vec![]);
+        let explicit = test_continuation_binding(
+            "codebase-audit-runtime-helper-dedup-refactor",
+            "taskflow-case-18-rollout-regression-gate",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+        let current = test_continuation_binding(
+            "agent-mode-dev-team-test-first-operating-model",
+            "agent-mode-dev-team-test-first-operating-model",
+            "run_graph_dispatch_init",
+            "run_graph_task",
+        );
+
+        let selected = select_task_next_lawful_binding(
+            &[explicit_task, current_task],
+            Some(&explicit),
+            Some(&current),
+        )
+        .expect(
+            "unscoped dispatch-init latest projection should not override live explicit binding",
+        )
+        .expect("explicit binding should select");
+
+        assert_eq!(selected.task_id, "taskflow-case-18-rollout-regression-gate");
+        assert_eq!(selected.binding_source, "explicit_continuation_bind_task");
+    }
+
+    #[test]
+    fn task_next_lawful_prefers_live_explicit_binding_over_unrelated_ready_candidates() {
+        let mut explicit_task =
+            owned_task_record("taskflow-case-18-rollout-regression-gate", vec![]);
+        explicit_task.status = "paused".to_string();
+        let mut ready_task = owned_task_record(
+            "agent-mode-defect-model-not-pinned-after-dispatch-init",
+            vec![],
+        );
+        ready_task.status = "open".to_string();
+        let explicit = test_continuation_binding(
+            "codebase-audit-runtime-helper-dedup-refactor",
+            "taskflow-case-18-rollout-regression-gate",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+        let ready = vec![super::task_continuation_candidate(&ready_task, false)];
+
+        let receipt =
+            task_next_lawful_receipt(&[explicit_task, ready_task], ready, Some(&explicit));
+
+        assert_eq!(receipt.status, "pass");
+        assert!(receipt.blocker_codes.is_empty());
+        assert_eq!(
+            receipt.active_bounded_unit["task_id"],
+            "taskflow-case-18-rollout-regression-gate"
+        );
+        assert_eq!(
+            receipt.binding_source,
+            Some("explicit_continuation_bind_task".to_string())
         );
     }
 
