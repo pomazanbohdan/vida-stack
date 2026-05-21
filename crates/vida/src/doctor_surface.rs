@@ -602,41 +602,23 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
-            let task_snapshot_path =
-                crate::StateStore::canonical_task_snapshot_path_for_state_root(store.root());
-            let dependency_graph =
-                match crate::StateStore::read_tasks_from_jsonl_snapshot(&task_snapshot_path)
-                    .map(|rows| crate::StateStore::validate_task_graph_rows(&rows))
-                {
-                    Ok(issues) if issues.is_empty() => issues,
-                    Ok(issues) => {
-                        let first = issues.first().expect("issues is not empty");
-                        eprintln!(
-                            "dependency graph: failed ({} issue(s), first={} on {})",
-                            issues.len(),
-                            first.issue_type,
-                            first.issue_id
-                        );
-                        return ExitCode::from(1);
-                    }
-                    Err(_) => match store.validate_task_graph().await {
-                        Ok(issues) if issues.is_empty() => issues,
-                        Ok(issues) => {
-                            let first = issues.first().expect("issues is not empty");
-                            eprintln!(
-                                "dependency graph: failed ({} issue(s), first={} on {})",
-                                issues.len(),
-                                first.issue_type,
-                                first.issue_id
-                            );
-                            return ExitCode::from(1);
-                        }
-                        Err(error) => {
-                            eprintln!("dependency graph: failed ({error})");
-                            return ExitCode::from(1);
-                        }
-                    },
-                };
+            let dependency_graph = match store.validate_task_graph().await {
+                Ok(issues) if issues.is_empty() => issues,
+                Ok(issues) => {
+                    let first = issues.first().expect("issues is not empty");
+                    eprintln!(
+                        "dependency graph: failed ({} issue(s), first={} on {})",
+                        issues.len(),
+                        first.issue_type,
+                        first.issue_id
+                    );
+                    return ExitCode::from(1);
+                }
+                Err(error) => {
+                    eprintln!("dependency graph: failed ({error})");
+                    return ExitCode::from(1);
+                }
+            };
             let boot_compatibility = match store.latest_boot_compatibility_summary().await {
                 Ok(Some(summary)) => summary,
                 Ok(None) => match store.evaluate_boot_compatibility().await {
