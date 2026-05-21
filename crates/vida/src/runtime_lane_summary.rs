@@ -965,31 +965,35 @@ mod tests {
 
         let analysis =
             summarize_agent_route_from_snapshot(&serde_json::Value::Null, agent_system, "analysis");
-        assert_eq!(analysis["executor_backend"], "opencode_cli");
+        assert_eq!(analysis["executor_backend"], "internal_subagents");
         assert_eq!(
             analysis["fanout_executor_backends"],
-            serde_json::json!(["hermes_cli", "opencode_cli", "kilo_cli"])
+            serde_json::json!(["internal_subagents"])
         );
         assert_eq!(
-            analysis["executor_backend_policy"]["lane_admissibility"]["implementation"],
-            false
+            analysis["fanout_executor_backends"]
+                .as_array()
+                .expect("analysis fanout should be an array")
+                .len(),
+            1
         );
 
         let coach =
             summarize_agent_route_from_snapshot(&serde_json::Value::Null, agent_system, "coach");
-        assert_eq!(coach["executor_backend"], "hermes_cli");
+        assert_eq!(coach["executor_backend"], "internal_subagents");
         let coach_fanout = coach["fanout_executor_backends"]
             .as_array()
             .expect("coach fanout should be an array");
-        assert!(coach_fanout.iter().any(|value| value == "hermes_cli"));
-        assert!(coach_fanout.iter().any(|value| value == "opencode_cli"));
+        assert!(coach_fanout
+            .iter()
+            .any(|value| value == "internal_subagents"));
 
         let verification = summarize_agent_route_from_snapshot(
             &serde_json::Value::Null,
             agent_system,
             "verification",
         );
-        assert_eq!(verification["executor_backend"], "opencode_cli");
+        assert_eq!(verification["executor_backend"], "internal_subagents");
 
         let review_ensemble = summarize_agent_route_from_snapshot(
             &serde_json::Value::Null,
@@ -1001,10 +1005,7 @@ mod tests {
             .expect("review ensemble fanout should be an array");
         assert!(review_ensemble_fanout
             .iter()
-            .any(|value| value == "hermes_cli"));
-        assert!(review_ensemble_fanout
-            .iter()
-            .any(|value| value == "opencode_cli"));
+            .any(|value| value == "internal_subagents"));
     }
 
     #[test]
@@ -1103,9 +1104,12 @@ mod tests {
         let implementation = assignment_for("write one bounded implementation patch");
         assert_eq!(implementation["enabled"], true);
         assert_eq!(implementation["runtime_role"], "worker");
-        assert_eq!(implementation["activation_agent_type"], "junior");
+        assert_eq!(
+            implementation["activation_agent_type"],
+            "internal_subagents"
+        );
         assert_eq!(implementation["activation_runtime_role"], "worker");
-        assert_eq!(implementation["selected_tier"], "junior");
+        assert_eq!(implementation["selected_tier"], "senior");
         assert_eq!(implementation["selected_runtime_role"], "worker");
         assert_eq!(implementation["tier_default_runtime_role"], "worker");
         assert_eq!(implementation["rate"], 1);

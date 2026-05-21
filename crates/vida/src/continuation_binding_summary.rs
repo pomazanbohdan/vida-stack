@@ -34,6 +34,22 @@ fn explicit_binding_is_admissible_for_status(
     )
 }
 
+fn dispatch_prelaunch_binding_matches_blocked_status(
+    binding: &crate::state_store::RunGraphContinuationBinding,
+    status: &crate::state_store::RunGraphStatus,
+) -> bool {
+    let binding_kind = binding
+        .active_bounded_unit
+        .get("kind")
+        .and_then(serde_json::Value::as_str);
+
+    binding.status == "bound"
+        && binding.run_id == status.run_id
+        && binding.task_id == status.task_id
+        && binding.binding_source == "dispatch_prelaunch_blocked"
+        && binding_kind == Some("task_graph_task")
+}
+
 fn explicit_task_binding_is_admissible_without_status(
     binding: &crate::state_store::RunGraphContinuationBinding,
 ) -> bool {
@@ -426,6 +442,28 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
                         pause_boundary_gate,
                     );
                 }
+                if explicit_binding_is_admissible_for_status(binding, status)
+                    && active_exception_takeover_evidence_matches_status(
+                        status,
+                        latest_run_graph_dispatch_receipt,
+                        None,
+                    )
+                {
+                    return binding_summary_json(
+                        binding,
+                        continuation_required_now,
+                        pause_boundary_gate,
+                        continuation_next_actions.clone(),
+                    );
+                }
+                if dispatch_prelaunch_binding_matches_blocked_status(binding, status) {
+                    return binding_summary_json(
+                        binding,
+                        continuation_required_now,
+                        pause_boundary_gate,
+                        continuation_next_actions.clone(),
+                    );
+                }
             }
             if active_exception_takeover_evidence_matches_status(
                 status,
@@ -661,7 +699,8 @@ pub(crate) fn add_taskflow_active_work_truth(
             candidate.get("task_id").and_then(serde_json::Value::as_str) == Some(task_id)
         })
     });
-    let orthogonal = bound_to_run_graph_task
+    let orthogonal = binding_source.starts_with("latest_run_graph")
+        && bound_to_run_graph_task
         && !taskflow_active_candidates.is_empty()
         && !active_candidate_matches;
 
@@ -947,6 +986,60 @@ mod tests {
     }
 
     #[test]
+    fn blocked_dispatch_prelaunch_binding_still_surfaces_active_unit() {
+        let task_id = "universal-surfaces-epic-2-wizard-settings-container";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(task_id, "analysis", "analysis");
+        status.task_id = task_id.to_string();
+        status.run_id = task_id.to_string();
+        status.active_node = "analysis".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: task_id.to_string(),
+            task_id: task_id.to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": task_id,
+                "run_id": task_id,
+                "task_status": "open",
+                "issue_type": "task",
+            }),
+            binding_source: "dispatch_prelaunch_blocked".to_string(),
+            why_this_unit: "Explicit continuation binding records task `universal-surfaces-epic-2-wizard-settings-container`.".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+            request_text: Some(task_id.to_string()),
+            recorded_at: "2026-05-21T09:08:04Z".to_string(),
+        };
+
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            None,
+            None,
+            false,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["continuation_allowed"], true);
+        assert_eq!(summary["active_bounded_unit"]["task_id"], task_id);
+        assert_eq!(summary["binding_source"], "dispatch_prelaunch_blocked");
+        assert_eq!(
+            summary["why_this_unit"],
+            "Explicit continuation binding records task `universal-surfaces-epic-2-wizard-settings-container`."
+        );
+        assert_eq!(
+            summary["sequential_vs_parallel_posture"],
+            "sequential_only_open_cycle"
+        );
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
     fn blocked_latest_run_graph_status_is_idle_when_taskflow_has_no_active_work() {
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             "runtime-bounded-slice-material-owned-app-chrome",
@@ -1027,6 +1120,56 @@ mod tests {
                     .as_str()
                     .is_some_and(|value| !value.starts_with("Continue the active exception-backed bounded unit with `vida taskflow consume continue")))
         }));
+    }
+
+    #[test]
+    fn blocked_latest_run_graph_status_accepts_explicit_same_run_binding_with_exception_takeover_receipt(
+    ) {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "taskflow-case-18-rollout-regression-gate",
+            "taskflow-case-18-rollout-regression-gate",
+            "coach",
+        );
+        status.active_node = "coach".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "taskflow-case-18-rollout-regression-gate".to_string(),
+            task_id: "taskflow-case-18-rollout-regression-gate".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "run_graph_task",
+                "task_id": "taskflow-case-18-rollout-regression-gate",
+                "run_id": "taskflow-case-18-rollout-regression-gate",
+                "active_node": "coach"
+            }),
+            binding_source: "explicit_continuation_bind".to_string(),
+            why_this_unit: "Explicit continuation binding records task `taskflow-case-18-rollout-regression-gate` at node `coach` as the active bounded unit.".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+            request_text: Some("CASE-18 rollout regression gate".to_string()),
+            recorded_at: "2026-05-21T11:19:38Z".to_string(),
+        };
+        let dispatch = exception_takeover_dispatch("taskflow-case-18-rollout-regression-gate");
+
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            Some(&dispatch),
+            Some("taskflow-case-18-rollout-regression-gate"),
+            false,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["continuation_allowed"], true);
+        assert_eq!(summary["binding_source"], "explicit_continuation_bind");
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "taskflow-case-18-rollout-regression-gate"
+        );
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
     }
 
     #[test]
@@ -1588,8 +1731,23 @@ mod tests {
             recorded_at: "2026-05-17T10:00:00Z".to_string(),
         };
 
-        let summary =
-            build_continuation_binding_summary(Some(&binding), None, None, None, None, false);
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "taskflow-case-18-rollout-regression-gate",
+            "taskflow-case-18-rollout-regression-gate",
+            "coach",
+        );
+        status.active_node = "coach".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+        let dispatch = exception_takeover_dispatch("taskflow-case-18-rollout-regression-gate");
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            Some(&dispatch),
+            Some("taskflow-case-18-rollout-regression-gate"),
+            false,
+        );
 
         assert_eq!(summary["status"], "bound");
         assert_eq!(summary["continuation_allowed"], true);
@@ -1679,6 +1837,60 @@ mod tests {
                     .is_some_and(|value| !value.contains("vida taskflow consume continue --run-id"))
             })
         }));
+    }
+
+    #[test]
+    fn taskflow_active_work_truth_preserves_explicit_run_graph_binding() {
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "taskflow-case-18-rollout-regression-gate".to_string(),
+            task_id: "taskflow-case-18-rollout-regression-gate".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "run_graph_task",
+                "task_id": "taskflow-case-18-rollout-regression-gate",
+                "run_id": "taskflow-case-18-rollout-regression-gate",
+                "active_node": "coach"
+            }),
+            binding_source: "explicit_continuation_bind".to_string(),
+            why_this_unit: "Explicit continuation binding records case 18.".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+            request_text: Some("CASE-18 rollout regression gate".to_string()),
+            recorded_at: "2026-05-21T11:25:10Z".to_string(),
+        };
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "taskflow-case-18-rollout-regression-gate",
+            "taskflow-case-18-rollout-regression-gate",
+            "coach",
+        );
+        status.active_node = "coach".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+        let dispatch = exception_takeover_dispatch("taskflow-case-18-rollout-regression-gate");
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            Some(&dispatch),
+            Some("taskflow-case-18-rollout-regression-gate"),
+            false,
+        );
+        let taskflow_candidates = taskflow_active_candidates_from_tasks(&[
+            task_record("runtime-normal-operation-recovery-epic", "in_progress"),
+            task_record("taskflow-testing-defects-epic", "in_progress"),
+        ]);
+        let summary = add_taskflow_active_work_truth(summary, taskflow_candidates);
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["continuation_allowed"], true);
+        assert_eq!(summary["binding_scope"], "run_graph_explicit");
+        assert_eq!(summary["orthogonal_to_taskflow_active_work"], false);
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "taskflow-case-18-rollout-regression-gate"
+        );
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
     }
 
     #[test]

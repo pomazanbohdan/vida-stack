@@ -1136,6 +1136,20 @@ impl CurrentSessionRunGraphClaimScope {
         self.run_ids.is_empty() && self.task_ids.is_empty()
     }
 
+    fn push_run_id(&mut self, run_id: String) {
+        let run_id = run_id.trim().to_string();
+        if !run_id.is_empty() && !self.run_ids.contains(&run_id) {
+            self.run_ids.push(run_id);
+        }
+    }
+
+    fn push_task_id(&mut self, task_id: String) {
+        let task_id = task_id.trim().to_string();
+        if !task_id.is_empty() && !self.task_ids.contains(&task_id) {
+            self.task_ids.push(task_id);
+        }
+    }
+
     fn matches_binding(&self, binding: &RunGraphContinuationBinding) -> bool {
         self.run_ids.contains(&binding.run_id)
             || self.task_ids.contains(&binding.task_id)
@@ -1205,14 +1219,34 @@ impl StateStore {
             if claim.orchestrator_session_id != current_session_id {
                 continue;
             }
-            if let Some(run_id) = claim.run_id.map(|value| value.trim().to_string()) {
-                if !run_id.is_empty() && !scope.run_ids.contains(&run_id) {
-                    scope.run_ids.push(run_id);
-                }
+            if let Some(run_id) = claim.run_id {
+                scope.push_run_id(run_id);
             }
-            if let Some(task_id) = claim.task_id.map(|value| value.trim().to_string()) {
-                if !task_id.is_empty() && !scope.task_ids.contains(&task_id) {
-                    scope.task_ids.push(task_id);
+            if let Some(task_id) = claim.task_id {
+                scope.push_task_id(task_id);
+            }
+        }
+
+        if scope.is_empty() {
+            let mut owner_query = self
+                .db
+                .query(
+                    "SELECT * FROM run_graph_owner_evidence \
+                     WHERE runtime_owner_evidence.current_session.session_id = $session_id \
+                     ORDER BY recorded_at DESC, run_id DESC;",
+                )
+                .bind(("session_id", current_session_id.clone()))
+                .await?;
+            let owner_records: Vec<RunGraphOwnerEvidenceRecord> = owner_query.take(0)?;
+            for record in owner_records {
+                if record
+                    .runtime_owner_evidence
+                    .get("current_session")
+                    .and_then(|session| session.get("session_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|session_id| session_id.trim() == current_session_id)
+                {
+                    scope.push_run_id(record.run_id);
                 }
             }
         }
@@ -3381,6 +3415,90 @@ mod tests {
                 .expect("scoped binding present")
                 .run_id,
             "run-current-binding"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test]
+    async fn latest_explicit_continuation_binding_for_current_session_uses_current_owner_evidence_without_claim(
+    ) {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-owner-evidence-binding");
+        }
+        let root = temp_run_graph_root("vida-run-graph-owner-evidence-binding");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .record_run_graph_continuation_binding(&sample_explicit_binding(
+                "run-owner-evidence-binding",
+                "task-owner-evidence-binding",
+                "2026-05-21T00:00:00Z",
+            ))
+            .await
+            .expect("persist owner-evidence binding");
+
+        assert!(store
+            .active_orchestrator_claims()
+            .await
+            .expect("read claims")
+            .is_empty());
+        assert_eq!(
+            store
+                .latest_explicit_run_graph_continuation_binding_for_current_session()
+                .await
+                .expect("read scoped binding")
+                .expect("scoped binding present")
+                .run_id,
+            "run-owner-evidence-binding"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_status_for_current_session_uses_owner_evidence_without_claim() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-owner-evidence-status");
+        }
+        let root = temp_run_graph_root("vida-run-graph-owner-evidence-status");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-owner-evidence-status".to_string();
+        status.task_id = "task-owner-evidence-status".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist owner-evidence status");
+        store
+            .record_run_graph_continuation_binding(&sample_explicit_binding(
+                "run-owner-evidence-status",
+                "task-owner-evidence-status",
+                "2026-05-21T00:00:00Z",
+            ))
+            .await
+            .expect("persist owner-evidence binding");
+
+        assert!(store
+            .active_orchestrator_claims()
+            .await
+            .expect("read claims")
+            .is_empty());
+        assert_eq!(
+            store
+                .latest_run_graph_status_for_current_session()
+                .await
+                .expect("read scoped status")
+                .expect("scoped status present")
+                .run_id,
+            "run-owner-evidence-status"
         );
 
         let _ = fs::remove_dir_all(&root);

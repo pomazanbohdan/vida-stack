@@ -217,17 +217,43 @@ host_environment:
       materialization_mode: codex_toml_catalog_render
       template_root: .codex
       runtime_root: .codex
+      app:
+        enabled: true
+        config_path: .codex/config.toml
+        template_path: .codex/templates/codex-app.config.toml
+        agents_dir: .codex/agents
+        multi_agent: true
+        internal_alias_projection: true
+        platform_overrides:
+          windows:
+            shell_environment_policy:
+              inherit: all
+            agent_bootstrap_instructions: |
+              VIDA command resolution for Windows Codex App:
+              1. Before invoking `vida`, first try `Get-Command vida -ErrorAction SilentlyContinue`.
+              2. If `vida` is not on PATH, resolve the installed production binary from `$env:LOCALAPPDATA\\vida-stack\\current\\bin\\vida.exe`.
+              3. If `LOCALAPPDATA` is missing but `USERPROFILE` is present, resolve `$env:USERPROFILE\\AppData\\Local\\vida-stack\\current\\bin\\vida.exe`.
+              4. When the installed production binary exists, prepend its parent directory to `$env:PATH` for the current process and invoke that binary or the refreshed `vida` command.
+              5. Treat `target\\debug\\vida.exe` and `target\\release\\vida.exe` as repository diagnostics only; do not use them as the production VIDA runtime unless the parent packet explicitly asks for diagnostic fallback.
+      legacy_cli:
+        enabled: true
+        template_path: .codex/templates/codex-cli.config.toml
+        multi_agent_feature_required: true
       dispatch:
         command: codex
+        receipt_backed_completion_supported: false
         static_args:
           - exec
           - --json
+        feature_args:
+          - --enable
+          - multi_agent
         workdir_flag: -C
         sandbox_flag: -s
         model_flag: -m
         reasoning_effort_flag: -c
         reasoning_effort_value_template: 'model_reasoning_effort="{value}"'
-        prompt_mode: positional
+        prompt_mode: stdin
       carriers: *codex_agent_catalog
     qwen:
       enabled: true
@@ -247,7 +273,7 @@ host_environment:
             - implementation
             - research
     hermes:
-      enabled: true
+      enabled: false
       execution_class: external
       materialization_mode: copy_tree_only
       template_root: .hermes
@@ -264,7 +290,7 @@ host_environment:
             - specification
             - planning
     opencode:
-      enabled: true
+      enabled: false
       execution_class: external
       materialization_mode: copy_tree_only
       template_root: .opencode
@@ -280,7 +306,7 @@ host_environment:
           task_classes:
             - implementation
     pi:
-      enabled: true
+      enabled: false
       execution_class: external
       materialization_mode: pi_agent_projection_render
       template_root: .pi
@@ -288,7 +314,7 @@ host_environment:
       authority: config_projection_only
       source_of_truth: vida.config.yaml
       app:
-        enabled: true
+        enabled: false
         settings_path: .pi/settings.json
         agents_dir: .pi/agents
         chains_dir: .pi/chains
@@ -631,8 +657,127 @@ agent_system:
   scoring:
     rule: capability_first_then_score_guard_then_cheapest_tier
   subagents:
-    pi_cli:
+    internal_subagents:
       enabled: true
+      subagent_backend_class: internal
+      role: senior_internal
+      orchestration_tier: senior
+      cost_priority: premium
+      budget_cost_units: 10
+      profiles: codex_gpt55_low_write,codex_gpt55_medium_write,codex_gpt55_high_readonly,codex_gpt55_xhigh_arch
+      default_profile: codex_gpt55_low_write
+      default_model_profile: codex_gpt55_low_write
+      capability_band: implementation_safe,architecture_safe,review_safe
+      default_runtime_role: worker
+      write_scope: orchestrator_native
+      billing_tier: internal
+      speed_tier: medium
+      quality_tier: high
+      runtime_roles:
+        - worker
+        - business_analyst
+        - coach
+        - verifier
+        - prover
+        - solution_architect
+      task_classes:
+        - implementation
+        - implementation_medium
+        - delivery_task
+        - execution_block
+        - specification
+        - planning
+        - analysis
+        - review
+        - coach
+        - verification
+        - quality_gate
+        - release_readiness
+        - architecture
+        - execution_preparation
+        - hard_escalation
+        - meta_analysis
+      model_profiles:
+        codex_gpt55_low_write:
+          provider: openai
+          model_ref: gpt-5.4
+          reasoning_effort: low
+          normalized_cost_units: 1
+          speed_tier: fast
+          quality_tier: medium_high
+          write_scope: orchestrator_native
+          runtime_roles:
+            - worker
+            - business_analyst
+          task_classes:
+            - implementation
+            - analysis
+            - delivery_task
+          readiness:
+            mode: codex_profile
+            required: true
+        codex_gpt55_medium_write:
+          provider: openai
+          model_ref: gpt-5.4
+          reasoning_effort: medium
+          normalized_cost_units: 4
+          speed_tier: fast
+          quality_tier: medium
+          write_scope: orchestrator_native
+          runtime_roles:
+            - business_analyst
+            - pm
+            - coach
+            - worker
+          task_classes:
+            - specification
+            - planning
+            - coach
+            - implementation_medium
+            - analysis
+          readiness:
+            mode: codex_profile
+            required: true
+        codex_gpt55_high_readonly:
+          provider: openai
+          model_ref: gpt-5.4
+          reasoning_effort: high
+          normalized_cost_units: 16
+          speed_tier: medium
+          quality_tier: high
+          write_scope: read_or_review
+          runtime_roles:
+            - coach
+            - verifier
+            - prover
+          task_classes:
+            - review
+            - verification
+            - coach
+            - release_readiness
+          readiness:
+            mode: codex_profile
+            required: true
+        codex_gpt55_xhigh_arch:
+          provider: openai
+          model_ref: gpt-5.4
+          reasoning_effort: xhigh
+          normalized_cost_units: 48
+          speed_tier: medium
+          quality_tier: very_high
+          write_scope: architecture_safe
+          runtime_roles:
+            - solution_architect
+          task_classes:
+            - architecture
+            - execution_preparation
+            - hard_escalation
+          readiness:
+            mode: codex_profile
+            required: true
+      specialties: implementation,architecture,integration,review,verification
+    pi_cli:
+      enabled: false
       subagent_backend_class: external_cli
       detect_command: vida-pi-agent
       provider_command: pi
@@ -783,20 +928,21 @@ agent_system:
           fail_closed_until_available: true
   routing:
     implementation:
-      executor_backend: pi_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       fallback_executor_backend: internal_subagents
       profiles:
-        pi_cli: pi_gpt54_mini_low_guarded
+        internal_subagents: codex_gpt55_low_write
       max_runtime_seconds: 420
       verification_gate: targeted_verification
       coach_required: yes
       coach_route_task_class: coach
       verification_route_task_class: review_ensemble
       independent_verification_required: yes
-      dispatch_required: external_guarded_when_admissible
+      dispatch_required: internal_agent_lane
       graph_strategy: diagnostic_only_implementation_summary
-      write_scope: guard_required_owned_paths
-      write_readiness: guard_required_fail_closed_until_adapter_guard
+      write_scope: scoped_owned_paths
+      write_readiness: codex_internal_agent_available
 
 # Optional internal-only agent-system scaffold example.
 # Use this as the canonical starting point for project initialization and

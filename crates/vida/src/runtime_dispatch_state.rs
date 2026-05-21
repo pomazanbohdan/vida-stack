@@ -6973,44 +6973,52 @@ mod tests {
 
     fn install_external_cli_test_model_profiles(config_path: &Path) {
         let config = fs::read_to_string(config_path).expect("config should exist");
-        let updated = config.replace(
-            concat!(
-                "    opencode_cli:\n",
-                "      enabled: true\n",
-                "      subagent_backend_class: external_cli\n",
-                "      runtime_roles: [worker, coach, verifier]\n",
-                "      task_classes: [implementation, delivery_task, execution_block, coach, review, verification]\n",
-                "      detect_command: qwen\n",
-                "      dispatch:\n"
-            ),
-            concat!(
-                "    opencode_cli:\n",
-                "      enabled: true\n",
-                "      subagent_backend_class: external_cli\n",
-                "      runtime_roles: [worker, coach, verifier]\n",
-                "      task_classes: [implementation, delivery_task, execution_block, coach, review, verification]\n",
-                "      detect_command: qwen\n",
-                "      default_model: opencode/minimax-m2.5-free\n",
-                "      default_model_profile: opencode_minimax_free_review\n",
-                "      model_profiles:\n",
-                "        opencode_minimax_free_review:\n",
-                "          provider: opencode\n",
-                "          model_ref: opencode/minimax-m2.5-free\n",
-                "          reasoning_effort: provider_default\n",
-                "          normalized_cost_units: 0\n",
-                "          runtime_roles: [coach]\n",
-                "          task_classes: [review]\n",
-                "        opencode_codex_mini_review:\n",
-                "          provider: opencode\n",
-                "          model_ref: opencode/gpt-5.1-codex-mini\n",
-                "          reasoning_effort: low\n",
-                "          normalized_cost_units: 1\n",
-                "          runtime_roles: [coach]\n",
-                "          task_classes: [review]\n",
-                "      dispatch:\n",
-            ),
+        let mut document: serde_yaml::Value =
+            serde_yaml::from_str(&config).expect("config should parse as yaml");
+        let root = document
+            .as_mapping_mut()
+            .expect("config root should be a yaml mapping");
+        let opencode = root
+            .get_mut(serde_yaml::Value::String("agent_system".to_string()))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|agent_system| {
+                agent_system.get_mut(serde_yaml::Value::String("subagents".to_string()))
+            })
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|subagents| {
+                subagents.get_mut(serde_yaml::Value::String("opencode_cli".to_string()))
+            })
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("opencode_cli test subagent should exist");
+        opencode.insert(
+            serde_yaml::Value::String("default_model".to_string()),
+            serde_yaml::Value::String("opencode/minimax-m2.5-free".to_string()),
         );
-        assert_ne!(updated, config, "expected opencode profile replacement");
+        opencode.insert(
+            serde_yaml::Value::String("default_model_profile".to_string()),
+            serde_yaml::Value::String("opencode_minimax_free_review".to_string()),
+        );
+        opencode.insert(
+            serde_yaml::Value::String("model_profiles".to_string()),
+            serde_yaml::from_str(concat!(
+                "opencode_minimax_free_review:\n",
+                "  provider: opencode\n",
+                "  model_ref: opencode/minimax-m2.5-free\n",
+                "  reasoning_effort: provider_default\n",
+                "  normalized_cost_units: 0\n",
+                "  runtime_roles: [coach]\n",
+                "  task_classes: [review]\n",
+                "opencode_codex_mini_review:\n",
+                "  provider: opencode\n",
+                "  model_ref: opencode/gpt-5.1-codex-mini\n",
+                "  reasoning_effort: low\n",
+                "  normalized_cost_units: 1\n",
+                "  runtime_roles: [coach]\n",
+                "  task_classes: [review]\n",
+            ))
+            .expect("model profiles should parse"),
+        );
+        let updated = serde_yaml::to_string(&document).expect("config should serialize as yaml");
         fs::write(config_path, updated).expect("config should update");
     }
 

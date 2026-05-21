@@ -85,6 +85,7 @@ Current entrypoints:
 64. [derived-cache-delivery-and-invalidation-research.md](research/derived-cache-delivery-and-invalidation-research.md)
 65. [embedded-runtime-bootstrap-and-projection-research.md](research/embedded-runtime-bootstrap-and-projection-research.md)
 66. [execution-preparation-and-developer-handoff-survey.md](research/execution-preparation-and-developer-handoff-survey.md)
+67. [docs/product/research/vida-service-tui-wizard-architecture-research.md](research/vida-service-tui-wizard-architecture-research.md)
 
 Release-1 working entrypoints:
 
@@ -134,10 +135,10 @@ Repository narrative entrypoints:
 artifact_path: product/index
 artifact_type: product_index
 artifact_version: '1'
-artifact_revision: 2026-05-06
+artifact_revision: 2026-05-21
 schema_version: '1'
 status: canonical
 source_path: docs/product/index.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-05-06T11:52:00+03:00
+updated_at: 2026-05-21T08:17:00.6740968Z
 changelog_ref: index.changelog.jsonl

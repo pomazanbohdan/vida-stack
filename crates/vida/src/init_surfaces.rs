@@ -18,6 +18,8 @@ const COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS: u64 = 30;
 const BOOT_RELEASE_VERIFICATION_RETRY_DELAY_MS: u64 = 25;
 const INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS: u64 = 45;
 const LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS: u64 = 30;
+const ORCHESTRATOR_INIT_STALE_PROJECTION_MAX_AGE: std::time::Duration =
+    std::time::Duration::from_secs(60 * 60);
 static AGENT_INIT_READ_SURFACE_GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 fn orchestrator_init_bundle_timeout_payload(state_dir: &Path) -> serde_json::Value {
@@ -2928,6 +2930,16 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
             orchestrator_init_projection_name(args.full),
             std::time::Duration::from_secs(60),
         ) {
+            println!("{cached}");
+            return ExitCode::SUCCESS;
+        }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                &state_dir,
+                orchestrator_init_projection_name(args.full),
+                ORCHESTRATOR_INIT_STALE_PROJECTION_MAX_AGE,
+            )
+        {
             println!("{cached}");
             return ExitCode::SUCCESS;
         }

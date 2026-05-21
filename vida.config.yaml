@@ -260,7 +260,7 @@ host_environment:
         prompt_mode: stdin
       carriers: *codex_agent_catalog
     hermes:
-      enabled: true
+      enabled: false
       execution_class: external
       materialization_mode: copy_tree_only
       template_root: .hermes
@@ -278,7 +278,7 @@ host_environment:
             - specification
             - planning
     opencode:
-      enabled: true
+      enabled: false
       execution_class: external
       materialization_mode: copy_tree_only
       template_root: .opencode
@@ -295,7 +295,7 @@ host_environment:
           task_classes:
             - implementation
     pi:
-      enabled: true
+      enabled: false
       execution_class: external
       materialization_mode: pi_agent_projection_render
       template_root: .pi
@@ -303,7 +303,7 @@ host_environment:
       authority: config_projection_only
       source_of_truth: vida.config.yaml
       app:
-        enabled: true
+        enabled: false
         settings_path: .pi/settings.json
         agents_dir: .pi/agents
         chains_dir: .pi/chains
@@ -1051,7 +1051,7 @@ agent_system:
             required: true
       specialties: implementation,architecture,integration,review,verification
     hermes_cli:
-      enabled: true
+      enabled: false
       subagent_backend_class: external_cli
       detect_command: hermes
       role: free_primary
@@ -1121,7 +1121,7 @@ agent_system:
         progress_idle_timeout_seconds: 105
         max_runtime_extension_seconds: 75
     opencode_cli:
-      enabled: true
+      enabled: false
       subagent_backend_class: external_cli
       detect_command: opencode
       role: free_primary
@@ -1235,7 +1235,7 @@ agent_system:
           substring: Authentication Failed
           max_age_seconds: 900
     kilo_cli:
-      enabled: true
+      enabled: false
       subagent_backend_class: external_cli
       detect_command: kilo
       role: free_primary
@@ -1306,7 +1306,7 @@ agent_system:
           path: ~/.local/state/kilo/model.json
           expected_ref: kilo/x-ai/grok-code-fast-1:optimized:free
     vibe_cli:
-      enabled: true
+      enabled: false
       subagent_backend_class: external_cli
       detect_command: vibe
       role: free_primary
@@ -1384,7 +1384,7 @@ agent_system:
           path: ~/.vibe/logs/vibe.log
           substring: Invalid API key
     pi_cli:
-      enabled: true
+      enabled: false
       subagent_backend_class: external_cli
       detect_command: vida-pi-agent
       provider_command: pi
@@ -1563,8 +1563,8 @@ agent_system:
           fail_closed_until_available: true
   routing:
     default:
-      executor_backend: opencode_cli
-      subagents: opencode_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       write_scope: none
       graph_strategy: deterministic_then_escalate
       deterministic_first: yes
@@ -1575,24 +1575,21 @@ agent_system:
       max_fallback_hops: 2
       max_total_runtime_seconds: 420
       verification_gate: subagent_return_contract
-      dispatch_required: external_first_when_eligible
-      external_first_required: yes
-      local_execution_allowed: no
-      local_execution_preferred: no
-      cli_dispatch_required_if_delegating: yes
-      direct_internal_bypass_forbidden: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
+      local_execution_allowed: yes
+      local_execution_preferred: yes
+      cli_dispatch_required_if_delegating: no
+      direct_internal_bypass_forbidden: no
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: write_scope_or_tie_break
       independent_verification_required: no
     status_diagnostic:
-      executor_backend: opencode_cli
-      subagents: opencode_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       fanout_executor_backends:
-        - hermes_cli
-        - opencode_cli
-        - kilo_cli
-        - vibe_cli
-      fanout_subagents: hermes_cli,opencode_cli,kilo_cli,vibe_cli
+        - internal_subagents
+      fanout_subagents: internal_subagents
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -1607,28 +1604,25 @@ agent_system:
       max_verification_passes: 0
       max_fallback_hops: 2
       max_total_runtime_seconds: 180
-      dispatch_required: local_or_external_first
+      dispatch_required: internal_agent_lane
       external_first_required: no
       local_execution_allowed: yes
       local_execution_preferred: yes
-      cli_dispatch_required_if_delegating: yes
-      direct_internal_bypass_forbidden: yes
+      cli_dispatch_required_if_delegating: no
+      direct_internal_bypass_forbidden: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: provider_exhausted_or_decision_conflict
       allowed_internal_reasons: provider_exhausted,quality_gap,semantic_conflict_without_majority,provider_exhausted_or_decision_conflict
       independent_verification_required: no
     research:
-      executor_backend: kilo_cli
-      subagents: kilo_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_low_write
       fanout_executor_backends:
-        - hermes_cli
-        - opencode_cli
-        - kilo_cli
-        - vibe_cli
-      fanout_subagents: hermes_cli,opencode_cli,kilo_cli,vibe_cli
+        - internal_subagents
+      fanout_subagents: internal_subagents
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -1643,8 +1637,8 @@ agent_system:
       max_verification_passes: 1
       max_fallback_hops: 2
       max_total_runtime_seconds: 360
-      dispatch_required: fanout_then_synthesize
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       web_search_required: yes
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
@@ -1652,15 +1646,13 @@ agent_system:
       verification_route_task_class: verification_ensemble
       independent_verification_required: yes
     research_fast:
-      executor_backend: kilo_cli
-      subagents: kilo_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_low_write
       fanout_executor_backends:
-        - kilo_cli
-        - opencode_cli
-        - hermes_cli
-      fanout_subagents: kilo_cli,opencode_cli,hermes_cli
+        - internal_subagents
+      fanout_subagents: internal_subagents
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -1668,8 +1660,8 @@ agent_system:
       max_runtime_seconds: 150
       min_output_bytes: 220
       max_fallback_hops: 2
-      dispatch_required: fanout_then_synthesize
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       web_search_required: yes
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
@@ -1677,15 +1669,13 @@ agent_system:
       verification_route_task_class: verification
       independent_verification_required: yes
     ui_research:
-      executor_backend: vibe_cli
-      subagents: vibe_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_low_write
       fanout_executor_backends:
-        - vibe_cli
-        - opencode_cli
-        - hermes_cli
-      fanout_subagents: vibe_cli,opencode_cli,hermes_cli
+        - internal_subagents
+      fanout_subagents: internal_subagents
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -1693,8 +1683,8 @@ agent_system:
       max_runtime_seconds: 150
       min_output_bytes: 220
       max_fallback_hops: 2
-      dispatch_required: fanout_then_synthesize
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       web_search_required: yes
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
@@ -1702,15 +1692,13 @@ agent_system:
       verification_route_task_class: verification
       independent_verification_required: yes
     research_deep:
-      executor_backend: kilo_cli
-      subagents: kilo_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_xhigh_arch
       fanout_executor_backends:
-        - hermes_cli
-        - opencode_cli
-        - kilo_cli
-      fanout_subagents: hermes_cli,opencode_cli,kilo_cli
+        - internal_subagents
+      fanout_subagents: internal_subagents
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -1725,8 +1713,8 @@ agent_system:
       max_verification_passes: 1
       max_fallback_hops: 2
       max_total_runtime_seconds: 480
-      dispatch_required: fanout_then_synthesize
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       web_search_required: yes
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
@@ -1734,17 +1722,14 @@ agent_system:
       verification_route_task_class: verification_ensemble
       independent_verification_required: yes
     analysis:
-      executor_backend: pi_cli
-      subagents: pi_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         pi_cli: pi_gpt55_high_readonly
         internal_subagents: codex_gpt55_medium_write
       fanout_executor_backends:
-        - pi_cli
-        - hermes_cli
-        - opencode_cli
-        - kilo_cli
-      fanout_subagents: hermes_cli,opencode_cli,kilo_cli
+        - internal_subagents
+      fanout_subagents: internal_subagents
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -1752,23 +1737,21 @@ agent_system:
       max_runtime_seconds: 180
       min_output_bytes: 320
       max_fallback_hops: 2
-      dispatch_required: fanout_then_synthesize
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: semantic_conflict_without_majority
       verification_route_task_class: verification_ensemble
       independent_verification_required: no
     read_only_prep:
-      executor_backend: opencode_cli
-      subagents: opencode_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_low_write
       fanout_executor_backends:
-        - opencode_cli
-        - hermes_cli
-        - kilo_cli
-      fanout_subagents: opencode_cli,hermes_cli,kilo_cli
+        - internal_subagents
+      fanout_subagents: internal_subagents
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -1783,25 +1766,24 @@ agent_system:
       max_verification_passes: 0
       max_fallback_hops: 2
       max_total_runtime_seconds: 240
-      dispatch_required: fanout_then_synthesize
-      external_first_required: yes
-      local_execution_allowed: no
-      local_execution_preferred: no
-      cli_dispatch_required_if_delegating: yes
-      direct_internal_bypass_forbidden: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
+      local_execution_allowed: yes
+      local_execution_preferred: yes
+      cli_dispatch_required_if_delegating: no
+      direct_internal_bypass_forbidden: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: subagent_exhausted_or_quality_gap
       independent_verification_required: no
     meta_analysis:
-      executor_backend: hermes_cli
-      subagents: hermes_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_high_readonly
       fanout_executor_backends:
-        - hermes_cli
-        - opencode_cli
-      fanout_subagents: hermes_cli,opencode_cli
+        - internal_subagents
+      fanout_subagents: internal_subagents
       fanout_min_results: 3
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -1809,16 +1791,16 @@ agent_system:
       max_runtime_seconds: 240
       min_output_bytes: 320
       max_fallback_hops: 2
-      dispatch_required: fanout_then_synthesize
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: semantic_conflict_without_majority
       verification_route_task_class: verification_ensemble
       independent_verification_required: yes
     review:
-      executor_backend: hermes_cli
-      subagents: hermes_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_high_readonly
       write_scope: none
@@ -1826,15 +1808,15 @@ agent_system:
       max_runtime_seconds: 180
       min_output_bytes: 260
       max_fallback_hops: 2
-      dispatch_required: external_first_review
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: unresolved_high_risk_findings
       independent_verification_required: no
     review_first_pass:
-      executor_backend: opencode_cli
-      subagents: opencode_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_high_readonly
       write_scope: none
@@ -1842,15 +1824,15 @@ agent_system:
       max_runtime_seconds: 180
       min_output_bytes: 260
       max_fallback_hops: 2
-      dispatch_required: external_first_review
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: unresolved_high_risk_findings
       independent_verification_required: no
     ui_review:
-      executor_backend: vibe_cli
-      subagents: vibe_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_high_readonly
       write_scope: none
@@ -1858,39 +1840,37 @@ agent_system:
       max_runtime_seconds: 180
       min_output_bytes: 240
       max_fallback_hops: 2
-      dispatch_required: external_first_review
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: unresolved_high_risk_findings
       independent_verification_required: no
     review_critical:
-      executor_backend: hermes_cli
-      subagents: hermes_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_high_readonly
       fanout_executor_backends:
-        - hermes_cli
-        - opencode_cli
-      fanout_subagents: hermes_cli,opencode_cli
+        - internal_subagents
+      fanout_subagents: internal_subagents
       write_scope: none
       verification_gate: review_findings
       max_runtime_seconds: 240
       min_output_bytes: 320
       max_fallback_hops: 2
-      dispatch_required: bridge_or_critical_review
+      dispatch_required: internal_agent_lane
       external_first_required: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: architecture_or_security_conflict
       independent_verification_required: no
     review_ensemble:
-      executor_backend: hermes_cli
-      subagents: hermes_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       fanout_executor_backends:
-        - hermes_cli
-        - opencode_cli
-      fanout_subagents: hermes_cli,opencode_cli
+        - internal_subagents
+      fanout_subagents: internal_subagents
       fanout_min_results: 2
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -1898,19 +1878,18 @@ agent_system:
       max_runtime_seconds: 180
       min_output_bytes: 280
       max_fallback_hops: 2
-      dispatch_required: fanout_then_synthesize
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: unresolved_high_risk_findings
       independent_verification_required: no
     coach:
-      executor_backend: hermes_cli
-      subagents: hermes_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       fanout_executor_backends:
-        - hermes_cli
-        - opencode_cli
-      fanout_subagents: hermes_cli,opencode_cli
+        - internal_subagents
+      fanout_subagents: internal_subagents
       fanout_min_results: 1
       merge_policy: unanimous_approve_rework_bias
       write_scope: none
@@ -1918,37 +1897,35 @@ agent_system:
       max_runtime_seconds: 180
       min_output_bytes: 280
       max_fallback_hops: 2
-      dispatch_required: external_first_review
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: unresolved_coach_conflict
       independent_verification_required: no
     small_patch:
-      executor_backend: opencode_cli
-      subagents: opencode_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_low_write
       analysis_required: yes
-      analysis_executor_backend: opencode_cli
+      analysis_executor_backend: internal_subagents
       analysis_route_task_class: analysis
       analysis_fanout_executor_backends:
-        - opencode_cli
-        - hermes_cli
-        - kilo_cli
-      analysis_fanout_subagents: opencode_cli,hermes_cli,kilo_cli
+        - internal_subagents
+      analysis_fanout_subagents: internal_subagents
       analysis_fanout_min_results: 1
       analysis_merge_policy: consensus_with_conflict_flag
-      analysis_external_first_required: yes
+      analysis_external_first_required: no
       analysis_receipt_required: yes
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: hermes_cli
+      coach_executor_backend: internal_subagents
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
-      dispatch_required: bridge_write_then_internal_if_expands
+      dispatch_required: internal_agent_lane
       external_first_required: no
       graph_strategy: deterministic_then_escalate
       deterministic_first: no
@@ -1965,32 +1942,30 @@ agent_system:
       verification_route_task_class: review_ensemble
       independent_verification_required: yes
     small_patch_write:
-      executor_backend: opencode_cli
-      subagents: opencode_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_low_write
       analysis_required: yes
-      analysis_executor_backend: opencode_cli
+      analysis_executor_backend: internal_subagents
       analysis_route_task_class: analysis
       analysis_fanout_executor_backends:
-        - opencode_cli
-        - hermes_cli
-        - kilo_cli
-      analysis_fanout_subagents: opencode_cli,hermes_cli,kilo_cli
+        - internal_subagents
+      analysis_fanout_subagents: internal_subagents
       analysis_fanout_min_results: 1
       analysis_merge_policy: consensus_with_conflict_flag
-      analysis_external_first_required: yes
+      analysis_external_first_required: no
       analysis_receipt_required: yes
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: hermes_cli
+      coach_executor_backend: internal_subagents
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
       max_coach_passes: 2
       max_fallback_hops: 2
-      dispatch_required: bridge_write_then_internal_if_expands
+      dispatch_required: internal_agent_lane
       external_first_required: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
@@ -1998,32 +1973,30 @@ agent_system:
       verification_route_task_class: review_ensemble
       independent_verification_required: yes
     ui_patch:
-      executor_backend: vibe_cli
-      subagents: vibe_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_low_write
       analysis_required: yes
-      analysis_executor_backend: vibe_cli
+      analysis_executor_backend: internal_subagents
       analysis_route_task_class: ui_review
       analysis_fanout_executor_backends:
-        - vibe_cli
-        - opencode_cli
-        - hermes_cli
-      analysis_fanout_subagents: vibe_cli,opencode_cli,hermes_cli
+        - internal_subagents
+      analysis_fanout_subagents: internal_subagents
       analysis_fanout_min_results: 2
       analysis_merge_policy: consensus_with_conflict_flag
-      analysis_external_first_required: yes
+      analysis_external_first_required: no
       analysis_receipt_required: yes
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: hermes_cli
+      coach_executor_backend: internal_subagents
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
       max_coach_passes: 2
       max_fallback_hops: 2
-      dispatch_required: bridge_write_then_internal_if_expands
+      dispatch_required: internal_agent_lane
       external_first_required: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
@@ -2031,32 +2004,30 @@ agent_system:
       verification_route_task_class: review_ensemble
       independent_verification_required: yes
     implementation:
-      executor_backend: pi_cli
-      subagents: pi_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         pi_cli: pi_gpt54_mini_low_guarded
         internal_subagents: codex_gpt55_low_write
       max_runtime_seconds: 420
       analysis_required: yes
-      analysis_executor_backend: opencode_cli
+      analysis_executor_backend: internal_subagents
       analysis_route_task_class: analysis
       analysis_fanout_executor_backends:
-        - hermes_cli
-        - opencode_cli
-        - kilo_cli
-      analysis_fanout_subagents: hermes_cli,opencode_cli,kilo_cli
+        - internal_subagents
+      analysis_fanout_subagents: internal_subagents
       analysis_fanout_min_results: 1
       analysis_merge_policy: consensus_with_conflict_flag
-      analysis_external_first_required: yes
+      analysis_external_first_required: no
       analysis_receipt_required: yes
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: hermes_cli
+      coach_executor_backend: internal_subagents
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
-      dispatch_required: external_readonly_then_senior_writer
+      dispatch_required: internal_agent_lane
       external_first_required: no
       graph_strategy: deterministic_then_escalate
       deterministic_first: no
@@ -2069,33 +2040,32 @@ agent_system:
       max_total_runtime_seconds: 540
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
-      preferred_external_backend: pi_cli
+      preferred_external_backend: internal_subagents
       write_readiness: guard_required_fail_closed_until_adapter_guard
       internal_escalation_trigger: pi_guard_unavailable_or_cross_module_or_architecture_shift
       verification_route_task_class: review_ensemble
       independent_verification_required: yes
     architecture:
-      executor_backend: hermes_cli
-      subagents: hermes_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_xhigh_arch
       fanout_executor_backends:
-        - hermes_cli
-        - opencode_cli
-      fanout_subagents: hermes_cli,opencode_cli
+        - internal_subagents
+      fanout_subagents: internal_subagents
       write_scope: none
       verification_gate: architectural_review
       max_fallback_hops: 2
-      dispatch_required: external_first_then_senior_arbitration
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: architecture_decision_required
       verification_route_task_class: review_ensemble
       independent_verification_required: yes
     verification:
-      executor_backend: opencode_cli
-      subagents: opencode_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
         internal_subagents: codex_gpt55_high_readonly
       write_scope: none
@@ -2103,23 +2073,20 @@ agent_system:
       max_runtime_seconds: 180
       min_output_bytes: 240
       max_fallback_hops: 2
-      dispatch_required: external_first_review
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: unresolved_verification_conflict
       independent_verification_required: no
     verification_ensemble:
-      executor_backend: opencode_cli
-      subagents: opencode_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       fanout_executor_backends:
-        - opencode_cli
-        - kilo_cli
-        - hermes_cli
-        - vibe_cli
+        - internal_subagents
       profiles:
         internal_subagents: codex_gpt55_high_readonly
-      fanout_subagents: opencode_cli,kilo_cli,hermes_cli,vibe_cli
+      fanout_subagents: internal_subagents
       fanout_min_results: 3
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -2127,8 +2094,8 @@ agent_system:
       max_runtime_seconds: 180
       min_output_bytes: 260
       max_fallback_hops: 2
-      dispatch_required: fanout_then_synthesize
-      external_first_required: yes
+      dispatch_required: internal_agent_lane
+      external_first_required: no
       fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
       internal_escalation_trigger: unresolved_verification_conflict
