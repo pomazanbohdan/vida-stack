@@ -2827,11 +2827,26 @@ fn active_exception_takeover_evidence_matches_status(
     let Some(dispatch) = dispatch else {
         return false;
     };
-    if terminal_continue_run_id == Some(status.run_id.as_str()) {
+    let supersedes_distinct_exception = dispatch
+        .exception_path_receipt_id
+        .as_deref()
+        .zip(dispatch.supersedes_receipt_id.as_deref())
+        .is_some_and(|(exception_path, supersedes)| {
+            !exception_path.trim().is_empty()
+                && !supersedes.trim().is_empty()
+                && exception_path != supersedes
+        });
+    if terminal_continue_run_id == Some(status.run_id.as_str()) && !supersedes_distinct_exception {
         return false;
     }
+    let exception_takeover_state = crate::release1_contracts::exception_takeover_state(
+        dispatch.exception_path_receipt_id.as_deref(),
+        dispatch.supersedes_receipt_id.as_deref(),
+        None,
+    );
     dispatch.run_id == status.run_id
-        && dispatch.lane_status == "lane_exception_takeover"
+        && (dispatch.lane_status == "lane_exception_takeover"
+            || exception_takeover_state.is_active())
         && dispatch
             .exception_path_receipt_id
             .as_deref()
@@ -9644,6 +9659,57 @@ agent_system:
         assert_eq!(
             decision.recommended_surface.as_deref(),
             Some("vida taskflow consume continue")
+        );
+        assert!(!decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "latest_run_graph_status_blocked"));
+    }
+
+    #[test]
+    fn taskflow_next_decision_continues_recorded_exception_with_active_supersession_evidence() {
+        let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
+            "universal-surfaces-epic-2-wizard-settings-container",
+            "universal-surfaces-epic-2-wizard-settings-container",
+            "analysis",
+        );
+        latest_status.status = "blocked".to_string();
+        latest_status.lifecycle_stage = "analysis_blocked".to_string();
+        let mut dispatch =
+            exception_takeover_dispatch("universal-surfaces-epic-2-wizard-settings-container");
+        dispatch.lane_status = "lane_exception_recorded".to_string();
+        dispatch.exception_path_receipt_id = Some("epic-2-doc-exception-takeover".to_string());
+        dispatch.supersedes_receipt_id = Some("epic-2-doc-exception-takeover".to_string());
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("ready-head")),
+            false,
+            true,
+            Some("final"),
+            None,
+            Some(&dispatch),
+            Some(&latest_status),
+            false,
+            false,
+            false,
+            None,
+            None,
+        );
+
+        assert_eq!(decision.status, "pass");
+        assert!(decision.primary_ready_task.is_none());
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "active_exception_takeover_continuation"
+        );
+        assert_eq!(
+            decision
+                .next_action
+                .as_ref()
+                .map(|value| value.command.as_str()),
+            Some(
+                "vida taskflow consume continue --run-id universal-surfaces-epic-2-wizard-settings-container --json"
+            )
         );
         assert!(!decision
             .blocker_codes
