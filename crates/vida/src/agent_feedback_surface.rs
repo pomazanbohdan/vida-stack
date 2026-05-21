@@ -504,6 +504,48 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
     close_reason: &str,
     source: &str,
 ) -> serde_json::Value {
+    let task_class = super::infer_task_class_from_task_payload(task);
+    let runtime_role = super::runtime_role_for_task_class(&task_class);
+    if let Some((canonical_status, canonical_gate)) =
+        canonical_close_status_from_reason(close_reason)
+    {
+        return serde_json::json!({
+            "status": "skipped",
+            "reason": "feedback_deferred_for_canonical_close_status",
+            "task_class": task_class,
+            "runtime_role": runtime_role,
+            "canonical_status": canonical_status,
+            "canonical_gate": canonical_gate,
+        });
+    }
+    if std::env::var_os("VIDA_TASK_CLOSE_FULL_FEEDBACK").is_none() {
+        let outcome = infer_feedback_outcome_from_close_reason(close_reason);
+        let score = default_feedback_score(outcome, &task_class);
+        let outcome_inference = close_feedback_outcome_inference(close_reason, outcome, score);
+        let safety_gate = if outcome == "failure" { "hold" } else { "observe" };
+        return serde_json::json!({
+            "status": "recorded",
+            "task_class": task_class,
+            "runtime_role": runtime_role,
+            "feedback_agent_id": "lightweight_task_close_feedback",
+            "feedback_selection_source": "operator_latency_budget_fast_path",
+            "feedback_outcome_inference": outcome_inference,
+            "feedback": {
+                "mode": "lightweight_task_close_feedback",
+                "recorded_outcome": outcome,
+                "recorded_score": score,
+                "recorded_task_class": task_class,
+                "recorded_notes": "automatic task-close feedback",
+                "safety_baseline": {
+                    "safety_gate": safety_gate,
+                    "status": "baseline_recorded",
+                },
+                "source": source,
+                "task_id": task["id"].as_str().unwrap_or(""),
+                "task_title": task["title"].as_str().unwrap_or(""),
+            },
+        });
+    }
     let overlay = match super::project_activator_surface::read_yaml_file_checked(
         &project_root.join("vida.config.yaml"),
     ) {
@@ -545,8 +587,6 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
                 });
             }
         };
-    let task_class = super::infer_task_class_from_task_payload(task);
-    let runtime_role = super::runtime_role_for_task_class(&task_class);
     let assignment = super::build_runtime_assignment_from_resolved_constraints(
         &compiled_bundle,
         "orchestrator",

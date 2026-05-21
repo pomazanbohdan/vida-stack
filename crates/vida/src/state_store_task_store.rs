@@ -189,6 +189,48 @@ impl StateStore {
         Ok(snapshot_path)
     }
 
+    pub async fn refresh_task_snapshot_for_task(
+        &self,
+        task: &TaskRecord,
+    ) -> Result<PathBuf, StateStoreError> {
+        let snapshot_path = Self::canonical_task_snapshot_path_for_state_root(self.root());
+        let mut tasks = if snapshot_path.exists() {
+            Self::read_tasks_from_jsonl_snapshot(&snapshot_path)?
+        } else {
+            self.all_tasks().await?
+        };
+        let mut replaced = false;
+        for existing in &mut tasks {
+            if existing.id == task.id {
+                *existing = task.clone();
+                replaced = true;
+                break;
+            }
+        }
+        if !replaced {
+            tasks.push(task.clone());
+        }
+        tasks.sort_by(|left, right| {
+            left.priority
+                .cmp(&right.priority)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let mut body = String::new();
+        for task in tasks {
+            body.push_str(&serde_json::to_string(&task).map_err(|error| {
+                StateStoreError::InvalidTaskRecord {
+                    reason: format!("failed to serialize task snapshot row: {error}"),
+                }
+            })?);
+            body.push('\n');
+        }
+        if let Some(parent) = snapshot_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        Self::write_jsonl_export_file(&snapshot_path, body.as_bytes())?;
+        Ok(snapshot_path)
+    }
+
     async fn build_task_close_reconciled_binding(
         &self,
         status: &RunGraphStatus,
@@ -598,6 +640,7 @@ impl StateStore {
         target_path: &Path,
     ) -> Result<usize, StateStoreError> {
         let tasks = self.all_tasks().await?;
+        let task_count = tasks.len();
         let mut body = String::new();
         for task in tasks {
             body.push_str(&serde_json::to_string(&task).map_err(|error| {
@@ -611,7 +654,7 @@ impl StateStore {
             fs::create_dir_all(parent)?;
         }
         Self::write_jsonl_export_file(target_path, body.as_bytes())?;
-        Ok(self.all_tasks().await?.len())
+        Ok(task_count)
     }
 
     fn write_jsonl_export_file(target_path: &Path, body: &[u8]) -> Result<(), StateStoreError> {

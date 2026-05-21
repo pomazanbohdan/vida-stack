@@ -199,6 +199,23 @@ async fn refresh_task_snapshot_after_mutation(
         })
 }
 
+async fn refresh_task_snapshot_for_task_after_mutation(
+    store: &StateStore,
+    task: &state_store::TaskRecord,
+    surface: &str,
+) -> Result<(), ExitCode> {
+    store
+        .refresh_task_snapshot_for_task(task)
+        .await
+        .map(|_| {
+            crate::operator_projection_cache::touch_state_mutation_marker(store.root());
+        })
+        .map_err(|error| {
+            eprintln!("Failed to refresh canonical task snapshot after {surface}: {error}");
+            ExitCode::from(1)
+        })
+}
+
 pub(crate) async fn ready_tasks_scoped_read_only(
     state_dir: std::path::PathBuf,
     scope_task_id: Option<&str>,
@@ -295,6 +312,17 @@ fn task_close_host_agent_telemetry(
             "reason": "isolated_state_dir",
             "state_dir": state_dir.display().to_string(),
             "feedback_store": "not_recorded",
+        });
+    }
+
+    if let Some((canonical_status, canonical_gate)) =
+        crate::agent_feedback_surface::canonical_close_status_from_reason(close_reason)
+    {
+        return serde_json::json!({
+            "status": "skipped",
+            "reason": "feedback_deferred_for_canonical_close_status",
+            "canonical_status": canonical_status,
+            "canonical_gate": canonical_gate,
         });
     }
 
@@ -1951,8 +1979,12 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                 .await
             {
                 Ok(task) => {
-                    if let Err(code) =
-                        refresh_task_snapshot_after_mutation(&store, "vida task create").await
+                    if let Err(code) = refresh_task_snapshot_for_task_after_mutation(
+                        &store,
+                        &task,
+                        "vida task create",
+                    )
+                    .await
                     {
                         return code;
                     }
@@ -4172,9 +4204,12 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     }
                     match store.close_task(&command.task_id, &command.reason).await {
                         Ok(task) => {
-                            if let Err(code) =
-                                refresh_task_snapshot_after_mutation(&store, "vida task close")
-                                    .await
+                            if let Err(code) = refresh_task_snapshot_for_task_after_mutation(
+                                &store,
+                                &task,
+                                "vida task close",
+                            )
+                            .await
                             {
                                 return code;
                             }
@@ -5954,6 +5989,40 @@ mod tests {
             &project_state_dir,
             true
         ));
+    }
+
+    #[test]
+    fn task_close_feedback_keeps_noncanonical_feedback_recorded_by_default() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let project_root = harness.path();
+        fs::write(project_root.join("vida.config.yaml"), "project: test\n")
+            .expect("project marker should write");
+        fs::write(project_root.join("AGENTS.md"), "test project\n")
+            .expect("agents marker should write");
+        fs::create_dir_all(project_root.join(".vida/config"))
+            .expect("config marker directory should initialize");
+        fs::create_dir_all(project_root.join(".vida/db"))
+            .expect("db marker directory should initialize");
+        fs::create_dir_all(project_root.join(".vida/project"))
+            .expect("project marker directory should initialize");
+        let task_value = serde_json::json!({
+            "id": "audit-p1-fast-task-close-feedback",
+            "status": "closed",
+        });
+        let telemetry = task_close_host_agent_telemetry(
+            &project_root.join(crate::state_store::default_state_dir()),
+            false,
+            Some(project_root),
+            &task_value,
+            "fixed_by_commit_abc_tests_pass",
+            "vida task close",
+        );
+
+        assert_eq!(telemetry["status"], "recorded");
+        assert_eq!(
+            telemetry["feedback"]["mode"],
+            "lightweight_task_close_feedback"
+        );
     }
 
     #[test]
