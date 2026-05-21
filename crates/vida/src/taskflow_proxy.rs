@@ -3792,12 +3792,23 @@ async fn graph_summary_task_rows(
 ) -> Result<Vec<crate::state_store::TaskRecord>, crate::state_store::StateStoreError> {
     let snapshot_path =
         crate::state_store::StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
-    if let Ok(rows) = crate::state_store::StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path)
-    {
-        return Ok(rows);
+    match crate::state_store::StateStore::open_existing(state_dir.to_path_buf()).await {
+        Ok(store) => store.list_tasks(None, true).await,
+        Err(error)
+            if crate::state_store::StateStore::error_is_lock_contention(&error)
+                || matches!(
+                    error,
+                    crate::state_store::StateStoreError::MissingStateDir(_)
+                ) =>
+        {
+            match crate::state_store::StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path) {
+                Ok(rows) => Ok(rows),
+                Err(crate::state_store::StateStoreError::Io(_)) => Err(error),
+                Err(snapshot_error) => Err(snapshot_error),
+            }
+        }
+        Err(error) => Err(error),
     }
-    let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf()).await?;
-    store.list_tasks(None, true).await
 }
 
 pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
@@ -6541,7 +6552,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn graph_summary_task_rows_use_canonical_snapshot_read_model() {
+    async fn graph_summary_task_rows_prefer_authoritative_store() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6580,7 +6591,7 @@ mod tests {
 
         let rows = graph_summary_task_rows(&root)
             .await
-            .expect("snapshot rows should load");
+            .expect("rows should load");
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "snapshot-ready");
