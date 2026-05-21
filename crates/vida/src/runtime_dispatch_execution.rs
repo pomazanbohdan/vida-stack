@@ -1528,6 +1528,47 @@ fn configured_codex_cli_fallback_enabled(overlay: &serde_yaml::Value) -> bool {
     })
 }
 
+fn internal_host_receipt_backed_completion_supported(
+    selected_cli_entry: Option<&serde_yaml::Value>,
+) -> serde_json::Value {
+    selected_cli_entry
+        .and_then(|entry| {
+            yaml_lookup(entry, &["dispatch", "receipt_backed_completion_supported"])
+                .and_then(serde_yaml::Value::as_bool)
+        })
+        .map_or(serde_json::Value::Null, serde_json::Value::Bool)
+}
+
+fn annotate_internal_host_completion_capability(
+    dispatch: &mut serde_json::Map<String, serde_json::Value>,
+    selected_cli_system: &str,
+    selected_cli_entry: Option<&serde_yaml::Value>,
+    execution_evidence_available: bool,
+) {
+    dispatch.insert(
+        "receipt_backed_completion_supported".to_string(),
+        internal_host_receipt_backed_completion_supported(selected_cli_entry),
+    );
+    dispatch.insert(
+        "receipt_backed_completion_source_path".to_string(),
+        serde_json::json!(format!(
+            "vida.config.yaml:host_environment.systems.{selected_cli_system}.dispatch.receipt_backed_completion_supported"
+        )),
+    );
+    dispatch.insert(
+        "execution_evidence_required".to_string(),
+        serde_json::json!(true),
+    );
+    dispatch.insert(
+        "execution_evidence_available".to_string(),
+        serde_json::json!(execution_evidence_available),
+    );
+    dispatch.insert(
+        "activation_view_is_execution_evidence".to_string(),
+        serde_json::json!(false),
+    );
+}
+
 fn internal_codex_app_bridge_requires_fail_closed(
     selected_cli_system: &str,
     overlay: &serde_yaml::Value,
@@ -1970,6 +2011,12 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
                 "external_cli_fallback_enabled".to_string(),
                 serde_json::json!(configured_codex_cli_fallback_enabled(&overlay)),
             );
+            annotate_internal_host_completion_capability(
+                dispatch,
+                &selected_cli_system,
+                selected_cli_entry.as_ref(),
+                false,
+            );
         }
         refresh_execution_truth(body, role_selection, receipt, Some(backend_id), "missing");
         return Ok(Some(result));
@@ -2099,6 +2146,12 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
                 dispatch.insert(key.to_string(), carrier[key].clone());
             }
         }
+        annotate_internal_host_completion_capability(
+            dispatch,
+            &selected_cli_system,
+            selected_cli_entry.as_ref(),
+            success,
+        );
     }
 
     body.insert(
@@ -3670,6 +3723,26 @@ agent_system:
         assert_eq!(result["execution_state"], "blocked");
         assert_eq!(result["blocker_code"], "internal_codex_carrier_unavailable");
         assert!(result["internal_codex_external_fallback"].is_null());
+        assert_eq!(
+            result["backend_dispatch"]["receipt_backed_completion_supported"],
+            false
+        );
+        assert_eq!(
+            result["backend_dispatch"]["receipt_backed_completion_source_path"],
+            "vida.config.yaml:host_environment.systems.codex.dispatch.receipt_backed_completion_supported"
+        );
+        assert_eq!(
+            result["backend_dispatch"]["execution_evidence_required"],
+            true
+        );
+        assert_eq!(
+            result["backend_dispatch"]["execution_evidence_available"],
+            false
+        );
+        assert_eq!(
+            result["backend_dispatch"]["activation_view_is_execution_evidence"],
+            false
+        );
 
         let _ = std::fs::remove_dir_all(&project_root);
     }
@@ -3788,6 +3861,7 @@ host_environment:
       execution_class: internal
       dispatch:
         command: codex
+        receipt_backed_completion_supported: false
         static_args: ["exec", "--json"]
         prompt_mode: positional
       carriers:

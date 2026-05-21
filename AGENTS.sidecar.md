@@ -137,8 +137,8 @@ Project-routing rule:
 30. Agent carriers, visible host-agent templates, carrier topology, and default lane-to-carrier assumptions must not be hardcoded in owner/runtime code paths; the source of truth is the active configuration and registries, primarily `vida.config.yaml` plus the enabled agent-extension registries.
 31. File-system template layouts such as `.codex/agents/*.toml` are materialization outputs, not authority surfaces; when code or runtime summaries need the available carriers/templates, resolve them from the configured carrier catalog first and treat on-disk templates as projection/evidence only.
 32. Active runtime/project code must not keep legacy code paths or legacy functionality as current behavior. The current implementation must be owned by canonical config, templates, registries, runtime contracts, and state-store truth. Historical artifact support is allowed only as bounded, explicit migration or normalization with recorded evidence and must not become an active routing, retry, dispatch, closure, materialization, or operator-output branch. When legacy code or functionality is found, create or update a TaskFlow defect under the current defect epic, then replace it with current canonical behavior rather than extending compatibility.
-33. For token-saving delegated support, the orchestrator may use project-local qwen fallback lanes only as read-only research, context, review, or junior-draft execution carriers. These lanes never transfer project write authority, never mutate `.vida/data/state`, receipts, packets, or lane metadata, and never replace canonical VIDA/TaskFlow `vida agent-init` for write-producing work. Accepted qwen findings or draft changes must be synthesized by the parent and routed through a lawful bounded VIDA write unit before project files are changed.
-34. When canonical VIDA delegation, dispatch, continuation, closure, or carrier execution is blocked by a runtime defect, stale state, activation-view-only handoff, missing receipt evidence, or carrier unavailability, the orchestrator must not silently collapse into solo root implementation. It must first use the available project/host agents as bounded advisory lanes when safe: read-only qwen/Pi research agents, review agents, planners, scouts, or other non-mutating carriers may gather code evidence, spec evidence, test designs, risk analysis, and implementation sketches. These advisory lanes are evidence inputs only; they do not grant write authority, completion receipts, exception takeover, or TaskFlow closure. If no agent lane can be launched, record the launch blocker explicitly before proceeding under Defective Runtime Emulation Mode.
+33. For token-saving delegated support, the orchestrator may use project-local configured fallback advisory lanes only as read-only research, context, review, or junior-draft execution carriers. These lanes never transfer project write authority, never mutate `.vida/data/state`, receipts, packets, or lane metadata, and never replace canonical VIDA/TaskFlow `vida agent-init` for write-producing work. Accepted advisory findings or draft changes must be synthesized by the parent and routed through a lawful bounded VIDA write unit before project files are changed.
+34. When canonical VIDA delegation, dispatch, continuation, closure, or carrier execution is blocked by a runtime defect, stale state, activation-view-only handoff, missing receipt evidence, or carrier unavailability, the orchestrator must not silently collapse into solo root implementation. It must first use the available configured project/host agents as bounded advisory lanes when safe: read-only research agents, review agents, planners, scouts, or other non-mutating carriers may gather code evidence, spec evidence, test designs, risk analysis, and implementation sketches. These advisory lanes are evidence inputs only; they do not grant write authority, completion receipts, exception takeover, or TaskFlow closure. If no agent lane can be launched, record the launch blocker explicitly before proceeding under Defective Runtime Emulation Mode.
 34a. During batch defect recovery, the orchestrator should launch one or more read-only advisory subagents for the next defect batch when the current bounded fix can continue independently and the next-batch analysis has a disjoint write scope. After each individual defect is proven, committed, and pushed, the orchestrator must immediately launch or refresh at least one read-only advisory subagent for the newly current defect batch before starting the next write-producing fix, unless no parallel-safe advisory question remains; if skipped, record the concrete reason in the task notes or progress update. Advisory subagents may validate defect evidence, identify shared invariants, propose grouping, sequence/parallel posture, likely code owners, and proof targets, but they must not edit files, mutate TaskFlow/runtime state, record receipts, or decide closure. The root orchestrator must synthesize advisory findings into the batch ledger, update or group TaskFlow defect tasks when the task store is writable, and explicitly restate `active_bounded_unit`, `why_this_unit`, and `sequential_vs_parallel_posture` before any write-producing follow-up.
 
 ## Defective Runtime Emulation Mode
@@ -160,7 +160,7 @@ Emulated runtime responsibilities:
 2. Replanning: when a selected unit changes shape, restate the bounded unit and either keep it with evidence or create/update the correct follow-up task under the correct epic. Do not hide new runtime defects as informal notes.
 3. Prioritization: continuously re-rank ready work by unblock value, critical path, severity, proof cost, command-latency impact, and conflict-domain safety. A newly discovered blocker that prevents continuation is allowed to preempt the current ready item with elevated priority until the flow can continue. Command timeout and slow-operator defects are Priority 0 when they affect normal runtime operation, with a two-second target for ordinary command processing. Prefer recovery work that restores normal runtime operation over cosmetic cleanup.
 4. Parallelization: treat tasks as parallel-safe only when runtime evidence or task execution semantics show disjoint conflict domains, disjoint owned paths, and no current delegated-cycle conflict. If the scheduler surface is contradictory, fail closed to sequential execution.
-5. Agent execution: emulate the canonical delegated lane sequence by producing the same external evidence an agent lane should have produced: bounded goal, owner role, read/write scope, inputs, outputs, proof target, result summary, and blocker/receipt status. Host subagent APIs may be used only as carrier details; the canonical lane model remains TaskFlow/agent-init. When canonical VIDA execution is blocked but host/Pi subagents are available, launch bounded read-only advisory agents before or alongside root diagnosis for complex work; prefer independent single async lanes with explicit artifact outputs, and synthesize their evidence before architectural decisions. Do not treat advisory agent output as a dispatch receipt, write authorization, or completion proof.
+5. Agent execution: emulate the canonical delegated lane sequence by producing the same external evidence an agent lane should have produced: bounded goal, owner role, read/write scope, inputs, outputs, proof target, result summary, and blocker/receipt status. Host subagent APIs may be used only as carrier details; the canonical lane model remains TaskFlow/agent-init. When canonical VIDA execution is blocked but configured host advisory agents are available, launch bounded read-only advisory agents before or alongside root diagnosis for complex work; prefer independent single async lanes with explicit artifact outputs, and synthesize their evidence before architectural decisions. Do not treat advisory agent output as a dispatch receipt, write authorization, or completion proof.
 6. Continuation: after every green proof, build, release install attempt, diagnostic result, handoff, or closure, immediately re-evaluate the next lawful continuation item instead of pausing at commentary.
 7. Closure: close or update tasks only with concrete proof evidence, including command names, pass/fail status, installed binary fingerprint when release is required, and any diagnostic blocker that remains.
 
@@ -192,43 +192,42 @@ Exit criteria:
 4. Runtime self-diagnostic has run and any remaining blockers are routed as TaskFlow work.
 5. The next continuation item is selected through the restored runtime surfaces, or the reason emulation must continue is recorded explicitly.
 
-## Project-Local Qwen Fallback Research And Junior Execution Mode
+## Project-Local Advisory Fallback Research And Junior Execution Mode
 
-Use this project-local fallback mode when the parent/orchestrator needs token-saving delegated support for bounded read-only research, context building, review evidence, mini-analysis, or junior-draft implementation reasoning. This mode is a Pi/subagents carrier pattern for support work; it never replaces VIDA/TaskFlow ownership for write-producing work.
+Use this project-local fallback mode when the parent/orchestrator needs token-saving delegated support for bounded read-only research, context building, review evidence, mini-analysis, or junior-draft implementation reasoning. This mode uses the currently configured advisory carrier catalog for support work; it never replaces VIDA/TaskFlow ownership for write-producing work.
 
 Activation criteria:
 
-1. The parent session explicitly launches Pi subagents with `context=fresh` and model `qwen3.6-35b-a3b-mtp` for bounded support work.
+1. The parent session explicitly launches configured read-only advisory carriers for bounded support work. Do not hardcode agent ids, host CLI systems, or model refs in project instructions or runtime code; resolve them from the active carrier/config registry or omit optional host-tool fields when the host can choose.
 2. The child task is scoped as read-only research, context, review, reproduction reasoning, test/proof suggestion, or junior-draft code reasoning; it must not directly modify project files.
 3. The parent provides a concrete prompt with a required non-empty markdown output schema and an explicit output artifact path.
-4. The parent prompt must require artifact-first execution: the qwen child creates an initial markdown skeleton at the requested artifact path before deep analysis, updates/overwrites that artifact after each major evidence chunk, and treats the final chat response as a short pointer to the already-written artifact rather than the only place where findings exist.
-5. The qwen child is never treated as a VIDA write lane, execution receipt, closure receipt, or exception-takeover authority.
+4. The parent prompt must require artifact-first execution: the advisory child creates an initial markdown skeleton at the requested artifact path before deep analysis, updates/overwrites that artifact after each major evidence chunk, and treats the final chat response as a short pointer to the already-written artifact rather than the only place where findings exist.
+5. The advisory child is never treated as a VIDA write lane, execution receipt, closure receipt, or exception-takeover authority.
 
 Default invocation shape:
 
 ```ts
 subagent({
-  agent: "delegate",
+  agent: "<configured-read-only-advisory-agent>",
   task: "Bounded read-only research slice with required markdown output schema...",
   async: true,
   context: "fresh",
-  model: "qwen3.6-35b-a3b-mtp",
   reads: false,
   progress: false,
-  output: "tmp/qwen-<slice>.md",
+  output: "tmp/advisory-<slice>.md",
   outputMode: "file-only"
 })
 ```
 
-A user-level `qwen-research` agent may be used for the same pattern when available:
+A user-level configured research agent may be used for the same pattern when available:
 
 ```ts
 subagent({
-  agent: "qwen-research",
+  agent: "<configured-research-agent>",
   task: "Bounded read-only research slice with required markdown output schema...",
   async: true,
   context: "fresh",
-  output: "tmp/qwen-<slice>.md",
+  output: "tmp/advisory-<slice>.md",
   outputMode: "file-only"
 })
 ```
@@ -236,7 +235,7 @@ subagent({
 Default agent-gated parent work strategy:
 
 1. This is the default work mode for defect analysis, architecture decisions, and preparation for code changes in this project.
-2. Before launching qwen/Pi advisory lanes, state the bounded decision, active write scope, and what evidence would change the decision.
+2. Before launching configured advisory lanes, state the bounded decision, active write scope, and what evidence would change the decision.
 3. Plan the lanes explicitly: sequential for one decision path; parallel only for independent, read-only, disjoint questions or when the user explicitly asks for parallel comparison.
 4. Each lane must have a bounded prompt, artifact path, scope limit, output schema, and clear success/failure criteria.
 5. After launching advisory lanes for that decision, do not patch, finalize, or silently continue solo until every relevant lane is complete, failed, or explicitly classified as irrelevant/stale.
@@ -252,35 +251,35 @@ Default agent-gated parent work strategy:
 
 Concurrency policy:
 
-1. Prefer independent single async qwen runs over grouped `tasks:[...]` parallel wrapper for qwen fallback work.
-2. Default to sequential rolling micro-lanes for active defect diagnosis: launch one qwen slice, verify the artifact, narrow the next question, and launch another slice only if useful.
-3. Use parallel qwen lanes only for independent read-only questions with disjoint evidence targets, or when the user explicitly asks for parallel comparison.
+1. Prefer independent single async advisory runs over grouped `tasks:[...]` parallel wrapper for fallback advisory work.
+2. Default to sequential rolling micro-lanes for active defect diagnosis: launch one advisory slice, verify the artifact, narrow the next question, and launch another slice only if useful.
+3. Use parallel advisory lanes only for independent read-only questions with disjoint evidence targets, or when the user explicitly asks for parallel comparison.
 4. A `0 B`, skeleton-only, meta-only, or schema-invalid artifact is process/content failure; retry once with a narrower focused prompt if the question remains useful.
 
 Prompt and output rules:
 
 1. Avoid pure no-op smoke prompts for real work.
-2. Use qwen in micro-iterations by default: one concrete question, one suspected seam, and at most 1-3 named files, symbols, or line ranges per child unless wider scope is explicitly required.
-3. Give each qwen child a strict session-size budget in the prompt: no broad `grep .`, no broad repository globbing, exact-symbol search only when search is needed, at most 2 evidence chunks, and a concise artifact unless the parent explicitly asks for more. Do not cap tool calls as a primary metric; allow as many reads/searches as needed inside the narrow evidence scope, but do not expand scope.
-4. Optimize for quality per unit of context, not speed alone. A qwen lane is successful only when it is evidence-backed enough for the decision being made, names uncertainty/risks, and gives an actionable next step. A faster artifact that only repeats parent assumptions is acceptable only for cheap hypothesis checks, not for code-fix authority.
+2. Use advisory lanes in micro-iterations by default: one concrete question, one suspected seam, and at most 1-3 named files, symbols, or line ranges per child unless wider scope is explicitly required.
+3. Give each advisory child a strict session-size budget in the prompt: no broad `grep .`, no broad repository globbing, exact-symbol search only when search is needed, at most 2 evidence chunks, and a concise artifact unless the parent explicitly asks for more. Do not cap tool calls as a primary metric; allow as many reads/searches as needed inside the narrow evidence scope, but do not expand scope.
+4. Optimize for quality per unit of context, not speed alone. An advisory lane is successful only when it is evidence-backed enough for the decision being made, names uncertainty/risks, and gives an actionable next step. A faster artifact that only repeats parent assumptions is acceptable only for cheap hypothesis checks, not for code-fix authority.
 5. Use the hybrid quality prompt as the current default for complex seam audits: compact fact-pack, narrow range-read, explicit hypothesis validation, direct evidence, `accept/reject/modify` decision, risk/regression guard, minimal test implication, confidence, and next micro-step.
-6. Give each qwen child required markdown headings appropriate to the prompt, at minimum `## Result`, direct findings/evidence, `## Confidence/Risks` for evidence-backed decisions, and `## Next micro-step` when another bounded question remains.
-7. Every qwen prompt with an output path must include incremental artifact instructions: write a skeleton first, rewrite findings after each bounded evidence chunk, and keep the artifact valid markdown even if compact, token exhaustion, stale-run reconciliation, or runner failure happens before the final answer.
-8. Accept a qwen lane as content-complete only after verifying the output artifact is non-empty, schema-valid, and useful for the requested decision.
-9. Store qwen outputs under `tmp/qwen-*.md` or a lawful research/documentation artifact path selected by the parent.
+6. Give each advisory child required markdown headings appropriate to the prompt, at minimum `## Result`, direct findings/evidence, `## Confidence/Risks` for evidence-backed decisions, and `## Next micro-step` when another bounded question remains.
+7. Every advisory prompt with an output path must include incremental artifact instructions: write a skeleton first, rewrite findings after each bounded evidence chunk, and keep the artifact valid markdown even if compact, token exhaustion, stale-run reconciliation, or runner failure happens before the final answer.
+8. Accept an advisory lane as content-complete only after verifying the output artifact is non-empty, schema-valid, and useful for the requested decision.
+9. Store advisory outputs under `tmp/advisory-*.md` or a lawful research/documentation artifact path selected by the parent.
 
 Write and authority boundaries:
 
-1. Qwen fallback children must not edit, write, delete, move, or mutate project files unless a future lawful VIDA packet explicitly assigns that write scope through canonical runtime authority.
-2. Qwen fallback children must not mutate `.vida/data/state`, TaskFlow DB, receipts, packets, lane metadata, release artifacts, or runtime ownership state.
-3. The parent/orchestrator owns synthesis, validation, and any conversion of qwen findings into TaskFlow tasks, DocFlow work, code changes, or documentation changes.
-4. For code-producing requests, qwen may provide a junior draft, patch idea, or implementation sketch only; the parent must validate and route any actual project mutation through lawful VIDA write ownership.
+1. Advisory fallback children must not edit, write, delete, move, or mutate project files unless a future lawful VIDA packet explicitly assigns that write scope through canonical runtime authority.
+2. Advisory fallback children must not mutate `.vida/data/state`, TaskFlow DB, receipts, packets, lane metadata, release artifacts, or runtime ownership state.
+3. The parent/orchestrator owns synthesis, validation, and any conversion of advisory findings into TaskFlow tasks, DocFlow work, code changes, or documentation changes.
+4. For code-producing requests, advisory children may provide a junior draft, patch idea, or implementation sketch only; the parent must validate and route any actual project mutation through lawful VIDA write ownership.
 5. This mode does not weaken `AGENTS.md` root write guard, delegated lane evidence requirements, or exception-takeover state rules.
 
 Local process note:
 
-1. Current local `pi-subagents` behavior should keep child process windows hidden for background and foreground qwen lanes.
-2. Qwen prompts must use non-ambiguous output-target wording plus explicit artifact-first instructions; avoid markdown-section-looking output directives that can be mistaken for response content.
+1. Current local host-subagent behavior should keep child process windows hidden for background and foreground advisory lanes.
+2. Advisory prompts must use non-ambiguous output-target wording plus explicit artifact-first instructions; avoid markdown-section-looking output directives that can be mistaken for response content.
 3. If `pi-subagents` is reinstalled or upgraded, re-check child window behavior, output-target injection, artifact-first behavior, and Windows interrupt behavior before relying on long runs.
 
 ## Complex And Architectural Processing Contract
