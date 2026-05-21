@@ -21,15 +21,6 @@ impl TaskReadMetadata {
         }
     }
 
-    fn canonical_snapshot_read_model(path: &std::path::Path) -> Self {
-        Self {
-            mode: "canonical_snapshot_read_model",
-            degraded: false,
-            snapshot_path: Some(path.display().to_string()),
-            detail: "served from the canonical task snapshot read model",
-        }
-    }
-
     fn snapshot(path: &std::path::Path, detail: &'static str) -> Self {
         Self {
             mode: "snapshot",
@@ -299,14 +290,6 @@ async fn task_ready_authoritative_first(
     state_dir: std::path::PathBuf,
     scope_task_id: Option<&str>,
 ) -> Result<(Vec<state_store::TaskRecord>, TaskReadMetadata), state_store::StateStoreError> {
-    let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(&state_dir);
-    if let Ok(rows) = StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path) {
-        let tasks = StateStore::ready_tasks_scoped_from_rows(&rows, scope_task_id)?;
-        return Ok((
-            tasks,
-            TaskReadMetadata::canonical_snapshot_read_model(&snapshot_path),
-        ));
-    }
     let (rows, metadata) = load_task_snapshot_rows_authoritative_first(&state_dir).await?;
     let tasks = StateStore::ready_tasks_scoped_from_rows(&rows, scope_task_id)?;
     Ok((tasks, metadata))
@@ -315,12 +298,21 @@ async fn task_ready_authoritative_first(
 async fn task_critical_path_snapshot_first(
     state_dir: std::path::PathBuf,
 ) -> Result<state_store::TaskCriticalPath, state_store::StateStoreError> {
-    let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(&state_dir);
-    if let Ok(rows) = StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path) {
-        return StateStore::critical_path_from_rows(&rows);
+    match StateStore::open_existing_read_only(state_dir.clone()).await {
+        Ok(store) => store.critical_path().await,
+        Err(error @ state_store::StateStoreError::MissingStateDir(_)) => {
+            match load_task_snapshot_rows_with_retry(&state_dir).await {
+                Ok(rows) => StateStore::critical_path_from_rows(&rows),
+                Err(state_store::StateStoreError::Io(_)) => Err(error),
+                Err(snapshot_error) => Err(snapshot_error),
+            }
+        }
+        Err(error) if is_authoritative_state_lock_error(&error) => {
+            let rows = load_task_snapshot_rows_with_retry(&state_dir).await?;
+            StateStore::critical_path_from_rows(&rows)
+        }
+        Err(error) => Err(error),
     }
-    let store = StateStore::open_existing_read_only(state_dir).await?;
-    store.critical_path().await
 }
 
 fn task_rows_as_values(
@@ -6331,7 +6323,7 @@ mod tests {
     }
 
     #[test]
-    fn task_ready_uses_canonical_snapshot_read_model_before_authoritative_store() {
+    fn task_ready_prefers_authoritative_store() {
         let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         runtime.block_on(async {
@@ -6343,22 +6335,26 @@ mod tests {
                 .refresh_task_snapshot()
                 .await
                 .expect("snapshot should refresh");
+            let snapshot_path =
+                crate::StateStore::canonical_task_snapshot_path_for_state_root(harness.path());
+            fs::write(&snapshot_path, "").expect("snapshot should be writable");
+            drop(store);
 
             let (tasks, metadata) =
                 task_ready_authoritative_first(harness.path().to_path_buf(), None)
                     .await
-                    .expect("ready tasks should load from snapshot");
+                    .expect("ready tasks should load from authoritative store");
 
             assert_eq!(tasks.len(), 1);
             assert_eq!(tasks[0].id, "task-ready");
-            assert_eq!(metadata.mode, "canonical_snapshot_read_model");
+            assert_eq!(metadata.mode, "authoritative_live");
             assert!(!metadata.degraded);
-            assert!(metadata.snapshot_path.is_some());
+            assert!(metadata.snapshot_path.is_none());
         });
     }
 
     #[test]
-    fn task_critical_path_uses_canonical_snapshot_before_authoritative_store() {
+    fn task_critical_path_prefers_authoritative_store() {
         let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         runtime.block_on(async {
@@ -6379,10 +6375,14 @@ mod tests {
                 .refresh_task_snapshot()
                 .await
                 .expect("snapshot should refresh");
+            let snapshot_path =
+                crate::StateStore::canonical_task_snapshot_path_for_state_root(harness.path());
+            fs::write(&snapshot_path, "").expect("snapshot should be writable");
+            drop(store);
 
             let path = task_critical_path_snapshot_first(harness.path().to_path_buf())
                 .await
-                .expect("critical path should load from snapshot");
+                .expect("critical path should load from authoritative store");
 
             assert_eq!(path.length, 1);
             assert_eq!(path.root_task_id.as_deref(), Some("critical-ready"));

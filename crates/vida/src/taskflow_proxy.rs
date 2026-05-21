@@ -3790,14 +3790,28 @@ fn cached_taskflow_next_open_delegated_cycle_projection(cached: &str) -> bool {
 async fn graph_summary_task_rows(
     state_dir: &Path,
 ) -> Result<Vec<crate::state_store::TaskRecord>, crate::state_store::StateStoreError> {
-    let snapshot_path =
-        crate::state_store::StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
-    if let Ok(rows) = crate::state_store::StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path)
-    {
-        return Ok(rows);
+    match crate::state_store::StateStore::open_existing_read_only(state_dir.to_path_buf()).await {
+        Ok(store) => store.list_tasks(None, true).await,
+        Err(error @ crate::state_store::StateStoreError::MissingStateDir(_)) => {
+            let snapshot_path =
+                crate::state_store::StateStore::canonical_task_snapshot_path_for_state_root(
+                    state_dir,
+                );
+            match crate::state_store::StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path) {
+                Ok(rows) => Ok(rows),
+                Err(crate::state_store::StateStoreError::Io(_)) => Err(error),
+                Err(snapshot_error) => Err(snapshot_error),
+            }
+        }
+        Err(error) if crate::state_store::StateStore::error_is_lock_contention(&error) => {
+            let snapshot_path =
+                crate::state_store::StateStore::canonical_task_snapshot_path_for_state_root(
+                    state_dir,
+                );
+            crate::state_store::StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path)
+        }
+        Err(error) => Err(error),
     }
-    let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf()).await?;
-    store.list_tasks(None, true).await
 }
 
 pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
@@ -6540,7 +6554,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn graph_summary_task_rows_use_canonical_snapshot_read_model() {
+    async fn graph_summary_task_rows_prefer_authoritative_store() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6575,11 +6589,14 @@ mod tests {
             .refresh_task_snapshot()
             .await
             .expect("refresh snapshot");
+        let snapshot_path =
+            crate::state_store::StateStore::canonical_task_snapshot_path_for_state_root(&root);
+        fs::write(&snapshot_path, "").expect("snapshot should be writable");
         drop(store);
 
         let rows = graph_summary_task_rows(&root)
             .await
-            .expect("snapshot rows should load");
+            .expect("authoritative rows should load");
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "snapshot-ready");
