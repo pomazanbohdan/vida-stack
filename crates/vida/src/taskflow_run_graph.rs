@@ -674,6 +674,9 @@ fn recommended_surface_for_command(command: &str) -> String {
     if command.starts_with("vida lane exception-takeover") {
         return "vida lane exception-takeover".to_string();
     }
+    if command.starts_with("vida lane retire") {
+        return "vida lane retire".to_string();
+    }
     if command.starts_with("vida lane supersede") {
         return "vida lane supersede".to_string();
     }
@@ -691,6 +694,9 @@ fn recovery_next_action_reason(
 ) -> String {
     if command.starts_with("vida lane exception-takeover") {
         return "record bounded exception-path evidence for the dispatch blocker before local recovery work".to_string();
+    }
+    if command.starts_with("vida lane retire") {
+        return "retire the stale missing-task run graph through the bounded lane repair surface before rebinding continuation".to_string();
     }
     if command.starts_with("vida lane supersede") {
         return "activate the recorded exception-path receipt before treating local recovery as lawful".to_string();
@@ -1529,11 +1535,16 @@ pub(crate) async fn run_graph_projection_truth(
     let dispatch_receipt = store.run_graph_dispatch_receipt(&status.run_id).await?;
     let persisted_continuation_binding =
         store.run_graph_continuation_binding(&status.run_id).await?;
-    let continuation_binding = effective_projection_continuation_binding(
-        status,
-        dispatch_receipt.as_ref(),
-        persisted_continuation_binding,
-    );
+    let task_missing = run_graph_task_missing(store, status).await?;
+    let continuation_binding = if task_missing {
+        None
+    } else {
+        effective_projection_continuation_binding(
+            status,
+            dispatch_receipt.as_ref(),
+            persisted_continuation_binding,
+        )
+    };
     let terminal_consume_continue_run_id = if dispatch_receipt.as_ref().is_some_and(|receipt| {
         blocked_external_dispatch_artifact_mismatched_as_internal_activation(receipt)
             || (dispatch_receipt_resolution_reason_class(receipt).is_some()
@@ -1547,7 +1558,6 @@ pub(crate) async fn run_graph_projection_truth(
     } else {
         None
     };
-    let task_missing = run_graph_task_missing(store, status).await?;
     let stale_state_suspected =
         task_missing || projection_stale_state_suspected(store.root(), dispatch_receipt.as_ref());
     Ok(RunGraphProjectionTruth {
@@ -6224,6 +6234,28 @@ mod tests {
             })
             .await
             .expect("persist dispatch receipt");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: run_id.to_string(),
+                    task_id: task_id.to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "run_graph_task",
+                        "run_id": run_id,
+                        "task_id": task_id,
+                        "active_node": "analysis"
+                    }),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only".to_string(),
+                    binding_source: "consume_continue_after_downstream_chain".to_string(),
+                    why_this_unit: "stale missing-task binding".to_string(),
+                    request_text: Some("stale missing task repro".to_string()),
+                    recorded_at: "2026-05-21T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist stale continuation binding");
 
         let truth = run_graph_projection_truth(&store, &status)
             .await
