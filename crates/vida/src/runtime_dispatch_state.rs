@@ -2769,7 +2769,7 @@ pub(crate) fn configured_external_backend_entry<'a>(
     overlay: &'a serde_yaml::Value,
     backend_id: &str,
 ) -> Option<&'a serde_yaml::Value> {
-    let entry = configured_subagent_entry_any(overlay, backend_id)?;
+    let entry = configured_subagent_entry(overlay, backend_id)?;
     (yaml_string(yaml_lookup(entry, &["subagent_backend_class"])).as_deref()
         == Some("external_cli"))
     .then_some(entry)
@@ -3725,6 +3725,34 @@ agent_system:
 
         assert!(
             selected_external_backend_for_system(&overlay, "qwen", Some("hermes_cli")).is_none()
+        );
+    }
+
+    #[test]
+    fn configured_external_backend_entry_requires_enabled_true() {
+        let overlay = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    qwen_dispatch:
+      subagent_backend_class: external_cli
+      dispatch:
+        command: qwen
+        prompt_mode: positional
+    qwen_enabled:
+      enabled: true
+      subagent_backend_class: external_cli
+"#,
+        )
+        .expect("overlay should parse");
+
+        assert!(
+            configured_external_backend_entry(&overlay, "qwen_dispatch").is_none(),
+            "missing enabled must fail closed for external backend selection"
+        );
+        assert!(
+            configured_external_backend_entry(&overlay, "qwen_enabled").is_some(),
+            "enabled external backend should still resolve"
         );
     }
 
