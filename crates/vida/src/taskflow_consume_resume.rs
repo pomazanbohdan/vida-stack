@@ -5350,11 +5350,6 @@ fn try_emit_cached_consume_continue_deferred_handoff_projection(
             CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_NAME,
             CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_MAX_AGE,
         ),
-        crate::operator_projection_cache::read_state_stale_recent_json_projection(
-            state_dir,
-            CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_NAME,
-            CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_MAX_AGE,
-        ),
     ]
     .into_iter()
     .flatten()
