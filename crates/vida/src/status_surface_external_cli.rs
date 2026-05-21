@@ -97,6 +97,29 @@ fn readiness_command<'a>(
         })
 }
 
+fn external_cli_probe_command_is_allowlisted(command: &str) -> bool {
+    let trimmed = command.trim();
+    if trimmed.is_empty() || command_contains_path_separator(trimmed) {
+        return false;
+    }
+    let normalized = trimmed.to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "codex"
+            | "qwen"
+            | "claude"
+            | "gemini"
+            | "aider"
+            | "cursor-agent"
+            | "opencode"
+            | "hermes"
+            | "kilo"
+            | "vibe"
+            | "vida-pi-agent"
+            | "pi"
+    ) || (cfg!(test) && normalized == "sh")
+}
+
 fn profile_write_scope_requires_guard(profile: &serde_json::Value) -> bool {
     matches!(
         profile["write_scope"]
@@ -550,6 +573,33 @@ fn pi_style_external_cli_carrier_readiness(
             )],
         );
     }
+    if !external_cli_probe_command_is_allowlisted(adapter_command) {
+        return pi_style_readiness_payload(
+            backend_id,
+            "pi_adapter_command_not_allowlisted",
+            true,
+            serde_json::Value::String(
+                crate::release1_contracts::blocker_code_str(
+                    crate::release1_contracts::BlockerCode::ToolExecutionFailed,
+                )
+                .to_string(),
+            ),
+            profile_projection,
+            selected_profile,
+            expected_model_ref,
+            serde_json::json!({
+                "status": "command_not_allowlisted",
+                "source": adapter_source,
+                "command": adapter_command,
+            }),
+            serde_json::json!({"status":"not_checked"}),
+            serde_json::json!({"status":"not_checked"}),
+            serde_json::json!({"status":"not_checked"}),
+            vec![format!(
+                "Use an allowlisted command for Pi adapter readiness probes; `{adapter_command}` is not allowed."
+            )],
+        );
+    }
     let adapter_status = command_ready_status(adapter_source, adapter_command);
 
     let provider_command = readiness_command(readiness, "provider");
@@ -590,6 +640,33 @@ fn pi_style_external_cli_carrier_readiness(
             serde_json::json!({"status":"not_checked"}),
             serde_json::json!({"status":"not_checked"}),
             vec![format!("Install or expose Pi provider command `{provider_command}` on PATH before dispatch.")],
+        );
+    }
+    if !external_cli_probe_command_is_allowlisted(provider_command) {
+        return pi_style_readiness_payload(
+            backend_id,
+            "pi_provider_command_not_allowlisted",
+            true,
+            serde_json::Value::String(
+                crate::release1_contracts::blocker_code_str(
+                    crate::release1_contracts::BlockerCode::ToolExecutionFailed,
+                )
+                .to_string(),
+            ),
+            profile_projection,
+            selected_profile,
+            expected_model_ref,
+            adapter_status,
+            serde_json::json!({
+                "status": "command_not_allowlisted",
+                "source": provider_source,
+                "command": provider_command,
+            }),
+            serde_json::json!({"status":"not_checked"}),
+            serde_json::json!({"status":"not_checked"}),
+            vec![format!(
+                "Use an allowlisted command for Pi provider readiness probes; `{provider_command}` is not allowed."
+            )],
         );
     }
     let provider_status = command_ready_status(provider_source, provider_command);
@@ -1635,6 +1712,7 @@ mod tests {
     use super::{
         adapter_prewrite_guard_capabilities, external_cli_backend_readiness_verdict_for_profile,
         external_cli_preflight_summary, external_cli_preflight_summary_with_probe_override,
+        external_cli_probe_command_is_allowlisted,
     };
     use std::fs;
 
@@ -1644,6 +1722,15 @@ mod tests {
         assert_eq!(capabilities["status"], "available");
         assert_eq!(capabilities["pre_write_enforcement"], true);
         assert_eq!(capabilities["explicit_extension_arg"], true);
+    }
+
+    #[test]
+    fn external_cli_probe_allowlist_rejects_path_like_commands_but_keeps_pi_provider() {
+        assert!(external_cli_probe_command_is_allowlisted("pi"));
+        assert!(external_cli_probe_command_is_allowlisted("vida-pi-agent"));
+        assert!(!external_cli_probe_command_is_allowlisted("./pi"));
+        assert!(!external_cli_probe_command_is_allowlisted("tools\\pi.exe"));
+        assert!(!external_cli_probe_command_is_allowlisted("not-a-carrier"));
     }
 
     fn current_exe_command() -> String {

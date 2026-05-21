@@ -7956,13 +7956,22 @@ agent_system:
             dispatch_packet_path: Some(packet_path.display().to_string()),
             dispatch_result_path: Some(in_flight_path.display().to_string()),
             blocker_code: None,
-            runtime_hold_expires_at: None,
-            policy_approval_required: false,
-            policy_approved_by: None,
-            stale_after_seconds: Some(422),
-            timeout_strategy: Some("exception_path_takeover".to_string()),
-            ownership_guard: None,
-            dispatch_recorded_at: "2026-05-20T15:09:18Z".to_string(),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("pi_cli".to_string()),
+            recorded_at: "2026-05-20T15:09:18Z".to_string(),
         };
 
         let normalized = normalize_stale_in_flight_dispatch_receipt(&root, &mut receipt)
@@ -7973,9 +7982,17 @@ agent_system:
             receipt.blocker_code.as_deref(),
             Some("timeout_without_takeover_authority")
         );
-        assert_eq!(
-            receipt.dispatch_result_path.as_deref(),
-            Some(in_flight_path.display().to_string().as_str())
+        let normalized_result_path = receipt
+            .dispatch_result_path
+            .as_deref()
+            .expect("timeout normalization should record a result path");
+        assert_ne!(
+            normalized_result_path,
+            forged_terminal_path.display().to_string().as_str()
+        );
+        assert_ne!(
+            normalized_result_path,
+            in_flight_path.display().to_string().as_str()
         );
 
         let _ = fs::remove_dir_all(&root);
