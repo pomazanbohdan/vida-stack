@@ -616,7 +616,14 @@ fn next_lawful_operator_action_for_projection(
     status: &RunGraphStatus,
     receipt: Option<&RunGraphDispatchReceipt>,
     terminal_consume_continue_run_id: Option<&str>,
+    task_missing: bool,
 ) -> Option<String> {
+    if task_missing && status.status == "blocked" {
+        return Some(format!(
+            "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json",
+            status.run_id, status.run_id
+        ));
+    }
     if receipt.is_some_and(blocked_external_dispatch_artifact_mismatched_as_internal_activation) {
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
             return Some(fail_closed_terminal_continue_followup(status));
@@ -1346,6 +1353,7 @@ fn projection_truth_from_status_surface(
             status,
             status_surface_receipt.as_ref(),
             None,
+            false,
         ),
         dispatch_receipt: status_surface_receipt.clone(),
         continuation_binding: None,
@@ -1503,6 +1511,17 @@ fn projection_stale_state_suspected(
     age_seconds > stale_after_seconds
 }
 
+async fn run_graph_task_missing(
+    store: &StateStore,
+    status: &RunGraphStatus,
+) -> Result<bool, StateStoreError> {
+    match store.show_task(&status.task_id).await {
+        Ok(_) => Ok(false),
+        Err(StateStoreError::MissingTask { .. }) => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
 pub(crate) async fn run_graph_projection_truth(
     store: &StateStore,
     status: &RunGraphStatus,
@@ -1528,8 +1547,9 @@ pub(crate) async fn run_graph_projection_truth(
     } else {
         None
     };
+    let task_missing = run_graph_task_missing(store, status).await?;
     let stale_state_suspected =
-        projection_stale_state_suspected(store.root(), dispatch_receipt.as_ref());
+        task_missing || projection_stale_state_suspected(store.root(), dispatch_receipt.as_ref());
     Ok(RunGraphProjectionTruth {
         projection_source: if dispatch_receipt.is_some() {
             "reconciled_run_graph_status".to_string()
@@ -1552,6 +1572,7 @@ pub(crate) async fn run_graph_projection_truth(
             status,
             dispatch_receipt.as_ref(),
             terminal_consume_continue_run_id.as_deref(),
+            task_missing,
         ),
         dispatch_receipt,
         continuation_binding,
@@ -6146,6 +6167,76 @@ mod tests {
     use serde_json::json;
     use std::path::Path;
 
+    #[tokio::test]
+    async fn projection_truth_recommends_retire_for_missing_task_stale_blocked_run() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        let run_id = "runtime-missing-task-stale-run";
+        let task_id = "missing-authoritative-task";
+
+        let mut status = default_run_graph_status(task_id, "implementation", "implementation");
+        status.run_id = run_id.to_string();
+        status.active_node = "analysis".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist stale status");
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: run_id.to_string(),
+                dispatch_target: "analysis".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: crate::LaneStatus::LaneBlocked.as_str().to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some(
+                    "runtime-consumption/dispatch-packets/missing.json".to_string(),
+                ),
+                dispatch_result_path: Some(
+                    "runtime-consumption/dispatch-results/missing.json".to_string(),
+                ),
+                blocker_code: Some("tool_execution_failed".to_string()),
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("analysis".to_string()),
+                downstream_dispatch_last_target: Some("analysis".to_string()),
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("verifier".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-05-21T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist dispatch receipt");
+
+        let truth = run_graph_projection_truth(&store, &status)
+            .await
+            .expect("projection truth should build");
+
+        assert!(truth.stale_state_suspected);
+        assert_eq!(
+            truth.next_lawful_operator_action.as_deref(),
+            Some("vida lane retire runtime-missing-task-stale-run --receipt-id runtime-missing-task-stale-run --reason \"missing TaskFlow task stale run\" --json")
+        );
+        assert!(truth.continuation_binding.is_none());
+    }
+
     #[test]
     fn governance_handoff_uses_lane_targets_for_execution() {
         let (handoff_state, resume_target) =
@@ -6481,7 +6572,8 @@ mod tests {
             recorded_at: "2026-04-26T00:00:00Z".to_string(),
         };
 
-        let command = next_lawful_operator_action_for_projection(&status, Some(&receipt), None);
+        let command =
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
 
         assert!(command
             .as_deref()
@@ -6539,7 +6631,8 @@ mod tests {
             recorded_at: "2026-05-13T00:00:00Z".to_string(),
         };
 
-        let command = next_lawful_operator_action_for_projection(&status, Some(&receipt), None);
+        let command =
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
 
         assert_eq!(
             command.as_deref(),
@@ -6598,7 +6691,8 @@ mod tests {
             recorded_at: "2026-05-13T00:00:00Z".to_string(),
         };
 
-        let command = next_lawful_operator_action_for_projection(&status, Some(&receipt), None);
+        let command =
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
 
         assert_eq!(
             command.as_deref(),
@@ -6657,7 +6751,7 @@ mod tests {
             recorded_at: "2026-05-13T00:00:00Z".to_string(),
         };
         let next_lawful_operator_action =
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None);
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
         let projection_truth = RunGraphProjectionTruth {
             projection_source: "reconciled_run_graph_status".to_string(),
             projection_reason: "run-graph status reflects persisted dispatch blocker evidence"
@@ -6777,7 +6871,8 @@ mod tests {
             "specification"
         );
         assert_eq!(
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None).as_deref(),
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
+                .as_deref(),
             Some("vida lane show run-stale-binding --json")
         );
     }
@@ -6866,6 +6961,7 @@ mod tests {
                 },
                 Some(&receipt),
                 None,
+                false,
             ),
             dispatch_receipt: Some(receipt),
             continuation_binding: None,
@@ -6973,7 +7069,8 @@ mod tests {
         };
 
         assert_eq!(
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None).as_deref(),
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
+                .as_deref(),
             Some(
                 "vida lane supersede run-recorded-exception --receipt-id exception-receipt-1 --json"
             )
@@ -7032,7 +7129,8 @@ mod tests {
         };
 
         assert_eq!(
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None).as_deref(),
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
+                .as_deref(),
             Some("vida taskflow consume continue --run-id run-active-exception --json")
         );
     }
@@ -7092,7 +7190,8 @@ mod tests {
             next_lawful_operator_action_for_projection(
                 &status,
                 Some(&receipt),
-                Some("run-active-exception")
+                Some("run-active-exception"),
+                false,
             )
             .as_deref(),
             Some("vida taskflow run-graph status run-active-exception --json")
@@ -7116,7 +7215,8 @@ mod tests {
             .push("internal_dispatch_timeout_without_receipt".to_string());
 
         assert_eq!(
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None).as_deref(),
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
+                .as_deref(),
             Some("vida lane show run-timeout --json")
         );
     }
@@ -10193,6 +10293,7 @@ mod tests {
                 },
                 Some(&receipt),
                 None,
+                false,
             )
             .as_deref(),
             Some("vida lane show run-projection-blocked-mismatch --json")

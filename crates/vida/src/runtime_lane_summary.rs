@@ -1433,6 +1433,34 @@ pub(crate) fn role_exists_in_lane_bundle(bundle: &serde_json::Value, role_id: &s
         return false;
     }
 
+    let carrier_runtime_role_exists = crate::carrier_runtime_section(bundle)["roles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|row| {
+            row["role_id"].as_str() == Some(role_id)
+                || row["runtime_role"].as_str() == Some(role_id)
+                || row["default_runtime_role"].as_str() == Some(role_id)
+                || row["runtime_roles"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .any(|value| value == role_id)
+                || row["model_profiles"]
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|profiles| profiles.values())
+                    .any(|profile| {
+                        profile["runtime_roles"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(serde_json::Value::as_str)
+                            .any(|value| value == role_id)
+                    })
+        });
+
     bundle["enabled_framework_roles"]
         .as_array()
         .into_iter()
@@ -1445,6 +1473,44 @@ pub(crate) fn role_exists_in_lane_bundle(bundle: &serde_json::Value, role_id: &s
             .flatten()
             .filter_map(|row| row["role_id"].as_str())
             .any(|value| value == role_id)
+        || carrier_runtime_role_exists
+}
+
+#[cfg(test)]
+mod role_exists_tests {
+    use super::role_exists_in_lane_bundle;
+
+    #[test]
+    fn role_exists_accepts_carrier_runtime_roles() {
+        let bundle = serde_json::json!({
+            "enabled_framework_roles": ["orchestrator"],
+            "project_roles": [],
+            "carrier_runtime": {
+                "roles": [{
+                    "role_id": "junior",
+                    "default_runtime_role": "worker",
+                    "runtime_roles": ["worker"],
+                    "model_profiles": {
+                        "codex_low_write": {
+                            "runtime_roles": ["worker"]
+                        }
+                    }
+                }, {
+                    "role_id": "middle",
+                    "model_profiles": {
+                        "codex_medium_write": {
+                            "runtime_roles": ["business_analyst", "coach"]
+                        }
+                    }
+                }]
+            }
+        });
+
+        assert!(role_exists_in_lane_bundle(&bundle, "worker"));
+        assert!(role_exists_in_lane_bundle(&bundle, "business_analyst"));
+        assert!(role_exists_in_lane_bundle(&bundle, "coach"));
+        assert!(!role_exists_in_lane_bundle(&bundle, "missing_role"));
+    }
 }
 
 fn known_tracked_flow_targets() -> &'static [&'static str] {
