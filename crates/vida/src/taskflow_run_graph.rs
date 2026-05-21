@@ -569,6 +569,9 @@ fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -
     if receipt.blocker_code.as_deref() == Some("internal_dispatch_timeout_without_receipt") {
         return Some("internal_dispatch_timeout_without_receipt");
     }
+    if receipt.blocker_code.as_deref() == Some("internal_codex_carrier_unavailable") {
+        return Some("internal_codex_carrier_unavailable");
+    }
     if receipt
         .downstream_dispatch_blockers
         .iter()
@@ -6899,6 +6902,31 @@ mod tests {
         assert_eq!(
             command.as_deref(),
             Some("vida lane show run-internal-activation-view-only --json")
+        );
+    }
+
+    #[test]
+    fn recovery_status_action_for_internal_codex_carrier_unavailable_points_to_lane_show() {
+        let mut status = packet_gate_status("run-internal-codex-carrier");
+        status.status = "blocked".to_string();
+        status.recovery_ready = false;
+        status.resume_target = "dispatch.coach".to_string();
+        status.active_node = "coach".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+
+        let mut receipt = packet_gate_receipt("run-internal-codex-carrier");
+        receipt.dispatch_target = "coach".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some("internal_codex_carrier_unavailable".to_string());
+        receipt.selected_backend = Some("internal_subagents".to_string());
+
+        let command =
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
+
+        assert_eq!(
+            command.as_deref(),
+            Some("vida lane show run-internal-codex-carrier --json")
         );
     }
 
