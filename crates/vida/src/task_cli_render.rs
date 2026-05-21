@@ -94,10 +94,11 @@ fn build_pass_operator_surface_payload(
 }
 
 pub(crate) fn print_task_update_graph_blocked(issue: &TaskGraphIssue, as_json: bool) {
+    let quoted_issue_id = crate::shell_quote(issue.issue_id.trim());
     let next_actions = match issue.issue_type.as_str() {
         "open_parent_has_no_open_child" => vec![format!(
             "Repair emptied parent `{}` with `vida task update {} --status closed --json`, then rerun the original task update.",
-            issue.issue_id, issue.issue_id
+            issue.issue_id, quoted_issue_id
         )],
         _ => vec![
             "Resolve task graph validation issues and rerun the original `vida task update ... --json` command."

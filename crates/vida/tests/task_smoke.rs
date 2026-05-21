@@ -6709,6 +6709,115 @@ fn task_update_parent_guard_returns_actionable_json_recovery() {
 }
 
 #[test]
+fn task_update_parent_guard_quotes_shell_unsafe_issue_id_in_next_action() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let old_parent_id = "old;echo pwned";
+    let open_child_id = "open-child-shell-quote";
+    let new_parent_id = "new-parent-shell-quote";
+
+    assert_eq!(
+        run_command_json(
+            &[
+                "task",
+                "create",
+                old_parent_id,
+                "Old parent",
+                "--type",
+                "epic",
+                "--status",
+                "closed",
+                "--json",
+            ],
+            &state_dir,
+        )["status"],
+        "pass"
+    );
+    assert_eq!(
+        run_command_json(
+            &[
+                "task",
+                "create",
+                "closed-child-shell-quote",
+                "Closed child",
+                "--type",
+                "defect",
+                "--status",
+                "closed",
+                "--parent-id",
+                old_parent_id,
+                "--json",
+            ],
+            &state_dir,
+        )["status"],
+        "pass"
+    );
+    assert_eq!(
+        run_command_json(
+            &[
+                "task",
+                "create",
+                open_child_id,
+                "Open child",
+                "--type",
+                "defect",
+                "--status",
+                "open",
+                "--parent-id",
+                old_parent_id,
+                "--json",
+            ],
+            &state_dir,
+        )["status"],
+        "pass"
+    );
+    assert_eq!(
+        run_command_json(
+            &[
+                "task",
+                "create",
+                new_parent_id,
+                "New parent",
+                "--type",
+                "epic",
+                "--json",
+            ],
+            &state_dir,
+        )["status"],
+        "pass"
+    );
+
+    let output = run_command_capture(
+        &[
+            "task",
+            "update",
+            open_child_id,
+            "--parent-id",
+            new_parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!output.status.success());
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("blocked update json should parse");
+    assert!(
+        parsed["next_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|action| action.as_str())
+            .any(|action| {
+                action.contains("vida task update 'old;echo pwned' --status closed --json")
+            }),
+        "{parsed}"
+    );
+
+    fs::remove_dir_all(&state_dir).expect("cleanup state dir");
+}
+
+#[test]
 fn task_update_rejects_notes_and_notes_file_together() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
