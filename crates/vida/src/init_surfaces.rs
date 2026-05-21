@@ -799,14 +799,20 @@ fn agent_init_packet_execute_command(selection: &serde_json::Value) -> Option<St
     selection
         .get("dispatch_packet_path")
         .and_then(serde_json::Value::as_str)
-        .map(|path| format!("vida agent-init --dispatch-packet '{path}' --execute-dispatch --json"))
+        .map(|path| {
+            format!(
+                "vida agent-init --dispatch-packet {} --execute-dispatch --json",
+                crate::shell_quote(path)
+            )
+        })
         .or_else(|| {
             selection
                 .get("downstream_packet_path")
                 .and_then(serde_json::Value::as_str)
                 .map(|path| {
                     format!(
-                        "vida agent-init --downstream-packet '{path}' --execute-dispatch --json"
+                        "vida agent-init --downstream-packet {} --execute-dispatch --json",
+                        crate::shell_quote(path)
                     )
                 })
         })
@@ -5658,7 +5664,10 @@ mod agent_init_surface_tests {
         );
         assert_eq!(
             payload["operator_guidance"]["flow_distinctions"][1]["surface"],
-            "vida agent-init --dispatch-packet '/tmp/dispatch.json' --execute-dispatch --json"
+            format!(
+                "vida agent-init --dispatch-packet {} --execute-dispatch --json",
+                crate::shell_quote("/tmp/dispatch.json")
+            )
         );
         assert!(payload["operator_guidance"]["next_lawful_execution_action"]
             .as_str()
@@ -6550,6 +6559,48 @@ mod agent_init_surface_tests {
         assert_eq!(
             payload["activation_vs_execution_evidence"]["evidence_state"],
             "activation_view_only"
+        );
+    }
+
+    #[test]
+    fn agent_init_packet_execute_command_quotes_shell_unsafe_dispatch_packet_path() {
+        let unsafe_path = "/tmp/packet' ; echo injected ; #.json";
+        let selection = serde_json::json!({
+            "dispatch_packet_path": unsafe_path,
+        });
+
+        let command = agent_init_packet_execute_command(&selection)
+            .expect("dispatch packet command should render");
+
+        assert_eq!(
+            command,
+            format!(
+                "vida agent-init --dispatch-packet {} --execute-dispatch --json",
+                crate::shell_quote(unsafe_path)
+            )
+        );
+        assert!(!command.contains("--dispatch-packet '/tmp/packet' ; echo injected ; #.json'"));
+    }
+
+    #[test]
+    fn agent_init_packet_execute_command_quotes_shell_unsafe_downstream_packet_path() {
+        let unsafe_path = "/tmp/downstream' ; echo injected ; #.json";
+        let selection = serde_json::json!({
+            "downstream_packet_path": unsafe_path,
+        });
+
+        let command = agent_init_packet_execute_command(&selection)
+            .expect("downstream packet command should render");
+
+        assert_eq!(
+            command,
+            format!(
+                "vida agent-init --downstream-packet {} --execute-dispatch --json",
+                crate::shell_quote(unsafe_path)
+            )
+        );
+        assert!(
+            !command.contains("--downstream-packet '/tmp/downstream' ; echo injected ; #.json'")
         );
     }
 
