@@ -102,8 +102,8 @@ fn active_exception_takeover_evidence_matches_status(
         None,
     );
     dispatch.run_id == status.run_id
-        && (dispatch.lane_status == "lane_exception_takeover"
-            || exception_takeover_state.is_active())
+        && dispatch.lane_status == "lane_exception_takeover"
+        && exception_takeover_state.is_active()
         && dispatch
             .exception_path_receipt_id
             .as_deref()
