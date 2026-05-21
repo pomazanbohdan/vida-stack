@@ -1896,11 +1896,33 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
             return ExitCode::from(2);
         }
     };
-    let notes = match resolve_optional_text_arg(
-        "notes",
-        command.notes.as_deref(),
-        command.notes_file.as_deref(),
-    ) {
+    if let Some(path) = command.notes_file.as_deref() {
+        let action = format!(
+            "Use `vida task {} <task-id> <title> --notes <text> --json` for trusted inline create-time notes, or create the task first and then run `vida task update <task-id> --notes-file {} --json` when recording operator-owned progress.",
+            if ensure_existing { "ensure" } else { "create" },
+            crate::shell_quote(&path.display().to_string())
+        );
+        if command.json {
+            crate::print_json_pretty(&serde_json::json!({
+                "status": "blocked",
+                "blocker_codes": ["untrusted_create_notes_file"],
+                "surface": if ensure_existing { "vida task ensure" } else { "vida task create" },
+                "rejected_option": "--notes-file",
+                "rejected_path": path,
+                "next_action": action,
+                "next_actions": [action],
+            }));
+        } else {
+            eprintln!(
+                "Refusing --notes-file for `vida task {}`: path `{}` is outside the trusted inline intake boundary.",
+                if ensure_existing { "ensure" } else { "create" },
+                path.display()
+            );
+            eprintln!("{action}");
+        }
+        return ExitCode::from(2);
+    }
+    let notes = match resolve_optional_text_arg("notes", command.notes.as_deref(), None) {
         Ok(notes) => notes,
         Err(error) => {
             eprintln!("{error}");
