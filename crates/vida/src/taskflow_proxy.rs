@@ -4138,13 +4138,11 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             println!("{rendered}");
             return cached_operator_projection_exit_code(&rendered);
         }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &proxy_state_root,
-                TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
-                TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
-            )
-        {
+        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
+            &proxy_state_root,
+            TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
+            TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
+        ) {
             let rendered =
                 compact_cached_taskflow_graph_summary_projection(&cached).unwrap_or(cached);
             println!("{rendered}");
@@ -6273,9 +6271,10 @@ mod tests {
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
         TaskSchedulingCandidate, TaskSchedulingProjection,
     };
+    use crate::test_cli_support::guard_current_dir;
     use std::fs;
     use std::process::ExitCode;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn cached_operator_projection_exit_code_preserves_blocked_status() {
@@ -6584,6 +6583,48 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "snapshot-ready");
+    }
+
+    #[tokio::test]
+    async fn graph_summary_rejects_state_marker_stale_cached_projection() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-graph-summary-stale-cache-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let state_dir = root.join(".vida").join("data").join("state");
+        fs::create_dir_all(root.join(".vida").join("config")).expect("config dir");
+        fs::create_dir_all(root.join(".vida").join("db")).expect("db dir");
+        fs::create_dir_all(root.join(".vida").join("project")).expect("project dir");
+        fs::write(root.join("AGENTS.md"), "").expect("AGENTS.md");
+        fs::write(root.join("vida.config.yaml"), "").expect("vida.config.yaml");
+        crate::state_store::StateStore::open(state_dir.clone())
+            .await
+            .expect("state store should initialize");
+
+        crate::operator_projection_cache::write_json_projection(
+            &state_dir,
+            super::TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
+            &serde_json::json!({
+                "surface": "vida taskflow graph-summary",
+                "status": "pass",
+                "cached": true
+            }),
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        crate::operator_projection_cache::touch_state_mutation_marker(&state_dir);
+
+        let _cwd = guard_current_dir(&root);
+        let code =
+            super::run_taskflow_graph_summary(&["graph-summary".to_string(), "--json".to_string()])
+                .await;
+
+        assert_eq!(code, ExitCode::from(1));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
