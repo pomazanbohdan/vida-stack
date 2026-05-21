@@ -212,17 +212,17 @@ pub(crate) fn build_status_json_report(
         })
     };
 
+    let Some(object) = summary_json.as_object_mut() else {
+        return Ok(summary_json);
+    };
+    object.insert(
+        "current_session".to_string(),
+        inputs.operator_session_projection["current_session"].clone(),
+    );
     if !inputs.summary_only {
-        let Some(object) = summary_json.as_object_mut() else {
-            return Ok(summary_json);
-        };
         object.insert(
             "operator_session_projection".to_string(),
             inputs.operator_session_projection.clone(),
-        );
-        object.insert(
-            "current_session".to_string(),
-            inputs.operator_session_projection["current_session"].clone(),
         );
         object.insert(
             "project_foreign_runs".to_string(),
