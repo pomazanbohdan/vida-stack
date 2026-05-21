@@ -7,7 +7,6 @@ use crate::{
 
 const DIAGNOSTICS_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
 const POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME: &str = "diagnostics-post-commit-latest";
-const POST_COMMIT_DIAGNOSTICS_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
 
 fn command_output(program: &str, args: &[&str]) -> serde_json::Value {
     match std::process::Command::new(program).args(args).output() {
@@ -157,44 +156,6 @@ fn diagnostic_exit_code(payload: &serde_json::Value) -> ExitCode {
     } else {
         ExitCode::from(1)
     }
-}
-
-fn refresh_cached_post_commit_diagnostics(payload: &str) -> Option<serde_json::Value> {
-    let mut payload = serde_json::from_str::<serde_json::Value>(payload).ok()?;
-    let git_status = git_status_summary();
-    let mut blocker_codes = payload["blocker_codes"]
-        .as_array()
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                .filter(|code| code != "git_status_blocked")
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if git_status["status"] != "pass" {
-        blocker_codes.push("git_status_blocked".to_string());
-    }
-    blocker_codes.sort();
-    blocker_codes.dedup();
-    let status = status_from_blockers(&blocker_codes);
-    let project_local_clean_completion = git_status["status"] == "pass";
-    payload["git_status"] = git_status;
-    payload["blocker_codes"] = serde_json::json!(blocker_codes);
-    payload["status"] = serde_json::json!(status);
-    if let Some(workflow) = payload
-        .get_mut("recommended_issue_workflow")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        workflow.insert(
-            "project_local_clean_completion".to_string(),
-            serde_json::json!(project_local_clean_completion),
-        );
-        workflow.insert(
-            "upstream_runtime_defect".to_string(),
-            serde_json::json!(status == "blocked"),
-        );
-    }
-    Some(payload)
 }
 
 fn compact_counted_json_member(value: &serde_json::Value) -> serde_json::Value {
@@ -390,20 +351,6 @@ async fn run_post_commit(args: DiagnosticsPostCommitArgs) -> ExitCode {
     let state_dir = args
         .state_dir
         .unwrap_or_else(crate::state_store::default_state_dir);
-    if args.json {
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &state_dir,
-                POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
-                POST_COMMIT_DIAGNOSTICS_RECENT_PROJECTION_MAX_AGE,
-            )
-        {
-            if let Some(payload) = refresh_cached_post_commit_diagnostics(&cached) {
-                crate::print_json_pretty(&payload);
-                return diagnostic_exit_code(&payload);
-            }
-        }
-    }
     match build_post_commit_diagnostics(state_dir.clone()).await {
         Ok(payload) => {
             if args.json {
@@ -440,7 +387,15 @@ pub(crate) async fn run_diagnostics(args: DiagnosticsArgs) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{compact_host_dispatch_preflight_for_diagnostics, missing_task_actionability};
+    use super::{
+        compact_host_dispatch_preflight_for_diagnostics, missing_task_actionability,
+        run_post_commit, POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
+    };
+    use crate::test_cli_support::guard_current_dir;
+    use crate::DiagnosticsPostCommitArgs;
+    use std::fs;
+    use std::process::ExitCode;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn diagnostics_post_commit_compacts_heavy_operator_evidence() {
@@ -462,6 +417,67 @@ mod tests {
         assert_eq!(compacted["agents"]["count"], 2);
         assert_eq!(compacted["subagent_backends"]["count"], 3);
         assert_eq!(compacted["host_cli_system"], "codex");
+    }
+
+    #[tokio::test]
+    async fn diagnostics_post_commit_rejects_state_marker_stale_cached_projection() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-diagnostics-post-commit-stale-cache-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let state_dir = root.join(".vida").join("data").join("state");
+        crate::state_store::StateStore::open(state_dir.clone())
+            .await
+            .expect("state store should initialize");
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&root)
+            .output()
+            .expect("git init should run");
+        fs::write(root.join(".git").join("info").join("exclude"), ".vida/\n")
+            .expect("git exclude should be writable");
+
+        crate::operator_projection_cache::write_json_projection(
+            &state_dir,
+            POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
+            &serde_json::json!({
+                "surface": "vida diagnostics post-commit",
+                "status": "pass",
+                "blocker_codes": [],
+                "recommended_issue_workflow": {
+                    "project_local_clean_completion": true,
+                    "upstream_runtime_defect": false
+                }
+            }),
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        crate::operator_projection_cache::touch_state_mutation_marker(&state_dir);
+
+        let _cwd = guard_current_dir(&root);
+        let code = run_post_commit(DiagnosticsPostCommitArgs {
+            state_dir: Some(state_dir.clone()),
+            json: true,
+        })
+        .await;
+
+        assert_eq!(code, ExitCode::SUCCESS);
+        let rewritten = fs::read_to_string(
+            state_dir
+                .join("operator-projections")
+                .join(format!("{POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME}.json")),
+        )
+        .expect("diagnostics projection should be rewritten");
+        let rewritten: serde_json::Value =
+            serde_json::from_str(&rewritten).expect("rewritten projection should be json");
+        assert_ne!(rewritten["cached"], true);
+        assert!(rewritten.get("projection_cache").is_none());
+        assert!(rewritten["taskflow_status"].is_object());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
