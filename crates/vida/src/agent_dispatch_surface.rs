@@ -30,6 +30,8 @@ struct AgentDispatchLanePreview {
     runtime_role: String,
     task_class: String,
     dispatch_command: String,
+    dispatch_command_kind: String,
+    receipt_backed_execution_command: String,
     ready_parallel_safe: bool,
     selection_reason: String,
     selection_truth: AgentDispatchLaneSelectionTruth,
@@ -436,6 +438,13 @@ fn agent_init_command(
     command
 }
 
+fn receipt_backed_execution_command_hint(task_id: &str) -> String {
+    format!(
+        "vida taskflow run-graph dispatch-init {} --json, then vida agent-init --dispatch-packet <packet-path> --execute-dispatch --json",
+        crate::shell_quote(task_id)
+    )
+}
+
 fn required_string_field(payload: &serde_json::Value, key: &str) -> Option<String> {
     payload[key]
         .as_str()
@@ -625,6 +634,10 @@ fn build_agent_dispatch_next_preview_standard(
                     explicit_state_dir,
                     &selection_truth.runtime_role,
                 ),
+                dispatch_command_kind: "startup_activation_view_only".to_string(),
+                receipt_backed_execution_command: receipt_backed_execution_command_hint(
+                    &primary.task.id,
+                ),
                 ready_parallel_safe: primary.ready_parallel_safe,
                 selection_reason: "primary_ready_task".to_string(),
                 selection_truth,
@@ -652,6 +665,10 @@ fn build_agent_dispatch_next_preview_standard(
                             &candidate.task.id,
                             explicit_state_dir,
                             &selection_truth.runtime_role,
+                        ),
+                        dispatch_command_kind: "startup_activation_view_only".to_string(),
+                        receipt_backed_execution_command: receipt_backed_execution_command_hint(
+                            &candidate.task.id,
                         ),
                         ready_parallel_safe: candidate.ready_parallel_safe,
                         selection_reason: "parallel_safe_ready_task".to_string(),
@@ -864,6 +881,10 @@ fn build_agent_dispatch_next_preview_dev_team(
                     explicit_state_dir,
                     &selection_truth.runtime_role,
                 ),
+                dispatch_command_kind: "startup_activation_view_only".to_string(),
+                receipt_backed_execution_command: receipt_backed_execution_command_hint(
+                    &candidate.task.id,
+                ),
                 ready_parallel_safe: candidate.ready_parallel_safe,
                 selection_reason: format!("dev_team_step_{}:{}", step_index + 1, step.role_label),
                 selection_truth,
@@ -915,6 +936,10 @@ fn build_agent_dispatch_next_preview_dev_team(
     if !selected_lanes.is_empty() {
         next_actions.push(
             "Preview only: review the selected carrier/model/cost truth first; run the shown `vida agent-init` command only after operator review."
+                .to_string(),
+        );
+        next_actions.push(
+            "The shown `vida agent-init --role` command is startup activation view only; receipt-backed execution requires a dispatch packet and `--execute-dispatch`."
                 .to_string(),
         );
     }
@@ -1022,6 +1047,10 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
                     &reservation.task_id,
                     explicit_state_dir,
                     &selection_truth.runtime_role,
+                ),
+                dispatch_command_kind: "startup_activation_view_only".to_string(),
+                receipt_backed_execution_command: receipt_backed_execution_command_hint(
+                    &reservation.task_id,
                 ),
                 ready_parallel_safe: scheduler_task_parallel_safety(&plan, &reservation.task_id),
                 selection_reason: if reservation.launch_role == "primary" {
@@ -2004,6 +2033,13 @@ mod tests {
 
         assert_eq!(preview.status, "pass");
         assert_eq!(preview.lanes_selected, 1);
+        assert_eq!(
+            preview.selected_lanes[0].dispatch_command_kind,
+            "startup_activation_view_only"
+        );
+        assert!(preview.selected_lanes[0]
+            .receipt_backed_execution_command
+            .contains("--execute-dispatch"));
         assert!(preview.blocker_codes.is_empty());
         assert_eq!(preview.blocked_candidates[0].task_id, "task-b");
         assert!(preview

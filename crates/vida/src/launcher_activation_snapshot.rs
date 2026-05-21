@@ -68,7 +68,15 @@ pub(crate) async fn read_or_sync_launcher_activation_snapshot(
     store: &StateStore,
 ) -> Result<LauncherActivationSnapshot, String> {
     match store.read_launcher_activation_snapshot().await {
-        Ok(snapshot) => Ok(snapshot),
+        Ok(snapshot) => {
+            let config_path = config_file_path()?;
+            let current_digest = config_file_digest(&config_path)?;
+            if snapshot.source_config_digest == current_digest {
+                Ok(snapshot)
+            } else {
+                sync_launcher_activation_snapshot(store).await
+            }
+        }
         Err(StateStoreError::MissingLauncherActivationSnapshot) => {
             sync_launcher_activation_snapshot(store).await
         }
