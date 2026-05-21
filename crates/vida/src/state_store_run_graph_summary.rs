@@ -2327,8 +2327,9 @@ impl StateStore {
             return Ok(false);
         }
         let release_admission_complete =
-            !crate::runtime_consumption_state::release_admission_operator_evidence_incomplete(
+            crate::runtime_consumption_state::release_admission_operator_evidence_complete_for_run(
                 self.root(),
+                &status.run_id,
             )
             .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
         if !release_admission_complete {
