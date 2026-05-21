@@ -1739,6 +1739,14 @@ impl StateStore {
 
     #[allow(dead_code)]
     pub async fn run_graph_status(&self, run_id: &str) -> Result<RunGraphStatus, StateStoreError> {
+        self.run_graph_status_from_task_rows(run_id, &[]).await
+    }
+
+    pub(crate) async fn run_graph_status_from_task_rows(
+        &self,
+        run_id: &str,
+        task_rows: &[TaskRecord],
+    ) -> Result<RunGraphStatus, StateStoreError> {
         let execution: Option<ExecutionPlanStateRow> =
             self.db.select(("execution_plan_state", run_id)).await?;
         let execution = execution.ok_or_else(|| StateStoreError::MissingTask {
@@ -1780,7 +1788,14 @@ impl StateStore {
         };
         let receipt = self.run_graph_dispatch_receipt_stored(run_id).await?;
         let status = reconcile_run_graph_status_with_dispatch_receipt(status, receipt.as_ref())?;
-        let task = self.show_task(&status.task_id).await.ok();
+        let task = if task_rows.is_empty() {
+            self.show_task(&status.task_id).await.ok()
+        } else {
+            task_rows
+                .iter()
+                .find(|task| task.id == status.task_id)
+                .cloned()
+        };
         let status =
             reconcile_run_graph_status_with_closed_task(status, task.as_ref(), receipt.as_ref());
         status.validate_memory_governance()?;
@@ -1822,13 +1837,33 @@ impl StateStore {
     }
 
     pub async fn latest_run_graph_status(&self) -> Result<Option<RunGraphStatus>, StateStoreError> {
-        let Some(run_id) = self.latest_run_graph_run_id().await? else {
+        self.latest_run_graph_status_from_task_rows(&[]).await
+    }
+
+    pub(crate) async fn latest_run_graph_status_from_task_rows(
+        &self,
+        task_rows: &[TaskRecord],
+    ) -> Result<Option<RunGraphStatus>, StateStoreError> {
+        let Some(run_id) = self
+            .latest_run_graph_run_id_from_task_rows(task_rows)
+            .await?
+        else {
             return Ok(None);
         };
-        Ok(Some(self.run_graph_status(&run_id).await?))
+        Ok(Some(
+            self.run_graph_status_from_task_rows(&run_id, task_rows)
+                .await?,
+        ))
     }
 
     pub(crate) async fn latest_run_graph_run_id(&self) -> Result<Option<String>, StateStoreError> {
+        self.latest_run_graph_run_id_from_task_rows(&[]).await
+    }
+
+    pub(crate) async fn latest_run_graph_run_id_from_task_rows(
+        &self,
+        task_rows: &[TaskRecord],
+    ) -> Result<Option<String>, StateStoreError> {
         let mut query = self
             .db
             .query(
@@ -1838,8 +1873,7 @@ impl StateStore {
         let rows: Vec<RunGraphLatestStateRow> = query.take(0)?;
         for latest in rows {
             if self
-                .run_graph_latest_row_points_to_terminal_task_active(&latest)
-                .await?
+                .run_graph_latest_row_points_to_terminal_task_active_from_rows(&latest, task_rows)?
             {
                 continue;
             }
@@ -1879,6 +1913,9 @@ impl StateStore {
         &self,
         latest: &RunGraphLatestStateRow,
     ) -> Result<bool, StateStoreError> {
+        if self.run_graph_latest_row_points_to_terminal_task_active_from_rows(latest, &[])? {
+            return Ok(true);
+        }
         if latest.status == "completed" {
             return Ok(false);
         }
@@ -1888,6 +1925,23 @@ impl StateStore {
             Err(error) => return Err(error),
         };
         Ok(task_status_is_terminal_for_continuation(&task.status))
+    }
+
+    fn run_graph_latest_row_points_to_terminal_task_active_from_rows(
+        &self,
+        latest: &RunGraphLatestStateRow,
+        task_rows: &[TaskRecord],
+    ) -> Result<bool, StateStoreError> {
+        if latest.status == "completed" {
+            return Ok(false);
+        }
+        if task_rows.is_empty() {
+            return Ok(false);
+        }
+        Ok(task_rows
+            .iter()
+            .find(|task| task.id == latest.task_id)
+            .is_some_and(|task| task_status_is_terminal_for_continuation(&task.status)))
     }
 
     pub(crate) async fn latest_run_graph_run_id_for_task(
@@ -2320,6 +2374,15 @@ impl StateStore {
         &self,
         status: &RunGraphStatus,
     ) -> Result<bool, StateStoreError> {
+        self.run_graph_status_is_stale_after_release_admission_complete_from_task_rows(status, &[])
+            .await
+    }
+
+    pub(crate) async fn run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
+        &self,
+        status: &RunGraphStatus,
+        task_rows: &[TaskRecord],
+    ) -> Result<bool, StateStoreError> {
         let blocked_or_open_cycle = status.status == "blocked"
             || status.lifecycle_stage.ends_with("_blocked")
             || status.delegation_gate().delegated_cycle_open;
@@ -2335,10 +2398,18 @@ impl StateStore {
         if !release_admission_complete {
             return Ok(false);
         }
-        match self.show_task(&status.task_id).await {
-            Ok(task) => Ok(task.status == "closed"),
-            Err(StateStoreError::MissingTask { .. }) => Ok(true),
-            Err(error) => Err(error),
+        if task_rows.is_empty() {
+            match self.show_task(&status.task_id).await {
+                Ok(task) => Ok(task.status == "closed"),
+                Err(StateStoreError::MissingTask { .. }) => Ok(true),
+                Err(error) => Err(error),
+            }
+        } else {
+            Ok(task_rows
+                .iter()
+                .find(|task| task.id == status.task_id)
+                .map(|task| task.status == "closed")
+                .unwrap_or(true))
         }
     }
 

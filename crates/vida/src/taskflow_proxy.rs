@@ -1019,6 +1019,32 @@ async fn latest_run_graph_dispatch_receipt_and_evidence_ambiguity(
     Ok((latest_run_graph_dispatch_receipt, evidence_ambiguous))
 }
 
+async fn latest_run_graph_dispatch_receipt_summary(
+    store: &crate::StateStore,
+    latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
+) -> Result<Option<crate::state_store::RunGraphDispatchReceiptSummary>, String> {
+    let Some(status) = latest_run_graph_status else {
+        return Ok(None);
+    };
+    match store.run_graph_dispatch_receipt(&status.run_id).await {
+        Ok(receipt) => {
+            Ok(receipt.map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt))
+        }
+        Err(error) => {
+            if error
+                .to_string()
+                .contains("latest checkpoint evidence must share the same run_id")
+            {
+                Ok(None)
+            } else {
+                Err(format!(
+                    "Failed to read scoped dispatch receipt summary: {error}"
+                ))
+            }
+        }
+    }
+}
+
 fn continuation_dispatch_gate_from_decision(
     decision: &TaskflowNextDecision,
     continuation_binding_summary: &serde_json::Value,
@@ -2443,12 +2469,15 @@ async fn scoped_latest_run_graph_for_explicit_ready_task(
     latest_run_graph: Option<crate::state_store::RunGraphStatus>,
     explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     ready_head: Option<&crate::state_store::TaskRecord>,
+    all_tasks: &[crate::state_store::TaskRecord],
 ) -> Result<Option<crate::state_store::RunGraphStatus>, String> {
     let latest_run_graph = match latest_run_graph {
         Some(status)
             if ready_head.is_some()
                 && store
-                    .run_graph_status_is_stale_after_release_admission_complete(&status)
+                    .run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
+                        &status, all_tasks,
+                    )
                     .await
                     .map_err(|error| {
                         format!(
@@ -2479,7 +2508,7 @@ async fn scoped_latest_run_graph_for_explicit_ready_task(
         return Ok(None);
     };
     store
-        .run_graph_status(&run_id)
+        .run_graph_status_from_task_rows(&run_id, all_tasks)
         .await
         .map(Some)
         .map_err(|error| format!("Failed to read scoped run-graph status: {error}"))
@@ -2539,6 +2568,7 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
         global_latest_run_graph,
         explicit_binding.as_ref(),
         ready_tasks.first(),
+        &all_tasks,
     )
     .await?;
     let recovery =
@@ -3670,18 +3700,21 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             }
         }
     };
-    let all_tasks = match store.as_ref() {
-        Some(store) => match store.list_tasks(None, true).await {
-            Ok(tasks) => tasks,
-            Err(error) => {
-                eprintln!("Failed to list tasks for taskflow next: {error}");
-                return ExitCode::from(1);
-            }
-        },
-        None => match crate::task_surface::load_task_snapshot_rows_with_retry(&state_dir).await {
-            Ok(tasks) => tasks,
-            Err(error) => {
-                eprintln!("Failed to read task snapshot for taskflow next: {error}");
+    let all_tasks = match crate::task_surface::load_task_snapshot_rows_with_retry(&state_dir).await
+    {
+        Ok(tasks) => tasks,
+        Err(snapshot_error) => match store.as_ref() {
+            Some(store) => match store.list_tasks(None, true).await {
+                Ok(tasks) => tasks,
+                Err(error) => {
+                    eprintln!(
+                        "Failed to list tasks for taskflow next: {error} (snapshot fallback also failed: {snapshot_error})"
+                    );
+                    return ExitCode::from(1);
+                }
+            },
+            None => {
+                eprintln!("Failed to read task snapshot for taskflow next: {snapshot_error}");
                 return ExitCode::from(1);
             }
         },
@@ -3696,35 +3729,18 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let global_latest_run_graph = match store.as_ref() {
-        Some(store) => match store.latest_run_graph_status().await {
-            Ok(summary) => summary,
+    let (global_latest_run_graph, explicit_binding) = match store.as_ref() {
+        Some(store) => match tokio::try_join!(
+            store.latest_run_graph_status_from_task_rows(&all_tasks),
+            store.latest_explicit_run_graph_continuation_binding()
+        ) {
+            Ok(summaries) => summaries,
             Err(error) => {
-                eprintln!("Failed to read latest run-graph status: {error}");
+                eprintln!("Failed to read taskflow next run-graph summaries: {error}");
                 return ExitCode::from(1);
             }
         },
-        None => None,
-    };
-    let global_recovery = match store.as_ref() {
-        Some(store) => match store.latest_run_graph_recovery_summary().await {
-            Ok(summary) => summary,
-            Err(error) => {
-                eprintln!("Failed to read latest recovery summary: {error}");
-                return ExitCode::from(1);
-            }
-        },
-        None => None,
-    };
-    let explicit_binding = match store.as_ref() {
-        Some(store) => match store.latest_explicit_run_graph_continuation_binding().await {
-            Ok(summary) => summary,
-            Err(error) => {
-                eprintln!("Failed to read latest explicit continuation binding: {error}");
-                return ExitCode::from(1);
-            }
-        },
-        None => None,
+        None => (None, None),
     };
     let latest_run_graph = match store.as_ref() {
         Some(store) => match scoped_latest_run_graph_for_explicit_ready_task(
@@ -3732,6 +3748,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             global_latest_run_graph,
             explicit_binding.as_ref(),
             ready_tasks.first(),
+            &all_tasks,
         )
         .await
         {
@@ -3743,47 +3760,26 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         },
         None => None,
     };
-    let recovery = match store.as_ref() {
-        Some(store) => match scoped_recovery_for_latest_run_graph(
-            store,
-            latest_run_graph.as_ref(),
-            global_recovery,
-        )
-        .await
-        {
-            Ok(summary) => summary,
-            Err(error) => {
-                eprintln!("{error}");
-                return ExitCode::from(1);
+    let recovery = latest_run_graph
+        .as_ref()
+        .cloned()
+        .map(crate::state_store::RunGraphRecoverySummary::from_status);
+    let gate = latest_run_graph
+        .as_ref()
+        .cloned()
+        .map(crate::state_store::RunGraphGateSummary::from_status);
+    let dispatch = match store.as_ref() {
+        Some(store) => {
+            match latest_run_graph_dispatch_receipt_summary(store, latest_run_graph.as_ref()).await
+            {
+                Ok(summary) => summary,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
             }
-        },
+        }
         None => None,
-    };
-    let gate = match (store.as_ref(), latest_run_graph.as_ref()) {
-        (Some(store), Some(status)) => match store.run_graph_gate_summary(&status.run_id).await {
-            Ok(summary) => Some(summary),
-            Err(error) => {
-                eprintln!("Failed to read scoped gate summary: {error}");
-                return ExitCode::from(1);
-            }
-        },
-        _ => None,
-    };
-    let (dispatch, _) = match store.as_ref() {
-        Some(store) => match latest_run_graph_dispatch_receipt_and_evidence_ambiguity(
-            store,
-            latest_run_graph.as_ref(),
-            recovery.as_ref(),
-        )
-        .await
-        {
-            Ok(summary) => summary,
-            Err(error) => {
-                eprintln!("{error}");
-                return ExitCode::from(1);
-            }
-        },
-        None => (None, false),
     };
 
     let recovery_holds_active_bound_run =
@@ -4049,6 +4045,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         global_latest_run_graph,
         explicit_binding.as_ref(),
         ready_tasks.first(),
+        &all_tasks,
     )
     .await
     {
@@ -6333,6 +6330,7 @@ mod tests {
             Some(global_latest),
             Some(&explicit_binding),
             Some(&ready),
+            &[ready.clone()],
         )
         .await
         .expect("resolve scoped latest")
