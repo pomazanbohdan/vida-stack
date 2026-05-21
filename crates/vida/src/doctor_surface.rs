@@ -23,6 +23,7 @@ const MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run 
 const MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
     "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence.";
 const DOCTOR_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
+const DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
 fn governance_projection_blocker_codes(
     principal_delegation: Option<&crate::state_store::RunGraphPrincipalDelegationProjection>,
     memory_governance: Option<&crate::state_store::RunGraphMemoryGovernanceProjection>,
@@ -514,6 +515,24 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let render = args.render;
     let as_json = args.json;
     let summary_only = args.summary;
+
+    if as_json {
+        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+            &state_dir,
+            doctor_json_projection_name(summary_only),
+        ) {
+            println!("{cached}");
+            return ExitCode::SUCCESS;
+        }
+        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
+            &state_dir,
+            doctor_json_projection_name(summary_only),
+            DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
+        ) {
+            println!("{cached}");
+            return ExitCode::SUCCESS;
+        }
+    }
 
     match super::StateStore::open_existing_read_only_with_timeout(
         state_dir.clone(),

@@ -11,6 +11,7 @@ use crate::status_surface_text_report::{emit_status_text_report, StatusTextRepor
 use crate::status_surface_truth_inputs::build_status_truth_inputs;
 
 const STATUS_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
+const STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
 pub(crate) fn degraded_read_lock_payload(
     surface: &str,
     state_dir: &std::path::Path,
@@ -89,6 +90,28 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let render = args.render;
     let as_json = args.json;
     let summary_only = args.summary;
+
+    if as_json {
+        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+            &state_dir,
+            status_json_projection_name(summary_only),
+        ) {
+            if cached_status_projection_admissible(&state_dir, summary_only, &cached) {
+                println!("{cached}");
+                return ExitCode::SUCCESS;
+            }
+        }
+        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
+            &state_dir,
+            status_json_projection_name(summary_only),
+            STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
+        ) {
+            if cached_status_projection_admissible(&state_dir, summary_only, &cached) {
+                println!("{cached}");
+                return ExitCode::SUCCESS;
+            }
+        }
+    }
 
     match StateStore::open_existing_read_only_with_timeout(
         state_dir.clone(),
@@ -646,6 +669,25 @@ fn status_json_projection_name(summary_only: bool) -> &'static str {
     } else {
         "status-full-latest"
     }
+}
+
+fn cached_status_projection_admissible(
+    _state_dir: &std::path::Path,
+    _summary_only: bool,
+    cached: &str,
+) -> bool {
+    serde_json::from_str::<serde_json::Value>(cached)
+        .ok()
+        .is_some_and(|payload| {
+            payload
+                .get("surface")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|surface| surface == "vida status")
+                && payload
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+        })
 }
 
 #[cfg(test)]
