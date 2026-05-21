@@ -5534,18 +5534,8 @@ pub(crate) async fn run_taskflow_consume_resume_command(
     surface_name: &str,
     emit_output: bool,
 ) -> ExitCode {
-    if emit_output {
-        if let Some(exit_code) = try_emit_cached_consume_continue_deferred_handoff_projection(
-            &state_dir,
-            surface_name,
-            requested_run_id.as_deref(),
-            requested_dispatch_packet_path.as_deref(),
-            requested_downstream_packet_path.as_deref(),
-            as_json,
-        ) {
-            return exit_code;
-        }
-    }
+    // Do not emit cached consume-continue deferred handoff projections before
+    // authoritative state and receipt validation on the full resume path.
     match try_emit_cached_deferred_agent_handoff_projection(
         &state_dir,
         surface_name,
