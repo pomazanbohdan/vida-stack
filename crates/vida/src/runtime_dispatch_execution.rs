@@ -262,6 +262,14 @@ pub(crate) fn internal_codex_external_fallback_backend(
         else {
             return false;
         };
+        if crate::runtime_dispatch_state::configured_external_backend_dispatch_blocker(
+            candidate,
+            backend_entry,
+        )
+        .is_some()
+        {
+            return false;
+        }
         let selected_model_profile_id =
             crate::runtime_dispatch_state::preferred_selected_model_profile_for_dispatch_target(
                 role_selection,
