@@ -108,54 +108,24 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .run_graph_summary()
         .await
         .map_err(|error| format!("Failed to read run graph summary: {error}"))?;
-    let latest_run_graph_status = match store
+    let latest_run_graph_status = store
         .latest_run_graph_status_for_current_session()
         .await
-        .map_err(|error| format!("Failed to read latest run graph status: {error}"))?
-    {
-        Some(status) => Some(status),
-        None => store
-            .latest_run_graph_status()
-            .await
-            .map_err(|error| format!("Failed to read latest run graph status: {error}"))?,
-    };
-    let latest_run_graph_recovery = match store
+        .map_err(|error| format!("Failed to read latest run graph status: {error}"))?;
+    let latest_run_graph_recovery = store
         .latest_run_graph_recovery_summary_for_current_session()
         .await
-        .map_err(|error| format!("Failed to read latest run graph recovery summary: {error}"))?
-    {
-        Some(recovery) => Some(recovery),
-        None => store
-            .latest_run_graph_recovery_summary()
-            .await
-            .map_err(|error| {
-                format!("Failed to read latest run graph recovery summary: {error}")
-            })?,
-    };
-    let explicit_continuation_binding = match store
+        .map_err(|error| format!("Failed to read latest run graph recovery summary: {error}"))?;
+    let explicit_continuation_binding = store
         .latest_explicit_run_graph_continuation_binding_for_current_session()
         .await
-        .map_err(|error| format!("Failed to read latest explicit continuation binding: {error}"))?
-    {
-        Some(binding) => Some(binding),
-        None => store
-            .latest_explicit_run_graph_continuation_binding()
-            .await
-            .map_err(|error| {
-                format!("Failed to read latest explicit continuation binding: {error}")
-            })?,
-    };
-    let latest_run_graph_dispatch_receipt = match store
+        .map_err(|error| format!("Failed to read latest explicit continuation binding: {error}"))?;
+    let latest_run_graph_dispatch_receipt = store
         .latest_run_graph_dispatch_receipt_summary_for_current_session()
         .await
-    {
-        Ok(Some(summary)) => Some(summary),
-        Ok(None) | Err(_) => store
-            .latest_run_graph_dispatch_receipt_summary()
-            .await
-            .ok()
-            .flatten(),
-    };
+        .map_err(|error| {
+            format!("Failed to read latest run graph dispatch receipt summary: {error}")
+        })?;
     let continuation_binding_evidence_ambiguous = latest_run_graph_dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {

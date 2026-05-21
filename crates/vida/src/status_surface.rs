@@ -226,14 +226,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 };
                 let latest_run_graph_status =
                     match store.latest_run_graph_status_for_current_session().await {
-                        Ok(Some(summary)) => Some(summary),
-                        Ok(None) => match store.latest_run_graph_status().await {
-                            Ok(summary) => summary,
-                            Err(error) => {
-                                eprintln!("Failed to read latest run graph status: {error}");
-                                return ExitCode::from(1);
-                            }
-                        },
+                        Ok(summary) => summary,
                         Err(error) => {
                             eprintln!("Failed to read latest run graph status: {error}");
                             return ExitCode::from(1);
@@ -362,18 +355,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     .latest_explicit_run_graph_continuation_binding_for_current_session()
                     .await
                 {
-                    Ok(Some(binding)) => Some(binding),
-                    Ok(None) => {
-                        match store.latest_explicit_run_graph_continuation_binding().await {
-                            Ok(binding) => binding,
-                            Err(error) => {
-                                eprintln!(
-                                    "Failed to read latest explicit continuation binding: {error}"
-                                );
-                                return ExitCode::from(1);
-                            }
-                        }
-                    }
+                    Ok(binding) => binding,
                     Err(error) => {
                         eprintln!("Failed to read latest explicit continuation binding: {error}");
                         return ExitCode::from(1);
