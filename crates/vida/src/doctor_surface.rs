@@ -518,34 +518,19 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
 
     if as_json {
         let projection_name = doctor_json_projection_name(summary_only);
-        let fresh_projection = if summary_only {
-            crate::operator_projection_cache::read_state_fresh_json_projection(
-                &state_dir,
-                projection_name,
-            )
-        } else {
-            crate::operator_projection_cache::read_fresh_json_projection(
-                &state_dir,
-                projection_name,
-            )
-        };
+        let fresh_projection = crate::operator_projection_cache::read_fresh_json_projection(
+            &state_dir,
+            projection_name,
+        );
         if let Some(cached) = fresh_projection {
             println!("{cached}");
             return ExitCode::SUCCESS;
         }
-        let recent_projection = if summary_only {
-            crate::operator_projection_cache::read_state_recent_json_projection(
-                &state_dir,
-                projection_name,
-                DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
-            )
-        } else {
-            crate::operator_projection_cache::read_recent_json_projection(
-                &state_dir,
-                projection_name,
-                DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
-            )
-        };
+        let recent_projection = crate::operator_projection_cache::read_recent_json_projection(
+            &state_dir,
+            projection_name,
+            DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
+        );
         if let Some(cached) = recent_projection {
             println!("{cached}");
             return ExitCode::SUCCESS;
