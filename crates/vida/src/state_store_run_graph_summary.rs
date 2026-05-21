@@ -121,7 +121,7 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.next_node = None;
             status.lifecycle_stage = format!("{blocked_target}_blocked");
             status.handoff_state = "none".to_string();
-            status.resume_target = format!("dispatch.{blocked_target}");
+            status.resume_target = "none".to_string();
             status.context_state = "sealed".to_string();
         }
         status.checkpoint_kind = "none".to_string();
@@ -1173,14 +1173,24 @@ impl StateStore {
 
     fn current_runtime_owner_evidence(&self) -> Result<serde_json::Value, StateStoreError> {
         static OWNER_EVIDENCE_CACHE: std::sync::OnceLock<
-            std::sync::Mutex<Option<(std::path::PathBuf, std::time::Instant, serde_json::Value)>>,
+            std::sync::Mutex<
+                Option<(
+                    std::path::PathBuf,
+                    Option<String>,
+                    std::time::Instant,
+                    serde_json::Value,
+                )>,
+            >,
         > = std::sync::OnceLock::new();
 
         let root = self.root().to_path_buf();
+        let session_id = std::env::var("VIDA_SESSION_ID").ok();
         let cache = OWNER_EVIDENCE_CACHE.get_or_init(|| std::sync::Mutex::new(None));
         if let Ok(guard) = cache.lock() {
-            if let Some((cached_root, cached_at, evidence)) = guard.as_ref() {
-                if cached_root == &root && cached_at.elapsed() < std::time::Duration::from_secs(10)
+            if let Some((cached_root, cached_session_id, cached_at, evidence)) = guard.as_ref() {
+                if cached_root == &root
+                    && cached_session_id == &session_id
+                    && cached_at.elapsed() < std::time::Duration::from_secs(10)
                 {
                     return Ok(evidence.clone());
                 }
@@ -1194,7 +1204,12 @@ impl StateStore {
                 })?;
 
         if let Ok(mut guard) = cache.lock() {
-            *guard = Some((root, std::time::Instant::now(), evidence.clone()));
+            *guard = Some((
+                root,
+                session_id,
+                std::time::Instant::now(),
+                evidence.clone(),
+            ));
         }
         Ok(evidence)
     }
@@ -1269,6 +1284,63 @@ impl StateStore {
         Ok(())
     }
 
+    async fn ensure_current_session_mutation_claim_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<(), StateStoreError> {
+        let evidence = self.current_runtime_owner_evidence()?;
+        let current_session_id = evidence["current_session"]["session_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| StateStoreError::InvalidTaskRecord {
+                reason: "run-graph mutation requires an active current session id".to_string(),
+            })?;
+
+        for claim in self.active_orchestrator_claims().await? {
+            if claim.orchestrator_session_id == current_session_id
+                && claim
+                    .run_id
+                    .as_deref()
+                    .is_some_and(|claim_run_id| claim_run_id.trim() == run_id)
+            {
+                return Ok(());
+            }
+        }
+
+        if self.run_graph_legacy_ownerless(run_id).await? {
+            return Ok(());
+        }
+
+        let mut owner_query = self
+            .db
+            .query(
+                "SELECT * FROM run_graph_owner_evidence \
+                 WHERE run_id = $run_id \
+                 ORDER BY recorded_at DESC, artifact_id DESC \
+                 LIMIT 1;",
+            )
+            .bind(("run_id", run_id.to_string()))
+            .await?;
+        let owner_records: Vec<RunGraphOwnerEvidenceRecord> = owner_query.take(0)?;
+        if owner_records.iter().any(|record| {
+            record
+                .runtime_owner_evidence
+                .get("current_session")
+                .and_then(|session| session.get("session_id"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|session_id| session_id.trim() == current_session_id)
+        }) {
+            return Ok(());
+        }
+
+        Err(StateStoreError::InvalidTaskRecord {
+            reason: format!(
+                "run-graph mutation blocked: current session does not own run `{run_id}`"
+            ),
+        })
+    }
+
     async fn record_run_graph_owner_evidence(
         &self,
         run_id: &str,
@@ -1276,6 +1348,8 @@ impl StateStore {
     ) -> Result<(), StateStoreError> {
         let evidence = self.current_runtime_owner_evidence()?;
         Self::ensure_runtime_owner_mutation_allowed(&evidence)?;
+        self.ensure_current_session_mutation_claim_for_run(run_id)
+            .await?;
         let artifact_id = Self::run_graph_owner_evidence_record_id(run_id, artifact_kind);
         let record = RunGraphOwnerEvidenceRecord {
             run_id: run_id.to_string(),
@@ -1348,6 +1422,8 @@ impl StateStore {
         status: &RunGraphStatus,
     ) -> Result<(), StateStoreError> {
         status.validate_memory_governance()?;
+        self.ensure_current_session_mutation_claim_for_run(&status.run_id)
+            .await?;
         let updated_at = unix_timestamp_nanos().to_string();
         let receipt_recorded_at = updated_at.clone();
         let checkpoint_record_updated_at = updated_at.clone();
@@ -2039,9 +2115,15 @@ impl StateStore {
             .await?;
         let rows: Vec<RunGraphLatestStateRow> = query.take(0)?;
         for latest in rows {
-            if self
-                .run_graph_latest_row_points_to_terminal_task_active_from_rows(&latest, task_rows)?
-            {
+            let terminal_task_active = if task_rows.is_empty() {
+                self.run_graph_latest_row_points_to_terminal_task_active(&latest)
+                    .await?
+            } else {
+                self.run_graph_latest_row_points_to_terminal_task_active_from_rows(
+                    &latest, task_rows,
+                )?
+            };
+            if terminal_task_active {
                 continue;
             }
             if self
@@ -2846,6 +2928,39 @@ mod tests {
         }
     }
 
+    fn sample_dispatch_receipt(run_id: &str) -> RunGraphDispatchReceipt {
+        RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "packet_ready".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --execute-dispatch --json".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-21T00:00:00Z".to_string(),
+        }
+    }
+
     #[test]
     fn terminal_closure_supersedes_stale_pending_developer_handoff_receipt() {
         let mut status = sample_run_graph_status();
@@ -3261,6 +3376,63 @@ mod tests {
             .expect("claim should make run non-ownerless"));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_mutation_blocks_foreign_session_without_claim() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-owner");
+        }
+        let root = temp_run_graph_root("vida-run-graph-mutation-claim-block");
+        let owner_store = StateStore::open(root.clone())
+            .await
+            .expect("open owner store");
+        owner_store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "owner-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-owner".to_string(),
+                task_id: Some("task-owner".to_string()),
+                run_id: Some("run-owned".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("owner-domain".to_string()),
+                owned_paths: vec!["owner/path.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire owner claim");
+        owner_store
+            .record_run_graph_dispatch_receipt(&sample_dispatch_receipt("run-owned"))
+            .await
+            .expect("persist owner receipt");
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-foreign");
+        }
+        let binding_result = owner_store
+            .record_run_graph_continuation_binding(&sample_explicit_binding(
+                "run-owned",
+                "task-owner",
+                "2026-05-21T01:00:00Z",
+            ))
+            .await;
+        assert!(binding_result.is_err());
+
+        let mut foreign_status = sample_run_graph_status();
+        foreign_status.run_id = "run-owned".to_string();
+        foreign_status.task_id = "task-owner".to_string();
+        let status_result = owner_store.record_run_graph_status(&foreign_status).await;
+        assert!(status_result.is_err());
+
+        let _ = fs::remove_dir_all(&root);
+        restore_vida_session_id(saved_session_id);
     }
 
     #[tokio::test]
@@ -4499,7 +4671,7 @@ mod tests {
         assert_eq!(persisted.dispatch_status, "blocked");
         assert_eq!(
             persisted.blocker_code.as_deref(),
-            Some("internal_activation_view_only")
+            Some("internal_dispatch_timeout_without_receipt")
         );
         assert_eq!(persisted.lane_status, "lane_exception_recorded");
 
