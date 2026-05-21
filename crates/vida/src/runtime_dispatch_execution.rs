@@ -771,6 +771,10 @@ fn external_provider_output_indicates_error(output: &ParsedExternalProviderOutpu
         return true;
     }
 
+    if external_provider_result_text_declares_blocker(output) {
+        return true;
+    }
+
     if output
         .error_message
         .as_ref()
@@ -818,6 +822,20 @@ fn external_provider_output_indicates_error(output: &ParsedExternalProviderOutpu
     ]
     .iter()
     .any(|needle| normalized.contains(needle))
+}
+
+fn external_provider_result_text_declares_blocker(output: &ParsedExternalProviderOutput) -> bool {
+    output
+        .result_text
+        .as_ref()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|normalized| {
+            normalized.contains("dispatch blocked")
+                || normalized.contains("blocked by vida pi write-scope guard")
+                || normalized.contains("no execution receipt")
+                || normalized.contains("no execution receipt/result artifact")
+                || normalized.contains("refused in bash guarded-write mode")
+        })
 }
 
 fn external_provider_scope_guard_indicates_violation(raw_json: &serde_json::Value) -> bool {
@@ -2746,6 +2764,17 @@ mod tests {
 
         assert!(!super::external_provider_output_indicates_error(&parsed));
         assert!(external_provider_output_confirms_execution(Some(&parsed)));
+    }
+
+    #[test]
+    fn parse_external_provider_output_blocks_pi_agent_end_when_result_declares_blocked_dispatch() {
+        let parsed = parse_external_provider_output(
+            r#"{"type":"result","subtype":"success","is_error":false,"raw_provider":{"mode":"rpc","provider":"pi","terminal_event":"agent_end"},"result":"Thinking mode: STC.\nBounded result: dispatch blocked by VIDA Pi write-scope guard; both the packet's `vida agent-init --execute-dispatch` path and the verification path are refused in bash guarded-write mode, so no execution receipt/result artifact was produced."}"#,
+        )
+        .expect("pi adapter blocked dispatch output should parse");
+
+        assert!(super::external_provider_output_indicates_error(&parsed));
+        assert!(!external_provider_output_confirms_execution(Some(&parsed)));
     }
 
     #[test]
