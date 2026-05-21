@@ -2273,6 +2273,7 @@ struct TaskNextLawfulReceipt {
     sequential_vs_parallel_posture: String,
     ready_task_candidates: Vec<TaskContinuationCandidate>,
     blocker_codes: Vec<String>,
+    next_action: Option<String>,
     next_actions: Vec<String>,
     source_surfaces: Vec<String>,
 }
@@ -3140,6 +3141,16 @@ fn continuation_binding_is_unscoped_dispatch_init_projection(
         && explicit.task_id != current.task_id
 }
 
+fn continuation_binding_is_unrelated_prelaunch_blocked_projection(
+    explicit: &state_store::RunGraphContinuationBinding,
+    current: &state_store::RunGraphContinuationBinding,
+) -> bool {
+    explicit.binding_source == "explicit_continuation_bind_task"
+        && current.binding_source == "dispatch_prelaunch_blocked"
+        && explicit.run_id != current.run_id
+        && explicit.task_id != current.task_id
+}
+
 fn select_task_next_lawful_binding<'a>(
     tasks: &[state_store::TaskRecord],
     explicit_binding: Option<&'a state_store::RunGraphContinuationBinding>,
@@ -3164,6 +3175,11 @@ fn select_task_next_lawful_binding<'a>(
             {
                 return Ok(Some(explicit));
             }
+            if continuation_binding_is_unrelated_prelaunch_blocked_projection(explicit, current)
+                && explicit_live
+            {
+                return Ok(Some(explicit));
+            }
             match (explicit_live, current_live) {
                 (false, false) => return Ok(None),
                 (false, true) => return Ok(Some(current)),
@@ -3175,14 +3191,17 @@ fn select_task_next_lawful_binding<'a>(
                 Vec::new(),
                 "continuation_source_drift",
                 &format!(
-                    "Continuation sources disagree: explicit binding `{}`/`{}` points to `{}`, while current latest-run binding `{}`/`{}` from `{}` points to `{}`. Reconcile with `vida status --json` and the authoritative `vida taskflow run-graph status` for that concrete run before continuing.",
+                    "Continuation sources disagree: explicit binding `{}`/`{}` points to `{}`, while current latest-run binding `{}`/`{}` from `{}` points to `{}`. Inspect current blocked-run recovery with `vida taskflow recovery status {} --json`, lane evidence with `vida lane show {} --json`, and explicit binding state with `vida taskflow run-graph status {} --json` before continuing.",
                     explicit.run_id,
                     explicit.binding_source,
                     explicit.task_id,
                     current.run_id,
                     current.binding_source,
                     current.binding_source,
-                    current.task_id
+                    current.task_id,
+                    crate::shell_quote(&current.run_id),
+                    crate::shell_quote(&current.run_id),
+                    crate::shell_quote(&explicit.run_id)
                 ),
             ))
         }
@@ -3199,6 +3218,7 @@ fn blocked_task_next_lawful_receipt(
     blocker_code: &str,
     next_action: &str,
 ) -> TaskNextLawfulReceipt {
+    let next_actions = vec![next_action.to_string()];
     TaskNextLawfulReceipt {
         status: "blocked".to_string(),
         active_bounded_unit,
@@ -3207,7 +3227,8 @@ fn blocked_task_next_lawful_receipt(
         sequential_vs_parallel_posture: "unknown_until_explicit_binding".to_string(),
         ready_task_candidates,
         blocker_codes: vec![blocker_code.to_string()],
-        next_actions: vec![next_action.to_string()],
+        next_action: next_actions.first().cloned(),
+        next_actions,
         source_surfaces: task_continuation_source_surfaces(),
     }
 }
@@ -3220,6 +3241,7 @@ fn pass_task_next_lawful_receipt(
     ready_task_candidates: Vec<TaskContinuationCandidate>,
     next_action: String,
 ) -> TaskNextLawfulReceipt {
+    let next_actions = vec![next_action];
     TaskNextLawfulReceipt {
         status: task_json_success_status().to_string(),
         active_bounded_unit,
@@ -3228,7 +3250,8 @@ fn pass_task_next_lawful_receipt(
         sequential_vs_parallel_posture: sequential_vs_parallel_posture.to_string(),
         ready_task_candidates,
         blocker_codes: Vec::new(),
-        next_actions: vec![next_action],
+        next_action: next_actions.first().cloned(),
+        next_actions,
         source_surfaces: task_continuation_source_surfaces(),
     }
 }
@@ -5706,6 +5729,36 @@ mod tests {
     }
 
     #[test]
+    fn task_next_lawful_prefers_live_explicit_over_unrelated_prelaunch_blocked_projection() {
+        let explicit_task = owned_task_record("taskflow-case-18-rollout-regression-gate", vec![]);
+        let current_task =
+            owned_task_record("agent-mode-dev-team-test-first-operating-model", vec![]);
+        let explicit = test_continuation_binding(
+            "codebase-audit-runtime-helper-dedup-refactor",
+            "taskflow-case-18-rollout-regression-gate",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+        let current = test_continuation_binding(
+            "agent-mode-dev-team-test-first-operating-model",
+            "agent-mode-dev-team-test-first-operating-model",
+            "dispatch_prelaunch_blocked",
+            "run_graph_task",
+        );
+
+        let selected = select_task_next_lawful_binding(
+            &[explicit_task, current_task],
+            Some(&explicit),
+            Some(&current),
+        )
+        .expect("unrelated prelaunch-blocked projection should not override live explicit binding")
+        .expect("explicit binding should select");
+
+        assert_eq!(selected.task_id, "taskflow-case-18-rollout-regression-gate");
+        assert_eq!(selected.binding_source, "explicit_continuation_bind_task");
+    }
+
+    #[test]
     fn task_next_lawful_prefers_live_explicit_binding_over_unrelated_ready_candidates() {
         let mut explicit_task =
             owned_task_record("taskflow-case-18-rollout-regression-gate", vec![]);
@@ -5840,6 +5893,9 @@ mod tests {
             .next_actions
             .iter()
             .any(|action| action.contains("consume_continue_after_downstream_chain")));
+        assert!(receipt.next_action.as_deref().is_some_and(
+            |action| action.contains("vida taskflow recovery status current-run --json")
+        ));
     }
 
     #[test]
