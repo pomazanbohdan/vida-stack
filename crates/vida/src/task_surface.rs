@@ -1880,10 +1880,19 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
             return ExitCode::from(2);
         }
     };
+    if let Some(path) = command.notes_file.as_deref() {
+        eprintln!(
+            "Refusing --notes-file for `vida task {}`: path `{}` is outside the trusted inline intake boundary; use --notes <text> instead",
+            if ensure_existing { "ensure" } else { "create" },
+            path.display()
+        );
+        return ExitCode::from(2);
+    }
+
     let notes = match resolve_optional_text_arg(
         "notes",
         command.notes.as_deref(),
-        command.notes_file.as_deref(),
+        None,
     ) {
         Ok(notes) => notes,
         Err(error) => {

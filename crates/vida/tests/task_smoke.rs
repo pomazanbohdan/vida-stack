@@ -6528,7 +6528,7 @@ fn task_update_accepts_notes_file_for_shell_safe_progress_recording() {
 }
 
 #[test]
-fn task_create_accepts_metadata_one_shot_for_shell_safe_intake() {
+fn task_create_rejects_notes_file_for_local_disclosure_boundary() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
     let import_path = format!("{state_dir}/tasks.jsonl");
@@ -6541,7 +6541,7 @@ fn task_create_accepts_metadata_one_shot_for_shell_safe_intake() {
         &state_dir,
     );
 
-    let parsed = run_command_json(
+    let output = run_command_capture(
         &[
             "task",
             "create",
@@ -6558,7 +6558,7 @@ fn task_create_accepts_metadata_one_shot_for_shell_safe_intake() {
             "--acceptance-target",
             "create sets planner metadata",
             "--proof-target",
-            "cargo test -p vida task_create_accepts_metadata_one_shot_for_shell_safe_intake",
+            "cargo test -p vida task_create_rejects_notes_file_for_local_disclosure_boundary",
             "--notes-file",
             &notes_path,
             "--json",
@@ -6566,22 +6566,11 @@ fn task_create_accepts_metadata_one_shot_for_shell_safe_intake() {
         &state_dir,
     );
 
-    assert_eq!(parsed["surface"], "vida task create");
-    assert_eq!(parsed["status"], "pass");
-    assert_eq!(parsed["task"]["notes"], "one-shot notes\n");
-    assert_eq!(
-        parsed["task"]["planner_metadata"]["owned_paths"],
-        serde_json::json!(["crates/vida/src/task_surface.rs"])
-    );
-    assert_eq!(
-        parsed["task"]["planner_metadata"]["acceptance_targets"],
-        serde_json::json!(["create sets planner metadata"])
-    );
-    assert_eq!(
-        parsed["task"]["planner_metadata"]["proof_targets"],
-        serde_json::json!([
-            "cargo test -p vida task_create_accepts_metadata_one_shot_for_shell_safe_intake"
-        ])
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Refusing --notes-file for `vida task create`"),
+        "stderr was: {stderr}"
     );
 
     fs::remove_dir_all(&state_dir).expect("cleanup state dir");
