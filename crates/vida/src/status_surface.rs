@@ -199,13 +199,14 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-                let latest_run_graph_status = match store.latest_run_graph_status().await {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("Failed to read latest run graph status: {error}");
-                        return ExitCode::from(1);
-                    }
-                };
+                let latest_run_graph_status =
+                    match store.latest_run_graph_status_for_current_session().await {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            eprintln!("Failed to read latest run graph status: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
                 let latest_run_graph_run_id = latest_run_graph_status
                     .as_ref()
                     .map(|status| status.run_id.as_str());
@@ -326,7 +327,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     && task_store.in_progress_count == 0
                     && task_store.ready_count == 0;
                 let explicit_continuation_binding = match store
-                    .latest_explicit_run_graph_continuation_binding()
+                    .latest_explicit_run_graph_continuation_binding_for_current_session()
                     .await
                 {
                     Ok(binding) => binding,
@@ -672,7 +673,7 @@ fn status_json_projection_name(summary_only: bool) -> &'static str {
 }
 
 fn cached_status_projection_admissible(
-    _state_dir: &std::path::Path,
+    state_dir: &std::path::Path,
     _summary_only: bool,
     cached: &str,
 ) -> bool {
@@ -687,12 +688,39 @@ fn cached_status_projection_admissible(
                     .get("status")
                     .and_then(serde_json::Value::as_str)
                     .is_some()
+                && cached_status_projection_matches_current_session(state_dir, &payload)
         })
+}
+
+fn cached_status_projection_matches_current_session(
+    state_dir: &std::path::Path,
+    payload: &serde_json::Value,
+) -> bool {
+    let Some(cached_session_id) = payload["current_session"]["session_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let Ok(owner_evidence) =
+        crate::orchestrator_session_surface::build_runtime_owner_evidence(state_dir, false)
+    else {
+        return false;
+    };
+    owner_evidence["current_session"]["session_id"]
+        .as_str()
+        .map(str::trim)
+        .is_some_and(|current_session_id| current_session_id == cached_session_id)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, time::SystemTime};
+    use std::{
+        fs,
+        sync::{Mutex, OnceLock},
+        time::SystemTime,
+    };
 
     use crate::activation_status::canonical_activation_status;
     use crate::contract_profile_adapter::operator_contracts_consistency_error;
@@ -709,6 +737,20 @@ mod tests {
     use crate::status_surface_write_guard::root_session_write_guard_summary_from_snapshot_path;
     use crate::{blocker_code_str, state_store, BlockerCode};
 
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn restore_vida_session_id(saved: Option<String>) {
+        unsafe {
+            match saved {
+                Some(value) => std::env::set_var("VIDA_SESSION_ID", value),
+                None => std::env::remove_var("VIDA_SESSION_ID"),
+            }
+        }
+    }
+
     #[test]
     fn status_summary_projection_cache_key_is_shape_versioned() {
         assert_eq!(
@@ -719,6 +761,49 @@ mod tests {
             super::status_json_projection_name(false),
             "status-full-latest"
         );
+    }
+
+    #[test]
+    fn status_projection_cache_is_session_identity_scoped() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        let nanos = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-status-cache-session-scope-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create temp state root");
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "status-cache-session-a");
+        }
+        let payload = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "current_session": {
+                "session_id": "status-cache-session-a"
+            }
+        });
+        assert!(super::cached_status_projection_admissible(
+            &root,
+            false,
+            &payload.to_string()
+        ));
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "status-cache-session-b");
+        }
+        assert!(!super::cached_status_projection_admissible(
+            &root,
+            false,
+            &payload.to_string()
+        ));
+
+        let _ = fs::remove_dir_all(root);
+        restore_vida_session_id(saved_session_id);
     }
 
     #[test]

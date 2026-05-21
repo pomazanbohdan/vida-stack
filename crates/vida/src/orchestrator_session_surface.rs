@@ -67,23 +67,58 @@ fn stable_local_session_id(state_dir: &Path) -> String {
     )
 }
 
-fn current_session_id(state_dir: &Path) -> String {
-    sanitized_env("VIDA_ORCHESTRATOR_SESSION_ID")
-        .or_else(|| sanitized_env("CODEX_SESSION_ID"))
-        .or_else(|| sanitized_env("CODEX_THREAD_ID"))
-        .unwrap_or_else(|| stable_local_session_id(state_dir))
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VidaSessionIdentity {
+    session_id: String,
+    identity_source: String,
+    legacy_stable_worktree_id: Option<String>,
 }
 
-fn current_session_identity_source() -> String {
-    if sanitized_env("VIDA_ORCHESTRATOR_SESSION_ID").is_some() {
-        "VIDA_ORCHESTRATOR_SESSION_ID".to_string()
-    } else if sanitized_env("CODEX_SESSION_ID").is_some() {
-        "CODEX_SESSION_ID".to_string()
-    } else if sanitized_env("CODEX_THREAD_ID").is_some() {
-        "CODEX_THREAD_ID".to_string()
-    } else {
-        "stable_local_worktree_session_id".to_string()
+fn generated_local_session_id(state_dir: &Path) -> String {
+    let worktree = canonicalized_current_dir();
+    let state_dir = canonicalized_path_string(state_dir);
+    let process_id = std::process::id();
+    let context_hash = stable_hash_hex(&format!("{worktree}\n{state_dir}"));
+    format!("local-session-{context_hash}-{process_id}")
+}
+
+fn resolve_vida_session_identity(state_dir: &Path) -> VidaSessionIdentity {
+    for (env_name, source) in [
+        ("VIDA_SESSION_ID", "VIDA_SESSION_ID"),
+        (
+            "VIDA_ORCHESTRATOR_SESSION_ID",
+            "VIDA_ORCHESTRATOR_SESSION_ID",
+        ),
+        ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"),
+        (
+            "CLAUDE_CODE_REMOTE_SESSION_ID",
+            "CLAUDE_CODE_REMOTE_SESSION_ID",
+        ),
+        ("CODEX_SESSION_ID", "CODEX_SESSION_ID"),
+        ("CODEX_THREAD_ID", "CODEX_THREAD_ID"),
+    ] {
+        if let Some(session_id) = sanitized_env(env_name) {
+            return VidaSessionIdentity {
+                session_id,
+                identity_source: source.to_string(),
+                legacy_stable_worktree_id: None,
+            };
+        }
     }
+
+    VidaSessionIdentity {
+        session_id: generated_local_session_id(state_dir),
+        identity_source: "generated_local_session_token".to_string(),
+        legacy_stable_worktree_id: Some(stable_local_session_id(state_dir)),
+    }
+}
+
+fn current_session_id(state_dir: &Path) -> String {
+    resolve_vida_session_identity(state_dir).session_id
+}
+
+fn current_session_identity_source(state_dir: &Path) -> String {
+    resolve_vida_session_identity(state_dir).identity_source
 }
 
 fn host_tool_identity() -> String {
@@ -193,9 +228,10 @@ fn write_sessions(path: &Path, sessions: &[serde_json::Value]) -> Result<(), Str
 
 fn current_session_record(state_dir: &Path) -> serde_json::Value {
     let now = now_epoch_seconds();
-    serde_json::json!({
-        "session_id": current_session_id(state_dir),
-        "identity_source": current_session_identity_source(),
+    let identity = resolve_vida_session_identity(state_dir);
+    let mut record = serde_json::json!({
+        "session_id": identity.session_id,
+        "identity_source": identity.identity_source,
         "owner_kind": "orchestrator",
         "state": "live",
         "host_tool": host_tool_identity(),
@@ -208,7 +244,12 @@ fn current_session_record(state_dir: &Path) -> serde_json::Value {
         "started_at_epoch_seconds": now,
         "last_heartbeat_epoch_seconds": now,
         "owner_annotation": "current_session",
-    })
+    });
+    if let Some(legacy_id) = identity.legacy_stable_worktree_id {
+        record["fallback_replaces_legacy_stable_worktree_state_hash"] =
+            serde_json::Value::String(legacy_id);
+    }
+    record
 }
 
 fn merge_current_session(
@@ -426,24 +467,9 @@ pub(crate) fn build_runtime_owner_evidence(
         );
         write_sessions(&path, &normalized_sessions)?;
     }
-    let has_live_other = !live_other_sessions.is_empty();
-    let mutation_gate = if has_live_other {
-        "blocked_live_other_orchestrator"
-    } else {
-        "current_session_allowed"
-    };
-    let blocker_codes = if has_live_other {
-        vec!["live_other_orchestrator_owner".to_string()]
-    } else {
-        Vec::<String>::new()
-    };
-    let next_actions = if has_live_other {
-        vec![
-            "Stop or age out foreign orchestrator sessions, then retry run-graph mutation surfaces.".to_string(),
-        ]
-    } else {
-        Vec::<String>::new()
-    };
+    let mutation_gate = "current_session_allowed";
+    let blocker_codes = Vec::<String>::new();
+    let next_actions = Vec::<String>::new();
     Ok(serde_json::json!({
         "schema_version": "runtime-owner-evidence-v1",
         "current_session": current,
@@ -668,9 +694,10 @@ pub(crate) fn context_summary_map(state_dir: &Path) -> BTreeMap<String, String> 
 mod tests {
     use super::{
         build_runtime_owner_evidence, classify_sessions_with_liveness, context_summary_map,
-        current_session_id, current_session_record, merge_current_session, now_epoch_seconds,
-        read_sessions, stable_local_session_id, OrchestratorSessionLiveness, ProcessLiveness,
-        MAX_SESSION_STORE_BYTES, STALE_SESSION_PURGE_AFTER_SECONDS,
+        current_session_id, current_session_identity_source, current_session_record,
+        merge_current_session, now_epoch_seconds, read_sessions, stable_local_session_id,
+        OrchestratorSessionLiveness, ProcessLiveness, MAX_SESSION_STORE_BYTES,
+        STALE_SESSION_PURGE_AFTER_SECONDS,
     };
     use crate::temp_state::TempStateHarness;
     use std::sync::{Mutex, OnceLock};
@@ -682,7 +709,10 @@ mod tests {
 
     fn saved_session_env() -> Vec<(&'static str, Option<String>)> {
         [
+            "VIDA_SESSION_ID",
             "VIDA_ORCHESTRATOR_SESSION_ID",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_REMOTE_SESSION_ID",
             "CODEX_SESSION_ID",
             "CODEX_THREAD_ID",
         ]
@@ -705,7 +735,10 @@ mod tests {
 
     fn clear_session_env() {
         for name in [
+            "VIDA_SESSION_ID",
             "VIDA_ORCHESTRATOR_SESSION_ID",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_REMOTE_SESSION_ID",
             "CODEX_SESSION_ID",
             "CODEX_THREAD_ID",
         ] {
@@ -737,7 +770,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_orchestrator_session_identity_uses_stable_worktree_session_id() {
+    fn fallback_orchestrator_session_identity_uses_generated_local_session_token() {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved = saved_session_env();
         clear_session_env();
@@ -755,10 +788,15 @@ mod tests {
             .as_str()
             .expect("second session id should be present");
         assert_eq!(first_id, second_id);
-        assert!(first_id.starts_with("local-worktree-"));
+        assert!(first_id.starts_with("local-session-"));
+        assert!(!first_id.starts_with("local-worktree-"));
         assert_eq!(
             second["current_session"]["identity_source"],
-            "stable_local_worktree_session_id"
+            "generated_local_session_token"
+        );
+        assert_eq!(
+            second["current_session"]["fallback_replaces_legacy_stable_worktree_state_hash"],
+            stable_local_session_id(harness.path())
         );
         assert!(second["live_other_sessions"].as_array().unwrap().is_empty());
         assert!(!second["blocker_codes"]
@@ -799,18 +837,22 @@ mod tests {
                 stale_synthesized_with_companion,
                 legacy_synthesized_without_companion,
             ],
-            current,
+            current.clone(),
             harness.path(),
         );
 
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0]["session_id"], stable_id);
+        assert_eq!(merged[0]["session_id"], current["session_id"]);
+        assert_eq!(
+            merged[0]["fallback_replaces_legacy_stable_worktree_state_hash"],
+            stable_id
+        );
 
         restore_session_env(saved);
     }
 
     #[test]
-    fn live_other_orchestrator_blocks_mutation_gate() {
+    fn live_other_orchestrator_is_visible_without_blocking_mutation_gate() {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved = saved_session_env();
         clear_session_env();
@@ -829,8 +871,8 @@ mod tests {
             .expect("second owner evidence should build");
 
         assert_eq!(second["current_session"]["session_id"], "session-b");
-        assert_eq!(second["mutation_gate"], "blocked_live_other_orchestrator");
-        assert!(second["blocker_codes"]
+        assert_eq!(second["mutation_gate"], "current_session_allowed");
+        assert!(!second["blocker_codes"]
             .as_array()
             .unwrap()
             .iter()
@@ -840,30 +882,71 @@ mod tests {
             .expect("live other sessions should be present")
             .iter()
             .any(|session| session["session_id"] == "session-a"));
-        assert!(second["next_actions"][0]
-            .as_str()
-            .expect("next action should be text")
-            .contains("Stop or age out foreign orchestrator sessions"));
+        assert!(second["next_actions"].as_array().unwrap().is_empty());
 
         restore_session_env(saved);
     }
 
     #[test]
-    fn explicit_orchestrator_session_env_wins_over_stable_fallback() {
+    fn canonical_vida_session_env_wins_over_legacy_and_host_aliases() {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved = saved_session_env();
         clear_session_env();
         unsafe {
-            std::env::set_var("VIDA_ORCHESTRATOR_SESSION_ID", "explicit-session");
+            std::env::set_var("VIDA_SESSION_ID", "canonical-session");
+            std::env::set_var("VIDA_ORCHESTRATOR_SESSION_ID", "legacy-session");
+            std::env::set_var("CLAUDE_CODE_SESSION_ID", "claude-session");
+            std::env::set_var("CODEX_SESSION_ID", "codex-session");
         }
 
         let harness = TempStateHarness::new().expect("temp state should initialize");
-        assert_eq!(current_session_id(harness.path()), "explicit-session");
+        assert_eq!(current_session_id(harness.path()), "canonical-session");
         let evidence = build_runtime_owner_evidence(harness.path(), false)
             .expect("owner evidence should build");
         assert_eq!(
             evidence["current_session"]["session_id"],
-            "explicit-session"
+            "canonical-session"
+        );
+        assert_eq!(
+            evidence["current_session"]["identity_source"],
+            "VIDA_SESSION_ID"
+        );
+
+        restore_session_env(saved);
+    }
+
+    #[test]
+    fn legacy_and_host_session_aliases_remain_supported() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved = saved_session_env();
+        clear_session_env();
+
+        let harness = TempStateHarness::new().expect("temp state should initialize");
+        unsafe {
+            std::env::set_var("VIDA_ORCHESTRATOR_SESSION_ID", "legacy-session");
+        }
+        assert_eq!(current_session_id(harness.path()), "legacy-session");
+        assert_eq!(
+            current_session_identity_source(harness.path()),
+            "VIDA_ORCHESTRATOR_SESSION_ID"
+        );
+        unsafe {
+            std::env::remove_var("VIDA_ORCHESTRATOR_SESSION_ID");
+            std::env::set_var("CLAUDE_CODE_SESSION_ID", "claude-session");
+        }
+        assert_eq!(current_session_id(harness.path()), "claude-session");
+        assert_eq!(
+            current_session_identity_source(harness.path()),
+            "CLAUDE_CODE_SESSION_ID"
+        );
+        unsafe {
+            std::env::remove_var("CLAUDE_CODE_SESSION_ID");
+            std::env::set_var("CODEX_THREAD_ID", "codex-thread");
+        }
+        assert_eq!(current_session_id(harness.path()), "codex-thread");
+        assert_eq!(
+            current_session_identity_source(harness.path()),
+            "CODEX_THREAD_ID"
         );
 
         restore_session_env(saved);

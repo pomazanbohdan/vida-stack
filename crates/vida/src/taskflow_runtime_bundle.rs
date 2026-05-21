@@ -109,22 +109,24 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .await
         .map_err(|error| format!("Failed to read run graph summary: {error}"))?;
     let latest_run_graph_status = store
-        .latest_run_graph_status()
+        .latest_run_graph_status_for_current_session()
         .await
         .map_err(|error| format!("Failed to read latest run graph status: {error}"))?;
     let latest_run_graph_recovery = store
-        .latest_run_graph_recovery_summary()
+        .latest_run_graph_recovery_summary_for_current_session()
         .await
         .map_err(|error| format!("Failed to read latest run graph recovery summary: {error}"))?;
     let explicit_continuation_binding = store
-        .latest_explicit_run_graph_continuation_binding()
+        .latest_explicit_run_graph_continuation_binding_for_current_session()
         .await
         .map_err(|error| format!("Failed to read latest explicit continuation binding: {error}"))?;
-    let latest_run_graph_dispatch_receipt =
-        match store.latest_run_graph_dispatch_receipt_summary().await {
-            Ok(summary) => summary,
-            Err(_) => None,
-        };
+    let latest_run_graph_dispatch_receipt = match store
+        .latest_run_graph_dispatch_receipt_summary_for_current_session()
+        .await
+    {
+        Ok(summary) => summary,
+        Err(_) => None,
+    };
     let continuation_binding_evidence_ambiguous = latest_run_graph_dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {

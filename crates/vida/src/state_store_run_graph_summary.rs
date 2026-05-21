@@ -1125,6 +1125,33 @@ impl RunGraphGateSummary {
     }
 }
 
+#[derive(Debug, Clone)]
+struct CurrentSessionRunGraphClaimScope {
+    run_ids: Vec<String>,
+    task_ids: Vec<String>,
+}
+
+impl CurrentSessionRunGraphClaimScope {
+    fn is_empty(&self) -> bool {
+        self.run_ids.is_empty() && self.task_ids.is_empty()
+    }
+
+    fn matches_binding(&self, binding: &RunGraphContinuationBinding) -> bool {
+        self.run_ids.contains(&binding.run_id)
+            || self.task_ids.contains(&binding.task_id)
+            || binding
+                .active_bounded_unit
+                .get("run_id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|run_id| self.run_ids.iter().any(|value| value == run_id))
+            || binding
+                .active_bounded_unit
+                .get("task_id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|task_id| self.task_ids.iter().any(|value| value == task_id))
+    }
+}
+
 impl StateStore {
     fn run_graph_owner_evidence_record_id(run_id: &str, artifact_kind: &str) -> String {
         sanitize_record_id(&format!("{run_id}::{artifact_kind}"))
@@ -1156,6 +1183,44 @@ impl StateStore {
             *guard = Some((root, std::time::Instant::now(), evidence.clone()));
         }
         Ok(evidence)
+    }
+
+    async fn current_session_run_graph_claim_scope(
+        &self,
+    ) -> Result<Option<CurrentSessionRunGraphClaimScope>, StateStoreError> {
+        let evidence = self.current_runtime_owner_evidence()?;
+        let Some(current_session_id) = evidence["current_session"]["session_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+        else {
+            return Ok(None);
+        };
+        let mut scope = CurrentSessionRunGraphClaimScope {
+            run_ids: Vec::new(),
+            task_ids: Vec::new(),
+        };
+        for claim in self.active_orchestrator_claims().await? {
+            if claim.orchestrator_session_id != current_session_id {
+                continue;
+            }
+            if let Some(run_id) = claim.run_id.map(|value| value.trim().to_string()) {
+                if !run_id.is_empty() && !scope.run_ids.contains(&run_id) {
+                    scope.run_ids.push(run_id);
+                }
+            }
+            if let Some(task_id) = claim.task_id.map(|value| value.trim().to_string()) {
+                if !task_id.is_empty() && !scope.task_ids.contains(&task_id) {
+                    scope.task_ids.push(task_id);
+                }
+            }
+        }
+        if scope.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(scope))
+        }
     }
 
     fn ensure_runtime_owner_mutation_allowed(
@@ -1563,6 +1628,26 @@ impl StateStore {
     pub async fn latest_explicit_run_graph_continuation_binding(
         &self,
     ) -> Result<Option<RunGraphContinuationBinding>, StateStoreError> {
+        self.latest_explicit_run_graph_continuation_binding_matching(|_| true)
+            .await
+    }
+
+    pub async fn latest_explicit_run_graph_continuation_binding_for_current_session(
+        &self,
+    ) -> Result<Option<RunGraphContinuationBinding>, StateStoreError> {
+        let Some(scope) = self.current_session_run_graph_claim_scope().await? else {
+            return Ok(None);
+        };
+        self.latest_explicit_run_graph_continuation_binding_matching(|binding| {
+            scope.matches_binding(binding)
+        })
+        .await
+    }
+
+    async fn latest_explicit_run_graph_continuation_binding_matching(
+        &self,
+        mut matches_scope: impl FnMut(&RunGraphContinuationBinding) -> bool,
+    ) -> Result<Option<RunGraphContinuationBinding>, StateStoreError> {
         let mut query = self
             .db
             .query(
@@ -1583,6 +1668,9 @@ impl StateStore {
                 .effective_exception_takeover_continuation_binding(binding)
                 .await?;
             binding.validate()?;
+            if !matches_scope(&binding) {
+                continue;
+            }
             if binding.binding_source != "explicit_continuation_bind_task" {
                 return Ok(Some(binding));
             }
@@ -1840,6 +1928,51 @@ impl StateStore {
         self.latest_run_graph_status_from_task_rows(&[]).await
     }
 
+    pub async fn latest_run_graph_status_for_current_session(
+        &self,
+    ) -> Result<Option<RunGraphStatus>, StateStoreError> {
+        let Some(scope) = self.current_session_run_graph_claim_scope().await? else {
+            return Ok(None);
+        };
+        let mut seen_run_ids = std::collections::BTreeSet::new();
+        for run_id in scope.run_ids {
+            if !seen_run_ids.insert(run_id.clone()) {
+                continue;
+            }
+            if self
+                .run_graph_latest_receipt_row_supersedes_lane(&run_id)
+                .await?
+            {
+                continue;
+            }
+            match self.run_graph_status_from_task_rows(&run_id, &[]).await {
+                Ok(status) => return Ok(Some(status)),
+                Err(StateStoreError::MissingTask { .. }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        for task_id in scope.task_ids {
+            let Some(run_id) = self.latest_run_graph_run_id_for_task(&task_id).await? else {
+                continue;
+            };
+            if !seen_run_ids.insert(run_id.clone()) {
+                continue;
+            }
+            if self
+                .run_graph_latest_receipt_row_supersedes_lane(&run_id)
+                .await?
+            {
+                continue;
+            }
+            match self.run_graph_status_from_task_rows(&run_id, &[]).await {
+                Ok(status) => return Ok(Some(status)),
+                Err(StateStoreError::MissingTask { .. }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(None)
+    }
+
     pub(crate) async fn latest_run_graph_status_from_task_rows(
         &self,
         task_rows: &[TaskRecord],
@@ -2054,6 +2187,16 @@ impl StateStore {
         &self,
     ) -> Result<Option<RunGraphDispatchReceiptSummary>, StateStoreError> {
         let Some(status) = self.latest_run_graph_status().await? else {
+            return Ok(None);
+        };
+        self.run_graph_dispatch_receipt_summary_for_status(&status)
+            .await
+    }
+
+    pub async fn latest_run_graph_dispatch_receipt_summary_for_current_session(
+        &self,
+    ) -> Result<Option<RunGraphDispatchReceiptSummary>, StateStoreError> {
+        let Some(status) = self.latest_run_graph_status_for_current_session().await? else {
             return Ok(None);
         };
         self.run_graph_dispatch_receipt_summary_for_status(&status)
@@ -2308,6 +2451,21 @@ impl StateStore {
             return Ok(None);
         };
         let status = self.load_consistent_run_graph_status(&run_id).await?;
+        if self
+            .run_graph_status_is_stale_after_release_admission_complete(&status)
+            .await?
+        {
+            return Ok(None);
+        }
+        Ok(Some(RunGraphRecoverySummary::from_status(status)))
+    }
+
+    pub async fn latest_run_graph_recovery_summary_for_current_session(
+        &self,
+    ) -> Result<Option<RunGraphRecoverySummary>, StateStoreError> {
+        let Some(status) = self.latest_run_graph_status_for_current_session().await? else {
+            return Ok(None);
+        };
         if self
             .run_graph_status_is_stale_after_release_admission_complete(&status)
             .await?
@@ -2585,7 +2743,30 @@ impl StateStore {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn temp_run_graph_root(prefix: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+    }
+
+    fn restore_vida_session_id(saved: Option<String>) {
+        unsafe {
+            match saved {
+                Some(value) => std::env::set_var("VIDA_SESSION_ID", value),
+                None => std::env::remove_var("VIDA_SESSION_ID"),
+            }
+        }
+    }
 
     fn sample_run_graph_status() -> RunGraphStatus {
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
@@ -2605,6 +2786,29 @@ mod tests {
         status.resume_target = "dispatch.implementer_lane".to_string();
         status.recovery_ready = true;
         status
+    }
+
+    fn sample_explicit_binding(
+        run_id: &str,
+        task_id: &str,
+        recorded_at: &str,
+    ) -> RunGraphContinuationBinding {
+        RunGraphContinuationBinding {
+            run_id: run_id.to_string(),
+            task_id: task_id.to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "run_graph_task",
+                "run_id": run_id,
+                "task_id": task_id,
+            }),
+            binding_source: "explicit_continuation_bind".to_string(),
+            why_this_unit: "test continuation".to_string(),
+            primary_path: "crates/vida/src/state_store_run_graph_summary.rs".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: None,
+            recorded_at: recorded_at.to_string(),
+        }
     }
 
     #[test]
@@ -3022,6 +3226,165 @@ mod tests {
             .expect("claim should make run non-ownerless"));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_status_for_current_session_ignores_foreign_claims() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-current");
+        }
+        let root = temp_run_graph_root("vida-run-graph-current-session-latest");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut foreign_status = sample_run_graph_status();
+        foreign_status.run_id = "run-foreign".to_string();
+        foreign_status.task_id = "task-foreign".to_string();
+        store
+            .record_run_graph_status(&foreign_status)
+            .await
+            .expect("persist foreign run graph status");
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "foreign-run-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-foreign".to_string(),
+                task_id: Some("task-foreign".to_string()),
+                run_id: Some("run-foreign".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("foreign-domain".to_string()),
+                owned_paths: vec!["foreign/path.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire foreign claim");
+
+        assert_eq!(
+            store
+                .latest_run_graph_status()
+                .await
+                .expect("read global latest")
+                .expect("global latest present")
+                .run_id,
+            "run-foreign"
+        );
+        assert!(store
+            .latest_run_graph_status_for_current_session()
+            .await
+            .expect("read scoped latest")
+            .is_none());
+
+        let mut current_status = sample_run_graph_status();
+        current_status.run_id = "run-current".to_string();
+        current_status.task_id = "task-current".to_string();
+        store
+            .record_run_graph_status(&current_status)
+            .await
+            .expect("persist current run graph status");
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "current-run-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-current".to_string(),
+                task_id: Some("task-current".to_string()),
+                run_id: Some("run-current".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("current-domain".to_string()),
+                owned_paths: vec!["current/path.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire current claim");
+
+        assert_eq!(
+            store
+                .latest_run_graph_status_for_current_session()
+                .await
+                .expect("read scoped latest")
+                .expect("scoped latest present")
+                .run_id,
+            "run-current"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test]
+    async fn latest_explicit_continuation_binding_for_current_session_skips_foreign_binding() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-current-binding");
+        }
+        let root = temp_run_graph_root("vida-run-graph-current-session-binding");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .record_run_graph_continuation_binding(&sample_explicit_binding(
+                "run-current-binding",
+                "task-current-binding",
+                "2026-05-21T00:00:00Z",
+            ))
+            .await
+            .expect("persist current binding");
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "current-binding-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-current-binding".to_string(),
+                task_id: Some("task-current-binding".to_string()),
+                run_id: Some("run-current-binding".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("current-binding-domain".to_string()),
+                owned_paths: vec!["current/binding/path.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire current binding claim");
+        store
+            .record_run_graph_continuation_binding(&sample_explicit_binding(
+                "run-foreign-binding",
+                "task-foreign-binding",
+                "2026-05-21T01:00:00Z",
+            ))
+            .await
+            .expect("persist newer foreign binding");
+
+        assert_eq!(
+            store
+                .latest_explicit_run_graph_continuation_binding()
+                .await
+                .expect("read global binding")
+                .expect("global binding present")
+                .run_id,
+            "run-foreign-binding"
+        );
+        assert_eq!(
+            store
+                .latest_explicit_run_graph_continuation_binding_for_current_session()
+                .await
+                .expect("read scoped binding")
+                .expect("scoped binding present")
+                .run_id,
+            "run-current-binding"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        restore_vida_session_id(saved_session_id);
     }
 
     #[tokio::test]

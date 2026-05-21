@@ -159,8 +159,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn projection_reports_owner_evidence_as_global_blocker() {
-        let root = temp_state_dir("global-blocker");
+    async fn projection_reports_live_foreign_session_without_global_blocker() {
+        let root = temp_state_dir("foreign-visible-nonblocking");
         let store = crate::state_store::StateStore::open(root.clone())
             .await
             .expect("open store");
@@ -190,8 +190,16 @@ mod tests {
         assert!(projection["global_blockers"]
             .as_array()
             .expect("global blockers")
+            .is_empty());
+        assert!(projection["runtime_owner_evidence"]["live_other_sessions"]
+            .as_array()
+            .expect("live other sessions")
             .iter()
-            .any(|value| value.as_str() == Some("live_other_orchestrator_owner")));
+            .any(|session| session["session_id"] == "foreign-live-session"));
+        assert_eq!(
+            projection["runtime_owner_evidence"]["mutation_gate"],
+            "current_session_allowed"
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

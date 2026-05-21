@@ -2243,7 +2243,7 @@ pub(crate) async fn build_taskflow_scheduler_dispatch_plan_from_store(
     let explicit_binding = if current_task_id.is_none() {
         Some(
             store
-                .latest_explicit_run_graph_continuation_binding()
+                .latest_explicit_run_graph_continuation_binding_for_current_session()
                 .await
                 .map_err(|error| {
                     format!("Failed to read latest explicit continuation binding: {error}")
@@ -2549,18 +2549,18 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
         .await
         .map_err(|error| format!("Failed to list tasks for continuation dispatch gate: {error}"))?;
     let global_latest_run_graph = store
-        .latest_run_graph_status()
+        .latest_run_graph_status_for_current_session()
         .await
         .map_err(|error| format!("Failed to read latest run-graph status: {error}"))?;
     if global_latest_run_graph.is_none() {
         return Ok(None);
     }
     let global_recovery = store
-        .latest_run_graph_recovery_summary()
+        .latest_run_graph_recovery_summary_for_current_session()
         .await
         .map_err(|error| format!("Failed to read latest recovery summary: {error}"))?;
     let explicit_binding = store
-        .latest_explicit_run_graph_continuation_binding()
+        .latest_explicit_run_graph_continuation_binding_for_current_session()
         .await
         .map_err(|error| format!("Failed to read latest explicit continuation binding: {error}"))?;
     let latest_run_graph = scoped_latest_run_graph_for_explicit_ready_task(
@@ -3760,8 +3760,8 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     };
     let (global_latest_run_graph, explicit_binding) = match store.as_ref() {
         Some(store) => match tokio::try_join!(
-            store.latest_run_graph_status_from_task_rows(&all_tasks),
-            store.latest_explicit_run_graph_continuation_binding()
+            store.latest_run_graph_status_for_current_session(),
+            store.latest_explicit_run_graph_continuation_binding_for_current_session()
         ) {
             Ok(summaries) => summaries,
             Err(error) => {
@@ -4048,21 +4048,27 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let global_latest_run_graph = match store.latest_run_graph_status().await {
+    let global_latest_run_graph = match store.latest_run_graph_status_for_current_session().await {
         Ok(summary) => summary,
         Err(error) => {
             eprintln!("Failed to read latest run-graph status: {error}");
             return ExitCode::from(1);
         }
     };
-    let global_recovery = match store.latest_run_graph_recovery_summary().await {
+    let global_recovery = match store
+        .latest_run_graph_recovery_summary_for_current_session()
+        .await
+    {
         Ok(summary) => summary,
         Err(error) => {
             eprintln!("Failed to read latest recovery summary: {error}");
             return ExitCode::from(1);
         }
     };
-    let explicit_binding = match store.latest_explicit_run_graph_continuation_binding().await {
+    let explicit_binding = match store
+        .latest_explicit_run_graph_continuation_binding_for_current_session()
+        .await
+    {
         Ok(summary) => summary,
         Err(error) => {
             eprintln!("Failed to read latest explicit continuation binding: {error}");
@@ -4826,19 +4832,27 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         }
     };
     let recovery = if execute_requested && !dry_run {
-        Some(match store.latest_run_graph_recovery_summary().await {
-            Ok(summary) => summary,
-            Err(error) => {
-                eprintln!("Failed to read latest recovery summary: {error}");
-                return ExitCode::from(1);
-            }
-        })
+        Some(
+            match store
+                .latest_run_graph_recovery_summary_for_current_session()
+                .await
+            {
+                Ok(summary) => summary,
+                Err(error) => {
+                    eprintln!("Failed to read latest recovery summary: {error}");
+                    return ExitCode::from(1);
+                }
+            },
+        )
     } else {
         None
     };
     let dispatch = if execute_requested && !dry_run {
         Some(
-            match store.latest_run_graph_dispatch_receipt_summary().await {
+            match store
+                .latest_run_graph_dispatch_receipt_summary_for_current_session()
+                .await
+            {
                 Ok(summary) => summary,
                 Err(error) => {
                     eprintln!("Failed to read latest dispatch receipt summary: {error}");
@@ -4850,7 +4864,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         None
     };
     let latest_run_graph_task_missing = if execute_requested && !dry_run {
-        match store.latest_run_graph_status().await {
+        match store.latest_run_graph_status_for_current_session().await {
             Ok(Some(status)) => match store.list_tasks(None, true).await {
                 Ok(tasks) => !tasks.iter().any(|task| task.id == status.task_id),
                 Err(error) => {
