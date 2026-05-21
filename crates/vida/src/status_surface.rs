@@ -207,14 +207,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 };
                 let latest_run_graph_status =
                     match store.latest_run_graph_status_for_current_session().await {
-                        Ok(Some(summary)) => Some(summary),
-                        Ok(None) => match store.latest_run_graph_status().await {
-                            Ok(summary) => summary,
-                            Err(error) => {
-                                eprintln!("Failed to read latest run graph status: {error}");
-                                return ExitCode::from(1);
-                            }
-                        },
+                        Ok(summary) => summary,
                         Err(error) => {
                             eprintln!("Failed to read latest run graph status: {error}");
                             return ExitCode::from(1);
@@ -343,18 +336,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     .latest_explicit_run_graph_continuation_binding_for_current_session()
                     .await
                 {
-                    Ok(Some(binding)) => Some(binding),
-                    Ok(None) => {
-                        match store.latest_explicit_run_graph_continuation_binding().await {
-                            Ok(binding) => binding,
-                            Err(error) => {
-                                eprintln!(
-                                    "Failed to read latest explicit continuation binding: {error}"
-                                );
-                                return ExitCode::from(1);
-                            }
-                        }
-                    }
+                    Ok(binding) => binding,
                     Err(error) => {
                         eprintln!("Failed to read latest explicit continuation binding: {error}");
                         return ExitCode::from(1);
@@ -773,8 +755,7 @@ async fn refresh_cached_status_projection_runtime_fields(
     .await
     .ok()?;
     let latest_run_graph_status = match store.latest_run_graph_status_for_current_session().await {
-        Ok(Some(summary)) => Some(summary),
-        Ok(None) => store.latest_run_graph_status().await.ok().flatten(),
+        Ok(summary) => summary,
         Err(_) => return None,
     };
     let latest_run_graph_run_id = latest_run_graph_status
@@ -852,12 +833,7 @@ async fn refresh_cached_status_projection_runtime_fields(
         .latest_explicit_run_graph_continuation_binding_for_current_session()
         .await
     {
-        Ok(Some(binding)) => Some(binding),
-        Ok(None) => store
-            .latest_explicit_run_graph_continuation_binding()
-            .await
-            .ok()
-            .flatten(),
+        Ok(binding) => binding,
         Err(_) => return None,
     };
     let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
@@ -1331,6 +1307,107 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_stale_projection_overlay_does_not_import_foreign_run_graph_evidence() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        let nanos = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-status-foreign-overlay-{}-{nanos}",
+            std::process::id()
+        ));
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "foreign-status-overlay-session");
+        }
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open state store");
+        store
+            .create_task(state_store::CreateTaskRequest {
+                task_id: "task-foreign-status",
+                title: "Foreign status task",
+                display_id: None,
+                description: "test task",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: state_store::TaskExecutionSemantics::default(),
+                planner_metadata: state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("create foreign task");
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-foreign-status",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "task-foreign-status".to_string();
+        status.status = "in_progress".to_string();
+        status.lifecycle_stage = "coach_active".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("record foreign run graph status");
+        store
+            .record_run_graph_continuation_binding(&state_store::RunGraphContinuationBinding {
+                run_id: "run-foreign-status".to_string(),
+                task_id: "task-foreign-status".to_string(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "run_graph_task",
+                    "run_id": "run-foreign-status",
+                    "task_id": "task-foreign-status",
+                    "active_node": "coach"
+                }),
+                binding_source: "latest_run_graph_exception_takeover_dispatch".to_string(),
+                why_this_unit: "foreign session binding".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only_exception_takeover".to_string(),
+                request_text: None,
+                recorded_at: "2026-05-21T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("record foreign continuation binding");
+        drop(store);
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "current-status-overlay-session");
+        }
+        let cached = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "root_session_write_guard": {},
+            "continuation_binding": {
+                "status": "ambiguous",
+                "active_bounded_unit": serde_json::Value::Null,
+                "why_this_unit": serde_json::Value::Null,
+                "sequential_vs_parallel_posture": "unknown_until_explicit_taskflow_binding"
+            }
+        });
+        let refreshed =
+            super::refresh_cached_status_projection_runtime_fields(&root, &cached.to_string())
+                .await
+                .expect("stale cached status should refresh without importing foreign evidence");
+        let payload: serde_json::Value =
+            serde_json::from_str(&refreshed).expect("refreshed status should remain json");
+
+        assert!(payload["latest_run_graph_status"].is_null());
+        assert!(payload["latest_run_graph_recovery"].is_null());
+        assert!(payload["latest_run_graph_dispatch_receipt"].is_null());
+        assert!(payload["continuation_binding"]["active_bounded_unit"].is_null());
+
+        let _ = fs::remove_dir_all(root);
+        restore_vida_session_id(saved_session_id);
     }
 
     #[test]
