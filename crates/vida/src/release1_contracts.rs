@@ -897,8 +897,8 @@ pub(crate) fn release_admission_operator_evidence_snapshot(snapshot: &serde_json
             .unwrap_or_default(),
     )
     .is_some();
-    let parity_ok = crate::operator_contracts::shared_operator_output_contract_parity_error(snapshot)
-        .is_none();
+    let parity_ok =
+        crate::operator_contracts::shared_operator_output_contract_parity_error(snapshot).is_none();
     let release_admission_has_complete_evidence_table =
         release_admission_record(snapshot).is_some_and(closure_admission_evidence_table_complete);
     let is_terminal_continue = snapshot.get("surface").and_then(serde_json::Value::as_str)
@@ -2154,7 +2154,6 @@ mod tests {
         Release1ContractType, Release1SchemaVersion, RiskTier, WorkflowClass,
     };
 
-
     #[test]
     fn release_admission_snapshot_with_missing_row_status_is_not_accepted() {
         let snapshot = serde_json::json!({
@@ -2177,7 +2176,9 @@ mod tests {
             }
         });
 
-        assert!(!super::release_admission_operator_evidence_snapshot(&snapshot));
+        assert!(!super::release_admission_operator_evidence_snapshot(
+            &snapshot
+        ));
     }
 
     #[test]

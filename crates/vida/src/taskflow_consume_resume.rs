@@ -1872,6 +1872,147 @@ async fn emit_runtime_consumption_resume_json(
     Ok(())
 }
 
+fn emit_deferred_agent_handoff_json(
+    store: &super::StateStore,
+    surface_name: &str,
+    dispatch_packet_path: &str,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    emit_output: bool,
+    as_json: bool,
+) -> Result<(), String> {
+    let mut normalized_dispatch_receipt = dispatch_receipt.clone();
+    normalized_dispatch_receipt.selected_backend =
+        super::canonical_selected_backend_for_receipt(role_selection, &normalized_dispatch_receipt);
+    let failure_control_evidence =
+        build_failure_control_evidence(&normalized_dispatch_receipt.run_id, dispatch_packet_path);
+    let payload_json = serde_json::json!({
+        "dispatch_receipt": normalized_dispatch_receipt,
+        "role_selection": role_selection,
+        "source_dispatch_packet_path": dispatch_packet_path,
+        "source_run_id": dispatch_receipt.run_id,
+        "failure_control_evidence": failure_control_evidence.clone(),
+        "deferred_agent_handoff": {
+            "status": "persisted",
+            "reason": "consume_continue_returns_after_routed_agent_handoff",
+        },
+    });
+    let snapshot = serde_json::json!({
+        "surface": surface_name,
+        "status": "pass",
+        "release_admission": {},
+        "failure_control_evidence": failure_control_evidence.clone(),
+        "payload": payload_json,
+    });
+    let snapshot_path =
+        super::write_runtime_consumption_snapshot(store.root(), "final", &snapshot)?;
+    let finalized = crate::operator_contracts::finalize_release1_operator_truth(
+        Vec::new(),
+        Vec::new(),
+        serde_json::json!({
+            "runtime_consumption_latest_snapshot_path": snapshot_path,
+            "latest_run_graph_dispatch_receipt_id": dispatch_receipt.run_id,
+            "latest_task_reconciliation_receipt_id": serde_json::Value::Null,
+            "consume_final_surface": surface_name,
+        }),
+    )?;
+    let operator_contracts = finalized.operator_contracts.clone();
+    let shared_fields = serde_json::json!({
+        "trace_id": operator_contracts["trace_id"].clone(),
+        "workflow_class": operator_contracts["workflow_class"].clone(),
+        "risk_tier": operator_contracts["risk_tier"].clone(),
+        "status": finalized.shared_fields["status"].clone(),
+        "blocker_codes": finalized.shared_fields["blocker_codes"].clone(),
+        "next_actions": finalized.shared_fields["next_actions"].clone(),
+        "artifact_refs": finalized.shared_fields["artifact_refs"].clone(),
+    });
+    let snapshot_with_operator_contracts = serde_json::json!({
+        "surface": surface_name,
+        "trace_id": operator_contracts["trace_id"].clone(),
+        "workflow_class": operator_contracts["workflow_class"].clone(),
+        "risk_tier": operator_contracts["risk_tier"].clone(),
+        "status": finalized.status,
+        "blocker_codes": finalized.blocker_codes.clone(),
+        "next_actions": finalized.next_actions.clone(),
+        "artifact_refs": finalized.artifact_refs.clone(),
+        "shared_fields": shared_fields.clone(),
+        "operator_contracts": operator_contracts.clone(),
+        "release_admission": {},
+        "payload": payload_json,
+        "failure_control_evidence": failure_control_evidence,
+    });
+    std::fs::write(
+        &snapshot_path,
+        serde_json::to_string_pretty(&snapshot_with_operator_contracts)
+            .map_err(|error| format!("Failed to encode deferred handoff snapshot: {error}"))?,
+    )
+    .map_err(|error| format!("Failed to write deferred handoff snapshot: {error}"))?;
+    if let Some(error) = crate::operator_contracts::shared_operator_output_contract_parity_error(
+        &snapshot_with_operator_contracts,
+    ) {
+        return Err(format!(
+            "Failed to preserve deferred handoff operator-contract parity: {error}"
+        ));
+    }
+    if !emit_output {
+        return Ok(());
+    }
+    if as_json {
+        let output_payload = serde_json::json!({
+            "surface": surface_name,
+            "trace_id": operator_contracts["trace_id"].clone(),
+            "workflow_class": operator_contracts["workflow_class"].clone(),
+            "risk_tier": operator_contracts["risk_tier"].clone(),
+            "status": finalized.status,
+            "blocker_codes": snapshot_with_operator_contracts["blocker_codes"].clone(),
+            "next_actions": snapshot_with_operator_contracts["next_actions"].clone(),
+            "artifact_refs": finalized.artifact_refs.clone(),
+            "shared_fields": shared_fields,
+            "operator_contracts": operator_contracts,
+            "source_run_id": dispatch_receipt.run_id,
+            "source_dispatch_packet_path": dispatch_packet_path,
+            "dispatch_receipt": snapshot_with_operator_contracts["payload"]["dispatch_receipt"].clone(),
+            "projection_truth": {
+                "projection_source": "deferred_agent_handoff_receipt",
+                "projection_reason": "consume continue persisted a routed agent handoff without waiting for backend execution",
+                "dispatch_receipt_present": true,
+                "continuation_binding_present": true,
+                "stale_state_suspected": false,
+                "next_lawful_operator_action": format!("vida lane show {} --json", dispatch_receipt.run_id),
+            },
+            "snapshot_path": snapshot_path,
+            "failure_control_evidence": snapshot_with_operator_contracts["failure_control_evidence"].clone(),
+        });
+        if let Some(error) =
+            crate::operator_contracts::shared_operator_output_contract_parity_error(&output_payload)
+        {
+            return Err(format!(
+                "Failed to preserve deferred handoff output parity: {error}"
+            ));
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output_payload)
+                .expect("deferred handoff command should render as json")
+        );
+    } else {
+        super::print_surface_header(super::RenderMode::Plain, surface_name);
+        super::print_surface_line(super::RenderMode::Plain, "status", finalized.status);
+        super::print_surface_line(
+            super::RenderMode::Plain,
+            "source run",
+            &dispatch_receipt.run_id,
+        );
+        super::print_surface_line(
+            super::RenderMode::Plain,
+            "source packet",
+            dispatch_packet_path,
+        );
+        super::print_surface_line(super::RenderMode::Plain, "snapshot path", &snapshot_path);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 async fn validate_run_graph_resume_state_for_downstream_packet(
     store: &super::StateStore,
@@ -2239,6 +2380,47 @@ fn build_resume_inputs(
         role_selection,
         run_graph_bootstrap,
     }
+}
+
+async fn fast_deferred_agent_handoff_resume_inputs(
+    store: &super::StateStore,
+    surface_name: &str,
+    requested_run_id: Option<&str>,
+    requested_dispatch_packet_path: Option<&str>,
+    requested_downstream_packet_path: Option<&str>,
+) -> Result<Option<ResumeInputs>, String> {
+    if surface_name != "vida taskflow consume continue"
+        || requested_dispatch_packet_path.is_some()
+        || requested_downstream_packet_path.is_some()
+    {
+        return Ok(None);
+    }
+    let Some(run_id) = requested_run_id else {
+        return Ok(None);
+    };
+    let Some(receipt) = store
+        .run_graph_dispatch_receipt(run_id)
+        .await
+        .map_err(|error| format!("Failed to read persisted run-graph dispatch receipt: {error}"))?
+    else {
+        return Ok(None);
+    };
+    if !consume_continue_should_defer_agent_handoff(surface_name, &receipt) {
+        return Ok(None);
+    }
+    let packet_path = receipt
+        .dispatch_packet_path
+        .clone()
+        .or_else(|| receipt.downstream_dispatch_packet_path.clone())
+        .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
+    let packet = read_dispatch_packet(&packet_path)?;
+    let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
+    Ok(Some(build_resume_inputs(
+        receipt,
+        packet_path,
+        packet,
+        role_selection,
+    )))
 }
 
 async fn reconcile_terminal_closure_lineage_for_resume(
@@ -4876,6 +5058,251 @@ pub(crate) fn parse_taskflow_consume_advance_args(
     Ok((as_json, run_id, max_rounds))
 }
 
+fn consume_continue_should_defer_agent_handoff(
+    surface_name: &str,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    surface_name == "vida taskflow consume continue"
+        && receipt.dispatch_kind == "agent_lane"
+        && (receipt.dispatch_status == "routed"
+            || (receipt.downstream_dispatch_ready
+                && receipt
+                    .downstream_dispatch_packet_path
+                    .as_deref()
+                    .is_some_and(|path| !path.trim().is_empty())))
+}
+
+async fn persist_and_emit_deferred_agent_handoff(
+    store: &super::StateStore,
+    surface_name: &str,
+    dispatch_packet_path: &str,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    _requested_run_id: Option<&str>,
+    persist_receipt_and_sync: bool,
+    emit_output: bool,
+    as_json: bool,
+) -> ExitCode {
+    if persist_receipt_and_sync {
+        if let Err(error) = store
+            .record_run_graph_dispatch_receipt(dispatch_receipt)
+            .await
+        {
+            eprintln!("Failed to record deferred run-graph dispatch receipt: {error}");
+            return ExitCode::from(1);
+        }
+        match store.run_graph_status(&dispatch_receipt.run_id).await {
+            Ok(status) => {
+                if let Err(error) =
+                    crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                        store,
+                        &status,
+                        "consume_continue_deferred_agent_handoff",
+                    )
+                    .await
+                {
+                    eprintln!(
+                        "Failed to sync continuation binding after deferred agent handoff: {error}"
+                    );
+                    return ExitCode::from(1);
+                }
+            }
+            Err(error) => {
+                eprintln!("Failed to read run-graph status after deferred agent handoff: {error}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+    match emit_deferred_agent_handoff_json(
+        store,
+        surface_name,
+        dispatch_packet_path,
+        dispatch_receipt,
+        role_selection,
+        emit_output,
+        as_json,
+    ) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn cached_deferred_handoff_projection_path(
+    state_dir: &std::path::Path,
+    run_id: &str,
+) -> Option<std::path::PathBuf> {
+    if run_id.is_empty()
+        || run_id
+            .chars()
+            .any(|ch| matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+    {
+        return None;
+    }
+    Some(
+        state_dir
+            .join("operator-projections")
+            .join(format!("lane-show-{run_id}.json")),
+    )
+}
+
+fn try_emit_cached_deferred_agent_handoff_projection(
+    state_dir: &std::path::Path,
+    surface_name: &str,
+    requested_run_id: Option<&str>,
+    requested_dispatch_packet_path: Option<&str>,
+    requested_downstream_packet_path: Option<&str>,
+    emit_output: bool,
+    as_json: bool,
+) -> Result<Option<ExitCode>, String> {
+    if surface_name != "vida taskflow consume continue"
+        || requested_dispatch_packet_path.is_some()
+        || requested_downstream_packet_path.is_some()
+    {
+        return Ok(None);
+    }
+    let Some(run_id) = requested_run_id else {
+        return Ok(None);
+    };
+    let Some(projection_path) = cached_deferred_handoff_projection_path(state_dir, run_id) else {
+        return Ok(None);
+    };
+    if !projection_path.is_file() {
+        return Ok(None);
+    }
+    let projection: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&projection_path)
+            .map_err(|error| format!("Failed to read cached lane projection: {error}"))?,
+    )
+    .map_err(|error| format!("Failed to decode cached lane projection: {error}"))?;
+    if projection["run_id"].as_str() != Some(run_id)
+        || projection["dispatch_status"].as_str() != Some("routed")
+    {
+        return Ok(None);
+    }
+    let artifact_refs = projection["artifact_refs"].clone();
+    let dispatch_packet_path = artifact_refs["dispatch_packet_path"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            "Cached routed handoff projection is missing dispatch_packet_path".to_string()
+        })?;
+    let lane_id = projection["lane_id"].as_str().unwrap_or("agent_lane");
+    let dispatch_target = lane_id.strip_suffix("_lane").unwrap_or(lane_id);
+    let receipt = serde_json::json!({
+        "run_id": run_id,
+        "dispatch_target": dispatch_target,
+        "dispatch_status": "routed",
+        "lane_status": projection["lane_status"].clone(),
+        "supersedes_receipt_id": projection["supersedes_receipt_id"].clone(),
+        "exception_path_receipt_id": projection["exception_path_receipt_id"].clone(),
+        "dispatch_kind": "agent_lane",
+        "dispatch_surface": "cached_operator_projection",
+        "dispatch_command": "vida agent-init",
+        "dispatch_packet_path": dispatch_packet_path,
+        "dispatch_result_path": artifact_refs["dispatch_result_path"].clone(),
+        "blocker_code": serde_json::Value::Null,
+        "downstream_dispatch_target": serde_json::Value::Null,
+        "downstream_dispatch_command": serde_json::Value::Null,
+        "downstream_dispatch_note": serde_json::Value::Null,
+        "downstream_dispatch_ready": false,
+        "downstream_dispatch_blockers": [],
+        "downstream_dispatch_packet_path": serde_json::Value::Null,
+        "downstream_dispatch_status": serde_json::Value::Null,
+        "downstream_dispatch_result_path": serde_json::Value::Null,
+        "downstream_dispatch_trace_path": serde_json::Value::Null,
+        "downstream_dispatch_executed_count": 0,
+        "downstream_dispatch_active_target": serde_json::Value::Null,
+        "downstream_dispatch_last_target": dispatch_target,
+        "activation_agent_type": serde_json::Value::Null,
+        "activation_runtime_role": dispatch_target,
+        "selected_backend": projection["selected_backend"].clone(),
+        "recorded_at": projection["exception_path_metadata"]["recorded_at"].clone(),
+    });
+    let failure_control_evidence = build_failure_control_evidence(run_id, dispatch_packet_path);
+    let finalized = crate::operator_contracts::finalize_release1_operator_truth(
+        Vec::new(),
+        Vec::new(),
+        serde_json::json!({
+            "runtime_consumption_latest_snapshot_path": serde_json::Value::Null,
+            "latest_run_graph_dispatch_receipt_id": run_id,
+            "latest_task_reconciliation_receipt_id": serde_json::Value::Null,
+            "consume_final_surface": surface_name,
+            "cached_projection_path": projection_path.display().to_string(),
+        }),
+    )?;
+    let operator_contracts = finalized.operator_contracts.clone();
+    let shared_fields = serde_json::json!({
+        "trace_id": operator_contracts["trace_id"].clone(),
+        "workflow_class": operator_contracts["workflow_class"].clone(),
+        "risk_tier": operator_contracts["risk_tier"].clone(),
+        "status": finalized.shared_fields["status"].clone(),
+        "blocker_codes": finalized.shared_fields["blocker_codes"].clone(),
+        "next_actions": finalized.shared_fields["next_actions"].clone(),
+        "artifact_refs": finalized.shared_fields["artifact_refs"].clone(),
+    });
+    if emit_output {
+        if as_json {
+            let output_payload = serde_json::json!({
+                "surface": surface_name,
+                "trace_id": operator_contracts["trace_id"].clone(),
+                "workflow_class": operator_contracts["workflow_class"].clone(),
+                "risk_tier": operator_contracts["risk_tier"].clone(),
+                "status": finalized.status,
+                "blocker_codes": finalized.blocker_codes.clone(),
+                "next_actions": finalized.next_actions.clone(),
+                "artifact_refs": finalized.artifact_refs.clone(),
+                "shared_fields": shared_fields,
+                "operator_contracts": operator_contracts,
+                "source_run_id": run_id,
+                "source_dispatch_packet_path": dispatch_packet_path,
+                "dispatch_receipt": receipt,
+                "projection_truth": {
+                    "projection_source": "cached_operator_projection",
+                    "projection_reason": "explicit routed agent handoff emitted from cached lane projection without opening full StateStore",
+                    "dispatch_receipt_present": true,
+                    "continuation_binding_present": true,
+                    "stale_state_suspected": false,
+                    "next_lawful_operator_action": format!("vida lane show {run_id} --json"),
+                },
+                "snapshot_path": serde_json::Value::Null,
+                "failure_control_evidence": failure_control_evidence,
+            });
+            if let Some(error) =
+                crate::operator_contracts::shared_operator_output_contract_parity_error(
+                    &output_payload,
+                )
+            {
+                return Err(format!(
+                    "Failed to preserve cached deferred handoff output parity: {error}"
+                ));
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&output_payload)
+                    .expect("cached deferred handoff output should render as json")
+            );
+        } else {
+            super::print_surface_header(super::RenderMode::Plain, surface_name);
+            super::print_surface_line(super::RenderMode::Plain, "status", finalized.status);
+            super::print_surface_line(super::RenderMode::Plain, "source run", run_id);
+            super::print_surface_line(
+                super::RenderMode::Plain,
+                "source packet",
+                dispatch_packet_path,
+            );
+            super::print_surface_line(
+                super::RenderMode::Plain,
+                "projection path",
+                &projection_path.display().to_string(),
+            );
+        }
+    }
+    Ok(Some(ExitCode::SUCCESS))
+}
+
 pub(crate) async fn run_taskflow_consume_resume_command(
     state_dir: std::path::PathBuf,
     as_json: bool,
@@ -4885,6 +5312,27 @@ pub(crate) async fn run_taskflow_consume_resume_command(
     surface_name: &str,
     emit_output: bool,
 ) -> ExitCode {
+    match try_emit_cached_deferred_agent_handoff_projection(
+        &state_dir,
+        surface_name,
+        requested_run_id.as_deref(),
+        requested_dispatch_packet_path.as_deref(),
+        requested_downstream_packet_path.as_deref(),
+        emit_output,
+        as_json,
+    ) {
+        Ok(Some(exit_code)) => return exit_code,
+        Ok(None) => {}
+        Err(error) => {
+            if emit_output {
+                eprintln!("{error}");
+                if as_json {
+                    emit_consume_continue_resume_error_json(&error, surface_name);
+                }
+            }
+            return ExitCode::from(1);
+        }
+    }
     match fail_fast_state_store_open(state_dir.clone(), "opening authoritative state store").await {
         Ok(store) => {
             let mut dispatch_receipt;
@@ -4915,14 +5363,28 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     return ExitCode::from(1);
                 }
             }
-            match resolve_runtime_consumption_resume_inputs(
+            let resolved_resume_inputs = match fast_deferred_agent_handoff_resume_inputs(
                 &store,
+                surface_name,
                 requested_run_id.as_deref(),
                 requested_dispatch_packet_path.as_deref(),
                 requested_downstream_packet_path.as_deref(),
             )
             .await
             {
+                Ok(Some(inputs)) => Ok(inputs),
+                Ok(None) => {
+                    resolve_runtime_consumption_resume_inputs(
+                        &store,
+                        requested_run_id.as_deref(),
+                        requested_dispatch_packet_path.as_deref(),
+                        requested_downstream_packet_path.as_deref(),
+                    )
+                    .await
+                }
+                Err(error) => Err(error),
+            };
+            match resolved_resume_inputs {
                 Ok(ResumeInputs {
                     dispatch_receipt: receipt,
                     dispatch_packet_path: packet_path,
@@ -5165,6 +5627,8 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     }
                 }
             }
+            let persist_deferred_handoff = dispatch_receipt.dispatch_status == "packet_ready"
+                || dispatch_receipt.downstream_dispatch_ready;
             if dispatch_receipt.dispatch_status == "packet_ready" {
                 dispatch_receipt.dispatch_status = "routed".to_string();
                 dispatch_receipt.lane_status = super::derive_lane_status(
@@ -5175,6 +5639,20 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 .as_str()
                 .to_string();
                 dispatch_receipt.blocker_code = None;
+            }
+            if consume_continue_should_defer_agent_handoff(surface_name, &dispatch_receipt) {
+                return persist_and_emit_deferred_agent_handoff(
+                    &store,
+                    surface_name,
+                    &dispatch_packet_path,
+                    &dispatch_receipt,
+                    &role_selection,
+                    requested_run_id.as_deref(),
+                    persist_deferred_handoff,
+                    emit_output,
+                    as_json,
+                )
+                .await;
             }
             if dispatch_receipt.dispatch_status == "routed" {
                 let allow_taskflow_pack_execution = dispatch_receipt.dispatch_kind
@@ -5301,6 +5779,20 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 {
                     eprintln!("{error}");
                     return ExitCode::from(1);
+                }
+                if consume_continue_should_defer_agent_handoff(surface_name, &dispatch_receipt) {
+                    return persist_and_emit_deferred_agent_handoff(
+                        &store,
+                        surface_name,
+                        &dispatch_packet_path,
+                        &dispatch_receipt,
+                        &role_selection,
+                        requested_run_id.as_deref(),
+                        false,
+                        emit_output,
+                        as_json,
+                    )
+                    .await;
                 }
                 drop(store);
             }
@@ -5621,9 +6113,10 @@ mod tests {
         consume_advance_success_payload, consume_continue_blocking_step_with_timeout,
         consume_continue_dispatch_handoff_timeout, consume_continue_handoff_with_timeout,
         consume_continue_resume_error_blocker_code, consume_continue_resume_error_payload,
-        consume_continue_state_access_blocker_payload, dispatch_receipt_internal_retry_eligible,
-        dispatch_receipt_primary_rebind_eligible, dispatch_receipt_retry_eligible,
-        emit_runtime_consumption_resume_json, enforce_consume_continue_execution_preparation_gate,
+        consume_continue_should_defer_agent_handoff, consume_continue_state_access_blocker_payload,
+        dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
+        dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
+        enforce_consume_continue_execution_preparation_gate,
         fail_fast_state_store_open_read_only_with_timeout, normalize_runtime_dispatch_packet,
         normalize_stale_in_flight_dispatch_receipt, packet_path_components_for_platform,
         persisted_dispatch_packet_lineage_task_id,
@@ -5650,6 +6143,78 @@ mod tests {
     use std::fs;
     use std::process::ExitCode;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn taskflow_consume_resume_test_receipt(
+        dispatch_kind: &str,
+        dispatch_status: &str,
+    ) -> crate::state_store::RunGraphDispatchReceipt {
+        crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-1".to_string(),
+            dispatch_target: "implementation".to_string(),
+            dispatch_status: dispatch_status.to_string(),
+            lane_status: "lane_ready".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: dispatch_kind.to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some("packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-21T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn consume_continue_defers_routed_agent_lane_handoff() {
+        let receipt = taskflow_consume_resume_test_receipt("agent_lane", "routed");
+
+        assert!(consume_continue_should_defer_agent_handoff(
+            "vida taskflow consume continue",
+            &receipt
+        ));
+        assert!(!consume_continue_should_defer_agent_handoff(
+            "vida taskflow consume advance",
+            &receipt
+        ));
+    }
+
+    #[test]
+    fn consume_continue_defers_ready_downstream_packet() {
+        let mut receipt = taskflow_consume_resume_test_receipt("agent_lane", "executed");
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_packet_path = Some("coach-packet.json".to_string());
+
+        assert!(consume_continue_should_defer_agent_handoff(
+            "vida taskflow consume continue",
+            &receipt
+        ));
+    }
+
+    #[test]
+    fn consume_continue_does_not_defer_taskflow_pack() {
+        let receipt = taskflow_consume_resume_test_receipt("taskflow_pack", "routed");
+
+        assert!(!consume_continue_should_defer_agent_handoff(
+            "vida taskflow consume continue",
+            &receipt
+        ));
+    }
 
     #[test]
     fn consume_advance_success_payload_uses_release_one_operator_envelope() {

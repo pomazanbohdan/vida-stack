@@ -17,6 +17,10 @@ use serde::Serialize;
 use taskflow_cli::Cli as TaskflowCli;
 
 const TASKFLOW_SCHEDULER_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+const TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
+    std::time::Duration::from_secs(300);
+const TASKFLOW_NEXT_PROJECTION_NAME: &str = "taskflow-next-latest";
+const TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME: &str = "taskflow-graph-summary-latest";
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct GraphSummaryTaskRef {
     pub(crate) id: String,
@@ -3589,6 +3593,22 @@ fn resolve_taskflow_proxy_state_dir(state_dir: Option<PathBuf>) -> Result<PathBu
     }
 }
 
+fn cached_operator_projection_exit_code(cached: &str) -> ExitCode {
+    let status = serde_json::from_str::<serde_json::Value>(cached)
+        .ok()
+        .and_then(|payload| {
+            payload
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
+    if status.as_deref() == Some("pass") {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     let (as_json, scope_task_id, state_dir) = match parse_taskflow_next_args(args) {
         Ok(TaskflowNextArgs::Help) => {
@@ -3613,6 +3633,23 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if as_json && scope_task_id.is_none() {
+        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+            &state_dir,
+            TASKFLOW_NEXT_PROJECTION_NAME,
+        ) {
+            println!("{cached}");
+            return cached_operator_projection_exit_code(&cached);
+        }
+        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
+            &state_dir,
+            TASKFLOW_NEXT_PROJECTION_NAME,
+            TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
+        ) {
+            println!("{cached}");
+            return cached_operator_projection_exit_code(&cached);
+        }
+    }
     let runtime_consumption = match crate::runtime_consumption_summary(&state_dir) {
         Ok(summary) => summary,
         Err(error) => {
@@ -3810,6 +3847,13 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
 
     if as_json {
         crate::print_json_pretty(&payload);
+        if scope_task_id.is_none() {
+            crate::operator_projection_cache::write_json_projection(
+                &state_dir,
+                TASKFLOW_NEXT_PROJECTION_NAME,
+                &payload,
+            );
+        }
     } else {
         crate::print_surface_header(RenderMode::Plain, "vida taskflow next");
         crate::print_surface_line(RenderMode::Plain, "status", &decision.status);
@@ -3905,10 +3949,18 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     if as_json {
         if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
             &proxy_state_dir(),
-            "taskflow-graph-summary-latest",
+            TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
         ) {
             println!("{cached}");
-            return ExitCode::SUCCESS;
+            return cached_operator_projection_exit_code(&cached);
+        }
+        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
+            &proxy_state_dir(),
+            TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
+            TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
+        ) {
+            println!("{cached}");
+            return cached_operator_projection_exit_code(&cached);
         }
     }
 
@@ -4207,7 +4259,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         crate::print_json_pretty(&payload);
         crate::operator_projection_cache::write_json_projection(
             &proxy_state_root,
-            "taskflow-graph-summary-latest",
+            TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
             &payload,
         );
     } else {
@@ -5997,15 +6049,28 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
-        taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
-        TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
+        cached_operator_projection_exit_code, taskflow_task_subcommand_supported,
+        GraphSummaryWaveBucket, TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
     };
     use crate::state_store::{
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
         TaskSchedulingCandidate, TaskSchedulingProjection,
     };
     use std::fs;
+    use std::process::ExitCode;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn cached_operator_projection_exit_code_preserves_blocked_status() {
+        assert_eq!(
+            cached_operator_projection_exit_code(r#"{"status":"pass"}"#),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            cached_operator_projection_exit_code(r#"{"status":"blocked"}"#),
+            ExitCode::from(1)
+        );
+    }
 
     fn task(
         id: &str,

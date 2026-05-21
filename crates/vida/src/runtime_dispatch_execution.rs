@@ -955,6 +955,32 @@ fn external_provider_error_message(output: &ParsedExternalProviderOutput) -> Opt
     None
 }
 
+fn external_provider_output_indicates_agent_end_timeout(
+    output: &ParsedExternalProviderOutput,
+) -> bool {
+    let provider_is_pi = output
+        .raw_json
+        .pointer("/raw_provider/provider")
+        .and_then(serde_json::Value::as_str)
+        == Some("pi");
+    if !provider_is_pi {
+        return false;
+    }
+    let returned_agent_end = output
+        .raw_json
+        .pointer("/raw_provider/terminal_event")
+        .and_then(serde_json::Value::as_str)
+        == Some("agent_end");
+    if returned_agent_end {
+        return false;
+    }
+    external_provider_error_message(output)
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|message| message.contains("timed out waiting for pi agent_end event"))
+}
+
 fn parse_external_provider_output(stdout: &str) -> Option<ParsedExternalProviderOutput> {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
@@ -2563,7 +2589,11 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         body.insert("blocker_reason".to_string(), serde_json::Value::Null);
         mark_dispatch_result_execution_evidence(body, "external_backend_completion", &backend_id);
         refresh_execution_truth(body, role_selection, receipt, Some(&backend_id), "recorded");
-    } else if timed_out {
+    } else if timed_out
+        || parsed_output
+            .as_ref()
+            .is_some_and(external_provider_output_indicates_agent_end_timeout)
+    {
         let timeout_seconds = wrapped_command
             .timeout_wrapper
             .as_ref()
@@ -2576,9 +2606,14 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             .unwrap_or_default();
         body.insert(
             "provider_error".to_string(),
-            serde_json::json!(format!(
-                "configured external backend timed out after {timeout_seconds}s and kill-after grace {kill_after_grace_seconds}s without receipt-backed completion"
-            )),
+            serde_json::json!(
+                parsed_output
+                    .as_ref()
+                    .and_then(external_provider_error_message)
+                    .unwrap_or_else(|| format!(
+                        "configured external backend timed out after {timeout_seconds}s and kill-after grace {kill_after_grace_seconds}s without receipt-backed completion"
+                    ))
+            ),
         );
         body.insert(
             "blocker_code".to_string(),
@@ -2711,6 +2746,23 @@ mod tests {
 
         assert!(!super::external_provider_output_indicates_error(&parsed));
         assert!(external_provider_output_confirms_execution(Some(&parsed)));
+    }
+
+    #[test]
+    fn parse_external_provider_output_classifies_pi_agent_end_timeout_as_runtime_timeout() {
+        let parsed = parse_external_provider_output(
+            r#"{"type":"result","subtype":"error_during_execution","is_error":true,"raw_provider":{"mode":"rpc","provider":"pi"},"error":{"message":"Timed out waiting for Pi agent_end event"}}"#,
+        )
+        .expect("pi timeout output should parse");
+
+        assert!(super::external_provider_output_indicates_error(&parsed));
+        assert!(super::external_provider_output_indicates_agent_end_timeout(
+            &parsed
+        ));
+        assert_eq!(
+            super::external_provider_error_message(&parsed).as_deref(),
+            Some("Timed out waiting for Pi agent_end event")
+        );
     }
 
     #[test]

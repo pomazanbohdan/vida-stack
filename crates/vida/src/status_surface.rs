@@ -11,7 +11,6 @@ use crate::status_surface_text_report::{emit_status_text_report, StatusTextRepor
 use crate::status_surface_truth_inputs::build_status_truth_inputs;
 
 const STATUS_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
-
 pub(crate) fn degraded_read_lock_payload(
     surface: &str,
     state_dir: &std::path::Path,

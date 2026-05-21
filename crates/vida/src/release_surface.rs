@@ -835,8 +835,41 @@ fn install_binary_once(
         .map_err(|error| (error, "read_source_metadata"))?
         .permissions();
     fs::set_permissions(staging_path, permissions).map_err(|error| (error, "set_permissions"))?;
-    fs::rename(staging_path, destination).map_err(|error| (error, "rename"))?;
+    replace_destination_binary(staging_path, destination)?;
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_destination_binary(
+    staging_path: &Path,
+    destination: &Path,
+) -> Result<(), (io::Error, &'static str)> {
+    fs::rename(staging_path, destination).map_err(|error| (error, "rename"))
+}
+
+#[cfg(windows)]
+fn replace_destination_binary(
+    staging_path: &Path,
+    destination: &Path,
+) -> Result<(), (io::Error, &'static str)> {
+    let backup_path = release_install_backup_path(staging_path);
+    let _ = fs::remove_file(&backup_path);
+    if destination.exists() {
+        fs::rename(destination, &backup_path)
+            .map_err(|error| (error, "rename_existing_destination"))?;
+    }
+    match fs::rename(staging_path, destination) {
+        Ok(()) => {
+            let _ = fs::remove_file(&backup_path);
+            Ok(())
+        }
+        Err(error) => {
+            if backup_path.exists() {
+                let _ = fs::rename(&backup_path, destination);
+            }
+            Err((error, "rename"))
+        }
+    }
 }
 
 fn install_binary_retry_delay(attempt: usize) -> Duration {
@@ -855,6 +888,16 @@ fn release_install_staging_path(parent: &Path, file_name: &str, attempt: usize) 
         process::id(),
         attempt + 1
     ))
+}
+
+#[cfg(windows)]
+fn release_install_backup_path(staging_path: &Path) -> PathBuf {
+    let file_name = staging_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.replace(".installing.", ".replaced."))
+        .unwrap_or_else(|| format!(".vida.replaced.{}", process::id()));
+    staging_path.with_file_name(file_name)
 }
 
 fn is_text_file_busy_error(error: &io::Error) -> bool {
@@ -1087,6 +1130,28 @@ mod tests {
             Some(receipt.installed_targets[0].fingerprint.as_str())
         );
         assert!(PathBuf::from(&receipt.installed_targets[0].path).is_file());
+    }
+
+    #[test]
+    fn release_install_binary_replaces_existing_destination() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let source = harness.path().join("fake-vida-new");
+        let destination = harness.path().join("bin").join(vida_binary_file_name());
+        fs::create_dir_all(
+            destination
+                .parent()
+                .expect("destination should have parent"),
+        )
+        .expect("destination parent should write");
+        fs::write(&source, b"new fake vida binary").expect("fake source should write");
+        fs::write(&destination, b"old fake vida binary").expect("destination should write");
+
+        install_binary(&source, &destination).expect("install should replace existing binary");
+
+        assert_eq!(
+            fs::read(&destination).expect("destination should remain readable"),
+            b"new fake vida binary"
+        );
     }
 
     #[test]
