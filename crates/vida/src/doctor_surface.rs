@@ -601,15 +601,29 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
-            let boot_compatibility = match store.evaluate_boot_compatibility().await {
-                Ok(summary) => summary,
+            let boot_compatibility = match store.latest_boot_compatibility_summary().await {
+                Ok(Some(summary)) => summary,
+                Ok(None) => match store.evaluate_boot_compatibility().await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("boot compatibility: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                },
                 Err(error) => {
                     eprintln!("boot compatibility: failed ({error})");
                     return ExitCode::from(1);
                 }
             };
-            let migration_preflight = match store.evaluate_migration_preflight().await {
-                Ok(summary) => summary,
+            let migration_preflight = match store.latest_migration_preflight_summary().await {
+                Ok(Some(summary)) => summary,
+                Ok(None) => match store.evaluate_migration_preflight().await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("migration preflight: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                },
                 Err(error) => {
                     eprintln!("migration preflight: failed ({error})");
                     return ExitCode::from(1);
