@@ -269,7 +269,6 @@ impl StateStore {
         Fut: std::future::Future<Output = Result<Self, StateStoreError>>,
     {
         for attempt in 0..AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT {
-            let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(&root)?;
             match open_once(root.clone()).await {
                 Ok(store) => return Ok(store),
                 Err(error) if Self::error_is_lock_contention(&error) => {
@@ -299,6 +298,9 @@ impl StateStore {
     pub async fn open_existing(root: PathBuf) -> Result<Self, StateStoreError> {
         if !root.exists() {
             return Err(StateStoreError::MissingStateDir(root));
+        }
+        if !Self::state_dir_has_existing_datastore_payload(&root)? {
+            return Self::open(root).await;
         }
         let _guard = AuthoritativeOpenGuard::acquire(&root).await?;
         Self::open_with_authoritative_lock_retry(root, Self::open_existing_once).await
@@ -363,8 +365,28 @@ impl StateStore {
         tokio::time::sleep(std::time::Duration::from_millis(DATASTORE_CLOSE_SETTLE_MS)).await;
     }
 
+    fn state_dir_has_existing_datastore_payload(root: &Path) -> Result<bool, StateStoreError> {
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if matches!(
+                file_name.as_ref(),
+                ".vida-authoritative-open.guard"
+                    | "LOCK"
+                    | ".operator-projection-cache-state-marker"
+            ) {
+                continue;
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     async fn open_existing_once(root: PathBuf) -> Result<Self, StateStoreError> {
-        Self::open_once(root).await
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
+        db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
+        Ok(Self { db, root })
     }
 
     async fn open_existing_read_only_once(root: PathBuf) -> Result<Self, StateStoreError> {

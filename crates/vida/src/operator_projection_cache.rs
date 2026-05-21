@@ -327,8 +327,10 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         touch_state_mutation_marker(&root);
         assert!(read_fresh_json_projection(&root, "status-full-latest").is_none());
-        assert!(read_recent_json_projection(&root, "status-full-latest", Duration::from_secs(60))
-            .is_none());
+        assert!(
+            read_recent_json_projection(&root, "status-full-latest", Duration::from_secs(60))
+                .is_none()
+        );
         let _ = fs::remove_dir_all(root);
     }
 

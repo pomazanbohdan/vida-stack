@@ -3658,17 +3658,6 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         }
     };
 
-    let ready_tasks =
-        match crate::task_surface::ready_tasks_scoped_read_only(state_dir.clone(), scope_task_id)
-            .await
-        {
-            Ok(tasks) => tasks,
-            Err(error) => {
-                eprintln!("Failed to compute ready tasks: {error}");
-                return ExitCode::from(1);
-            }
-        };
-
     let store = match crate::task_surface::open_read_only_task_store(state_dir.clone()).await {
         Ok(store) => Some(store),
         Err(error) => {
@@ -3679,6 +3668,32 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
                 eprintln!("Failed to open authoritative state store: {error}");
                 return ExitCode::from(1);
             }
+        }
+    };
+    let all_tasks = match store.as_ref() {
+        Some(store) => match store.list_tasks(None, true).await {
+            Ok(tasks) => tasks,
+            Err(error) => {
+                eprintln!("Failed to list tasks for taskflow next: {error}");
+                return ExitCode::from(1);
+            }
+        },
+        None => match crate::task_surface::load_task_snapshot_rows_with_retry(&state_dir).await {
+            Ok(tasks) => tasks,
+            Err(error) => {
+                eprintln!("Failed to read task snapshot for taskflow next: {error}");
+                return ExitCode::from(1);
+            }
+        },
+    };
+    let ready_tasks = match crate::state_store::StateStore::ready_tasks_scoped_from_rows(
+        &all_tasks,
+        scope_task_id,
+    ) {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            eprintln!("Failed to compute ready tasks: {error}");
+            return ExitCode::from(1);
         }
     };
     let global_latest_run_graph = match store.as_ref() {
@@ -3775,16 +3790,12 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         recovery_holds_unresolved_active_bound_run(recovery.as_ref(), dispatch.as_ref());
     let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
         match (store.as_ref(), latest_run_graph.as_ref()) {
-            (Some(store), Some(status)) => match store.list_tasks(None, true).await {
-                Ok(tasks) => match tasks.iter().find(|task| task.id == status.task_id) {
+            (Some(_), Some(status)) => {
+                match all_tasks.iter().find(|task| task.id == status.task_id) {
                     Some(task) => (task.status == "closed", false),
                     None => (false, true),
-                },
-                Err(error) => {
-                    eprintln!("Failed to read tasks for latest run-graph task state: {error}");
-                    return ExitCode::from(1);
                 }
-            },
+            }
             _ => (false, false),
         };
     let latest_run_graph_legacy_ownerless = match (store.as_ref(), latest_run_graph.as_ref()) {

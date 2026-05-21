@@ -95,7 +95,7 @@ fn load_task_snapshot_rows(
     StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path)
 }
 
-async fn load_task_snapshot_rows_with_retry(
+pub(crate) async fn load_task_snapshot_rows_with_retry(
     state_dir: &std::path::Path,
 ) -> Result<Vec<state_store::TaskRecord>, state_store::StateStoreError> {
     let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(state_dir);

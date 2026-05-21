@@ -522,7 +522,11 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
         let outcome = infer_feedback_outcome_from_close_reason(close_reason);
         let score = default_feedback_score(outcome, &task_class);
         let outcome_inference = close_feedback_outcome_inference(close_reason, outcome, score);
-        let safety_gate = if outcome == "failure" { "hold" } else { "observe" };
+        let safety_gate = if outcome == "failure" {
+            "hold"
+        } else {
+            "observe"
+        };
         return serde_json::json!({
             "status": "recorded",
             "task_class": task_class,

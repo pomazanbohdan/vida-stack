@@ -136,20 +136,16 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
                     Some(receipt.run_id.as_str()),
                 )
         });
+    let all_tasks = store
+        .list_tasks(None, true)
+        .await
+        .map_err(|error| format!("Failed to read tasks for runtime bundle: {error}"))?;
     let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
         match latest_run_graph_status.as_ref() {
-            Some(status) => store
-                .list_tasks(None, true)
-                .await
-                .map(
-                    |tasks| match tasks.iter().find(|task| task.id == status.task_id) {
-                        Some(task) => (task.status == "closed", false),
-                        None => (false, true),
-                    },
-                )
-                .map_err(|error| {
-                    format!("Failed to read tasks for latest run-graph task state: {error}")
-                })?,
+            Some(status) => match all_tasks.iter().find(|task| task.id == status.task_id) {
+                Some(task) => (task.status == "closed", false),
+                None => (false, true),
+            },
             None => (false, false),
         };
     let continuation_binding =
@@ -169,13 +165,15 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             latest_run_graph_task_closed,
             latest_run_graph_task_missing,
         );
-    let taskflow_active_candidates = store
-        .list_tasks(Some("in_progress"), true)
-        .await
-        .map(|tasks| {
-            crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&tasks)
-        })
-        .unwrap_or_default();
+    let in_progress_tasks = all_tasks
+        .iter()
+        .filter(|task| task.status == "in_progress")
+        .cloned()
+        .collect::<Vec<_>>();
+    let taskflow_active_candidates =
+        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
+            &in_progress_tasks,
+        );
     let continuation_binding = crate::continuation_binding_summary::add_taskflow_active_work_truth(
         continuation_binding,
         taskflow_active_candidates,
