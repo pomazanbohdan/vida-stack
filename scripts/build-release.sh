@@ -145,8 +145,8 @@ verify_runtime_binary_version() {
   if [[ -z "$actual" && "$WINDOWS_RELEASE" == "yes" && -f "${binary_path}.version" ]]; then
     actual="$(head -n 1 "${binary_path}.version" | tr -d '\r')"
   fi
-  if [[ "$actual" != "$binary_label $expected_version" ]]; then
-    fail "Packaged $binary_label version mismatch: expected '$binary_label $expected_version', got '${actual:-<no output>}' from $binary_path"
+  if [[ "$actual" != "$binary_label $expected_version" && "$actual" != "$binary_label $expected_version "* ]]; then
+    fail "Packaged $binary_label version mismatch: expected '$binary_label $expected_version' (optionally with build metadata suffix), got '${actual:-<no output>}' from $binary_path"
   fi
 }
 
