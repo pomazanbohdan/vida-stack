@@ -4514,69 +4514,6 @@ async fn seed_existing_task_payload_for_dispatch_init(
     Ok(Some(payload))
 }
 
-fn preview_run_graph_dispatch_init_from_task_snapshot(
-    state_dir: &std::path::Path,
-    run_id: &str,
-) -> Result<Option<RunGraphDispatchInitPreview>, String> {
-    let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
-    let rows = match StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path) {
-        Ok(rows) => rows,
-        Err(_) => return Ok(None),
-    };
-    let Some(task) = rows.into_iter().find(|task| task.id == run_id) else {
-        return Ok(None);
-    };
-    if taskflow_task_status_is_terminal_for_dispatch_init(&task.status) {
-        return Err(format!(
-            "Dispatch-init cannot seed terminal TaskFlow task `{run_id}` with status `{}`; bind a non-terminal bounded unit before dispatch-init.",
-            task.status
-        ));
-    }
-    let request_text = task_record_dispatch_seed_request_text(&task);
-    let snapshot = crate::launcher_activation_snapshot::capture_launcher_activation_snapshot()?;
-    let payload =
-        build_seeded_run_graph_status_from_activation_snapshot(&task.id, &request_text, &snapshot)?;
-    let mut role_selection = payload.role_selection.clone();
-    inject_task_planner_metadata(&mut role_selection.execution_plan, &task.planner_metadata);
-    let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&payload.status)?;
-    let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
-    let mut dispatch_receipt = crate::taskflow_consume::build_runtime_consumption_dispatch_receipt(
-        &role_selection,
-        &run_graph_bootstrap,
-    );
-    crate::runtime_dispatch_state::sync_receipt_configured_activation_assignment(
-        &role_selection,
-        &mut dispatch_receipt,
-    );
-    dispatch_receipt.dispatch_command = crate::runtime_dispatch_command_for_target(
-        &role_selection,
-        &dispatch_receipt.dispatch_target,
-    );
-    let ctx = crate::RuntimeDispatchPacketContext::new(
-        state_dir,
-        &role_selection,
-        &dispatch_receipt,
-        &taskflow_handoff_plan,
-        &run_graph_bootstrap,
-    );
-    let dispatch_packet_path = crate::write_runtime_dispatch_packet(&ctx)?;
-    dispatch_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
-    dispatch_receipt.dispatch_command = dispatch_command_from_packet_path(&dispatch_packet_path)?;
-    Ok(Some(RunGraphDispatchInitPreview::Prepared(
-        PreparedRunGraphDispatchInit {
-            requested_run_id: run_id.to_string(),
-            run_id: task.id,
-            status: payload.status.clone(),
-            role_selection,
-            run_graph_bootstrap,
-            taskflow_handoff_plan,
-            dispatch_receipt,
-            dispatch_packet_path,
-            seed_payload: Some(payload),
-        },
-    )))
-}
-
 async fn preview_run_graph_dispatch_init_artifacts(
     store: &StateStore,
     run_id: &str,
@@ -4742,12 +4679,6 @@ async fn commit_previewed_run_graph_dispatch_init_artifacts(
             let requested_run_id = artifacts.requested_run_id.clone();
             let run_id = artifacts.run_id.clone();
             let mut payload = artifacts.into_json_payload();
-            write_run_graph_dispatch_init_fast_cache(
-                state_dir,
-                &requested_run_id,
-                &run_id,
-                &payload,
-            )?;
 
             let authoritative_commit = async {
                 let store = StateStore::open_existing_with_timeout(
@@ -4793,7 +4724,7 @@ async fn commit_previewed_run_graph_dispatch_init_artifacts(
                 Ok(Err(error)) if StateStore::message_is_lock_contention(&error) => {
                     payload["authoritative_persistence"] = serde_json::json!({
                         "status": "deferred_lock_contention",
-                        "reason": format!("dispatch-init packet and fast-cache receipt were written, but authoritative state-store commit could not acquire the datastore lock within the bounded operator window: {error}"),
+                        "reason": format!("dispatch-init packet/cache were not written because authoritative state-store commit could not acquire the datastore lock within the bounded operator window: {error}"),
                         "retry_surface": "vida taskflow run-graph dispatch-init"
                     });
                 }
@@ -4801,7 +4732,7 @@ async fn commit_previewed_run_graph_dispatch_init_artifacts(
                 Err(_) => {
                     payload["authoritative_persistence"] = serde_json::json!({
                         "status": "deferred_commit_timeout",
-                        "reason": "dispatch-init packet and fast-cache receipt were written, but authoritative state-store commit exceeded the bounded operator window",
+                        "reason": "dispatch-init packet/cache were not written because authoritative state-store commit exceeded the bounded operator window",
                         "retry_surface": "vida taskflow run-graph dispatch-init"
                     });
                 }
@@ -4863,9 +4794,6 @@ async fn run_graph_dispatch_init_from_state_dir(
     match tokio::time::timeout(
         std::time::Duration::from_secs(RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS),
         async {
-            if let Some(preview) = preview_run_graph_dispatch_init_from_task_snapshot(state_dir, run_id)? {
-                return commit_previewed_run_graph_dispatch_init_artifacts(state_dir, preview).await;
-            }
             let store = StateStore::open_existing_read_only(state_dir.to_path_buf())
                 .await
                 .map_err(|error| {
