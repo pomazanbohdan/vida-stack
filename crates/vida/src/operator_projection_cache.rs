@@ -63,14 +63,6 @@ pub(crate) fn read_state_recent_json_projection(
     read_recent_json_projection_with_dependency_marker(state_dir, projection_name, max_age, None)
 }
 
-pub(crate) fn read_state_stale_recent_json_projection(
-    state_dir: &Path,
-    projection_name: &str,
-    max_age: Duration,
-) -> Option<String> {
-    read_recent_json_projection_allowing_state_marker(state_dir, projection_name, max_age, None)
-}
-
 fn read_recent_json_projection_with_dependency_marker(
     state_dir: &Path,
     projection_name: &str,
@@ -95,46 +87,6 @@ fn read_recent_json_projection_with_dependency_marker(
     }
     let body = read_json_without_following_symlinks(&path).ok()?;
     annotate_recent_projection(&body, projection_name, cache_age, max_age).or(Some(body))
-}
-
-fn read_recent_json_projection_allowing_state_marker(
-    state_dir: &Path,
-    projection_name: &str,
-    max_age: Duration,
-    dependency_modified: Option<SystemTime>,
-) -> Option<String> {
-    let path = projection_path(state_dir, projection_name);
-    if path_is_symlink(&path) {
-        return None;
-    }
-    let cache_modified = std::fs::metadata(&path).ok()?.modified().ok()?;
-    if dependency_modified.is_some_and(|modified| cache_modified < modified) {
-        return None;
-    }
-    let cache_age = SystemTime::now().duration_since(cache_modified).ok()?;
-    if cache_age > max_age {
-        return None;
-    }
-    let state_modified = latest_state_mutation_marker(state_dir).ok();
-    let state_marker_newer = state_modified.is_some_and(|modified| cache_modified < modified);
-    let body = read_json_without_following_symlinks(&path).ok()?;
-    annotate_recent_projection_with_status(
-        &body,
-        projection_name,
-        cache_age,
-        max_age,
-        if state_marker_newer {
-            "state_marker_stale_recent_projection"
-        } else {
-            "recent_projection"
-        },
-        if state_marker_newer {
-            "bounded_state_marker_stale_ok_for_doctor_summary_read_only_operator_query"
-        } else {
-            "recent_bounded_stale_ok_for_read_only_operator_query"
-        },
-    )
-    .or(Some(body))
 }
 
 pub(crate) fn write_json_projection(
@@ -312,8 +264,7 @@ mod tests {
         read_fresh_json_projection, read_fresh_json_projection_with_dependency_marker,
         read_recent_json_projection, read_recent_json_projection_with_dependency_marker,
         read_state_fresh_json_projection, read_state_recent_json_projection,
-        read_state_stale_recent_json_projection, touch_state_mutation_marker,
-        write_json_projection,
+        touch_state_mutation_marker, write_json_projection,
     };
     use std::{fs, time::Duration};
 
@@ -446,43 +397,6 @@ mod tests {
         assert!(
             read_recent_json_projection(&root, "status-full-latest", Duration::from_secs(60))
                 .is_none()
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn stale_recent_json_projection_reports_state_marker_staleness() {
-        let root = std::env::temp_dir().join(format!(
-            "vida-operator-projection-cache-stale-recent-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("test clock should support unique ids")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).expect("state root should be writable");
-        let payload = serde_json::json!({"surface": "vida doctor", "status": "pass"});
-        write_json_projection(&root, "doctor-summary-latest", &payload);
-
-        std::thread::sleep(Duration::from_millis(10));
-        touch_state_mutation_marker(&root);
-        assert!(read_state_recent_json_projection(
-            &root,
-            "doctor-summary-latest",
-            Duration::from_secs(60)
-        )
-        .is_none());
-        let stale = read_state_stale_recent_json_projection(
-            &root,
-            "doctor-summary-latest",
-            Duration::from_secs(60),
-        )
-        .expect("stale recent projection should be available inside max age");
-        let stale_json: serde_json::Value =
-            serde_json::from_str(&stale).expect("stale projection should remain json");
-        assert_eq!(
-            stale_json["projection_cache"]["status"],
-            "state_marker_stale_recent_projection"
         );
         let _ = fs::remove_dir_all(root);
     }
