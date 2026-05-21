@@ -426,15 +426,14 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     summary_only,
                 );
                 let host_agents = status_truth_inputs.host_agents;
+                let latest_release_admission_operator_evidence_snapshot_path =
+                    status_truth_inputs.latest_release_admission_operator_evidence_snapshot_path;
                 let latest_final_snapshot_path = if summary_only {
                     status_truth_inputs.latest_final_snapshot_path
                 } else {
-                    crate::release1_contracts::latest_release_admission_operator_evidence_snapshot_path(
-                        store.root(),
-                    )
-                    .ok()
-                    .flatten()
-                    .or(status_truth_inputs.latest_final_snapshot_path)
+                    latest_release_admission_operator_evidence_snapshot_path
+                        .clone()
+                        .or(status_truth_inputs.latest_final_snapshot_path)
                 };
                 let mut root_session_write_guard = status_truth_inputs.root_session_write_guard;
                 let activation_truth = status_truth_inputs.activation_truth;
@@ -499,16 +498,19 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             }
                         };
                     let incomplete_release_admission_operator_evidence =
-                        match if latest_final_snapshot_path.is_some() {
+                        match if latest_release_admission_operator_evidence_snapshot_path.is_some()
+                        {
                             Ok(false)
                         } else if summary_only {
                             crate::runtime_consumption_state::release_admission_operator_evidence_incomplete_from_latest_snapshot(
                                 runtime_consumption.latest_snapshot_path.as_deref(),
                             )
-                        } else {
+                        } else if latest_final_snapshot_path.is_some() {
                             crate::runtime_consumption_state::release_admission_operator_evidence_incomplete(
                                 store.root(),
                             )
+                        } else {
+                            Ok(true)
                         } {
                             Ok(value) => value,
                             Err(error) => {

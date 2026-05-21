@@ -5534,14 +5534,52 @@ fn selected_backend_readiness_payload(
     let project_root = crate::state_store::repo_root();
     let overlay =
         crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(&project_root).ok()?;
+    selected_backend_readiness_payload_from_overlay(
+        &overlay,
+        selected_backend,
+        preferred_profile_id,
+    )
+}
+
+fn selected_backend_readiness_payload_from_overlay(
+    overlay: &serde_yaml::Value,
+    selected_backend: &str,
+    preferred_profile_id: Option<&str>,
+) -> Option<serde_json::Value> {
     let backend_entry =
-        crate::yaml_lookup(&overlay, &["agent_system", "subagents", selected_backend])?;
+        crate::yaml_lookup(overlay, &["agent_system", "subagents", selected_backend])?;
     let backend_class = crate::yaml_lookup(backend_entry, &["subagent_backend_class"])
         .and_then(serde_yaml::Value::as_str)
         .map(str::trim)
         .unwrap_or_default();
     if backend_class != "external_cli" {
         return None;
+    }
+    if let Some(blocker_reason) =
+        crate::runtime_dispatch_state::configured_external_backend_dispatch_blocker(
+            selected_backend,
+            backend_entry,
+        )
+    {
+        let selected_model_profile = preferred_profile_id
+            .map(|profile_id| serde_json::Value::String(profile_id.to_string()))
+            .or_else(|| {
+                crate::yaml_lookup(backend_entry, &["default_model_profile"])
+                    .and_then(serde_yaml::Value::as_str)
+                    .map(|profile_id| serde_json::Value::String(profile_id.to_string()))
+            })
+            .unwrap_or(serde_json::Value::Null);
+        return Some(serde_json::json!({
+            "backend_id": selected_backend,
+            "status": "external_backend_dispatch_blocked",
+            "blocked": true,
+            "blocker_code": "configured_backend_dispatch_failed",
+            "blocker_reason": blocker_reason,
+            "selected_model_profile": selected_model_profile,
+            "next_actions": [
+                format!("Enable and repair external backend `{selected_backend}` in `vida.config.yaml`, or reroute this lane to a receipt-backed backend before dispatch.")
+            ],
+        }));
     }
     Some(
         crate::status_surface_external_cli::external_cli_backend_readiness_verdict_for_profile(
@@ -8337,6 +8375,54 @@ mod tests {
         );
         assert!(actions[1].contains("vida taskflow route explain --run-id run-route-drift --json"));
         assert!(actions[2].contains("model_not_pinned"));
+    }
+
+    #[test]
+    fn route_explain_blocks_disabled_selected_external_backend() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    pi_cli:
+      enabled: false
+      subagent_backend_class: external_cli
+      default_model_profile: pi_gpt55_medium_guarded
+      dispatch:
+        command: vida-pi-agent
+"#,
+        )
+        .expect("overlay should parse");
+        let readiness = super::selected_backend_readiness_payload_from_overlay(
+            &overlay,
+            "pi_cli",
+            Some("pi_gpt55_medium_guarded"),
+        )
+        .expect("disabled external backend should return readiness blocker");
+        let payload = serde_json::json!({
+            "route_present": true,
+            "selected_backend": "pi_cli",
+            "runtime_assignment_enabled": true,
+            "model_selection_enabled": true,
+            "candidate_scope": "unified_carrier_model_profiles",
+            "selected_backend_readiness": readiness,
+            "non_behavioral_route_fields": [],
+        });
+        let blocker_codes =
+            crate::taskflow_routing::route_explain_blocker_codes(&payload, Some(true));
+
+        assert_eq!(
+            payload["selected_backend_readiness"]["status"],
+            "external_backend_dispatch_blocked"
+        );
+        assert_eq!(
+            payload["selected_backend_readiness"]["blocker_code"],
+            "configured_backend_dispatch_failed"
+        );
+        assert_eq!(
+            crate::taskflow_routing::route_explain_status(&payload, Some(true)),
+            "blocked"
+        );
+        assert!(blocker_codes.contains(&"selected_backend_not_ready".to_string()));
     }
 
     #[test]

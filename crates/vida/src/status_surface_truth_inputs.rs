@@ -8,6 +8,7 @@ use crate::status_surface_write_guard::root_session_write_guard_summary_from_sna
 
 pub(crate) struct StatusTruthInputs {
     pub(crate) host_agents: Option<serde_json::Value>,
+    pub(crate) latest_release_admission_operator_evidence_snapshot_path: Option<String>,
     pub(crate) latest_final_snapshot_path: Option<String>,
     pub(crate) latest_recorded_final_snapshot_path: Option<String>,
     pub(crate) root_session_write_guard: serde_json::Value,
@@ -25,12 +26,14 @@ pub(crate) fn build_status_truth_inputs(
     let mut host_agents = status_project_root
         .as_deref()
         .and_then(build_host_agent_status_summary);
-    let latest_final_snapshot_path =
+    let latest_release_admission_operator_evidence_snapshot_path =
         crate::release1_contracts::latest_release_admission_operator_evidence_snapshot_path(
             state_root,
         )
         .ok()
-        .flatten()
+        .flatten();
+    let latest_final_snapshot_path = latest_release_admission_operator_evidence_snapshot_path
+        .clone()
         .or_else(|| {
             if summary_only {
                 runtime_consumption_latest_snapshot_path
@@ -80,6 +83,7 @@ pub(crate) fn build_status_truth_inputs(
 
     StatusTruthInputs {
         host_agents,
+        latest_release_admission_operator_evidence_snapshot_path,
         latest_final_snapshot_path,
         latest_recorded_final_snapshot_path,
         root_session_write_guard,
