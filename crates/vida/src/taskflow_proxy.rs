@@ -3684,27 +3684,6 @@ fn cached_taskflow_next_open_delegated_cycle_projection(cached: &str) -> bool {
         .any(|code| code.as_str() == Some("open_delegated_cycle"))
 }
 
-fn cached_taskflow_graph_summary_stale_pass_projection(cached: &str) -> bool {
-    let Ok(payload) = serde_json::from_str::<serde_json::Value>(cached) else {
-        return false;
-    };
-    if payload.get("status").and_then(serde_json::Value::as_str) != Some("pass") {
-        return false;
-    }
-    let blocker_codes_empty = payload
-        .get("blocker_codes")
-        .and_then(serde_json::Value::as_array)
-        .is_none_or(|codes| codes.is_empty());
-    if !blocker_codes_empty {
-        return false;
-    }
-    payload
-        .get("candidate_task_context")
-        .and_then(|context| context.get("admissible_now"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-}
-
 async fn graph_summary_task_rows(
     state_dir: &Path,
 ) -> Result<Vec<crate::state_store::TaskRecord>, crate::state_store::StateStoreError> {
@@ -4054,26 +4033,6 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             println!("{cached}");
             return cached_operator_projection_exit_code(&cached);
         }
-        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
-            &proxy_state_root,
-            TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
-            TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
-        ) {
-            println!("{cached}");
-            return cached_operator_projection_exit_code(&cached);
-        }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &proxy_state_root,
-                TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
-                TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
-            )
-        {
-            if cached_taskflow_graph_summary_stale_pass_projection(&cached) {
-                println!("{cached}");
-                return cached_operator_projection_exit_code(&cached);
-            }
-        }
     }
 
     let all_tasks = match graph_summary_task_rows(&proxy_state_root).await {
@@ -4126,7 +4085,14 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         }
     };
     let global_latest_run_graph = match store.latest_run_graph_status_for_current_session().await {
-        Ok(summary) => summary,
+        Ok(Some(summary)) => Some(summary),
+        Ok(None) => match store.latest_run_graph_status().await {
+            Ok(summary) => summary,
+            Err(error) => {
+                eprintln!("Failed to read latest run-graph status: {error}");
+                return ExitCode::from(1);
+            }
+        },
         Err(error) => {
             eprintln!("Failed to read latest run-graph status: {error}");
             return ExitCode::from(1);
@@ -4136,7 +4102,14 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         .latest_run_graph_recovery_summary_for_current_session()
         .await
     {
-        Ok(summary) => summary,
+        Ok(Some(summary)) => Some(summary),
+        Ok(None) => match store.latest_run_graph_recovery_summary().await {
+            Ok(summary) => summary,
+            Err(error) => {
+                eprintln!("Failed to read latest recovery summary: {error}");
+                return ExitCode::from(1);
+            }
+        },
         Err(error) => {
             eprintln!("Failed to read latest recovery summary: {error}");
             return ExitCode::from(1);
@@ -4146,7 +4119,14 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         .latest_explicit_run_graph_continuation_binding_for_current_session()
         .await
     {
-        Ok(summary) => summary,
+        Ok(Some(summary)) => Some(summary),
+        Ok(None) => match store.latest_explicit_run_graph_continuation_binding().await {
+            Ok(summary) => summary,
+            Err(error) => {
+                eprintln!("Failed to read latest explicit continuation binding: {error}");
+                return ExitCode::from(1);
+            }
+        },
         Err(error) => {
             eprintln!("Failed to read latest explicit continuation binding: {error}");
             return ExitCode::from(1);
@@ -6205,8 +6185,7 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
-        cached_operator_projection_exit_code, cached_taskflow_graph_summary_stale_pass_projection,
-        cached_taskflow_next_open_delegated_cycle_projection,
+        cached_operator_projection_exit_code, cached_taskflow_next_open_delegated_cycle_projection,
         graph_summary_scheduling_projection_json, graph_summary_task_rows,
         taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
         TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
@@ -6241,22 +6220,6 @@ mod tests {
         ));
         assert!(!cached_taskflow_next_open_delegated_cycle_projection(
             r#"{"status":"blocked","blocker_codes":["no_ready_task_candidates"]}"#
-        ));
-    }
-
-    #[test]
-    fn cached_graph_summary_stale_projection_only_allows_clean_admissible_pass() {
-        assert!(cached_taskflow_graph_summary_stale_pass_projection(
-            r#"{"status":"pass","blocker_codes":[],"candidate_task_context":{"admissible_now":true}}"#
-        ));
-        assert!(!cached_taskflow_graph_summary_stale_pass_projection(
-            r#"{"status":"blocked","blocker_codes":["open_delegated_cycle"],"candidate_task_context":{"admissible_now":true}}"#
-        ));
-        assert!(!cached_taskflow_graph_summary_stale_pass_projection(
-            r#"{"status":"pass","blocker_codes":["runtime_evidence_ambiguous"],"candidate_task_context":{"admissible_now":true}}"#
-        ));
-        assert!(!cached_taskflow_graph_summary_stale_pass_projection(
-            r#"{"status":"pass","blocker_codes":[],"candidate_task_context":{"admissible_now":false}}"#
         ));
     }
 

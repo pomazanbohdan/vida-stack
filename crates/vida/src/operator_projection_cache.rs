@@ -33,7 +33,7 @@ fn read_fresh_json_projection_with_dependency_marker(
     }
     let cache_modified = std::fs::metadata(&path).ok()?.modified().ok()?;
     let state_modified = latest_state_mutation_marker(state_dir).ok()?;
-    if cache_modified < state_modified {
+    if cache_modified <= state_modified {
         return None;
     }
     if dependency_modified.is_some_and(|modified| cache_modified < modified) {
@@ -83,7 +83,7 @@ fn read_recent_json_projection_with_dependency_marker(
     }
     let cache_modified = std::fs::metadata(&path).ok()?.modified().ok()?;
     let state_modified = latest_state_mutation_marker(state_dir).ok()?;
-    if cache_modified < state_modified {
+    if cache_modified <= state_modified {
         return None;
     }
     if dependency_modified.is_some_and(|modified| cache_modified < modified) {
@@ -116,7 +116,7 @@ fn read_recent_json_projection_allowing_state_marker(
         return None;
     }
     let state_modified = latest_state_mutation_marker(state_dir).ok();
-    let state_marker_newer = state_modified.is_some_and(|modified| cache_modified < modified);
+    let state_marker_newer = state_modified.is_some_and(|modified| cache_modified <= modified);
     let body = read_json_without_following_symlinks(&path).ok()?;
     annotate_recent_projection_with_status(
         &body,

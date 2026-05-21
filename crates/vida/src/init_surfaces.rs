@@ -18,8 +18,6 @@ const COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS: u64 = 30;
 const BOOT_RELEASE_VERIFICATION_RETRY_DELAY_MS: u64 = 25;
 const INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS: u64 = 45;
 const LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS: u64 = 30;
-const ORCHESTRATOR_INIT_STALE_PROJECTION_MAX_AGE: std::time::Duration =
-    std::time::Duration::from_secs(60 * 60);
 static AGENT_INIT_READ_SURFACE_GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 fn orchestrator_init_bundle_timeout_payload(state_dir: &Path) -> serde_json::Value {
@@ -448,6 +446,13 @@ fn orchestrator_init_projection_name(full: bool) -> &'static str {
     } else {
         "orchestrator-init-summary-latest"
     }
+}
+
+fn read_orchestrator_init_cached_projection(state_dir: &Path, full: bool) -> Option<String> {
+    crate::operator_projection_cache::read_fresh_json_projection(
+        state_dir,
+        orchestrator_init_projection_name(full),
+    )
 }
 
 fn compact_project_activation_summary(init_view: &serde_json::Value) -> serde_json::Value {
@@ -978,6 +983,36 @@ mod tests {
         {
             std::thread::sleep(Duration::from_millis(25));
         }
+    }
+
+    #[test]
+    fn orchestrator_init_cache_policy_rejects_state_marker_stale_summary_projection() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let payload = json!({
+            "surface": "vida orchestrator-init",
+            "view": "summary",
+            "status": "pass",
+            "init": {
+                "continuation_binding": {
+                    "status": "ambiguous",
+                    "active_bounded_unit": serde_json::Value::Null,
+                    "why_this_unit": serde_json::Value::Null,
+                    "sequential_vs_parallel_posture": "unknown_until_explicit_taskflow_binding"
+                }
+            }
+        });
+        crate::operator_projection_cache::write_json_projection(
+            harness.path(),
+            orchestrator_init_projection_name(false),
+            &payload,
+        );
+
+        assert!(read_orchestrator_init_cached_projection(harness.path(), false).is_some());
+
+        std::thread::sleep(Duration::from_millis(10));
+        crate::operator_projection_cache::touch_state_mutation_marker(harness.path());
+
+        assert!(read_orchestrator_init_cached_projection(harness.path(), false).is_none());
     }
 
     fn run_on_cli_runtime_stack(name: &str, test: impl FnOnce() + Send + 'static) {
@@ -2918,28 +2953,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
         PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
 
     if args.json {
-        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
-            &state_dir,
-            orchestrator_init_projection_name(args.full),
-        ) {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
-        }
-        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
-            &state_dir,
-            orchestrator_init_projection_name(args.full),
-            std::time::Duration::from_secs(60),
-        ) {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
-        }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &state_dir,
-                orchestrator_init_projection_name(args.full),
-                ORCHESTRATOR_INIT_STALE_PROJECTION_MAX_AGE,
-            )
-        {
+        if let Some(cached) = read_orchestrator_init_cached_projection(&state_dir, args.full) {
             println!("{cached}");
             return ExitCode::SUCCESS;
         }
