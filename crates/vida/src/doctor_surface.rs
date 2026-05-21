@@ -1281,37 +1281,41 @@ fn doctor_json_projection_name(summary_only: bool) -> &'static str {
 }
 
 fn doctor_cached_json_projection(state_dir: &Path, summary_only: bool) -> Option<String> {
+    doctor_cached_json_projection_with_dependency_marker(
+        state_dir,
+        summary_only,
+        crate::operator_projection_cache::current_launcher_mutation_marker(),
+    )
+}
+
+fn doctor_cached_json_projection_with_dependency_marker(
+    state_dir: &Path,
+    summary_only: bool,
+    dependency_modified: Option<std::time::SystemTime>,
+) -> Option<String> {
     let projection_name = doctor_json_projection_name(summary_only);
-    let fresh_projection = if summary_only {
-        crate::operator_projection_cache::read_state_fresh_json_projection(
+    let fresh_projection =
+        crate::operator_projection_cache::read_fresh_json_projection_with_dependency_marker(
             state_dir,
             projection_name,
-        )
-    } else {
-        crate::operator_projection_cache::read_fresh_json_projection(state_dir, projection_name)
-    };
+            dependency_modified,
+        );
     if fresh_projection.is_some() {
         return fresh_projection;
     }
-    if summary_only {
-        crate::operator_projection_cache::read_state_recent_json_projection(
-            state_dir,
-            projection_name,
-            DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
-        )
-    } else {
-        crate::operator_projection_cache::read_recent_json_projection(
-            state_dir,
-            projection_name,
-            DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
-        )
-    }
+    crate::operator_projection_cache::read_recent_json_projection_with_dependency_marker(
+        state_dir,
+        projection_name,
+        DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
+        dependency_modified,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_trace_evidence_summary, doctor_cached_json_projection, doctor_operator_blocker_codes,
+        build_trace_evidence_summary, doctor_cached_json_projection,
+        doctor_cached_json_projection_with_dependency_marker, doctor_operator_blocker_codes,
         final_snapshot_missing_release_admission_evidence, selected_effective_bundle_receipt_id,
     };
     use crate::contract_profile_adapter::{
@@ -1355,6 +1359,37 @@ mod tests {
         crate::operator_projection_cache::touch_state_mutation_marker(&root);
 
         assert!(doctor_cached_json_projection(&root, true).is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn doctor_summary_cache_rejects_launcher_marker_stale_projection() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-doctor-summary-launcher-cache-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        fs::write(root.join("manifest"), "stable").expect("state marker should be writable");
+        let payload = serde_json::json!({"surface": "vida doctor", "status": "pass"});
+        crate::operator_projection_cache::write_json_projection(
+            &root,
+            "doctor-summary-latest",
+            &payload,
+        );
+        assert!(doctor_cached_json_projection(&root, true).is_some());
+
+        std::thread::sleep(Duration::from_millis(10));
+        let dependency_modified = std::time::SystemTime::now();
+        assert!(doctor_cached_json_projection_with_dependency_marker(
+            &root,
+            true,
+            Some(dependency_modified),
+        )
+        .is_none());
         let _ = fs::remove_dir_all(root);
     }
 

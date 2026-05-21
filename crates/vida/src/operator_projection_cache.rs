@@ -22,7 +22,7 @@ pub(crate) fn read_state_fresh_json_projection(
     read_fresh_json_projection_with_dependency_marker(state_dir, projection_name, None)
 }
 
-fn read_fresh_json_projection_with_dependency_marker(
+pub(crate) fn read_fresh_json_projection_with_dependency_marker(
     state_dir: &Path,
     projection_name: &str,
     dependency_modified: Option<SystemTime>,
@@ -71,7 +71,7 @@ pub(crate) fn read_state_stale_recent_json_projection(
     read_recent_json_projection_allowing_state_marker(state_dir, projection_name, max_age, None)
 }
 
-fn read_recent_json_projection_with_dependency_marker(
+pub(crate) fn read_recent_json_projection_with_dependency_marker(
     state_dir: &Path,
     projection_name: &str,
     max_age: Duration,
@@ -245,7 +245,7 @@ fn latest_state_mutation_marker(state_dir: &Path) -> std::io::Result<SystemTime>
     Ok(latest)
 }
 
-fn current_launcher_mutation_marker() -> Option<SystemTime> {
+pub(crate) fn current_launcher_mutation_marker() -> Option<SystemTime> {
     std::env::current_exe()
         .ok()
         .and_then(|path| std::fs::metadata(path).ok())
