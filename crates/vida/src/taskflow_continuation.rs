@@ -14,8 +14,6 @@ pub(crate) const CONSUME_CONTINUE_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE: &str =
 pub(crate) const CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE: &str =
     "consume_after_downstream_chain";
 const CONTINUATION_BIND_SURFACE: &str = "vida taskflow continuation bind";
-const CONTINUATION_BIND_PROJECTION_MAX_AGE: std::time::Duration =
-    std::time::Duration::from_secs(60 * 60);
 
 pub(crate) fn is_downstream_chain_continuation_binding_source(binding_source: &str) -> bool {
     matches!(
@@ -124,115 +122,6 @@ fn continuation_bind_success_payload(
             "workflow_class": null,
         },
     })
-}
-
-fn lane_show_projection_name(run_id: &str) -> String {
-    let suffix = run_id
-        .chars()
-        .map(|value| {
-            if value.is_ascii_alphanumeric() || value == '-' || value == '_' {
-                value
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    format!("lane-show-{suffix}")
-}
-
-fn cached_idempotent_continuation_binding(
-    state_dir: &std::path::Path,
-    run_id: &str,
-) -> Option<(RunGraphContinuationBinding, Option<serde_json::Value>)> {
-    if let Some(cached) = crate::operator_projection_cache::read_state_stale_recent_json_projection(
-        state_dir,
-        &lane_show_projection_name(run_id),
-        CONTINUATION_BIND_PROJECTION_MAX_AGE,
-    ) {
-        let payload: serde_json::Value = serde_json::from_str(&cached).ok()?;
-        if let Some(binding_value) = payload
-            .get("projection_truth")
-            .and_then(|truth| truth.get("continuation_binding"))
-            .cloned()
-        {
-            let binding: RunGraphContinuationBinding =
-                serde_json::from_value(binding_value).ok()?;
-            if cached_binding_matches_run(&binding, run_id) {
-                return Some((binding, payload.get("projection_cache").cloned()));
-            }
-        }
-    }
-
-    let cached = crate::operator_projection_cache::read_state_stale_recent_json_projection(
-        state_dir,
-        "orchestrator-init-summary-latest",
-        CONTINUATION_BIND_PROJECTION_MAX_AGE,
-    )?;
-    let payload: serde_json::Value = serde_json::from_str(&cached).ok()?;
-    let summary = payload
-        .get("init")
-        .and_then(|init| init.get("continuation_binding"))?;
-    let active_bounded_unit = summary.get("active_bounded_unit")?.clone();
-    let active_run_id = active_bounded_unit
-        .get("run_id")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or(run_id);
-    let active_task_id = active_bounded_unit
-        .get("task_id")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or(active_run_id);
-    if summary.get("status").and_then(serde_json::Value::as_str) != Some("bound")
-        || summary
-            .get("binding_source")
-            .and_then(serde_json::Value::as_str)
-            != Some("explicit_continuation_bind")
-        || active_run_id != run_id
-    {
-        return None;
-    }
-    let binding = RunGraphContinuationBinding {
-        run_id: active_run_id.to_string(),
-        task_id: active_task_id.to_string(),
-        status: "bound".to_string(),
-        active_bounded_unit,
-        binding_source: "explicit_continuation_bind".to_string(),
-        why_this_unit: summary
-            .get("why_this_unit")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("Explicit continuation binding selected this bounded unit.")
-            .to_string(),
-        primary_path: summary
-            .get("primary_path")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("normal_delivery_path")
-            .to_string(),
-        sequential_vs_parallel_posture: summary
-            .get("sequential_vs_parallel_posture")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("sequential_only_open_cycle")
-            .to_string(),
-        request_text: None,
-        recorded_at: time::OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
-    };
-    if cached_binding_matches_run(&binding, run_id) {
-        Some((binding, payload.get("projection_cache").cloned()))
-    } else {
-        None
-    }
-}
-
-fn cached_binding_matches_run(binding: &RunGraphContinuationBinding, run_id: &str) -> bool {
-    let active_run_id = binding
-        .active_bounded_unit
-        .get("run_id")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or(binding.run_id.as_str());
-    binding.status == "bound"
-        && binding.binding_source == "explicit_continuation_bind"
-        && binding.run_id == run_id
-        && active_run_id == run_id
 }
 
 fn emit_continuation_bind_error(
@@ -548,26 +437,6 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
         }
     };
 
-    if as_json && task_id.is_none() && why.is_none() {
-        let state_dir = proxy_state_dir();
-        if let Some((binding, projection_cache)) =
-            cached_idempotent_continuation_binding(&state_dir, &run_id)
-        {
-            let mut payload = continuation_bind_success_payload(&run_id, &binding);
-            if let Some(cache) = projection_cache {
-                if let Some(object) = payload.as_object_mut() {
-                    object.insert("projection_cache".to_string(), cache);
-                    object.insert(
-                        "idempotent_binding_source".to_string(),
-                        serde_json::Value::String("cached_lane_projection".to_string()),
-                    );
-                }
-            }
-            crate::print_json_pretty(&payload);
-            return ExitCode::SUCCESS;
-        }
-    }
-
     let store = match StateStore::open_existing(proxy_state_dir()).await {
         Ok(store) => store,
         Err(error) => {
@@ -719,8 +588,8 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         build_run_graph_continuation_binding, build_task_graph_continuation_binding,
-        cached_idempotent_continuation_binding, continuation_bind_blocked_payload,
-        continuation_bind_success_payload, parse_bind_args, sync_run_graph_continuation_binding,
+        continuation_bind_blocked_payload, continuation_bind_success_payload, parse_bind_args,
+        run_taskflow_continuation, sync_run_graph_continuation_binding,
         terminal_completed_without_next_unit,
     };
     use std::{
@@ -797,8 +666,8 @@ mod tests {
         assert_eq!(payload["operator_contracts"]["status"], "ok");
     }
 
-    #[test]
-    fn cached_idempotent_continuation_binding_reads_lane_projection() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn continuation_bind_json_rejects_stale_projection_cache_without_state_store() {
         let root = std::env::temp_dir().join(format!(
             "vida-continuation-bind-cache-{}-{}",
             std::process::id(),
@@ -828,35 +697,6 @@ mod tests {
                 }
             }),
         );
-
-        let (cached, projection_cache) =
-            cached_idempotent_continuation_binding(&root, "run-1").expect("cached binding");
-
-        assert_eq!(cached.run_id, "run-1");
-        assert_eq!(cached.binding_source, "explicit_continuation_bind");
-        assert!(projection_cache.is_some());
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn cached_idempotent_continuation_binding_falls_back_to_orchestrator_projection() {
-        let root = std::env::temp_dir().join(format!(
-            "vida-continuation-bind-orchestrator-cache-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0)
-        ));
-        crate::operator_projection_cache::write_json_projection(
-            &root,
-            "lane-show-run-1",
-            &serde_json::json!({
-                "surface": "vida lane",
-                "status": "blocked"
-            }),
-        );
         crate::operator_projection_cache::write_json_projection(
             &root,
             "orchestrator-init-summary-latest",
@@ -879,15 +719,18 @@ mod tests {
                 }
             }),
         );
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(root.clone()));
 
-        let (cached, projection_cache) =
-            cached_idempotent_continuation_binding(&root, "run-1").expect("cached binding");
+        let exit = run_taskflow_continuation(&[
+            "continuation".to_string(),
+            "bind".to_string(),
+            "run-1".to_string(),
+            "--json".to_string(),
+        ])
+        .await;
 
-        assert_eq!(cached.run_id, "run-1");
-        assert_eq!(cached.task_id, "run-1");
-        assert_eq!(cached.binding_source, "explicit_continuation_bind");
-        assert_eq!(cached.active_bounded_unit["active_node"], "coach");
-        assert!(projection_cache.is_some());
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        assert_ne!(exit, std::process::ExitCode::SUCCESS);
 
         let _ = fs::remove_dir_all(&root);
     }
