@@ -705,6 +705,19 @@ fn stale_missing_task_run_graph_resume_error(
     )
 }
 
+async fn receipt_backed_terminal_closure_resume(
+    store: &super::StateStore,
+    status: &crate::state_store::RunGraphStatus,
+    run_id: &str,
+) -> bool {
+    status.lifecycle_stage == "closure_complete"
+        && status.status == "completed"
+        && status.resume_target == "none"
+        && status.next_node.is_none()
+        && status.handoff_state == "none"
+        && matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)))
+}
+
 async fn validate_run_graph_resume_state(
     store: &super::StateStore,
     run_id: &str,
@@ -728,15 +741,11 @@ async fn validate_run_graph_resume_state(
             status.run_id
         ));
     }
+    if receipt_backed_terminal_closure_resume(store, &status, run_id).await {
+        return Ok(());
+    }
     if run_graph_resume_task_missing(store, &status).await? {
         return Err(stale_missing_task_run_graph_resume_error(&status));
-    }
-    if status.lifecycle_stage == "closure_complete"
-        && status.status == "completed"
-        && status.resume_target == "none"
-        && matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)))
-    {
-        return Ok(());
     }
     let active_receipt = store
         .run_graph_dispatch_receipt(run_id)
@@ -778,15 +787,11 @@ async fn validate_run_graph_resume_state_strict(
             status.run_id
         ));
     }
+    if receipt_backed_terminal_closure_resume(store, &status, run_id).await {
+        return Ok(());
+    }
     if run_graph_resume_task_missing(store, &status).await? {
         return Err(stale_missing_task_run_graph_resume_error(&status));
-    }
-    if status.lifecycle_stage == "closure_complete"
-        && status.status == "completed"
-        && status.resume_target == "none"
-        && matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)))
-    {
-        return Ok(());
     }
     let active_receipt = store
         .run_graph_dispatch_receipt(run_id)
@@ -10623,7 +10628,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn validate_run_graph_resume_state_accepts_closure_complete_receipt_backed_lineage() {
+    async fn validate_run_graph_resume_state_accepts_closure_complete_receipt_backed_lineage_with_missing_task(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10693,6 +10699,9 @@ agent_system:
         validate_run_graph_resume_state(&store, run_id)
             .await
             .expect("closure-complete receipt lineage should allow resume validation");
+        validate_run_graph_resume_state_strict(&store, run_id)
+            .await
+            .expect("closure-complete receipt lineage should allow strict resume validation");
         validate_run_graph_resume_state_for_downstream_packet(&store, run_id)
             .await
             .expect("closure-complete receipt lineage should allow downstream resume validation");
