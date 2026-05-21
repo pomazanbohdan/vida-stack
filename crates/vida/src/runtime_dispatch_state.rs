@@ -2769,7 +2769,7 @@ pub(crate) fn configured_external_backend_entry<'a>(
     overlay: &'a serde_yaml::Value,
     backend_id: &str,
 ) -> Option<&'a serde_yaml::Value> {
-    let entry = configured_subagent_entry_any(overlay, backend_id)?;
+    let entry = configured_subagent_entry(overlay, backend_id)?;
     (yaml_string(yaml_lookup(entry, &["subagent_backend_class"])).as_deref()
         == Some("external_cli"))
     .then_some(entry)
