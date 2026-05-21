@@ -6893,7 +6893,9 @@ Required fixture groups:
 11. changed diff rejects old apply token.
 12. apply receipt lists artifact-level before/after hashes.
 
-### Proposed Clarifications For Approval, Set 22
+### Approved Clarifications, Set 22
+
+Approved by operator on 2026-05-21:
 
 1. Wizard is a persisted service/domain state machine, not TUI-local state.
 2. Wizard states include created/inspecting/drafting/validating/invalid/diff_ready/approval_required/apply_queued/applying/applied/stale/cancelled/blocked/failed.
@@ -6972,5 +6974,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/research/vida-service-tui-wizard-architecture-research.md
 created_at: 2026-05-21T08:10:55.0420002Z
-updated_at: 2026-05-21T11:26:17.4146326Z
+updated_at: 2026-05-21T12:08:02.8204972Z
 changelog_ref: vida-service-tui-wizard-architecture-research.changelog.jsonl
