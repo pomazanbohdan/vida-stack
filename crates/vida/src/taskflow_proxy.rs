@@ -3700,20 +3700,17 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             }
         }
     };
-    let all_tasks = match crate::task_surface::load_task_snapshot_rows_with_retry(&state_dir).await
-    {
-        Ok(tasks) => tasks,
-        Err(snapshot_error) => match store.as_ref() {
-            Some(store) => match store.list_tasks(None, true).await {
-                Ok(tasks) => tasks,
-                Err(error) => {
-                    eprintln!(
-                        "Failed to list tasks for taskflow next: {error} (snapshot fallback also failed: {snapshot_error})"
-                    );
-                    return ExitCode::from(1);
-                }
-            },
-            None => {
+    let all_tasks = match store.as_ref() {
+        Some(store) => match store.list_tasks(None, true).await {
+            Ok(tasks) => tasks,
+            Err(error) => {
+                eprintln!("Failed to list tasks for taskflow next: {error}");
+                return ExitCode::from(1);
+            }
+        },
+        None => match crate::task_surface::load_task_snapshot_rows_with_retry(&state_dir).await {
+            Ok(tasks) => tasks,
+            Err(snapshot_error) => {
                 eprintln!("Failed to read task snapshot for taskflow next: {snapshot_error}");
                 return ExitCode::from(1);
             }
