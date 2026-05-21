@@ -16731,6 +16731,17 @@ host_environment:
             .expect("dispatch result should be readable"),
         )
         .expect("dispatch result should decode");
+        let dispatch_result_path = receipt
+            .dispatch_result_path
+            .as_deref()
+            .expect("dispatch result path should persist");
+        assert_eq!(artifact["dispatch_result_path"], dispatch_result_path);
+        assert_eq!(artifact["receipt_path"], dispatch_result_path);
+        assert_eq!(artifact["receipt_status"], "blocked");
+        assert_eq!(
+            artifact["lane_execution_receipt_path"],
+            dispatch_result_path
+        );
         assert_eq!(
             artifact["blocker_code"],
             INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
@@ -19218,6 +19229,10 @@ fn write_runtime_dispatch_result(
     let mut artifact_body = body.clone();
     let result_path_display = result_path.display().to_string();
     if let Some(object) = artifact_body.as_object_mut() {
+        object.insert(
+            "dispatch_result_path".to_string(),
+            serde_json::json!(result_path_display),
+        );
         object.insert("run_id".to_string(), serde_json::json!(receipt.run_id));
         object.insert(
             "recorded_at".to_string(),
@@ -19235,15 +19250,36 @@ fn write_runtime_dispatch_result(
             );
         }
         if is_terminal_dispatch_execution_state(body) {
-            object.insert(
-                "lane_execution_receipt_artifact".to_string(),
-                canonical_lane_execution_receipt_artifact_json(
-                    receipt,
-                    body,
-                    &recorded_at,
-                    &result_path_display,
-                ),
+            let lane_receipt = canonical_lane_execution_receipt_artifact_json(
+                receipt,
+                body,
+                &recorded_at,
+                &result_path_display,
             );
+            let receipt_status = json_string(body.get("status"))
+                .filter(|value| value == "pass" || value == "blocked")
+                .unwrap_or_else(|| {
+                    if json_string(body.get("execution_state")).as_deref() == Some("blocked")
+                        || receipt.dispatch_status == "blocked"
+                    {
+                        "blocked".to_string()
+                    } else {
+                        "pass".to_string()
+                    }
+                });
+            object.insert(
+                "receipt_status".to_string(),
+                serde_json::json!(receipt_status),
+            );
+            object.insert(
+                "receipt_path".to_string(),
+                serde_json::json!(result_path_display),
+            );
+            object.insert(
+                "lane_execution_receipt_path".to_string(),
+                serde_json::json!(result_path_display),
+            );
+            object.insert("lane_execution_receipt_artifact".to_string(), lane_receipt);
         }
         let executed_agent_lane = receipt.dispatch_kind == "agent_lane"
             && json_string(body.get("execution_state")).as_deref() == Some("executed")

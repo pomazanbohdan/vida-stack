@@ -440,6 +440,150 @@ fn agent_init_execute_dispatch_resume_error_payload(
     })
 }
 
+fn agent_init_execute_dispatch_resume_error_payload_with_receipt_evidence(
+    dispatch_mode: &serde_json::Value,
+    error: &str,
+    receipt: Option<&crate::state_store::RunGraphDispatchReceipt>,
+    result_artifact: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let mut payload = agent_init_execute_dispatch_resume_error_payload(dispatch_mode, error);
+    let Some(receipt) = receipt else {
+        return payload;
+    };
+    let dispatch_result_path = receipt.dispatch_result_path.as_deref();
+    let receipt_status = if receipt.dispatch_status == "blocked" || receipt.blocker_code.is_some() {
+        "blocked"
+    } else {
+        "pass"
+    };
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "underlying_dispatch_status".to_string(),
+            serde_json::json!(receipt.dispatch_status),
+        );
+        object.insert(
+            "underlying_lane_status".to_string(),
+            serde_json::json!(receipt.lane_status),
+        );
+        object.insert(
+            "underlying_dispatch_blocker_code".to_string(),
+            serde_json::json!(receipt.blocker_code),
+        );
+        object.insert(
+            "dispatch_result_path".to_string(),
+            serde_json::json!(dispatch_result_path),
+        );
+        object.insert(
+            "receipt_status".to_string(),
+            serde_json::json!(receipt_status),
+        );
+        object.insert(
+            "receipt_path".to_string(),
+            serde_json::json!(dispatch_result_path),
+        );
+        object.insert(
+            "lane_execution_receipt_path".to_string(),
+            serde_json::json!(dispatch_result_path),
+        );
+        if let Some(artifact) = result_artifact {
+            for key in [
+                "activation_evidence",
+                "activation_vs_execution_evidence",
+                "lane_execution_receipt_artifact",
+            ] {
+                if let Some(value) = artifact.get(key) {
+                    object
+                        .entry(key.to_string())
+                        .or_insert_with(|| value.clone());
+                }
+            }
+            if !object.contains_key("activation_evidence") {
+                if let Some(value) = artifact.get("activation_vs_execution_evidence") {
+                    object.insert("activation_evidence".to_string(), value.clone());
+                }
+            }
+        }
+        for key in ["artifact_refs", "operator_contracts", "shared_fields"] {
+            if let Some(section) = object.get_mut(key) {
+                insert_dispatch_receipt_evidence_into_operator_section(
+                    section,
+                    dispatch_result_path,
+                    receipt,
+                );
+            }
+        }
+    }
+    payload
+}
+
+fn insert_dispatch_receipt_evidence_into_operator_section(
+    section: &mut serde_json::Value,
+    dispatch_result_path: Option<&str>,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) {
+    if section
+        .as_object()
+        .is_some_and(|object| object.contains_key("artifact_refs"))
+    {
+        if let Some(artifact_refs) = section.get_mut("artifact_refs") {
+            insert_dispatch_receipt_evidence_into_operator_section(
+                artifact_refs,
+                dispatch_result_path,
+                receipt,
+            );
+        }
+        return;
+    }
+    let Some(object) = section.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "dispatch_result_path".to_string(),
+        serde_json::json!(dispatch_result_path),
+    );
+    object.insert(
+        "receipt_path".to_string(),
+        serde_json::json!(dispatch_result_path),
+    );
+    object.insert(
+        "lane_execution_receipt_path".to_string(),
+        serde_json::json!(dispatch_result_path),
+    );
+    object.insert(
+        "underlying_dispatch_blocker_code".to_string(),
+        serde_json::json!(receipt.blocker_code),
+    );
+}
+
+async fn agent_init_execute_dispatch_resume_error_receipt_evidence(
+    store: &StateStore,
+    error: &str,
+    requested_dispatch_packet_path: Option<&str>,
+) -> (
+    Option<crate::state_store::RunGraphDispatchReceipt>,
+    Option<serde_json::Value>,
+) {
+    let run_id = agent_init_execute_dispatch_resume_error_run_id(error).or_else(|| {
+        requested_dispatch_packet_path
+            .and_then(|path| super::taskflow_consume_resume::read_dispatch_packet(path).ok())
+            .and_then(|packet| string_field(&packet, "run_id"))
+    });
+    let Some(run_id) = run_id else {
+        return (None, None);
+    };
+    let receipt = store
+        .run_graph_dispatch_receipt(&run_id)
+        .await
+        .ok()
+        .flatten();
+    let result_artifact = receipt
+        .as_ref()
+        .and_then(|receipt| receipt.dispatch_result_path.as_deref())
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok());
+    (receipt, result_artifact)
+}
+
 fn orchestrator_init_projection_name(full: bool) -> &'static str {
     if full {
         "orchestrator-init-full-latest"
@@ -3257,7 +3401,9 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
         dispatch_mode,
         &state_root,
         &mut resume_inputs,
-    ) {
+    )
+    .await
+    {
         return exit_code;
     }
 
@@ -3403,7 +3549,7 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
     }
 }
 
-fn execute_agent_init_prelaunch_blocker_without_store_reopen(
+async fn execute_agent_init_prelaunch_blocker_without_store_reopen(
     json_output: bool,
     dispatch_mode: &serde_json::Value,
     state_root: &Path,
@@ -3441,6 +3587,11 @@ fn execute_agent_init_prelaunch_blocker_without_store_reopen(
         eprintln!("Failed to materialize agent-init prelaunch blocker result: {error}");
         return Some(ExitCode::from(1));
     }
+    let persist_warning = persist_agent_init_prelaunch_blocked_dispatch_receipt(
+        state_root,
+        &resume_inputs.dispatch_receipt,
+    )
+    .await;
     let Some(dispatch_result_path) = resume_inputs
         .dispatch_receipt
         .dispatch_result_path
@@ -3469,6 +3620,12 @@ fn execute_agent_init_prelaunch_blocker_without_store_reopen(
     };
     if let Some(object) = result_json.as_object_mut() {
         object.insert("dispatch_mode".to_string(), dispatch_mode.clone());
+        if let Some(warning) = persist_warning {
+            object.insert(
+                "prelaunch_reconciliation_warning".to_string(),
+                serde_json::json!(warning),
+            );
+        }
     }
     if json_output {
         println!(
@@ -3480,6 +3637,40 @@ fn execute_agent_init_prelaunch_blocker_without_store_reopen(
         crate::print_json_pretty(&result_json);
     }
     Some(ExitCode::from(1))
+}
+
+async fn persist_agent_init_prelaunch_blocked_dispatch_receipt(
+    state_root: &Path,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Option<String> {
+    let store = match tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+        StateStore::open_existing(state_root.to_path_buf()),
+    )
+    .await
+    {
+        Ok(Ok(store)) => store,
+        Ok(Err(error)) => {
+            return Some(format!(
+                "authoritative prelaunch-blocker receipt persistence deferred until next safe reopen: failed to reopen state store: {error}"
+            ));
+        }
+        Err(_) => {
+            return Some(format!(
+                "authoritative prelaunch-blocker receipt persistence deferred until next safe reopen: timed out reopening state store after {}s",
+                DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS
+            ));
+        }
+    };
+    store
+        .record_run_graph_dispatch_receipt(receipt)
+        .await
+        .err()
+        .map(|error| {
+            format!(
+                "authoritative prelaunch-blocker receipt persistence deferred until next safe reopen: failed to persist blocked dispatch receipt: {error}"
+            )
+        })
 }
 
 fn string_field(value: &serde_json::Value, field: &str) -> Option<String> {
@@ -3826,10 +4017,19 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                             if args.json {
                                 let dispatch_mode =
                                     agent_init_dispatch_mode(&args, &serde_json::Value::Null);
+                                let (receipt_evidence, result_artifact) =
+                                    agent_init_execute_dispatch_resume_error_receipt_evidence(
+                                        &store,
+                                        &error,
+                                        args.dispatch_packet.as_deref(),
+                                    )
+                                    .await;
                                 crate::print_json_pretty(
-                                    &agent_init_execute_dispatch_resume_error_payload(
+                                    &agent_init_execute_dispatch_resume_error_payload_with_receipt_evidence(
                                         &dispatch_mode,
                                         &error,
+                                        receipt_evidence.as_ref(),
+                                        result_artifact.as_ref(),
                                     ),
                                 );
                                 return ExitCode::from(1);
@@ -6274,6 +6474,83 @@ mod agent_init_surface_tests {
             .as_str()
             .expect("third action should render")
             .contains("vida taskflow route explain --json"));
+    }
+
+    #[test]
+    fn agent_init_resume_gate_error_payload_preserves_existing_blocked_dispatch_evidence() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "epic-2-run".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --execute-dispatch --json".to_string()),
+            dispatch_packet_path: Some("dispatch-packet.json".to_string()),
+            dispatch_result_path: Some("dispatch-result.json".to_string()),
+            blocker_code: Some("internal_codex_carrier_unavailable".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("senior".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-21T00:00:00Z".to_string(),
+        };
+        let payload = agent_init_execute_dispatch_resume_error_payload_with_receipt_evidence(
+            &serde_json::json!({
+                "mode": "dispatch_packet",
+                "execution_dispatch": true
+            }),
+            "Run-graph resume gate denied for `epic-2-run`: recovery_ready is false",
+            Some(&receipt),
+            Some(&serde_json::json!({
+                "activation_vs_execution_evidence": {
+                    "evidence_state": "activation_view_only",
+                    "receipt_backed": false
+                }
+            })),
+        );
+
+        assert_eq!(payload["blocker_code"], "run_graph_recovery_not_ready");
+        assert_eq!(
+            payload["underlying_dispatch_blocker_code"],
+            "internal_codex_carrier_unavailable"
+        );
+        assert_eq!(payload["dispatch_result_path"], "dispatch-result.json");
+        assert_eq!(payload["receipt_status"], "blocked");
+        assert_eq!(payload["receipt_path"], "dispatch-result.json");
+        assert_eq!(
+            payload["lane_execution_receipt_path"],
+            "dispatch-result.json"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["dispatch_result_path"],
+            "dispatch-result.json"
+        );
+        assert_eq!(
+            payload["operator_contracts"]["artifact_refs"]["dispatch_result_path"],
+            "dispatch-result.json"
+        );
+        assert_eq!(
+            payload["activation_evidence"]["evidence_state"],
+            "activation_view_only"
+        );
+        assert_eq!(
+            payload["activation_vs_execution_evidence"]["evidence_state"],
+            "activation_view_only"
+        );
     }
 
     #[test]
