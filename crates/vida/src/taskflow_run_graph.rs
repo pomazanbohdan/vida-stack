@@ -43,6 +43,7 @@ fn recovery_status_projection_name(run_id: &str) -> String {
 fn read_recovery_status_projection(
     state_dir: &std::path::Path,
     projection_name: &str,
+    run_id: &str,
 ) -> Option<String> {
     crate::operator_projection_cache::read_fresh_json_projection(state_dir, projection_name)
         .or_else(|| {
@@ -53,12 +54,63 @@ fn read_recovery_status_projection(
             )
         })
         .or_else(|| {
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
+            let cached = crate::operator_projection_cache::read_state_stale_recent_json_projection(
                 state_dir,
                 projection_name,
                 TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE,
-            )
+            )?;
+            if stale_recovery_projection_matches_lane_truth(state_dir, run_id, &cached) {
+                Some(cached)
+            } else {
+                None
+            }
         })
+}
+
+fn stale_recovery_projection_matches_lane_truth(
+    state_dir: &std::path::Path,
+    run_id: &str,
+    cached: &str,
+) -> bool {
+    let Ok(recovery_payload) = serde_json::from_str::<serde_json::Value>(cached) else {
+        return false;
+    };
+    let recovery_blocked_open_cycle = recovery_payload
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|codes| {
+            codes
+                .iter()
+                .any(|code| code.as_str() == Some("open_delegated_cycle"))
+        });
+    if !recovery_blocked_open_cycle {
+        return true;
+    }
+    let lane_projection_name = format!("lane-show-{}", projection_component(run_id));
+    let Some(lane_cached) =
+        crate::operator_projection_cache::read_state_stale_recent_json_projection(
+            state_dir,
+            &lane_projection_name,
+            TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE,
+        )
+    else {
+        return true;
+    };
+    let Ok(lane_payload) = serde_json::from_str::<serde_json::Value>(&lane_cached) else {
+        return true;
+    };
+    let lane_clean = lane_payload
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(Vec::is_empty)
+        && lane_payload
+            .get("exception_path_receipt_id")
+            .is_some_and(serde_json::Value::is_null)
+        && lane_payload
+            .get("lane_status")
+            .and_then(serde_json::Value::as_str)
+            == Some("lane_completed");
+    !lane_clean
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -2203,7 +2255,9 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         {
             let state_dir = proxy_state_dir();
             let projection_name = recovery_status_projection_name(run_id);
-            if let Some(cached) = read_recovery_status_projection(&state_dir, &projection_name) {
+            if let Some(cached) =
+                read_recovery_status_projection(&state_dir, &projection_name, run_id)
+            {
                 println!("{cached}");
                 return ExitCode::SUCCESS;
             }
@@ -5960,6 +6014,49 @@ mod tests {
             serde_json::json!([RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER])
         );
         assert!(run_graph_dispatch_init_error_evidence("unrelated dispatch-init error").is_none());
+    }
+
+    #[test]
+    fn recovery_status_rejects_stale_blocked_projection_after_clean_lane() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-recovery-stale-projection-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let run_id = "run-1";
+        crate::operator_projection_cache::write_json_projection(
+            &root,
+            &recovery_status_projection_name(run_id),
+            &serde_json::json!({
+                "surface": "vida taskflow recovery status",
+                "status": "blocked",
+                "blocker_codes": ["open_delegated_cycle", "tool_execution_failed"]
+            }),
+        );
+        crate::operator_projection_cache::write_json_projection(
+            &root,
+            "lane-show-run-1",
+            &serde_json::json!({
+                "surface": "vida lane",
+                "status": "pass",
+                "blocker_codes": [],
+                "exception_path_receipt_id": null,
+                "lane_status": "lane_completed"
+            }),
+        );
+        crate::operator_projection_cache::touch_state_mutation_marker(&root);
+
+        assert!(read_recovery_status_projection(
+            &root,
+            &recovery_status_projection_name(run_id),
+            run_id
+        )
+        .is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
