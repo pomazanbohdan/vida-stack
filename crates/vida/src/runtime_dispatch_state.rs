@@ -2722,12 +2722,20 @@ fn configured_subagent_entry<'a>(
     overlay: &'a serde_yaml::Value,
     backend_id: &str,
 ) -> Option<&'a serde_yaml::Value> {
+    let entry = configured_subagent_entry_any(overlay, backend_id)?;
+    yaml_bool(yaml_lookup(entry, &["enabled"]), false).then_some(entry)
+}
+
+fn configured_subagent_entry_any<'a>(
+    overlay: &'a serde_yaml::Value,
+    backend_id: &str,
+) -> Option<&'a serde_yaml::Value> {
     yaml_lookup(overlay, &["agent_system", "subagents"])
         .and_then(serde_yaml::Value::as_mapping)
         .and_then(|entries| {
             entries.iter().find_map(|(key, value)| {
                 let id = key.as_str()?.trim();
-                if id == backend_id && yaml_bool(yaml_lookup(value, &["enabled"]), false) {
+                if id == backend_id {
                     Some(value)
                 } else {
                     None
@@ -2761,7 +2769,7 @@ pub(crate) fn configured_external_backend_entry<'a>(
     overlay: &'a serde_yaml::Value,
     backend_id: &str,
 ) -> Option<&'a serde_yaml::Value> {
-    let entry = configured_subagent_entry(overlay, backend_id)?;
+    let entry = configured_subagent_entry_any(overlay, backend_id)?;
     (yaml_string(yaml_lookup(entry, &["subagent_backend_class"])).as_deref()
         == Some("external_cli"))
     .then_some(entry)
@@ -3151,6 +3159,13 @@ fn external_backend_dispatch_blocker(
         }
     }
     None
+}
+
+pub(crate) fn configured_external_backend_dispatch_blocker(
+    backend_id: &str,
+    backend_entry: &serde_yaml::Value,
+) -> Option<String> {
+    external_backend_dispatch_blocker(backend_id, backend_entry)
 }
 
 fn external_dispatch_command_is_allowlisted(command: &str) -> bool {
@@ -4106,6 +4121,32 @@ fn runtime_agent_lane_dispatch_from_overlay(
                 "selected_cli_system": selected_cli_system,
                 "selected_execution_class": selected_execution_class,
                 "backend_id": internal_host_backend_hint,
+            }),
+        };
+    }
+    if let Some((backend_id, backend_class, backend_entry)) = overlay.and_then(|overlay| {
+        preferred_backend.and_then(|backend_id| {
+            configured_external_backend_entry(overlay, backend_id)
+                .map(|entry| (backend_id.to_string(), "external_cli".to_string(), entry))
+        })
+    }) {
+        return RuntimeAgentLaneDispatch {
+            surface: format!("external_cli:{backend_id}"),
+            activation_command: configured_external_activation_command(
+                &backend_id,
+                backend_entry,
+                project_root,
+                packet_path,
+                preferred_model_profile_id,
+            )
+            .unwrap_or_else(|| agent_init_command_for_packet_path(packet_path)),
+            backend_dispatch: serde_json::json!({
+                "selected_cli_system": selected_cli_system,
+                "selected_execution_class": selected_execution_class,
+                "backend_class": backend_class,
+                "backend_id": backend_id,
+                "selected_model_profile_id": preferred_model_profile_id,
+                "policy_selected_external_backend": true,
             }),
         };
     }
@@ -7113,6 +7154,46 @@ mod tests {
         );
         let updated = serde_yaml::to_string(&document).expect("config should serialize as yaml");
         fs::write(config_path, updated).expect("config should update");
+    }
+
+    fn set_test_subagent_dispatch_command(
+        config_path: &Path,
+        backend_id: &str,
+        command: &str,
+        static_args: &[&str],
+    ) {
+        let config = fs::read_to_string(config_path).expect("config should exist");
+        let mut document: serde_yaml::Value =
+            serde_yaml::from_str(&config).expect("config should parse as yaml");
+        let agent_system_key = serde_yaml::Value::String("agent_system".to_string());
+        let subagents_key = serde_yaml::Value::String("subagents".to_string());
+        let backend_key = serde_yaml::Value::String(backend_id.to_string());
+        let dispatch_key = serde_yaml::Value::String("dispatch".to_string());
+        let dispatch = document
+            .get_mut(&agent_system_key)
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|agent_system| agent_system.get_mut(&subagents_key))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|subagents| subagents.get_mut(&backend_key))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|subagent| subagent.get_mut(&dispatch_key))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("test subagent dispatch should exist");
+        dispatch.insert(
+            serde_yaml::Value::String("command".to_string()),
+            serde_yaml::Value::String(command.to_string()),
+        );
+        dispatch.insert(
+            serde_yaml::Value::String("static_args".to_string()),
+            serde_yaml::Value::Sequence(
+                static_args
+                    .iter()
+                    .map(|arg| serde_yaml::Value::String((*arg).to_string()))
+                    .collect(),
+            ),
+        );
+        let updated = serde_yaml::to_string(&document).expect("config should serialize as yaml");
+        fs::write(config_path, updated).expect("config should update dispatch command");
     }
 
     fn bridge_test_role_selection(dev_task_id: &str) -> RuntimeConsumptionLaneSelection {
@@ -10925,6 +11006,65 @@ mod tests {
     }
 
     #[test]
+    fn runtime_agent_lane_dispatch_surfaces_disabled_preferred_external_backend_for_internal_hosts()
+    {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+        let config_path = harness.path().join("vida.config.yaml");
+        install_external_cli_test_subagents(&config_path);
+        let config = fs::read_to_string(&config_path).expect("config should exist");
+        fs::write(
+            &config_path,
+            config.replace(
+                "hermes_cli:\n  enabled: true\n",
+                "hermes_cli:\n  enabled: false\n",
+            ),
+        )
+        .expect("config should disable hermes");
+
+        let dispatch_packet_path = harness.path().join("runtime-dispatch-packet.json");
+        let dispatch = runtime_agent_lane_dispatch_for_root(
+            harness.path(),
+            dispatch_packet_path.to_string_lossy().as_ref(),
+            Some("hermes_cli"),
+            None,
+        );
+
+        assert_eq!(dispatch.surface, "external_cli:hermes_cli");
+        assert_eq!(dispatch.backend_dispatch["selected_cli_system"], "codex");
+        assert_eq!(
+            dispatch.backend_dispatch["selected_execution_class"],
+            "internal"
+        );
+        assert_eq!(dispatch.backend_dispatch["backend_class"], "external_cli");
+        assert_eq!(dispatch.backend_dispatch["backend_id"], "hermes_cli");
+        assert_eq!(
+            dispatch.backend_dispatch["policy_selected_external_backend"],
+            true
+        );
+    }
+
+    #[test]
     fn runtime_agent_lane_dispatch_keeps_policy_selected_internal_backend_on_agent_init() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -11081,12 +11221,16 @@ mod tests {
         let config_path = harness.path().join("vida.config.yaml");
         install_external_cli_test_subagents(&config_path);
         install_external_cli_test_model_profiles(&config_path);
-        let config = fs::read_to_string(&config_path).expect("config should exist");
-        let updated = config.replace(
-            "command: qwen\n        static_args:\n          - -y\n          - -o\n          - text",
-            "command: sh\n        static_args:\n          - -lc\n          - \"printf 'external-dispatch:%s' \\\"$*\\\"\"\n          - vida-dispatch",
+        set_test_subagent_dispatch_command(
+            &config_path,
+            "opencode_cli",
+            "sh",
+            &[
+                "-lc",
+                "printf 'external-dispatch:%s' \"$*\"",
+                "vida-dispatch",
+            ],
         );
-        fs::write(&config_path, updated).expect("config should update");
 
         let state_root = harness_state_root(&harness);
         runtime
@@ -11225,12 +11369,16 @@ mod tests {
         let config_path = harness.path().join("vida.config.yaml");
         install_external_cli_test_subagents(&config_path);
         install_external_cli_test_model_profiles(&config_path);
-        let config = fs::read_to_string(&config_path).expect("config should exist");
-        let updated = config.replace(
-            "command: qwen\n        static_args:\n          - -y\n          - -o\n          - text",
-            "command: sh\n        static_args:\n          - -lc\n          - \"printf 'external-dispatch:%s' \\\"$1\\\"\"\n          - vida-dispatch",
+        set_test_subagent_dispatch_command(
+            &config_path,
+            "opencode_cli",
+            "sh",
+            &[
+                "-lc",
+                "printf 'external-dispatch:%s' \"$1\"",
+                "vida-dispatch",
+            ],
         );
-        fs::write(&config_path, updated).expect("config should update");
 
         let state_root = harness_state_root(&harness);
         runtime

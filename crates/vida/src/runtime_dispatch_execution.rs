@@ -2228,6 +2228,69 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         (backend_id, backend_entry, backend_class)
     };
 
+    if let Some(dispatch_blocker) =
+        crate::runtime_dispatch_state::configured_external_backend_dispatch_blocker(
+            &backend_id,
+            &backend_entry,
+        )
+    {
+        let readiness_verdict = serde_json::json!({
+            "backend_id": backend_id,
+            "status": "external_backend_dispatch_blocked",
+            "blocked": true,
+            "blocker_code": "configured_backend_dispatch_failed",
+            "blocker_reason": dispatch_blocker,
+            "next_actions": [
+                format!("Enable and repair external backend `{backend_id}` in `vida.config.yaml`, or reroute this lane to a receipt-backed backend before dispatch.")
+            ],
+        });
+        let activation_view = bounded_activation_view(
+            state_root,
+            project_root,
+            dispatch_packet_path,
+            receipt,
+            role_selection,
+        )
+        .await;
+        let mut result = agent_lane_dispatch_result(
+            activation_view,
+            dispatch_packet_path,
+            Some(&backend_id),
+            role_selection,
+            receipt,
+            host_runtime,
+        );
+        let body = result
+            .as_object_mut()
+            .expect("agent lane dispatch result should serialize to an object");
+        body.insert(
+            "blocker_code".to_string(),
+            serde_json::json!("configured_backend_dispatch_failed"),
+        );
+        body.insert(
+            "blocker_reason".to_string(),
+            serde_json::json!(dispatch_blocker),
+        );
+        body.insert("status".to_string(), serde_json::json!("blocked"));
+        body.insert("execution_state".to_string(), serde_json::json!("blocked"));
+        body.insert(
+            "external_backend_readiness".to_string(),
+            readiness_verdict.clone(),
+        );
+        if let Some(dispatch) = body
+            .get_mut("backend_dispatch")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            dispatch.insert(
+                "backend_class".to_string(),
+                serde_json::json!(backend_class.clone()),
+            );
+            dispatch.insert("external_backend_readiness".to_string(), readiness_verdict);
+        }
+        refresh_execution_truth(body, role_selection, receipt, Some(&backend_id), "missing");
+        return Ok(result);
+    }
+
     // Admissibility gate: refuse to dispatch to an external backend that is not
     // admissible for the target lane (e.g. a read-only backend for an implementer lane).
     if !backend_is_admissible_for_dispatch_target(
@@ -4931,6 +4994,84 @@ agent_system:
         assert_eq!(result["provider_is_error"], true);
         assert_eq!(result["provider_error_message"], "adapter boom");
         assert_eq!(result["blocker_reason"], "adapter boom");
+
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn execute_external_agent_lane_dispatch_blocks_disabled_external_backend_before_launch() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-external-dispatch-disabled-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+    hermes_cli:
+      enabled: false
+      subagent_backend_class: external_cli
+      dispatch:
+        command: sh
+        static_args: ["-c", "echo SHOULD_NOT_LAUNCH >&2; exit 99"]
+        prompt_mode: positional
+"#,
+        )
+        .expect("write overlay");
+
+        let role_selection = external_test_role_selection("hermes_cli");
+        let receipt = external_test_receipt("hermes_cli");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let result = runtime
+            .block_on(async {
+                execute_external_agent_lane_dispatch(
+                    project_root.join("missing-state").as_path(),
+                    &project_root,
+                    "/tmp/dispatch-packet.json",
+                    Some("hermes_cli"),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "internal"
+                    }),
+                )
+                .await
+            })
+            .expect("dispatch should return blocked result");
+
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["blocker_code"], "configured_backend_dispatch_failed");
+        assert_eq!(
+            result["external_backend_readiness"]["status"],
+            "external_backend_dispatch_blocked"
+        );
+        assert!(result["blocker_reason"]
+            .as_str()
+            .expect("blocker reason should render")
+            .contains("disabled"));
+        assert!(!result["blocker_reason"]
+            .as_str()
+            .expect("blocker reason should render")
+            .contains("SHOULD_NOT_LAUNCH"));
 
         let _ = std::fs::remove_dir_all(&project_root);
     }
