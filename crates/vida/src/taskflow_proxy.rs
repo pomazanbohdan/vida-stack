@@ -19,6 +19,8 @@ use taskflow_cli::Cli as TaskflowCli;
 const TASKFLOW_SCHEDULER_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
     std::time::Duration::from_secs(300);
+const TASKFLOW_GRAPH_SUMMARY_STALE_PROJECTION_MAX_AGE: std::time::Duration =
+    std::time::Duration::from_secs(30);
 const TASKFLOW_NEXT_PROJECTION_NAME: &str = "taskflow-next-latest";
 const TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME: &str = "taskflow-graph-summary-latest";
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -3656,6 +3658,27 @@ fn cached_taskflow_next_open_delegated_cycle_projection(cached: &str) -> bool {
         .any(|code| code.as_str() == Some("open_delegated_cycle"))
 }
 
+fn cached_taskflow_graph_summary_stale_pass_projection(cached: &str) -> bool {
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(cached) else {
+        return false;
+    };
+    if payload.get("status").and_then(serde_json::Value::as_str) != Some("pass") {
+        return false;
+    }
+    let blocker_codes_empty = payload
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .is_none_or(|codes| codes.is_empty());
+    if !blocker_codes_empty {
+        return false;
+    }
+    payload
+        .get("candidate_task_context")
+        .and_then(|context| context.get("admissible_now"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
 pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     let (as_json, scope_task_id, state_dir) = match parse_taskflow_next_args(args) {
         Ok(TaskflowNextArgs::Help) => {
@@ -3997,6 +4020,18 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         ) {
             println!("{cached}");
             return cached_operator_projection_exit_code(&cached);
+        }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                &proxy_state_dir(),
+                TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
+                TASKFLOW_GRAPH_SUMMARY_STALE_PROJECTION_MAX_AGE,
+            )
+        {
+            if cached_taskflow_graph_summary_stale_pass_projection(&cached) {
+                println!("{cached}");
+                return cached_operator_projection_exit_code(&cached);
+            }
         }
     }
 
@@ -6129,9 +6164,9 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
-        cached_operator_projection_exit_code, cached_taskflow_next_open_delegated_cycle_projection,
-        taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
-        TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
+        cached_operator_projection_exit_code, cached_taskflow_graph_summary_stale_pass_projection,
+        cached_taskflow_next_open_delegated_cycle_projection, taskflow_task_subcommand_supported,
+        GraphSummaryWaveBucket, TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
     };
     use crate::state_store::{
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
@@ -6163,6 +6198,22 @@ mod tests {
         ));
         assert!(!cached_taskflow_next_open_delegated_cycle_projection(
             r#"{"status":"blocked","blocker_codes":["no_ready_task_candidates"]}"#
+        ));
+    }
+
+    #[test]
+    fn cached_graph_summary_stale_projection_only_allows_clean_admissible_pass() {
+        assert!(cached_taskflow_graph_summary_stale_pass_projection(
+            r#"{"status":"pass","blocker_codes":[],"candidate_task_context":{"admissible_now":true}}"#
+        ));
+        assert!(!cached_taskflow_graph_summary_stale_pass_projection(
+            r#"{"status":"blocked","blocker_codes":["open_delegated_cycle"],"candidate_task_context":{"admissible_now":true}}"#
+        ));
+        assert!(!cached_taskflow_graph_summary_stale_pass_projection(
+            r#"{"status":"pass","blocker_codes":["runtime_evidence_ambiguous"],"candidate_task_context":{"admissible_now":true}}"#
+        ));
+        assert!(!cached_taskflow_graph_summary_stale_pass_projection(
+            r#"{"status":"pass","blocker_codes":[],"candidate_task_context":{"admissible_now":false}}"#
         ));
     }
 
