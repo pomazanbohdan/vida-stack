@@ -53,7 +53,12 @@ impl TaskHandoffStatusArg {
 #[command(
     name = "vida",
     bin_name = "vida",
-    version = env!("CARGO_PKG_VERSION"),
+    version = concat!(
+        env!("CARGO_PKG_VERSION"),
+        " (built ",
+        env!("VIDA_BUILD_TIMESTAMP_UTC"),
+        ")"
+    ),
     disable_help_subcommand = true,
     about = "VIDA Binary Foundation",
     long_about = "VIDA Binary Foundation\n\nTaskFlow remains execution authority; DocFlow remains the documentation/readiness surface. Root `lane` and `approval` are family-owned operator surfaces over the delegated runtime law.",
@@ -1253,6 +1258,31 @@ pub(crate) struct OrchestratorSessionTransferArgs {
 mod tests {
     use super::{Cli, TaskCommand};
     use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn root_version_includes_build_timestamp_to_seconds() {
+        let build_timestamp = env!("VIDA_BUILD_TIMESTAMP_UTC");
+        assert_eq!(
+            build_timestamp.len(),
+            20,
+            "build timestamp should use UTC RFC3339 seconds"
+        );
+        assert!(build_timestamp.contains('T'));
+        assert!(build_timestamp.ends_with('Z'));
+        assert!(
+            !build_timestamp.contains('.'),
+            "build timestamp should not include subsecond precision"
+        );
+
+        let version = Cli::command()
+            .get_version()
+            .expect("root CLI version should be configured")
+            .to_string();
+        assert_eq!(
+            version,
+            format!("{} (built {build_timestamp})", env!("CARGO_PKG_VERSION"))
+        );
+    }
 
     #[test]
     fn task_help_lists_mutation_commands() {
