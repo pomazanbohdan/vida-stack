@@ -59,6 +59,10 @@ fn read_recent_json_projection_with_dependency_marker(
         return None;
     }
     let cache_modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+    let state_modified = latest_state_mutation_marker(state_dir).ok()?;
+    if cache_modified < state_modified {
+        return None;
+    }
     if dependency_modified.is_some_and(|modified| cache_modified < modified) {
         return None;
     }
@@ -307,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn recent_json_projection_returns_bounded_stale_projection_after_state_marker_touch() {
+    fn recent_json_projection_invalidates_when_state_marker_is_touched() {
         let root = std::env::temp_dir().join(format!(
             "vida-operator-projection-cache-recent-{}-{}",
             std::process::id(),
@@ -323,13 +327,8 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         touch_state_mutation_marker(&root);
         assert!(read_fresh_json_projection(&root, "status-full-latest").is_none());
-        let recent =
-            read_recent_json_projection(&root, "status-full-latest", Duration::from_secs(60))
-                .expect("recent projection should be admissible");
-        let recent: serde_json::Value =
-            serde_json::from_str(&recent).expect("recent projection should remain json");
-        assert_eq!(recent["surface"], "vida status");
-        assert_eq!(recent["projection_cache"]["status"], "recent_projection");
+        assert!(read_recent_json_projection(&root, "status-full-latest", Duration::from_secs(60))
+            .is_none());
         let _ = fs::remove_dir_all(root);
     }
 
