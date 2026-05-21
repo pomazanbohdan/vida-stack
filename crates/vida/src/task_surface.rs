@@ -19,6 +19,15 @@ impl TaskReadMetadata {
         }
     }
 
+    fn canonical_snapshot_read_model(path: &std::path::Path) -> Self {
+        Self {
+            mode: "canonical_snapshot_read_model",
+            degraded: false,
+            snapshot_path: Some(path.display().to_string()),
+            detail: "served from the canonical task snapshot read model",
+        }
+    }
+
     fn snapshot(path: &std::path::Path, detail: &'static str) -> Self {
         Self {
             mode: "snapshot",
@@ -271,9 +280,28 @@ async fn task_ready_authoritative_first(
     state_dir: std::path::PathBuf,
     scope_task_id: Option<&str>,
 ) -> Result<(Vec<state_store::TaskRecord>, TaskReadMetadata), state_store::StateStoreError> {
+    let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(&state_dir);
+    if let Ok(rows) = StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path) {
+        let tasks = StateStore::ready_tasks_scoped_from_rows(&rows, scope_task_id)?;
+        return Ok((
+            tasks,
+            TaskReadMetadata::canonical_snapshot_read_model(&snapshot_path),
+        ));
+    }
     let (rows, metadata) = load_task_snapshot_rows_authoritative_first(&state_dir).await?;
     let tasks = StateStore::ready_tasks_scoped_from_rows(&rows, scope_task_id)?;
     Ok((tasks, metadata))
+}
+
+async fn task_critical_path_snapshot_first(
+    state_dir: std::path::PathBuf,
+) -> Result<state_store::TaskCriticalPath, state_store::StateStoreError> {
+    let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(&state_dir);
+    if let Ok(rows) = StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path) {
+        return StateStore::critical_path_from_rows(&rows);
+    }
+    let store = StateStore::open_existing_read_only(state_dir).await?;
+    store.critical_path().await
 }
 
 fn task_rows_as_values(
@@ -3020,6 +3048,15 @@ fn continuation_binding_is_historical_task_close_reconcile(
     explicit.binding_source == "task_close_reconcile" && explicit.run_id != current.run_id
 }
 
+fn continuation_binding_is_superseded_same_task_explicit(
+    explicit: &state_store::RunGraphContinuationBinding,
+    current: &state_store::RunGraphContinuationBinding,
+) -> bool {
+    explicit.binding_source == "explicit_continuation_bind_task"
+        && explicit.run_id != current.run_id
+        && explicit.task_id == current.task_id
+}
+
 fn select_task_next_lawful_binding<'a>(
     tasks: &[state_store::TaskRecord],
     explicit_binding: Option<&'a state_store::RunGraphContinuationBinding>,
@@ -3030,6 +3067,11 @@ fn select_task_next_lawful_binding<'a>(
             let explicit_live = continuation_binding_has_live_unit(tasks, explicit);
             let current_live = continuation_binding_has_live_unit(tasks, current);
             if continuation_binding_is_historical_task_close_reconcile(explicit, current)
+                && current_live
+            {
+                return Ok(Some(current));
+            }
+            if continuation_binding_is_superseded_same_task_explicit(explicit, current)
                 && current_live
             {
                 return Ok(Some(current));
@@ -3145,6 +3187,45 @@ fn runtime_recovery_blocks_task_next_lawful(
                 == "blocked_open_delegated_cycle"
             || recovery.resume_status == "running"
     })
+}
+
+fn runtime_binding_has_active_exception_takeover(
+    binding: &state_store::RunGraphContinuationBinding,
+    dispatch: Option<&state_store::RunGraphDispatchReceiptSummary>,
+) -> bool {
+    let Some(dispatch) = dispatch else {
+        return false;
+    };
+    dispatch.run_id == binding.run_id
+        && dispatch.lane_status == "lane_exception_takeover"
+        && dispatch
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && dispatch
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn pass_exception_takeover_task_next_lawful_receipt(
+    binding: &state_store::RunGraphContinuationBinding,
+    ready_task_candidates: Vec<TaskContinuationCandidate>,
+) -> TaskNextLawfulReceipt {
+    pass_task_next_lawful_receipt(
+        binding.active_bounded_unit.clone(),
+        Some("latest_run_graph_exception_takeover_dispatch".to_string()),
+        &format!(
+            "Latest runtime dispatch records exception-takeover evidence for task `{}`.",
+            binding.task_id
+        ),
+        "sequential_only_exception_takeover",
+        ready_task_candidates,
+        format!(
+            "Finish the active exception-takeover unit for `{}` before selecting another TaskFlow step.",
+            binding.task_id
+        ),
+    )
 }
 
 fn task_next_lawful_receipt(
@@ -3899,7 +3980,30 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                         None => None,
                     };
+                    let latest_dispatch_receipt = match store
+                        .latest_run_graph_dispatch_receipt_summary()
+                        .await
+                    {
+                        Ok(receipt) => receipt,
+                        Err(error) => {
+                            eprintln!("Failed to read latest run-graph dispatch receipt: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
                     let receipt = match scoped_runtime_binding {
+                        Some(binding)
+                            if runtime_recovery_blocks_task_next_lawful(
+                                runtime_recovery.as_ref(),
+                            ) && runtime_binding_has_active_exception_takeover(
+                                binding,
+                                latest_dispatch_receipt.as_ref(),
+                            ) =>
+                        {
+                            pass_exception_takeover_task_next_lawful_receipt(
+                                binding,
+                                ready_task_candidates,
+                            )
+                        }
                         Some(binding)
                             if runtime_recovery_blocks_task_next_lawful(
                                 runtime_recovery.as_ref(),
@@ -4677,40 +4781,13 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing_read_only(state_dir.clone()).await {
-                Ok(store) => match store.critical_path().await {
-                    Ok(path) => {
-                        print_task_critical_path(command.render, &path, command.json);
-                        ExitCode::SUCCESS
-                    }
-                    Err(error) => {
-                        eprintln!("Failed to compute critical path: {error}");
-                        ExitCode::from(1)
-                    }
-                },
-                Err(error) if is_authoritative_state_lock_error(&error) => {
-                    let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
-                        Ok(rows) => rows,
-                        Err(snapshot_error) => {
-                            eprintln!(
-                                "Failed to read critical path from snapshot: {snapshot_error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                    };
-                    match StateStore::critical_path_from_rows(&rows) {
-                        Ok(path) => {
-                            print_task_critical_path(command.render, &path, command.json);
-                            ExitCode::SUCCESS
-                        }
-                        Err(error) => {
-                            eprintln!("Failed to compute critical path from snapshot: {error}");
-                            ExitCode::from(1)
-                        }
-                    }
+            match task_critical_path_snapshot_first(state_dir).await {
+                Ok(path) => {
+                    print_task_critical_path(command.render, &path, command.json);
+                    ExitCode::SUCCESS
                 }
                 Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
+                    eprintln!("Failed to compute critical path: {error}");
                     ExitCode::from(1)
                 }
             }
@@ -4727,16 +4804,19 @@ mod tests {
         ensure_existing_task_mismatch_reason, load_adaptive_preview_finding_json,
         normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
         parse_label_values, parse_optional_label_value, parse_split_child_specs,
-        persist_task_handoff_accept_receipt, runtime_binding_open_delegated_cycle_next_action,
-        runtime_recovery_blocks_task_next_lawful, select_task_next_lawful_binding,
-        task_close_automation_receipt, task_close_commit_allowlist_next_actions,
-        task_close_commit_file_strings, task_close_feedback_blocker_summary,
-        task_close_host_agent_telemetry, task_close_uses_isolated_state_dir,
-        task_create_semantics_mismatch, task_create_semantics_requested, task_create_title,
+        pass_exception_takeover_task_next_lawful_receipt, persist_task_handoff_accept_receipt,
+        runtime_binding_has_active_exception_takeover,
+        runtime_binding_open_delegated_cycle_next_action, runtime_recovery_blocks_task_next_lawful,
+        select_task_next_lawful_binding, task_close_automation_receipt,
+        task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
+        task_close_feedback_blocker_summary, task_close_host_agent_telemetry,
+        task_close_uses_isolated_state_dir, task_create_semantics_mismatch,
+        task_create_semantics_requested, task_create_title, task_critical_path_snapshot_first,
         task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
         task_handoff_receipt_root, task_json_success_status, task_next_lawful_receipt,
-        task_owned_status_receipt, task_parent_id, task_update_planner_metadata_arg,
-        validate_task_handoff_accept_receipt, ADAPTIVE_REPLAN_FINDING_KINDS,
+        task_owned_status_receipt, task_parent_id, task_ready_authoritative_first,
+        task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
+        ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -5443,6 +5523,33 @@ mod tests {
     }
 
     #[test]
+    fn task_next_lawful_prefers_current_same_task_over_stale_explicit_run_binding() {
+        let task = owned_task_record("taskflow-case-18-rollout-regression-gate", vec![]);
+        let explicit = test_continuation_binding(
+            "codebase-audit-runtime-helper-dedup-refactor",
+            "taskflow-case-18-rollout-regression-gate",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+        let current = test_continuation_binding(
+            "taskflow-case-18-rollout-regression-gate",
+            "taskflow-case-18-rollout-regression-gate",
+            "consume_continue_deferred_agent_handoff",
+            "run_graph_task",
+        );
+
+        let selected = select_task_next_lawful_binding(&[task], Some(&explicit), Some(&current))
+            .expect("same-task current run should supersede stale explicit task binding")
+            .expect("current binding should select");
+
+        assert_eq!(selected.run_id, "taskflow-case-18-rollout-regression-gate");
+        assert_eq!(
+            selected.binding_source,
+            "consume_continue_deferred_agent_handoff"
+        );
+    }
+
+    #[test]
     fn task_next_lawful_prefers_current_binding_over_stale_closed_explicit_binding() {
         let mut stale_task = owned_task_record("stale-task", vec![]);
         stale_task.status = "closed".to_string();
@@ -5784,6 +5891,66 @@ mod tests {
     }
 
     #[test]
+    fn task_next_lawful_exception_takeover_bypasses_open_cycle_blocker() {
+        let binding = test_continuation_binding(
+            "taskflow-case-18-rollout-regression-gate",
+            "taskflow-case-18-rollout-regression-gate",
+            "consume_continue_deferred_agent_handoff",
+            "run_graph_task",
+        );
+        let dispatch = state_store::RunGraphDispatchReceiptSummary {
+            run_id: "taskflow-case-18-rollout-regression-gate".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("case18-previous-takeover".to_string()),
+            exception_path_receipt_id: Some("case18-current-takeover".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:pi_cli".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("opencode_cli".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "2026-05-21T12:28:00Z".to_string(),
+        };
+
+        assert!(runtime_binding_has_active_exception_takeover(
+            &binding,
+            Some(&dispatch)
+        ));
+        let receipt = pass_exception_takeover_task_next_lawful_receipt(&binding, Vec::new());
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(
+            receipt.binding_source.as_deref(),
+            Some("latest_run_graph_exception_takeover_dispatch")
+        );
+        assert_eq!(
+            receipt.sequential_vs_parallel_posture,
+            "sequential_only_exception_takeover"
+        );
+        assert!(receipt.blocker_codes.is_empty());
+    }
+
+    #[test]
     fn task_next_lawful_command_runs_with_single_ready_task() {
         let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -5807,6 +5974,66 @@ mod tests {
         ])));
 
         assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn task_ready_uses_canonical_snapshot_read_model_before_authoritative_store() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(&store, "task-ready", "Ready task", "task", "open", 2, None).await;
+            store
+                .refresh_task_snapshot()
+                .await
+                .expect("snapshot should refresh");
+
+            let (tasks, metadata) =
+                task_ready_authoritative_first(harness.path().to_path_buf(), None)
+                    .await
+                    .expect("ready tasks should load from snapshot");
+
+            assert_eq!(tasks.len(), 1);
+            assert_eq!(tasks[0].id, "task-ready");
+            assert_eq!(metadata.mode, "canonical_snapshot_read_model");
+            assert!(!metadata.degraded);
+            assert!(metadata.snapshot_path.is_some());
+        });
+    }
+
+    #[test]
+    fn task_critical_path_uses_canonical_snapshot_before_authoritative_store() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(
+                &store,
+                "critical-ready",
+                "Critical ready",
+                "task",
+                "open",
+                1,
+                None,
+            )
+            .await;
+            store
+                .refresh_task_snapshot()
+                .await
+                .expect("snapshot should refresh");
+
+            let path = task_critical_path_snapshot_first(harness.path().to_path_buf())
+                .await
+                .expect("critical path should load from snapshot");
+
+            assert_eq!(path.length, 1);
+            assert_eq!(path.root_task_id.as_deref(), Some("critical-ready"));
+            assert_eq!(path.terminal_task_id.as_deref(), Some("critical-ready"));
+        });
     }
 
     #[test]

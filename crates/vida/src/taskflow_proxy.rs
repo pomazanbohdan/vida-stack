@@ -19,8 +19,6 @@ use taskflow_cli::Cli as TaskflowCli;
 const TASKFLOW_SCHEDULER_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
     std::time::Duration::from_secs(300);
-const TASKFLOW_GRAPH_SUMMARY_STALE_PROJECTION_MAX_AGE: std::time::Duration =
-    std::time::Duration::from_secs(30);
 const TASKFLOW_NEXT_PROJECTION_NAME: &str = "taskflow-next-latest";
 const TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME: &str = "taskflow-graph-summary-latest";
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -230,6 +228,34 @@ fn graph_summary_parallel_contract_fields(
         parallel_blockers,
         parallel_candidates_after_current,
     )
+}
+
+fn graph_summary_scheduling_candidate_json(
+    candidate: &crate::state_store::TaskSchedulingCandidate,
+) -> serde_json::Value {
+    serde_json::json!({
+        "task": graph_summary_task_ref(&candidate.task),
+        "ready_now": candidate.ready_now,
+        "ready_parallel_safe": candidate.ready_parallel_safe,
+        "blocked_by": candidate.blocked_by,
+        "active_critical_path": candidate.active_critical_path,
+        "parallel_blockers": candidate.parallel_blockers,
+    })
+}
+
+fn graph_summary_scheduling_projection_json(
+    scheduling: &crate::state_store::TaskSchedulingProjection,
+) -> serde_json::Value {
+    serde_json::json!({
+        "current_task_id": scheduling.current_task_id,
+        "ready": scheduling.ready.iter().map(graph_summary_scheduling_candidate_json).collect::<Vec<_>>(),
+        "blocked": scheduling.blocked.iter().map(graph_summary_scheduling_candidate_json).collect::<Vec<_>>(),
+        "parallel_candidates_after_current": scheduling
+            .parallel_candidates_after_current
+            .iter()
+            .map(graph_summary_task_ref)
+            .collect::<Vec<_>>(),
+    })
 }
 
 fn normalize_scheduler_path(path: &str) -> Option<String> {
@@ -3679,6 +3705,19 @@ fn cached_taskflow_graph_summary_stale_pass_projection(cached: &str) -> bool {
         .unwrap_or(false)
 }
 
+async fn graph_summary_task_rows(
+    state_dir: &Path,
+) -> Result<Vec<crate::state_store::TaskRecord>, crate::state_store::StateStoreError> {
+    let snapshot_path =
+        crate::state_store::StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
+    if let Ok(rows) = crate::state_store::StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path)
+    {
+        return Ok(rows);
+    }
+    let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf()).await?;
+    store.list_tasks(None, true).await
+}
+
 pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     let (as_json, scope_task_id, state_dir) = match parse_taskflow_next_args(args) {
         Ok(TaskflowNextArgs::Help) => {
@@ -4005,16 +4044,18 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         }
     };
 
+    let proxy_state_root = proxy_state_dir();
+
     if as_json {
         if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
-            &proxy_state_dir(),
+            &proxy_state_root,
             TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
         ) {
             println!("{cached}");
             return cached_operator_projection_exit_code(&cached);
         }
         if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
-            &proxy_state_dir(),
+            &proxy_state_root,
             TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
             TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
         ) {
@@ -4023,9 +4064,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         }
         if let Some(cached) =
             crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &proxy_state_dir(),
+                &proxy_state_root,
                 TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
-                TASKFLOW_GRAPH_SUMMARY_STALE_PROJECTION_MAX_AGE,
+                TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
             )
         {
             if cached_taskflow_graph_summary_stale_pass_projection(&cached) {
@@ -4035,18 +4076,19 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         }
     }
 
-    let store = match crate::state_store::StateStore::open_existing(proxy_state_dir()).await {
-        Ok(store) => store,
+    let all_tasks = match graph_summary_task_rows(&proxy_state_root).await {
+        Ok(tasks) => tasks,
         Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
+            eprintln!("Failed to list tasks for wave summary: {error}");
             return ExitCode::from(1);
         }
     };
 
-    let all_tasks = match store.list_tasks(None, true).await {
-        Ok(tasks) => tasks,
+    let store = match crate::state_store::StateStore::open_existing(proxy_state_root.clone()).await
+    {
+        Ok(store) => store,
         Err(error) => {
-            eprintln!("Failed to list tasks for wave summary: {error}");
+            eprintln!("Failed to open authoritative state store: {error}");
             return ExitCode::from(1);
         }
     };
@@ -4152,7 +4194,6 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-    let proxy_state_root = proxy_state_dir();
     let runtime_consumption = match crate::runtime_consumption_summary(&proxy_state_root) {
         Ok(state) => state,
         Err(error) => {
@@ -4328,7 +4369,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         "global_blockers": operator_session_projection["global_blockers"].clone(),
         "claim_conflicts": operator_session_projection["claim_conflicts"].clone(),
         "runtime_consumption": runtime_consumption,
-        "scheduling": scheduling,
+        "scheduling": graph_summary_scheduling_projection_json(&scheduling),
         "waves": waves,
         "critical_path": critical_path,
     });
@@ -6165,8 +6206,10 @@ mod tests {
     use super::{
         build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
         cached_operator_projection_exit_code, cached_taskflow_graph_summary_stale_pass_projection,
-        cached_taskflow_next_open_delegated_cycle_projection, taskflow_task_subcommand_supported,
-        GraphSummaryWaveBucket, TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
+        cached_taskflow_next_open_delegated_cycle_projection,
+        graph_summary_scheduling_projection_json, graph_summary_task_rows,
+        taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
+        TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
     };
     use crate::state_store::{
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
@@ -6215,6 +6258,34 @@ mod tests {
         assert!(!cached_taskflow_graph_summary_stale_pass_projection(
             r#"{"status":"pass","blocker_codes":[],"candidate_task_context":{"admissible_now":false}}"#
         ));
+    }
+
+    #[test]
+    fn graph_summary_scheduling_projection_omits_large_task_body_fields() {
+        let mut ready = task("ready-with-notes", "task", "open", 1, &[], Vec::new());
+        ready.description = "large description should not be duplicated".repeat(16);
+        ready.notes = Some("large notes should not be duplicated".repeat(16));
+        let scheduling = TaskSchedulingProjection {
+            current_task_id: Some(ready.id.clone()),
+            ready: vec![TaskSchedulingCandidate {
+                task: ready.clone(),
+                ready_now: true,
+                ready_parallel_safe: true,
+                blocked_by: Vec::new(),
+                active_critical_path: true,
+                parallel_blockers: Vec::new(),
+            }],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: vec![ready],
+        };
+
+        let payload = graph_summary_scheduling_projection_json(&scheduling);
+
+        assert_eq!(payload["ready"][0]["task"]["id"], "ready-with-notes");
+        assert!(payload["ready"][0]["task"]["notes"].is_null());
+        assert!(payload["ready"][0]["task"]["description"].is_null());
+        assert!(payload["parallel_candidates_after_current"][0]["notes"].is_null());
+        assert!(payload["parallel_candidates_after_current"][0]["description"].is_null());
     }
 
     fn task(
@@ -6395,6 +6466,52 @@ mod tests {
         assert_eq!(waves.len(), 1);
         assert_eq!(waves[0].wave_id, "wave-2");
         assert_eq!(waves[0].ready_count, 1);
+    }
+
+    #[tokio::test]
+    async fn graph_summary_task_rows_use_canonical_snapshot_read_model() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-graph-summary-snapshot-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "snapshot-ready",
+                title: "Snapshot ready",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("create task");
+        store
+            .refresh_task_snapshot()
+            .await
+            .expect("refresh snapshot");
+        drop(store);
+
+        let rows = graph_summary_task_rows(&root)
+            .await
+            .expect("snapshot rows should load");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "snapshot-ready");
     }
 
     #[tokio::test]

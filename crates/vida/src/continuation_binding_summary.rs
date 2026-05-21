@@ -9,7 +9,8 @@ fn explicit_binding_is_admissible_for_status(
 
     if binding.run_id != status.run_id {
         return binding.binding_source == "explicit_continuation_bind_task"
-            && binding_kind == Some("task_graph_task");
+            && binding_kind == Some("task_graph_task")
+            && (status.status == "completed" || binding.task_id != status.task_id);
     }
     if status.status != "completed" {
         return binding.binding_source != "explicit_continuation_bind_task"
@@ -83,7 +84,16 @@ fn active_exception_takeover_evidence_matches_status(
     let Some(dispatch) = dispatch else {
         return false;
     };
-    if terminal_continue_run_id == Some(status.run_id.as_str()) {
+    let supersedes_distinct_exception = dispatch
+        .exception_path_receipt_id
+        .as_deref()
+        .zip(dispatch.supersedes_receipt_id.as_deref())
+        .is_some_and(|(exception_path, supersedes)| {
+            !exception_path.trim().is_empty()
+                && !supersedes.trim().is_empty()
+                && exception_path != supersedes
+        });
+    if terminal_continue_run_id == Some(status.run_id.as_str()) && !supersedes_distinct_exception {
         return false;
     }
     let exception_takeover_state = crate::release1_contracts::exception_takeover_state(
@@ -705,7 +715,7 @@ pub(crate) fn taskflow_active_candidates_from_tasks(
 ) -> Vec<serde_json::Value> {
     tasks
         .iter()
-        .filter(|task| task.status == "in_progress")
+        .filter(|task| task.status == "in_progress" && task.issue_type != "epic")
         .map(|task| {
             serde_json::json!({
                 "task_id": task.id,
@@ -988,6 +998,55 @@ mod tests {
             .is_some_and(|rows| rows.iter().any(|row| row
                 .as_str()
                 .is_some_and(|value| value.contains("consume continue --run-id task-1 --json")))));
+    }
+
+    #[test]
+    fn active_same_task_run_overrides_stale_explicit_task_binding() {
+        let task_id = "taskflow-case-18-rollout-regression-gate";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(task_id, "coach", "implementation");
+        status.run_id = task_id.to_string();
+        status.task_id = task_id.to_string();
+        status.active_node = "coach".to_string();
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "coach_active".to_string();
+
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "codebase-audit-runtime-helper-dedup-refactor".to_string(),
+            task_id: task_id.to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": task_id,
+                "run_id": "codebase-audit-runtime-helper-dedup-refactor",
+                "task_status": "open",
+                "issue_type": "task",
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: format!("Explicit continuation binding records task `{task_id}`."),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: Some(task_id.to_string()),
+            recorded_at: "2026-05-21T12:04:52Z".to_string(),
+        };
+
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            None,
+            None,
+            false,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["active_bounded_unit"]["run_id"], task_id);
+        assert_eq!(summary["active_bounded_unit"]["task_id"], task_id);
+        assert_eq!(summary["binding_source"], "latest_run_graph_status");
+        assert_eq!(
+            summary["why_this_unit"],
+            "Latest runtime state is still active for task `taskflow-case-18-rollout-regression-gate` at node `coach`."
+        );
     }
 
     #[test]
@@ -1505,6 +1564,42 @@ mod tests {
     }
 
     #[test]
+    fn blocked_latest_run_graph_status_accepts_new_exception_takeover_after_terminal_continue() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "taskflow-case-18-rollout-regression-gate",
+            "taskflow-case-18-rollout-regression-gate",
+            "coach",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+        let mut dispatch = exception_takeover_dispatch("taskflow-case-18-rollout-regression-gate");
+        dispatch.exception_path_receipt_id =
+            Some("case18-local-takeover-continuation-source-drift-20260521-1219".to_string());
+        dispatch.supersedes_receipt_id =
+            Some("case18-local-takeover-task-ready-cache-20260521-1520".to_string());
+
+        let summary = build_continuation_binding_summary(
+            None,
+            Some(&status),
+            None,
+            Some(&dispatch),
+            Some("taskflow-case-18-rollout-regression-gate"),
+            false,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["active_exception_takeover"], true);
+        assert_eq!(
+            summary["binding_source"],
+            "latest_run_graph_exception_takeover_dispatch"
+        );
+        assert_eq!(
+            summary["active_bounded_unit"]["run_id"],
+            "taskflow-case-18-rollout-regression-gate"
+        );
+    }
+
+    #[test]
     fn blocked_latest_run_graph_status_rejects_explicit_normal_binding() {
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             "task-1",
@@ -2000,5 +2095,49 @@ mod tests {
         assert_eq!(summary["binding_scope"], "run_graph_latest");
         assert_eq!(summary["orthogonal_to_taskflow_active_work"], false);
         assert_eq!(summary["active_bounded_unit"]["task_id"], "task-1");
+    }
+
+    #[test]
+    fn taskflow_active_work_truth_ignores_in_progress_epics() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "taskflow-case-18-rollout-regression-gate",
+            "taskflow-case-18-rollout-regression-gate",
+            "coach",
+        );
+        status.task_id = "taskflow-case-18-rollout-regression-gate".to_string();
+        status.active_node = "coach".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+        let mut dispatch = exception_takeover_dispatch("taskflow-case-18-rollout-regression-gate");
+        dispatch.exception_path_receipt_id = Some("case18-current-takeover".to_string());
+        dispatch.supersedes_receipt_id = Some("case18-previous-takeover".to_string());
+
+        let summary = build_continuation_binding_summary(
+            None,
+            Some(&status),
+            None,
+            Some(&dispatch),
+            Some("taskflow-case-18-rollout-regression-gate"),
+            false,
+        );
+        let mut epic = task_record("runtime-normal-operation-recovery-epic", "in_progress");
+        epic.issue_type = "epic".to_string();
+        let taskflow_candidates = taskflow_active_candidates_from_tasks(&[epic]);
+        let summary = add_taskflow_active_work_truth(summary, taskflow_candidates);
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["active_exception_takeover"], true);
+        assert_eq!(
+            summary["binding_source"],
+            "latest_run_graph_exception_takeover_dispatch"
+        );
+        assert_eq!(summary["orthogonal_to_taskflow_active_work"], false);
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "taskflow-case-18-rollout-regression-gate"
+        );
+        assert!(summary["taskflow_active_candidates"]
+            .as_array()
+            .is_some_and(Vec::is_empty));
     }
 }
