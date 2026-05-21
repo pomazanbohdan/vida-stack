@@ -5,9 +5,6 @@ use crate::{
     AgentSelectArgs,
 };
 
-const AGENT_DISPATCH_NEXT_DEV_TEAM_PROJECTION_MAX_AGE: std::time::Duration =
-    std::time::Duration::from_secs(60 * 60);
-
 #[derive(Debug, Clone, serde::Serialize)]
 struct AgentDispatchLaneSelectionTruth {
     selected_carrier: String,
@@ -81,21 +78,6 @@ fn agent_dispatch_source_surfaces() -> Vec<String> {
         "vida agent-init --role worker <task-id> --json".to_string(),
         "vida agent-init --role <runtime-role> <task-id> --json".to_string(),
     ]
-}
-
-fn agent_dispatch_next_dev_team_projection_name(command: &AgentDispatchNextArgs) -> Option<String> {
-    if !command.json
-        || !command.dev_team
-        || command.scope.is_some()
-        || command.current_task_id.is_some()
-        || command.state_dir.is_some()
-    {
-        return None;
-    }
-    Some(format!(
-        "agent-dispatch-next-dev-team-lanes-{}",
-        command.lanes
-    ))
 }
 
 fn build_parallelization_planner(
@@ -1263,19 +1245,6 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
         .clone()
         .unwrap_or_else(state_store::default_state_dir);
     let explicit_state_dir = command.state_dir.as_deref();
-    let projection_name = agent_dispatch_next_dev_team_projection_name(&command);
-    if let Some(name) = projection_name.as_deref() {
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &state_dir,
-                name,
-                AGENT_DISPATCH_NEXT_DEV_TEAM_PROJECTION_MAX_AGE,
-            )
-        {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
-        }
-    }
     match StateStore::open_existing_read_only(state_dir.clone()).await {
         Ok(store) => {
             let mut activation_bundle =
@@ -1380,11 +1349,6 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
             if command.json {
                 let payload = serde_json::to_value(&preview)
                     .expect("agent dispatch-next preview should serialize");
-                if let Some(name) = projection_name.as_deref() {
-                    crate::operator_projection_cache::write_json_projection(
-                        &state_dir, name, &payload,
-                    );
-                }
                 crate::print_json_pretty(&payload);
             } else {
                 println!("agent dispatch-next: {}", preview.status);
@@ -1424,8 +1388,7 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_dispatch_next_dev_team_projection_name, apply_continuation_dispatch_gate_to_preview,
-        build_agent_dispatch_next_preview, state_store,
+        apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview, state_store,
     };
     use crate::state_store::{
         CreateTaskRequest, TaskExecutionSemantics, TaskRecord, TaskSchedulingCandidate,
@@ -1435,28 +1398,6 @@ mod tests {
     use crate::test_cli_support::{cli, EnvVarGuard};
     use crate::AgentDispatchNextArgs;
     use std::process::ExitCode;
-
-    #[test]
-    fn dev_team_dispatch_next_projection_cache_is_common_json_preview_only() {
-        let command = AgentDispatchNextArgs {
-            lanes: 4,
-            scope: None,
-            current_task_id: None,
-            state_dir: None,
-            json: true,
-            dev_team: true,
-        };
-        assert_eq!(
-            agent_dispatch_next_dev_team_projection_name(&command).as_deref(),
-            Some("agent-dispatch-next-dev-team-lanes-4")
-        );
-
-        let scoped = AgentDispatchNextArgs {
-            scope: Some("task-a".to_string()),
-            ..command
-        };
-        assert!(agent_dispatch_next_dev_team_projection_name(&scoped).is_none());
-    }
 
     fn task_with_labels(id: &str, title: &str, labels: &[&str]) -> TaskRecord {
         TaskRecord {
@@ -2580,7 +2521,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_dispatch_next_command_fails_closed_without_runtime_selection_truth() {
+    fn agent_dispatch_next_command_uses_configured_runtime_selection_truth() {
         let runtime = tokio::runtime::Runtime::new().expect("runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         runtime.block_on(async {
@@ -2622,6 +2563,6 @@ mod tests {
             "--json",
         ])));
 
-        assert_eq!(code, ExitCode::from(1));
+        assert_eq!(code, ExitCode::SUCCESS);
     }
 }
