@@ -1798,6 +1798,29 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     host_runtime: serde_json::Value,
 ) -> Result<Option<serde_json::Value>, String> {
+    execute_internal_agent_lane_dispatch_with_fallback_policy(
+        state_root,
+        project_root,
+        dispatch_packet_path,
+        preferred_backend,
+        role_selection,
+        receipt,
+        host_runtime,
+        true,
+    )
+    .await
+}
+
+async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
+    state_root: &Path,
+    project_root: &Path,
+    dispatch_packet_path: &str,
+    preferred_backend: Option<&str>,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    host_runtime: serde_json::Value,
+    allow_internal_codex_external_fallback: bool,
+) -> Result<Option<serde_json::Value>, String> {
     let Some(backend_id) = preferred_backend.or(receipt.selected_backend.as_deref()) else {
         return Err(format!(
             "Dispatch target `{}` is routed to an internal agent lane but no backend id was resolved",
@@ -1858,36 +1881,38 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         &command,
         &args,
     ) {
-        if let Some(fallback_backend) = internal_codex_external_fallback_backend(
-            role_selection,
-            &receipt.dispatch_target,
-            backend_id,
-            &overlay,
-        ) {
-            let mut result = Box::pin(execute_external_agent_lane_dispatch(
-                state_root,
-                project_root,
-                dispatch_packet_path,
-                Some(&fallback_backend),
+        if allow_internal_codex_external_fallback {
+            if let Some(fallback_backend) = internal_codex_external_fallback_backend(
                 role_selection,
-                receipt,
-                host_runtime.clone(),
-            ))
-            .await?;
-            if let Some(body) = result.as_object_mut() {
-                body.insert(
-                    "internal_codex_external_fallback".to_string(),
-                    serde_json::json!({
-                        "blocked_backend": backend_id,
-                        "blocker_code": "internal_codex_carrier_unavailable",
-                        "blocker_reason": blocker_reason,
-                        "fallback_backend": fallback_backend,
-                        "fallback_source": "route_admissible_external_backend",
-                        "selected_cli_system": selected_cli_system,
-                    }),
-                );
+                &receipt.dispatch_target,
+                backend_id,
+                &overlay,
+            ) {
+                let mut result = Box::pin(execute_external_agent_lane_dispatch(
+                    state_root,
+                    project_root,
+                    dispatch_packet_path,
+                    Some(&fallback_backend),
+                    role_selection,
+                    receipt,
+                    host_runtime.clone(),
+                ))
+                .await?;
+                if let Some(body) = result.as_object_mut() {
+                    body.insert(
+                        "internal_codex_external_fallback".to_string(),
+                        serde_json::json!({
+                            "blocked_backend": backend_id,
+                            "blocker_code": "internal_codex_carrier_unavailable",
+                            "blocker_reason": blocker_reason,
+                            "fallback_backend": fallback_backend,
+                            "fallback_source": "route_admissible_external_backend",
+                            "selected_cli_system": selected_cli_system,
+                        }),
+                    );
+                }
+                return Ok(Some(result));
             }
-            return Ok(Some(result));
         }
         let activation_view = bounded_activation_view(
             state_root,
@@ -2244,6 +2269,65 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
                 format!("Enable and repair external backend `{backend_id}` in `vida.config.yaml`, or reroute this lane to a receipt-backed backend before dispatch.")
             ],
         });
+        if let Some(fallback_backend) = ready_external_readiness_fallback_backend(
+            role_selection,
+            &receipt.dispatch_target,
+            &backend_id,
+            &overlay,
+            receipt.selected_backend.as_deref(),
+        ) {
+            let mut result = Box::pin(execute_external_agent_lane_dispatch(
+                state_root,
+                project_root,
+                dispatch_packet_path,
+                Some(&fallback_backend),
+                role_selection,
+                receipt,
+                host_runtime.clone(),
+            ))
+            .await?;
+            if let Some(body) = result.as_object_mut() {
+                body.insert(
+                    "external_dispatch_blocker_external_fallback".to_string(),
+                    serde_json::json!({
+                        "blocked_backend": backend_id,
+                        "fallback_backend": fallback_backend,
+                        "readiness": readiness_verdict,
+                    }),
+                );
+            }
+            return Ok(result);
+        }
+        if let Some(fallback_backend) = readiness_fallback_internal_backend(
+            role_selection,
+            &receipt.dispatch_target,
+            &backend_id,
+        ) {
+            if let Some(mut result) = execute_internal_agent_lane_dispatch_with_fallback_policy(
+                state_root,
+                project_root,
+                dispatch_packet_path,
+                Some(&fallback_backend),
+                role_selection,
+                receipt,
+                host_runtime.clone(),
+                false,
+            )
+            .await?
+            {
+                if let Some(body) = result.as_object_mut() {
+                    body.insert(
+                        "external_dispatch_blocker_internal_fallback".to_string(),
+                        serde_json::json!({
+                            "blocked_backend": backend_id,
+                            "fallback_backend": fallback_backend,
+                            "readiness": readiness_verdict,
+                        }),
+                    );
+                }
+                return Ok(result);
+            }
+        }
         let activation_view = bounded_activation_view(
             state_root,
             project_root,
@@ -2389,7 +2473,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             &receipt.dispatch_target,
             &backend_id,
         ) {
-            if let Some(mut result) = execute_internal_agent_lane_dispatch(
+            if let Some(mut result) = execute_internal_agent_lane_dispatch_with_fallback_policy(
                 state_root,
                 project_root,
                 dispatch_packet_path,
@@ -2397,6 +2481,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
                 role_selection,
                 receipt,
                 host_runtime.clone(),
+                false,
             )
             .await?
             {
@@ -3589,6 +3674,110 @@ agent_system:
         let _ = std::fs::remove_dir_all(&project_root);
     }
 
+    #[test]
+    fn external_readiness_internal_fallback_preserves_internal_codex_blocker() {
+        let blocked_external_backend = "disabled_external_fixture";
+        let internal_backend = "internal_fixture";
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-external-internal-codex-blocker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        std::fs::write(
+            project_root.join("dispatch.json"),
+            r#"{"prompt":"EXTERNAL_INTERNAL_BLOCKER"}"#,
+        )
+        .expect("write dispatch packet");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            internal_codex_disabled_external_primary_overlay(),
+        )
+        .expect("write overlay");
+
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": blocked_external_backend,
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "analysis": true,
+                        "implementation": true
+                    }
+                },
+                {
+                    "backend_id": internal_backend,
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "analysis": true,
+                        "implementation": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "analysis": {
+                    "executor_backend": blocked_external_backend,
+                    "fallback_executor_backend": internal_backend,
+                    "fanout_executor_backends": []
+                }
+            },
+            "runtime_assignment": {
+                "activation_agent_type": "middle",
+                "selected_tier": "middle"
+            }
+        }));
+        let mut receipt = internal_codex_fallback_receipt(
+            project_root
+                .join("dispatch.json")
+                .to_str()
+                .expect("dispatch path should render"),
+        );
+        receipt.selected_backend = Some(blocked_external_backend.to_string());
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let result = runtime
+            .block_on(async {
+                super::execute_external_agent_lane_dispatch(
+                    project_root.join("missing-state").as_path(),
+                    &project_root,
+                    receipt
+                        .dispatch_packet_path
+                        .as_deref()
+                        .expect("receipt dispatch packet path"),
+                    Some(blocked_external_backend),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "internal"
+                    }),
+                )
+                .await
+            })
+            .expect("dispatch should return");
+
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["blocker_code"], "internal_codex_carrier_unavailable");
+        assert_eq!(result["backend_dispatch"]["backend_id"], internal_backend);
+        assert_eq!(
+            result["external_dispatch_blocker_internal_fallback"]["blocked_backend"],
+            blocked_external_backend
+        );
+        assert_eq!(
+            result["external_dispatch_blocker_internal_fallback"]["fallback_backend"],
+            internal_backend
+        );
+        assert!(result["internal_codex_external_fallback"].is_null());
+
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
     fn internal_codex_external_fallback_overlay() -> &'static str {
         r#"
 host_environment:
@@ -3633,6 +3822,46 @@ agent_system:
           - vida-dispatch
         prompt_mode: positional
         prompt_template: "FALLBACK_OK"
+"#
+    }
+
+    fn internal_codex_disabled_external_primary_overlay() -> &'static str {
+        r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      dispatch:
+        command: codex
+        static_args: ["exec", "--json"]
+        prompt_mode: positional
+      carriers:
+        middle:
+          model: fixture-model
+          model_reasoning_effort: medium
+          sandbox_mode: workspace-write
+agent_system:
+  subagents:
+    disabled_external_fixture:
+      enabled: false
+      subagent_backend_class: external_cli
+      dispatch:
+        command: qwen
+        prompt_mode: positional
+    internal_fixture:
+      enabled: true
+      subagent_backend_class: internal
+      default_model_profile: internal_fast
+      model_profiles:
+        internal_fast:
+          provider: internal
+          reasoning_effort: medium
+          normalized_cost_units: 4
+          write_scope: orchestrator_native
+          runtime_roles: [business_analyst]
+          task_classes: [analysis]
 "#
     }
 
