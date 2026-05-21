@@ -12,6 +12,9 @@ const DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS: [&str; 3] = [
 ];
 const CONSUME_RESUME_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const CONSUME_RESUME_PREPARATION_GATE_TIMEOUT: Duration = Duration::from_secs(10);
+const CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_NAME: &str =
+    "taskflow-consume-continue-deferred-handoff";
+const CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 
 async fn consume_continue_handoff_with_timeout<F>(
     label: &str,
@@ -2051,6 +2054,11 @@ fn emit_deferred_agent_handoff_json(
                 "Failed to preserve deferred handoff output parity: {error}"
             ));
         }
+        crate::operator_projection_cache::write_json_projection(
+            store.root(),
+            CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_NAME,
+            &output_payload,
+        );
         println!(
             "{}",
             serde_json::to_string_pretty(&output_payload)
@@ -2456,15 +2464,37 @@ async fn fast_deferred_agent_handoff_resume_inputs(
     {
         return Ok(None);
     }
-    let Some(run_id) = requested_run_id else {
-        return Ok(None);
-    };
-    let Some(receipt) = store
-        .run_graph_dispatch_receipt(run_id)
-        .await
-        .map_err(|error| format!("Failed to read persisted run-graph dispatch receipt: {error}"))?
-    else {
-        return Ok(None);
+    let receipt = if let Some(run_id) = requested_run_id {
+        let Some(receipt) = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .map_err(|error| {
+                format!("Failed to read persisted run-graph dispatch receipt: {error}")
+            })?
+        else {
+            return Ok(None);
+        };
+        receipt
+    } else {
+        let Some(receipt) = store
+            .latest_run_graph_dispatch_receipt()
+            .await
+            .map_err(|error| {
+                format!("Failed to read latest persisted run-graph dispatch receipt: {error}")
+            })?
+        else {
+            return Ok(None);
+        };
+        if let Some(binding) = store
+            .latest_explicit_run_graph_continuation_binding()
+            .await
+            .map_err(|error| format!("Failed to read explicit continuation binding: {error}"))?
+        {
+            if binding.status == "bound" && binding.run_id != receipt.run_id {
+                return Ok(None);
+            }
+        }
+        receipt
     };
     if !consume_continue_should_defer_agent_handoff(surface_name, &receipt) {
         return Ok(None);
@@ -5209,6 +5239,108 @@ fn cached_deferred_handoff_projection_path(
     )
 }
 
+fn cached_consume_continue_deferred_handoff_projection_is_admissible(
+    cached: &str,
+    requested_run_id: Option<&str>,
+) -> bool {
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(cached) else {
+        return false;
+    };
+    if payload.get("surface").and_then(serde_json::Value::as_str)
+        != Some("vida taskflow consume continue")
+        || payload.get("status").and_then(serde_json::Value::as_str) != Some("pass")
+    {
+        return false;
+    }
+    if !payload
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        return false;
+    }
+    let source_run_id = payload
+        .get("source_run_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if requested_run_id.is_some() && source_run_id != requested_run_id {
+        return false;
+    }
+    let dispatch_receipt = &payload["dispatch_receipt"];
+    if dispatch_receipt
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        != source_run_id
+        || dispatch_receipt
+            .get("dispatch_kind")
+            .and_then(serde_json::Value::as_str)
+            != Some("agent_lane")
+        || dispatch_receipt
+            .get("dispatch_status")
+            .and_then(serde_json::Value::as_str)
+            != Some("routed")
+        || dispatch_receipt
+            .get("blocker_code")
+            .is_some_and(|value| !value.is_null())
+    {
+        return false;
+    }
+    let packet_path = dispatch_receipt
+        .get("dispatch_packet_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    packet_path
+        == payload
+            .get("source_dispatch_packet_path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+}
+
+fn try_emit_cached_consume_continue_deferred_handoff_projection(
+    state_dir: &std::path::Path,
+    surface_name: &str,
+    requested_run_id: Option<&str>,
+    requested_dispatch_packet_path: Option<&str>,
+    requested_downstream_packet_path: Option<&str>,
+    as_json: bool,
+) -> Option<ExitCode> {
+    if surface_name != "vida taskflow consume continue"
+        || !as_json
+        || requested_dispatch_packet_path.is_some()
+        || requested_downstream_packet_path.is_some()
+    {
+        return None;
+    }
+    for cached in [
+        crate::operator_projection_cache::read_state_fresh_json_projection(
+            state_dir,
+            CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_NAME,
+        ),
+        crate::operator_projection_cache::read_state_recent_json_projection(
+            state_dir,
+            CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_NAME,
+            CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_MAX_AGE,
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if cached_consume_continue_deferred_handoff_projection_is_admissible(
+            &cached,
+            requested_run_id,
+        ) {
+            println!("{cached}");
+            return Some(ExitCode::SUCCESS);
+        }
+    }
+    None
+}
+
 fn try_emit_cached_deferred_agent_handoff_projection(
     state_dir: &std::path::Path,
     surface_name: &str,
@@ -5373,6 +5505,18 @@ pub(crate) async fn run_taskflow_consume_resume_command(
     surface_name: &str,
     emit_output: bool,
 ) -> ExitCode {
+    if emit_output {
+        if let Some(exit_code) = try_emit_cached_consume_continue_deferred_handoff_projection(
+            &state_dir,
+            surface_name,
+            requested_run_id.as_deref(),
+            requested_dispatch_packet_path.as_deref(),
+            requested_downstream_packet_path.as_deref(),
+            as_json,
+        ) {
+            return exit_code;
+        }
+    }
     match try_emit_cached_deferred_agent_handoff_projection(
         &state_dir,
         surface_name,
@@ -5401,7 +5545,28 @@ pub(crate) async fn run_taskflow_consume_resume_command(
             let role_selection;
             let run_graph_bootstrap;
             let state_root = store.root().to_path_buf();
-            if requested_run_id.is_none()
+            let fast_deferred_resume_inputs = match fast_deferred_agent_handoff_resume_inputs(
+                &store,
+                surface_name,
+                requested_run_id.as_deref(),
+                requested_dispatch_packet_path.as_deref(),
+                requested_downstream_packet_path.as_deref(),
+            )
+            .await
+            {
+                Ok(inputs) => inputs,
+                Err(error) => {
+                    if emit_output {
+                        eprintln!("{error}");
+                        if as_json {
+                            emit_consume_continue_resume_error_json(&error, surface_name);
+                        }
+                    }
+                    return ExitCode::from(1);
+                }
+            };
+            if fast_deferred_resume_inputs.is_none()
+                && requested_run_id.is_none()
                 && requested_dispatch_packet_path.is_none()
                 && requested_downstream_packet_path.is_none()
             {
@@ -5424,17 +5589,9 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     return ExitCode::from(1);
                 }
             }
-            let resolved_resume_inputs = match fast_deferred_agent_handoff_resume_inputs(
-                &store,
-                surface_name,
-                requested_run_id.as_deref(),
-                requested_dispatch_packet_path.as_deref(),
-                requested_downstream_packet_path.as_deref(),
-            )
-            .await
-            {
-                Ok(Some(inputs)) => Ok(inputs),
-                Ok(None) => {
+            let resolved_resume_inputs = match fast_deferred_resume_inputs {
+                Some(inputs) => Ok(inputs),
+                None => {
                     resolve_runtime_consumption_resume_inputs(
                         &store,
                         requested_run_id.as_deref(),
@@ -5443,7 +5600,6 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     )
                     .await
                 }
-                Err(error) => Err(error),
             };
             match resolved_resume_inputs {
                 Ok(ResumeInputs {
@@ -5456,6 +5612,25 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     dispatch_packet_path = packet_path;
                     role_selection = selection;
                     run_graph_bootstrap = bootstrap;
+                    if dispatch_receipt.dispatch_status == "routed"
+                        && consume_continue_should_defer_agent_handoff(
+                            surface_name,
+                            &dispatch_receipt,
+                        )
+                    {
+                        return persist_and_emit_deferred_agent_handoff(
+                            &store,
+                            surface_name,
+                            &dispatch_packet_path,
+                            &dispatch_receipt,
+                            &role_selection,
+                            requested_run_id.as_deref(),
+                            false,
+                            emit_output,
+                            as_json,
+                        )
+                        .await;
+                    }
                     if let Err(error) = reconcile_terminal_closure_lineage_for_resume(
                         &store,
                         &role_selection,
@@ -6169,15 +6344,16 @@ mod tests {
     use super::{
         active_exception_takeover_resume_blocker_error,
         blocked_external_dispatch_artifact_mismatched_as_internal_activation,
-        build_failure_control_evidence, canonical_resume_dispatch_status,
-        canonical_resume_lane_status, canonical_resume_string_array_entries,
-        consume_advance_success_payload, consume_continue_blocking_step_with_timeout,
-        consume_continue_dispatch_handoff_timeout, consume_continue_handoff_with_timeout,
-        consume_continue_resume_error_blocker_code, consume_continue_resume_error_payload,
-        consume_continue_should_defer_agent_handoff, consume_continue_state_access_blocker_payload,
-        dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
-        dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
-        enforce_consume_continue_execution_preparation_gate,
+        build_failure_control_evidence,
+        cached_consume_continue_deferred_handoff_projection_is_admissible,
+        canonical_resume_dispatch_status, canonical_resume_lane_status,
+        canonical_resume_string_array_entries, consume_advance_success_payload,
+        consume_continue_blocking_step_with_timeout, consume_continue_dispatch_handoff_timeout,
+        consume_continue_handoff_with_timeout, consume_continue_resume_error_blocker_code,
+        consume_continue_resume_error_payload, consume_continue_should_defer_agent_handoff,
+        consume_continue_state_access_blocker_payload, dispatch_receipt_internal_retry_eligible,
+        dispatch_receipt_primary_rebind_eligible, dispatch_receipt_retry_eligible,
+        emit_runtime_consumption_resume_json, enforce_consume_continue_execution_preparation_gate,
         fail_fast_state_store_open_read_only_with_timeout, normalize_runtime_dispatch_packet,
         normalize_stale_in_flight_dispatch_receipt, packet_path_components_for_platform,
         persisted_dispatch_packet_lineage_task_id,
@@ -6275,6 +6451,61 @@ mod tests {
             "vida taskflow consume continue",
             &receipt
         ));
+    }
+
+    #[test]
+    fn cached_consume_continue_deferred_handoff_accepts_routed_agent_projection() {
+        let packet_path = "C:/tmp/run-1-packet.json";
+        let cached = serde_json::json!({
+            "surface": "vida taskflow consume continue",
+            "status": "pass",
+            "blocker_codes": [],
+            "source_run_id": "run-1",
+            "source_dispatch_packet_path": packet_path,
+            "dispatch_receipt": {
+                "run_id": "run-1",
+                "dispatch_kind": "agent_lane",
+                "dispatch_status": "routed",
+                "dispatch_packet_path": packet_path,
+                "blocker_code": null
+            }
+        })
+        .to_string();
+
+        assert!(cached_consume_continue_deferred_handoff_projection_is_admissible(&cached, None));
+        assert!(
+            cached_consume_continue_deferred_handoff_projection_is_admissible(
+                &cached,
+                Some("run-1")
+            )
+        );
+    }
+
+    #[test]
+    fn cached_consume_continue_deferred_handoff_rejects_stale_or_blocked_projection() {
+        let cached = serde_json::json!({
+            "surface": "vida taskflow consume continue",
+            "status": "blocked",
+            "blocker_codes": ["pending_review_clean_evidence"],
+            "source_run_id": "run-1",
+            "source_dispatch_packet_path": "C:/tmp/run-1-packet.json",
+            "dispatch_receipt": {
+                "run_id": "run-1",
+                "dispatch_kind": "agent_lane",
+                "dispatch_status": "blocked",
+                "dispatch_packet_path": "C:/tmp/run-1-packet.json",
+                "blocker_code": "pending_review_clean_evidence"
+            }
+        })
+        .to_string();
+
+        assert!(!cached_consume_continue_deferred_handoff_projection_is_admissible(&cached, None));
+        assert!(
+            !cached_consume_continue_deferred_handoff_projection_is_admissible(
+                &cached,
+                Some("other-run")
+            )
+        );
     }
 
     #[test]
