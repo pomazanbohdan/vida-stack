@@ -5268,6 +5268,33 @@ fn cached_consume_continue_deferred_handoff_projection_is_admissible(
         return false;
     }
     let dispatch_receipt = &payload["dispatch_receipt"];
+    let dispatch_status = dispatch_receipt
+        .get("dispatch_status")
+        .and_then(serde_json::Value::as_str);
+    let routed_handoff = dispatch_status == Some("routed");
+    let executed_packet_ready_handoff = dispatch_status == Some("executed")
+        && dispatch_receipt
+            .get("lane_status")
+            .and_then(serde_json::Value::as_str)
+            == Some("lane_completed")
+        && dispatch_receipt
+            .get("downstream_dispatch_ready")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        && dispatch_receipt
+            .get("downstream_dispatch_status")
+            .and_then(serde_json::Value::as_str)
+            == Some("packet_ready")
+        && dispatch_receipt
+            .get("downstream_dispatch_packet_path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+        && dispatch_receipt
+            .get("downstream_dispatch_blockers")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(Vec::is_empty);
     if dispatch_receipt
         .get("run_id")
         .and_then(serde_json::Value::as_str)
@@ -5278,10 +5305,7 @@ fn cached_consume_continue_deferred_handoff_projection_is_admissible(
             .get("dispatch_kind")
             .and_then(serde_json::Value::as_str)
             != Some("agent_lane")
-        || dispatch_receipt
-            .get("dispatch_status")
-            .and_then(serde_json::Value::as_str)
-            != Some("routed")
+        || !(routed_handoff || executed_packet_ready_handoff)
         || dispatch_receipt
             .get("blocker_code")
             .is_some_and(|value| !value.is_null())
@@ -5322,6 +5346,11 @@ fn try_emit_cached_consume_continue_deferred_handoff_projection(
             CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_NAME,
         ),
         crate::operator_projection_cache::read_state_recent_json_projection(
+            state_dir,
+            CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_NAME,
+            CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_MAX_AGE,
+        ),
+        crate::operator_projection_cache::read_state_stale_recent_json_projection(
             state_dir,
             CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_NAME,
             CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_MAX_AGE,
@@ -6473,6 +6502,39 @@ mod tests {
         .to_string();
 
         assert!(cached_consume_continue_deferred_handoff_projection_is_admissible(&cached, None));
+        assert!(
+            cached_consume_continue_deferred_handoff_projection_is_admissible(
+                &cached,
+                Some("run-1")
+            )
+        );
+    }
+
+    #[test]
+    fn cached_consume_continue_deferred_handoff_accepts_executed_packet_ready_projection() {
+        let packet_path = "C:/tmp/run-1-packet.json";
+        let downstream_packet_path = "C:/tmp/run-1-verification-packet.json";
+        let cached = serde_json::json!({
+            "surface": "vida taskflow consume continue",
+            "status": "pass",
+            "blocker_codes": [],
+            "source_run_id": "run-1",
+            "source_dispatch_packet_path": packet_path,
+            "dispatch_receipt": {
+                "run_id": "run-1",
+                "dispatch_kind": "agent_lane",
+                "dispatch_status": "executed",
+                "lane_status": "lane_completed",
+                "dispatch_packet_path": packet_path,
+                "blocker_code": null,
+                "downstream_dispatch_ready": true,
+                "downstream_dispatch_status": "packet_ready",
+                "downstream_dispatch_packet_path": downstream_packet_path,
+                "downstream_dispatch_blockers": []
+            }
+        })
+        .to_string();
+
         assert!(
             cached_consume_continue_deferred_handoff_projection_is_admissible(
                 &cached,
