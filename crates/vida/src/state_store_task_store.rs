@@ -1207,7 +1207,7 @@ impl StateStore {
         for parent in reopened_parents {
             self.persist_task_record(parent).await?;
         }
-        self.persist_task_record(task.clone()).await?;
+        self.persist_new_task_record(task.clone()).await?;
         Ok(task)
     }
 
@@ -1634,6 +1634,19 @@ impl StateStore {
         Ok(())
     }
 
+    async fn persist_new_task_record(&self, task: TaskRecord) -> Result<(), StateStoreError> {
+        let task_id = task.id.clone();
+        let row = TaskStorageRow::from(task.clone());
+        let _: Option<TaskStorageRow> = self
+            .db
+            .upsert(("task", task_id.as_str()))
+            .content(row)
+            .await?;
+        self.insert_task_dependency_rows(&task_id, &task.dependencies)
+            .await?;
+        Ok(())
+    }
+
     async fn replace_task_dependency_rows(
         &self,
         task_id: &str,
@@ -1647,6 +1660,15 @@ impl StateStore {
             ))
             .await?;
 
+        self.insert_task_dependency_rows(task_id, dependencies)
+            .await
+    }
+
+    async fn insert_task_dependency_rows(
+        &self,
+        task_id: &str,
+        dependencies: &[TaskDependencyRecord],
+    ) -> Result<(), StateStoreError> {
         for dependency in dependencies {
             let dep_id = format!(
                 "{}--{}--{}",
