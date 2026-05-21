@@ -21,7 +21,7 @@ use time::format_description::well_known::Rfc3339;
 const STALE_PROJECTION_DISPATCH_TIMEOUT_SECONDS: i64 = 10;
 const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS: u64 = 60;
 const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER: &str = "run_graph_dispatch_init_timeout";
-const TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
+const TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
 fn projection_component(value: &str) -> String {
     value
@@ -38,6 +38,27 @@ fn projection_component(value: &str) -> String {
 
 fn recovery_status_projection_name(run_id: &str) -> String {
     format!("taskflow-recovery-status-{}", projection_component(run_id))
+}
+
+fn read_recovery_status_projection(
+    state_dir: &std::path::Path,
+    projection_name: &str,
+) -> Option<String> {
+    crate::operator_projection_cache::read_fresh_json_projection(state_dir, projection_name)
+        .or_else(|| {
+            crate::operator_projection_cache::read_recent_json_projection(
+                state_dir,
+                projection_name,
+                TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE,
+            )
+        })
+        .or_else(|| {
+            crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                state_dir,
+                projection_name,
+                TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE,
+            )
+        })
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -2182,18 +2203,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         {
             let state_dir = proxy_state_dir();
             let projection_name = recovery_status_projection_name(run_id);
-            if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
-                &state_dir,
-                &projection_name,
-            ) {
-                println!("{cached}");
-                return ExitCode::SUCCESS;
-            }
-            if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
-                &state_dir,
-                &projection_name,
-                TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE,
-            ) {
+            if let Some(cached) = read_recovery_status_projection(&state_dir, &projection_name) {
                 println!("{cached}");
                 return ExitCode::SUCCESS;
             }

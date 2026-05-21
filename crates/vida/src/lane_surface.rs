@@ -9,6 +9,7 @@ use crate::taskflow_task_bridge::proxy_state_dir;
 use crate::{state_store::StateStore, ProxyArgs};
 
 const LANE_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
+const LANE_SURFACE_STALE_PROJECTION_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Serialize)]
 struct LaneEnvelope {
@@ -1149,6 +1150,29 @@ fn emit_cached_lane_show_projection(cached: String) -> ExitCode {
     }
 }
 
+fn read_cached_lane_show_projection(state_dir: &Path, projection_name: &str) -> Option<String> {
+    crate::operator_projection_cache::read_fresh_json_projection(state_dir, projection_name)
+        .or_else(|| {
+            crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                state_dir,
+                projection_name,
+                LANE_SURFACE_STALE_PROJECTION_MAX_AGE,
+            )
+        })
+}
+
+fn emit_lane_envelope_with_projection_cache(
+    state_dir: &Path,
+    run_id: &str,
+    envelope: &LaneEnvelope,
+    as_json: bool,
+) -> ExitCode {
+    if as_json {
+        write_lane_show_projection_cache(state_dir, run_id, envelope);
+    }
+    emit_lane_envelope(envelope, as_json)
+}
+
 fn exception_takeover_metadata_dir(state_root: &Path) -> PathBuf {
     state_root.join("lane-exception-path-metadata")
 }
@@ -1285,13 +1309,21 @@ fn missing_task_stale_blocked_run_can_retire(
     status: &crate::state_store::RunGraphStatus,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
-    status.status == "blocked"
-        && receipt.dispatch_status == "blocked"
-        && matches!(
-            receipt.lane_status.as_str(),
-            value if value == crate::LaneStatus::LaneRunning.as_str()
-                || value == crate::LaneStatus::LaneBlocked.as_str()
-        )
+    if status.status != "blocked" {
+        return false;
+    }
+
+    let lane_status = receipt.lane_status.as_str();
+    let blocked_or_running = matches!(
+        lane_status,
+        value if value == crate::LaneStatus::LaneRunning.as_str()
+            || value == crate::LaneStatus::LaneBlocked.as_str()
+    );
+    let prelaunch_packet_ready = receipt.dispatch_status == "executed"
+        && lane_status == crate::LaneStatus::LaneCompleted.as_str()
+        && receipt.downstream_dispatch_status.as_deref() == Some("packet_ready");
+
+    (receipt.dispatch_status == "blocked" && blocked_or_running) || prelaunch_packet_ready
 }
 
 fn read_lane_packet(path: &str) -> Result<serde_json::Value, String> {
@@ -1437,7 +1469,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
     match &command {
         LaneCommand::ShowLatest { as_json } => {
             if *as_json {
-                if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+                if let Some(cached) = read_cached_lane_show_projection(
                     &state_dir,
                     &lane_show_projection_name("latest"),
                 ) {
@@ -1466,7 +1498,10 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            let Some(summary) = (match store.latest_run_graph_dispatch_receipt_summary().await {
+            let Some(summary) = (match store
+                .latest_run_graph_dispatch_receipt_summary_for_current_session()
+                .await
+            {
                 Ok(summary) => summary,
                 Err(error) => {
                     eprintln!("Failed to read latest lane receipt summary: {error}");
@@ -1512,17 +1547,15 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.blocker_codes,
                 truth.next_actions,
             );
-            if *as_json {
-                write_lane_show_projection_cache(&state_dir, "latest", &envelope);
-            }
-            return emit_lane_envelope(&envelope, *as_json);
+            return emit_lane_envelope_with_projection_cache(
+                &state_dir, "latest", &envelope, *as_json,
+            );
         }
         LaneCommand::ShowRun { run_id, as_json } => {
             if *as_json {
-                if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
-                    &state_dir,
-                    &lane_show_projection_name(run_id),
-                ) {
+                if let Some(cached) =
+                    read_cached_lane_show_projection(&state_dir, &lane_show_projection_name(run_id))
+                {
                     return emit_cached_lane_show_projection(cached);
                 }
             }
@@ -1607,15 +1640,14 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.blocker_codes,
                 truth.next_actions,
             );
-            if *as_json {
-                write_lane_show_projection_cache(&state_dir, run_id, &envelope);
-            }
-            return emit_lane_envelope(&envelope, *as_json);
+            return emit_lane_envelope_with_projection_cache(
+                &state_dir, run_id, &envelope, *as_json,
+            );
         }
         _ => {}
     }
 
-    let store = match StateStore::open_existing(state_dir).await {
+    let store = match StateStore::open_existing(state_dir.clone()).await {
         Ok(store) => store,
         Err(error) => {
             eprintln!("Failed to open authoritative state store: {error}");
@@ -1677,7 +1709,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.blocker_codes,
                 truth.next_actions,
             );
-            emit_lane_envelope(&envelope, as_json)
+            emit_lane_envelope_with_projection_cache(&state_dir, "latest", &envelope, as_json)
         }
         LaneCommand::ShowRun { run_id, as_json } => {
             let status = store.run_graph_status(run_id).await.ok();
@@ -1727,7 +1759,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.blocker_codes,
                 truth.next_actions,
             );
-            emit_lane_envelope(&envelope, as_json)
+            emit_lane_envelope_with_projection_cache(&state_dir, run_id, &envelope, as_json)
         }
         LaneCommand::Complete {
             run_id,
@@ -1942,7 +1974,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.blocker_codes,
                 truth.next_actions,
             );
-            emit_lane_envelope(&envelope, as_json)
+            emit_lane_envelope_with_projection_cache(&state_dir, run_id, &envelope, as_json)
         }
         LaneCommand::Retire {
             run_id,
@@ -2009,24 +2041,24 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                                 Ok(task) if task.status == "closed" => {}
                                 Ok(task) => {
                                     eprintln!(
-                                    "Lane `{run_id}` can only be retired after exception bounded unit `{}` is closed; current task status is `{}`.",
-                                    task.id, task.status
-                                );
+                                        "Lane `{run_id}` can only be retired after exception bounded unit `{}` is closed; current task status is `{}`.",
+                                        task.id, task.status
+                                    );
                                     return ExitCode::from(2);
                                 }
                                 Err(metadata_error) => {
                                     eprintln!(
-                                    "Failed to verify exception bounded unit `{task_id}` before retiring lane `{run_id}` after run task `{}` lookup failed: {metadata_error}",
-                                    status.task_id
-                                );
+                                        "Failed to verify exception bounded unit `{task_id}` before retiring lane `{run_id}` after run task `{}` lookup failed: {metadata_error}",
+                                        status.task_id
+                                    );
                                     return ExitCode::from(2);
                                 }
                             },
                             None => {
                                 eprintln!(
-                                "Failed to verify closed task `{}` before retiring lane `{run_id}`: {error}",
-                                status.task_id
-                            );
+                                    "Failed to verify closed task `{}` before retiring lane `{run_id}`: {error}",
+                                    status.task_id
+                                );
                                 return ExitCode::from(1);
                             }
                         }
@@ -2122,7 +2154,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.blocker_codes,
                 truth.next_actions,
             );
-            emit_lane_envelope(&envelope, as_json)
+            emit_lane_envelope_with_projection_cache(&state_dir, run_id, &envelope, as_json)
         }
         LaneCommand::ExceptionTakeover {
             run_id,
@@ -2177,7 +2209,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.blocker_codes,
                 truth.next_actions,
             );
-            emit_lane_envelope(&envelope, as_json)
+            emit_lane_envelope_with_projection_cache(&state_dir, run_id, &envelope, as_json)
         }
         LaneCommand::Supersede {
             run_id,
@@ -2254,7 +2286,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 truth.blocker_codes,
                 truth.next_actions,
             );
-            emit_lane_envelope(&envelope, as_json)
+            emit_lane_envelope_with_projection_cache(&state_dir, run_id, &envelope, as_json)
         }
         LaneCommand::Reclaim {
             completed,
@@ -2885,8 +2917,9 @@ mod tests {
         assert!(truth
             .blocker_codes
             .contains(&"supersession_without_receipt".to_string()));
-        assert!(truth.next_actions.iter().any(|value| value
-            .contains("vida lane supersede run-lane-test --receipt-id exception-1 --json")));
+        assert!(truth.next_actions.iter().any(|value| {
+            value.contains("vida lane supersede run-lane-test --receipt-id exception-1 --json")
+        }));
     }
 
     #[test]
@@ -3413,6 +3446,137 @@ mod tests {
             .run_graph_continuation_binding(run_id)
             .await
             .expect("read continuation binding")
+            .is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_retire_allows_missing_task_stale_prelaunch_packet_run() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-retire-missing-task-prelaunch-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-lane-retire-missing-task-prelaunch";
+        let task_id = "task-lane-retire-missing-prelaunch";
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            task_id,
+            "implementation",
+            "implementation",
+        );
+        status.run_id = run_id.to_string();
+        status.active_node = "analysis".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "awaiting_analysis".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked prelaunch run graph status");
+
+        let packet_dir = root.join("runtime-consumption").join("dispatch-packets");
+        std::fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path = packet_dir.join("run-lane-retire-missing-task-prelaunch.json");
+        std::fs::write(
+            &packet_path,
+            "{\"run_id\":\"run-lane-retire-missing-task-prelaunch\"}",
+        )
+        .expect("write dispatch packet");
+
+        let mut receipt = sample_receipt("executed");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.dispatch_result_path =
+            Some("runtime-consumption/dispatch-results/prelaunch.json".to_string());
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+        receipt.downstream_dispatch_active_target = Some("analysis".to_string());
+        receipt.downstream_dispatch_last_target = Some("analysis".to_string());
+        receipt.blocker_code = None;
+        receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist prelaunch receipt");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: run_id.to_string(),
+                    task_id: task_id.to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "run_graph_task",
+                        "task_id": task_id,
+                        "run_id": run_id,
+                        "active_node": "analysis"
+                    }),
+                    binding_source: "test-prelaunch".to_string(),
+                    why_this_unit: "test prelaunch binding".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+                    request_text: None,
+                    recorded_at: "2026-05-21T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist prelaunch continuation binding");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec![
+                "retire".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "retire-missing-task-prelaunch-1".to_string(),
+                "--reason".to_string(),
+                "missing TaskFlow task stale run".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after prelaunch retire");
+        let retired = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read retired prelaunch status");
+        assert_eq!(retired.status, "completed");
+        assert_eq!(retired.lifecycle_stage, "closure_complete");
+        let receipt = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read retired prelaunch receipt")
+            .expect("receipt should exist");
+        assert_eq!(
+            receipt.lane_status,
+            crate::LaneStatus::LaneCompleted.as_str()
+        );
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("retired_closed_task_run")
+        );
+        assert!(store
+            .run_graph_continuation_binding(run_id)
+            .await
+            .expect("read prelaunch continuation binding")
             .is_none());
 
         let _ = std::fs::remove_dir_all(&root);

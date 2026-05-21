@@ -315,6 +315,131 @@ fn agent_init_dispatch_timeout_fallback_payload(
     payload
 }
 
+fn agent_init_execute_dispatch_resume_error_run_id(error: &str) -> Option<String> {
+    for marker in [
+        "Run-graph resume gate denied for `",
+        "Stale missing-task run graph `",
+        "run `",
+        "run_id `",
+    ] {
+        let Some(start) = error.find(marker).map(|index| index + marker.len()) else {
+            continue;
+        };
+        let rest = &error[start..];
+        let Some(end) = rest.find('`') else {
+            continue;
+        };
+        let run_id = rest[..end].trim();
+        if !run_id.is_empty() {
+            return Some(run_id.to_string());
+        }
+    }
+    None
+}
+
+fn agent_init_execute_dispatch_resume_error_blocker_code(error: &str) -> &'static str {
+    if error.contains("recovery_ready is false") {
+        "run_graph_recovery_not_ready"
+    } else if error.contains("Stale missing-task run graph")
+        || error.contains("references missing TaskFlow task")
+    {
+        "stale_missing_task_run_graph"
+    } else if error.contains("No persisted run-graph dispatch receipt exists")
+        || error.contains("missing receipt recovery could not load dispatch context")
+    {
+        "missing_run_graph_dispatch_receipt"
+    } else {
+        "agent_init_execute_dispatch_resume_blocked"
+    }
+}
+
+fn agent_init_execute_dispatch_resume_error_next_actions(
+    blocker_code: &str,
+    run_id: Option<&str>,
+) -> Vec<String> {
+    match (blocker_code, run_id) {
+        ("run_graph_recovery_not_ready", Some(run_id)) => vec![
+            format!(
+                "Inspect the blocked run with `vida taskflow recovery status {} --json`.",
+                crate::shell_quote(run_id)
+            ),
+            format!(
+                "Inspect run-graph gate fields with `vida taskflow run-graph status {} --json` and make recovery_ready=true through the canonical recovery/continue path before retrying execute-dispatch.",
+                crate::shell_quote(run_id)
+            ),
+            "Inspect route freshness with `vida taskflow route explain --json`; if it reports model_not_pinned or catalog drift, refresh or reseed the route assignment before creating another packet.".to_string(),
+        ],
+        ("run_graph_recovery_not_ready", None) => vec![
+            "Inspect the blocked run with `vida taskflow recovery latest --json`.".to_string(),
+            "Inspect run-graph gate fields with `vida taskflow run-graph status <run-id> --json` and make recovery_ready=true through the canonical recovery/continue path before retrying execute-dispatch.".to_string(),
+            "Inspect route freshness with `vida taskflow route explain --json`; if it reports model_not_pinned or catalog drift, refresh or reseed the route assignment before creating another packet.".to_string(),
+        ],
+        ("stale_missing_task_run_graph", Some(run_id)) => vec![
+            format!(
+                "Retire the stale missing-task run with `vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json`.",
+                crate::shell_quote(run_id),
+                crate::shell_quote(run_id)
+            ),
+            "Refresh continuation evidence with `vida status --json` and `vida taskflow recovery latest --json` before retrying execute-dispatch.".to_string(),
+        ],
+        ("missing_run_graph_dispatch_receipt", Some(run_id)) => vec![
+            format!(
+                "Inspect recovery for missing receipt repair with `vida taskflow recovery status {} --json`.",
+                crate::shell_quote(run_id)
+            ),
+            "Regenerate a fresh dispatch packet only after the recovery surface reports receipt-backed dispatch context.".to_string(),
+        ],
+        _ => vec![
+            "Inspect continuation evidence with `vida status --json` and `vida taskflow recovery latest --json`.".to_string(),
+            "Do not retry `vida agent-init --execute-dispatch --json` until the recovery surface reports recovery_ready=true and a dispatch resume target.".to_string(),
+        ],
+    }
+}
+
+fn agent_init_execute_dispatch_resume_error_payload(
+    dispatch_mode: &serde_json::Value,
+    error: &str,
+) -> serde_json::Value {
+    let blocker_code = agent_init_execute_dispatch_resume_error_blocker_code(error);
+    let run_id = agent_init_execute_dispatch_resume_error_run_id(error);
+    let next_actions =
+        agent_init_execute_dispatch_resume_error_next_actions(blocker_code, run_id.as_deref());
+    let artifact_refs = serde_json::json!({
+        "surface": "vida agent-init",
+        "run_id": run_id,
+    });
+    let blocker_codes = vec![blocker_code];
+    serde_json::json!({
+        "surface": "vida agent-init",
+        "status": "blocked",
+        "execution_state": "blocked",
+        "dispatch_mode": dispatch_mode,
+        "error": error,
+        "run_id": run_id,
+        "blocker_code": blocker_code,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+            "risk_tier": null,
+            "trace_id": null,
+            "workflow_class": null
+        },
+        "shared_fields": {
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs
+        }
+    })
+}
+
 fn orchestrator_init_projection_name(full: bool) -> &'static str {
     if full {
         "orchestrator-init-full-latest"
@@ -516,6 +641,97 @@ fn agent_init_dispatch_mode(
         "missing_execution_evidence_semantics": "non_executing_bridge_blocker",
         "root_session_write_authority_granted": false,
         "continuation_authority_granted": false,
+    })
+}
+
+fn agent_init_packet_execute_command(selection: &serde_json::Value) -> Option<String> {
+    selection
+        .get("dispatch_packet_path")
+        .and_then(serde_json::Value::as_str)
+        .map(|path| format!("vida agent-init --dispatch-packet '{path}' --execute-dispatch --json"))
+        .or_else(|| {
+            selection
+                .get("downstream_packet_path")
+                .and_then(serde_json::Value::as_str)
+                .map(|path| {
+                    format!(
+                        "vida agent-init --downstream-packet '{path}' --execute-dispatch --json"
+                    )
+                })
+        })
+}
+
+fn agent_init_operator_guidance(
+    selection: &serde_json::Value,
+    activation_semantics: &serde_json::Value,
+    dispatch_mode: &serde_json::Value,
+) -> serde_json::Value {
+    let execute_command = agent_init_packet_execute_command(selection);
+    let current_mode = dispatch_mode
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("activation_view_only");
+    let execution_dispatch = dispatch_mode["execution_dispatch"]
+        .as_bool()
+        .unwrap_or(false);
+    let next_lawful_execution_action = if execution_dispatch {
+        "wait for the execute-dispatch result artifact and require receipt-backed worker evidence before claiming completion".to_string()
+    } else if let Some(command) = execute_command.as_deref() {
+        format!(
+            "run `{command}` for a packet-backed execution attempt; do not treat this activation view as completion"
+        )
+    } else {
+        "create or refresh a scheduler dispatch packet first, then run `vida agent-init --dispatch-packet <path> --execute-dispatch --json` for execution evidence".to_string()
+    };
+
+    serde_json::json!({
+        "current_surface_contract": {
+            "mode": current_mode,
+            "activation_kind": activation_semantics
+                .get("activation_kind")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!("activation_view")),
+            "view_only": activation_semantics
+                .get("view_only")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!(true)),
+            "executes_packet": execution_dispatch,
+            "is_completion_evidence": false,
+            "records_completion_receipt": activation_semantics
+                .get("records_completion_receipt")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!(false)),
+            "transfers_root_session_write_authority": activation_semantics
+                .get("transfers_root_session_write_authority")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!(false)),
+        },
+        "flow_distinctions": [
+            {
+                "stage": "startup_activation_view",
+                "surface": "vida agent-init --role <runtime-role> <task-id> --json",
+                "executes_packet": false,
+                "records_completion_receipt": false,
+                "meaning": "bounded lane startup/context only"
+            },
+            {
+                "stage": "packet_backed_execution_attempt",
+                "surface": execute_command
+                    .as_deref()
+                    .unwrap_or("vida agent-init --dispatch-packet <path> --execute-dispatch --json"),
+                "executes_packet": true,
+                "records_completion_receipt": "only_on_success",
+                "meaning": "attempts the bounded delegated packet and must return execution evidence"
+            },
+            {
+                "stage": "receipt_backed_worker_execution",
+                "surface": "dispatch result / run-graph dispatch receipt",
+                "executes_packet": true,
+                "records_completion_receipt": true,
+                "meaning": "the only completion evidence that can support delegated work completion or write-authority decisions"
+            }
+        ],
+        "next_lawful_execution_action": next_lawful_execution_action,
     })
 }
 
@@ -855,6 +1071,18 @@ mod tests {
         );
         assert_eq!(inputs.role_selection.selected_role, "coach");
         assert_eq!(inputs.run_graph_bootstrap["run_id"], "run-fast-dispatch");
+
+        let quoted_path = format!("'{}'", packet_path.display());
+        let quoted_inputs = resume_inputs_from_dispatch_packet_without_store(&quoted_path)
+            .expect("quoted dispatch packet path should normalize before read");
+        assert_eq!(quoted_inputs.dispatch_receipt.run_id, "run-fast-dispatch");
+        assert_eq!(
+            quoted_inputs
+                .dispatch_receipt
+                .dispatch_packet_path
+                .as_deref(),
+            packet_path.to_str()
+        );
     }
 
     #[test]
@@ -3237,10 +3465,26 @@ fn string_field(value: &serde_json::Value, field: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+fn normalized_packet_arg_path(packet_path: &str) -> std::path::PathBuf {
+    let trimmed = packet_path.trim();
+    let unquoted = trimmed
+        .strip_prefix('\'')
+        .and_then(|value| value.strip_suffix('\''))
+        .or_else(|| {
+            trimmed
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+        })
+        .unwrap_or(trimmed);
+    super::runtime_dispatch_state::normalize_persisted_runtime_path(unquoted)
+}
+
 fn resume_inputs_from_downstream_packet_without_store(
     packet_path: &str,
 ) -> Result<super::taskflow_consume_resume::ResumeInputs, String> {
-    let packet = super::taskflow_consume_resume::read_dispatch_packet(packet_path)?;
+    let normalized_packet_path = normalized_packet_arg_path(packet_path);
+    let normalized_packet_path = normalized_packet_path.display().to_string();
+    let packet = super::taskflow_consume_resume::read_dispatch_packet(&normalized_packet_path)?;
     let run_id = string_field(&packet, "run_id")
         .ok_or_else(|| "Persisted downstream dispatch packet is missing run_id".to_string())?;
     let dispatch_target = string_field(&packet, "downstream_dispatch_target").ok_or_else(|| {
@@ -3294,7 +3538,7 @@ fn resume_inputs_from_downstream_packet_without_store(
         dispatch_kind: "agent_lane".to_string(),
         dispatch_surface: Some("vida agent-init".to_string()),
         dispatch_command: string_field(&packet, "downstream_dispatch_command"),
-        dispatch_packet_path: Some(packet_path.to_string()),
+        dispatch_packet_path: Some(normalized_packet_path.clone()),
         dispatch_result_path: None,
         blocker_code: None,
         downstream_dispatch_target: None,
@@ -3323,7 +3567,7 @@ fn resume_inputs_from_downstream_packet_without_store(
         .unwrap_or(serde_json::Value::Null);
     Ok(super::taskflow_consume_resume::ResumeInputs {
         dispatch_receipt: receipt,
-        dispatch_packet_path: packet_path.to_string(),
+        dispatch_packet_path: normalized_packet_path,
         role_selection,
         run_graph_bootstrap,
     })
@@ -3332,7 +3576,9 @@ fn resume_inputs_from_downstream_packet_without_store(
 fn resume_inputs_from_dispatch_packet_without_store(
     packet_path: &str,
 ) -> Result<super::taskflow_consume_resume::ResumeInputs, String> {
-    let body = std::fs::read_to_string(packet_path)
+    let normalized_packet_path = normalized_packet_arg_path(packet_path);
+    let normalized_packet_path = normalized_packet_path.display().to_string();
+    let body = std::fs::read_to_string(&normalized_packet_path)
         .map_err(|error| format!("Failed to read dispatch packet `{packet_path}`: {error}"))?;
     let packet = serde_json::from_str::<serde_json::Value>(&body)
         .map_err(|error| format!("Failed to parse dispatch packet `{packet_path}`: {error}"))?;
@@ -3364,7 +3610,7 @@ fn resume_inputs_from_dispatch_packet_without_store(
         dispatch_surface: string_field(&packet, "dispatch_surface")
             .or_else(|| Some("vida agent-init".to_string())),
         dispatch_command: string_field(&packet, "dispatch_command"),
-        dispatch_packet_path: Some(packet_path.to_string()),
+        dispatch_packet_path: Some(normalized_packet_path.clone()),
         dispatch_result_path: None,
         blocker_code: string_field(&packet, "blocker_code"),
         downstream_dispatch_target: string_field(&packet, "downstream_dispatch_target"),
@@ -3408,7 +3654,7 @@ fn resume_inputs_from_dispatch_packet_without_store(
         .unwrap_or_else(|| serde_json::json!({ "run_id": run_id }));
     Ok(super::taskflow_consume_resume::ResumeInputs {
         dispatch_receipt: receipt,
-        dispatch_packet_path: packet_path.to_string(),
+        dispatch_packet_path: normalized_packet_path,
         role_selection,
         run_graph_bootstrap,
     })
@@ -3551,6 +3797,17 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     {
                         Ok(inputs) => inputs,
                         Err(error) => {
+                            if args.json {
+                                let dispatch_mode =
+                                    agent_init_dispatch_mode(&args, &serde_json::Value::Null);
+                                crate::print_json_pretty(
+                                    &agent_init_execute_dispatch_resume_error_payload(
+                                        &dispatch_mode,
+                                        &error,
+                                    ),
+                                );
+                                return ExitCode::from(1);
+                            }
                             eprintln!("{error}");
                             return ExitCode::from(1);
                         }
@@ -3743,6 +4000,15 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     {
                         Ok(inputs) => inputs,
                         Err(error) => {
+                            if args.json {
+                                crate::print_json_pretty(
+                                    &agent_init_execute_dispatch_resume_error_payload(
+                                        &dispatch_mode,
+                                        &error,
+                                    ),
+                                );
+                                return ExitCode::from(1);
+                            }
                             eprintln!("{error}");
                             return ExitCode::from(1);
                         }
@@ -3981,6 +4247,23 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 );
                 if let Some(next_step) = activation_semantics["next_lawful_action"].as_str() {
                     print_surface_line(RenderMode::Plain, "next lawful action", next_step);
+                }
+                if let Some(next_execution_action) =
+                    surface_payload["operator_guidance"]["next_lawful_execution_action"].as_str()
+                {
+                    print_surface_line(
+                        RenderMode::Plain,
+                        "next execution action",
+                        next_execution_action,
+                    );
+                }
+                if let Some(stage) = surface_payload["operator_guidance"]["flow_distinctions"]
+                    .as_array()
+                    .and_then(|rows| rows.first())
+                    .and_then(|row| row.get("stage"))
+                    .and_then(serde_json::Value::as_str)
+                {
+                    print_surface_line(RenderMode::Plain, "agent-init stage", stage);
                 }
                 if let Some(fallback_surface) = init_view["source_mode_fallback_surface"].as_str() {
                     print_surface_line(RenderMode::Plain, "fallback surface", fallback_surface);
@@ -4655,6 +4938,8 @@ fn build_agent_init_surface_payload(
         &selection,
         &backend_truth,
     );
+    let operator_guidance =
+        agent_init_operator_guidance(&selection, &activation_semantics, &dispatch_mode);
 
     serde_json::json!({
         "surface": "vida agent-init",
@@ -4662,6 +4947,7 @@ fn build_agent_init_surface_payload(
         "selection": selection,
         "dispatch_mode": dispatch_mode,
         "activation_semantics": activation_semantics,
+        "operator_guidance": operator_guidance,
         "execution_truth": execution_truth,
         "backend_truth": backend_truth,
         "dev_team_readiness": dev_team_readiness,
@@ -5132,6 +5418,25 @@ mod agent_init_surface_tests {
             payload["dev_team_readiness"]["active_selection"]["selected_model"]["model_ref"],
             "gpt-5.4"
         );
+        assert_eq!(
+            payload["operator_guidance"]["current_surface_contract"]["mode"],
+            "activation_view_only"
+        );
+        assert_eq!(
+            payload["operator_guidance"]["current_surface_contract"]["executes_packet"],
+            false
+        );
+        assert_eq!(
+            payload["operator_guidance"]["flow_distinctions"][0]["stage"],
+            "startup_activation_view"
+        );
+        assert_eq!(
+            payload["operator_guidance"]["flow_distinctions"][1]["surface"],
+            "vida agent-init --dispatch-packet '/tmp/dispatch.json' --execute-dispatch --json"
+        );
+        assert!(payload["operator_guidance"]["next_lawful_execution_action"]
+            .as_str()
+            .is_some_and(|value| value.contains("--execute-dispatch")));
     }
 
     #[test]
@@ -5342,6 +5647,17 @@ mod agent_init_surface_tests {
             payload["dev_team_readiness"]["active_selection"]["selected_cost_units"],
             1
         );
+        assert_eq!(
+            payload["operator_guidance"]["current_surface_contract"]["view_only"],
+            true
+        );
+        assert_eq!(
+            payload["operator_guidance"]["flow_distinctions"][2]["stage"],
+            "receipt_backed_worker_execution"
+        );
+        assert!(payload["operator_guidance"]["next_lawful_execution_action"]
+            .as_str()
+            .is_some_and(|value| value.contains("scheduler dispatch packet")));
     }
 
     #[test]
@@ -5900,6 +6216,38 @@ mod agent_init_surface_tests {
             payload["timeout_reconciliation_warning"],
             "deferred reconciliation"
         );
+    }
+
+    #[test]
+    fn agent_init_execute_dispatch_resume_error_payload_names_recovery_gate() {
+        let payload = agent_init_execute_dispatch_resume_error_payload(
+            &serde_json::json!({
+                "mode": "dispatch_packet",
+                "execution_dispatch": true
+            }),
+            "Run-graph resume gate denied for `epic-2-run`: recovery_ready is false",
+        );
+
+        assert_eq!(payload["surface"], "vida agent-init");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["run_id"], "epic-2-run");
+        assert_eq!(payload["blocker_code"], "run_graph_recovery_not_ready");
+        assert_eq!(
+            payload["operator_contracts"]["blocker_codes"][0],
+            "run_graph_recovery_not_ready"
+        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("first action should render")
+            .contains("vida taskflow recovery status epic-2-run --json"));
+        assert!(payload["next_actions"][1]
+            .as_str()
+            .expect("second action should render")
+            .contains("recovery_ready=true"));
+        assert!(payload["next_actions"][2]
+            .as_str()
+            .expect("third action should render")
+            .contains("vida taskflow route explain --json"));
     }
 
     #[test]
