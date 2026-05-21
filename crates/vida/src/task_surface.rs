@@ -3196,8 +3196,14 @@ fn runtime_binding_has_active_exception_takeover(
     let Some(dispatch) = dispatch else {
         return false;
     };
+    let exception_takeover_state = crate::release1_contracts::exception_takeover_state(
+        dispatch.exception_path_receipt_id.as_deref(),
+        dispatch.supersedes_receipt_id.as_deref(),
+        None,
+    );
     dispatch.run_id == binding.run_id
-        && dispatch.lane_status == "lane_exception_takeover"
+        && (dispatch.lane_status == "lane_exception_takeover"
+            || exception_takeover_state.is_active())
         && dispatch
             .exception_path_receipt_id
             .as_deref()
@@ -5930,6 +5936,66 @@ mod tests {
             route_policy: serde_json::Value::Null,
             activation_evidence: serde_json::Value::Null,
             recorded_at: "2026-05-21T12:28:00Z".to_string(),
+        };
+
+        assert!(runtime_binding_has_active_exception_takeover(
+            &binding,
+            Some(&dispatch)
+        ));
+        let receipt = pass_exception_takeover_task_next_lawful_receipt(&binding, Vec::new());
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(
+            receipt.binding_source.as_deref(),
+            Some("latest_run_graph_exception_takeover_dispatch")
+        );
+        assert_eq!(
+            receipt.sequential_vs_parallel_posture,
+            "sequential_only_exception_takeover"
+        );
+        assert!(receipt.blocker_codes.is_empty());
+    }
+
+    #[test]
+    fn task_next_lawful_accepts_active_exception_takeover_with_recorded_lane_status() {
+        let binding = test_continuation_binding(
+            "taskflow-case-18-rollout-regression-gate",
+            "taskflow-case-18-rollout-regression-gate",
+            "consume_continue_deferred_agent_handoff",
+            "run_graph_task",
+        );
+        let dispatch = state_store::RunGraphDispatchReceiptSummary {
+            run_id: "taskflow-case-18-rollout-regression-gate".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_recorded".to_string(),
+            supersedes_receipt_id: Some("case18-supersession-evidence".to_string()),
+            exception_path_receipt_id: Some("case18-exception-takeover".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:hermes_cli".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["configured_backend_dispatch_failed".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "2026-05-21T14:47:00Z".to_string(),
         };
 
         assert!(runtime_binding_has_active_exception_takeover(
