@@ -3639,6 +3639,23 @@ fn cached_operator_projection_exit_code(cached: &str) -> ExitCode {
     }
 }
 
+fn cached_taskflow_next_open_delegated_cycle_projection(cached: &str) -> bool {
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(cached) else {
+        return false;
+    };
+    if payload.get("status").and_then(serde_json::Value::as_str) != Some("blocked") {
+        return false;
+    }
+    let blocker_codes = payload
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    blocker_codes
+        .iter()
+        .any(|code| code.as_str() == Some("open_delegated_cycle"))
+}
+
 pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     let (as_json, scope_task_id, state_dir) = match parse_taskflow_next_args(args) {
         Ok(TaskflowNextArgs::Help) => {
@@ -3678,6 +3695,18 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         ) {
             println!("{cached}");
             return cached_operator_projection_exit_code(&cached);
+        }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                &state_dir,
+                TASKFLOW_NEXT_PROJECTION_NAME,
+                TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
+            )
+        {
+            if cached_taskflow_next_open_delegated_cycle_projection(&cached) {
+                println!("{cached}");
+                return cached_operator_projection_exit_code(&cached);
+            }
         }
     }
     let runtime_consumption = match crate::runtime_consumption_summary(&state_dir) {
@@ -4822,15 +4851,15 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
     };
     let latest_run_graph_task_missing = if execute_requested && !dry_run {
         match store.latest_run_graph_status().await {
-            Ok(Some(status)) => {
-                match store.list_tasks(None, true).await {
-                    Ok(tasks) => !tasks.iter().any(|task| task.id == status.task_id),
-                    Err(error) => {
-                        eprintln!("Failed to read tasks for latest scheduler run-graph task state: {error}");
-                        return ExitCode::from(1);
-                    }
+            Ok(Some(status)) => match store.list_tasks(None, true).await {
+                Ok(tasks) => !tasks.iter().any(|task| task.id == status.task_id),
+                Err(error) => {
+                    eprintln!(
+                        "Failed to read tasks for latest scheduler run-graph task state: {error}"
+                    );
+                    return ExitCode::from(1);
                 }
-            }
+            },
             Ok(None) => false,
             Err(error) => {
                 eprintln!("Failed to read latest run-graph status for scheduler gate: {error}");
@@ -5422,6 +5451,21 @@ fn route_assignment_catalog_drift_payload(route: &serde_json::Value) -> Option<s
     None
 }
 
+fn route_assignment_reseed_next_actions(run_id: &str, task_id: &str) -> Vec<String> {
+    vec![
+        format!(
+            "Refresh the stale route assignment by reseeding dispatch context with `vida taskflow run-graph dispatch-init {} --json`.",
+            crate::shell_quote(task_id)
+        ),
+        format!(
+            "Re-check the active route with `vida taskflow route explain --run-id {} --json`.",
+            crate::shell_quote(run_id)
+        ),
+        "Do not trust scheduler or execute-dispatch packets that still report `model_not_pinned`."
+            .to_string(),
+    ]
+}
+
 fn route_payload_for_dispatch_target(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
@@ -5495,7 +5539,7 @@ fn route_payload_for_dispatch_target(
             object.insert(
                 "next_actions".to_string(),
                 serde_json::json!([
-                    "refresh the run graph dispatch context or reseed the route assignment from the current carrier catalog before trusting routing diagnostics"
+                    "refresh the run graph dispatch context with `vida taskflow run-graph dispatch-init <task-id> --json` or reseed the route assignment from the current carrier catalog before trusting routing diagnostics"
                 ]),
             );
         }
@@ -5890,10 +5934,19 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                 },
             };
             let explain = route_payload_for_dispatch_target(execution_plan, &dispatch_target);
+            let next_actions = if string_array_from_payload(&explain["blocker_codes"])
+                .iter()
+                .any(|code| code == "model_not_pinned")
+            {
+                route_assignment_reseed_next_actions(&context.run_id, &context.task_id)
+            } else {
+                string_array_from_payload(&explain["next_actions"])
+            };
             serde_json::json!({
                 "surface": "vida taskflow route explain",
                 "status": explain["status"],
                 "blocker_codes": explain["blocker_codes"],
+                "next_actions": next_actions,
                 "run_id": context.run_id,
                 "task_id": context.task_id,
                 "dispatch_target": dispatch_target,
@@ -5967,6 +6020,11 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>();
+            let next_actions = if blocker_codes.iter().any(|code| code == "model_not_pinned") {
+                route_assignment_reseed_next_actions(&context.run_id, &context.task_id)
+            } else {
+                next_actions
+            };
             let status = if blocker_codes.is_empty() {
                 "pass"
             } else {
@@ -6057,8 +6115,9 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
-        cached_operator_projection_exit_code, taskflow_task_subcommand_supported,
-        GraphSummaryWaveBucket, TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
+        cached_operator_projection_exit_code, cached_taskflow_next_open_delegated_cycle_projection,
+        taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
+        TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
     };
     use crate::state_store::{
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
@@ -6078,6 +6137,19 @@ mod tests {
             cached_operator_projection_exit_code(r#"{"status":"blocked"}"#),
             ExitCode::from(1)
         );
+    }
+
+    #[test]
+    fn cached_taskflow_next_stale_projection_only_allows_open_delegated_cycle() {
+        assert!(cached_taskflow_next_open_delegated_cycle_projection(
+            r#"{"status":"blocked","blocker_codes":["open_delegated_cycle"]}"#
+        ));
+        assert!(!cached_taskflow_next_open_delegated_cycle_projection(
+            r#"{"status":"pass","blocker_codes":[]}"#
+        ));
+        assert!(!cached_taskflow_next_open_delegated_cycle_projection(
+            r#"{"status":"blocked","blocker_codes":["no_ready_task_candidates"]}"#
+        ));
     }
 
     fn task(
@@ -8037,6 +8109,18 @@ mod tests {
                 "selected_backend_not_admissible_for_dispatch_target"
             ))
         }));
+    }
+
+    #[test]
+    fn route_assignment_reseed_next_actions_name_concrete_refresh_command() {
+        let actions =
+            super::route_assignment_reseed_next_actions("run-route-drift", "task-route-drift");
+
+        assert!(
+            actions[0].contains("vida taskflow run-graph dispatch-init task-route-drift --json")
+        );
+        assert!(actions[1].contains("vida taskflow route explain --run-id run-route-drift --json"));
+        assert!(actions[2].contains("model_not_pinned"));
     }
 
     #[test]
