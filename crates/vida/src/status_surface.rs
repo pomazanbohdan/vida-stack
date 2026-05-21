@@ -91,18 +91,6 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
-    if as_json {
-        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
-            &state_dir,
-            status_json_projection_name(summary_only),
-        ) {
-            if cached_status_projection_admissible(&state_dir, summary_only, &cached) {
-                println!("{cached}");
-                return ExitCode::SUCCESS;
-            }
-        }
-    }
-
     match StateStore::open_existing_read_only_with_timeout(
         state_dir.clone(),
         STATUS_SURFACE_LOCK_TIMEOUT,
@@ -657,45 +645,6 @@ fn status_json_projection_name(summary_only: bool) -> &'static str {
     } else {
         "status-full-latest"
     }
-}
-
-fn cached_status_projection_admissible(
-    state_dir: &std::path::Path,
-    summary_only: bool,
-    cached: &str,
-) -> bool {
-    if !summary_only {
-        return true;
-    }
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(cached) else {
-        return false;
-    };
-    let has_release_admission_blocker = value
-        .get("blocker_codes")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|codes| {
-            codes
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .any(|code| {
-                    matches!(
-                        code,
-                        "incomplete_release_admission_operator_evidence"
-                            | "missing_retrieval_trust_operator_evidence"
-                            | "missing_retrieval_trust_signal_operator_evidence"
-                            | "missing_retrieval_trust_source_operator_evidence"
-                    )
-                })
-        });
-    if !has_release_admission_blocker {
-        return true;
-    }
-    !matches!(
-        crate::release1_contracts::latest_release_admission_operator_evidence_snapshot_path(
-            state_dir
-        ),
-        Ok(Some(_))
-    )
 }
 
 #[cfg(test)]

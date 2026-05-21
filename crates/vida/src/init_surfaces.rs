@@ -2687,16 +2687,6 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
     let framework_memory_source_root =
         PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
 
-    if args.json {
-        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
-            &state_dir,
-            orchestrator_init_projection_name(args.full),
-        ) {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
-        }
-    }
-
     match tokio::time::timeout(
         std::time::Duration::from_secs(COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS),
         StateStore::open(state_dir.clone()),

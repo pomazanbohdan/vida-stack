@@ -505,15 +505,6 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
-    if as_json {
-        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
-            &state_dir,
-            doctor_json_projection_name(summary_only),
-        ) {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
-        }
-    }
 
     match super::StateStore::open_existing_read_only_with_timeout(
         state_dir.clone(),
