@@ -364,25 +364,6 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
             });
         }
     }
-    if evidence_ambiguous {
-        return serde_json::json!({
-            "status": "ambiguous",
-            "continuation_allowed": false,
-            "continuation_required_now": false,
-            "active_bounded_unit": serde_json::Value::Null,
-            "binding_source": serde_json::Value::Null,
-            "why_this_unit": serde_json::Value::Null,
-            "primary_path": "diagnosis_path",
-            "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
-            "pause_boundary_gate": "forbidden_while_ambiguous",
-            "ambiguity_reason": "runtime_evidence_ambiguous",
-            "next_actions": [
-                "Do not continue by heuristic while run-graph continuation evidence is ambiguous.",
-                "Refresh continuation evidence with `vida taskflow consume continue --json` and recheck `vida status --json` before selecting the next bounded step."
-            ]
-        });
-    }
-
     let sequential_vs_parallel_posture = if latest_run_graph_recovery
         .is_some_and(|recovery| recovery.delegation_gate.delegated_cycle_open)
     {
@@ -392,6 +373,50 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
     };
 
     if let Some(status) = latest_run_graph_status {
+        if evidence_ambiguous {
+            if let Some(binding) = explicit_binding {
+                if active_exception_takeover_binding_matches_status(
+                    binding,
+                    status,
+                    latest_run_graph_dispatch_receipt,
+                ) && terminal_consume_continue_run_id != Some(status.run_id.as_str())
+                {
+                    return active_exception_takeover_binding_summary_json(
+                        binding,
+                        status,
+                        continuation_required_now,
+                        pause_boundary_gate,
+                    );
+                }
+            }
+            if active_exception_takeover_evidence_matches_status(
+                status,
+                latest_run_graph_dispatch_receipt,
+                terminal_consume_continue_run_id,
+            ) {
+                return active_exception_takeover_status_summary_json(
+                    status,
+                    continuation_required_now,
+                    pause_boundary_gate,
+                );
+            }
+            return serde_json::json!({
+                "status": "ambiguous",
+                "continuation_allowed": false,
+                "continuation_required_now": false,
+                "active_bounded_unit": serde_json::Value::Null,
+                "binding_source": serde_json::Value::Null,
+                "why_this_unit": serde_json::Value::Null,
+                "primary_path": "diagnosis_path",
+                "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
+                "pause_boundary_gate": "forbidden_while_ambiguous",
+                "ambiguity_reason": "runtime_evidence_ambiguous",
+                "next_actions": [
+                    "Do not continue by heuristic while run-graph continuation evidence is ambiguous.",
+                    "Refresh continuation evidence with `vida taskflow consume continue --json` and recheck `vida status --json` before selecting the next bounded step."
+                ]
+            });
+        }
         let terminal_completed_without_next_unit = status.status == "completed"
             && status.lifecycle_stage == "closure_complete"
             && status
@@ -624,6 +649,25 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
                         Some(status.run_id.as_str()),
                     )
                 ]
+        });
+    }
+
+    if evidence_ambiguous {
+        return serde_json::json!({
+            "status": "ambiguous",
+            "continuation_allowed": false,
+            "continuation_required_now": false,
+            "active_bounded_unit": serde_json::Value::Null,
+            "binding_source": serde_json::Value::Null,
+            "why_this_unit": serde_json::Value::Null,
+            "primary_path": "diagnosis_path",
+            "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
+            "pause_boundary_gate": "forbidden_while_ambiguous",
+            "ambiguity_reason": "runtime_evidence_ambiguous",
+            "next_actions": [
+                "Do not continue by heuristic while run-graph continuation evidence is ambiguous.",
+                "Refresh continuation evidence with `vida taskflow consume continue --json` and recheck `vida status --json` before selecting the next bounded step."
+            ]
         });
     }
 
@@ -1380,6 +1424,46 @@ mod tests {
             summary["active_bounded_unit"]["run_id"],
             "run-stale-lane-status"
         );
+    }
+
+    #[test]
+    fn active_exception_takeover_surfaces_bounded_unit_despite_ambient_evidence_ambiguity() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "universal-surfaces-epic-2-wizard-settings-container",
+            "analysis",
+            "analysis",
+        );
+        status.task_id = "universal-surfaces-epic-2-wizard-settings-container".to_string();
+        status.run_id = "universal-surfaces-epic-2-wizard-settings-container".to_string();
+        status.active_node = "analysis".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+        let mut dispatch =
+            exception_takeover_dispatch("universal-surfaces-epic-2-wizard-settings-container");
+        dispatch.lane_status = "lane_exception_recorded".to_string();
+        dispatch.supersedes_receipt_id = Some("epic-2-doc-exception-takeover".to_string());
+        dispatch.exception_path_receipt_id = Some("epic-2-doc-exception-takeover".to_string());
+
+        let summary = build_continuation_binding_summary(
+            None,
+            Some(&status),
+            None,
+            Some(&dispatch),
+            None,
+            true,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["active_exception_takeover"], true);
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "universal-surfaces-epic-2-wizard-settings-container"
+        );
+        assert_eq!(
+            summary["sequential_vs_parallel_posture"],
+            "sequential_only_exception_takeover"
+        );
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
     }
 
     #[test]
