@@ -65,10 +65,25 @@ The normal top-level loop is:
 2. bind it to the active backlog item or bounded ask,
 3. inspect the active skill catalog and activate the minimal relevant skill set,
 4. choose the decomposition depth,
-5. decide local vs delegated vs escalated handling,
-6. shape one lawful packet,
-7. dispatch the packet,
-8. synthesize the result into the next bounded step or closure.
+5. actualize TaskFlow status, parent/child layer, priority, dependencies, owned paths, proof targets, and sequential/parallel posture from current evidence,
+6. decide delegated vs escalated handling through the configured agent roles/carriers,
+7. shape one lawful packet,
+8. dispatch the next configured lane,
+9. synthesize the result into TaskFlow and the next bounded step or closure.
+
+Global goal progress gate:
+
+1. during synthesis, before closure or advancement to a more complex happy-path case, the orchestrator must compare current evidence against the project operating goal: root orchestrates, configured agents execute, cheapest eligible roles are used unless promotion is evidence-backed, TaskFlow is current, diagnostics create or update concrete tasks, and continuation is selected only from explicit TaskFlow/runtime evidence,
+2. failed checks must become TaskFlow updates or child tasks under the active epic before the next write-producing lane starts,
+3. newly discovered global-goal gaps are priority analysis tasks for the configured analyst lane and must be checked against the relevant project specs before implementation routing.
+
+Release-impact version gate:
+
+1. when synthesis closes a pool of tasks that materially changes runtime behavior, agent-mode behavior, diagnostic behavior, release behavior, operator contracts, or self-hosting readiness, the orchestrator must classify the pool as release-impact before treating it as done,
+2. patch release is allowed for compatible bounded fixes that only repair a defect, test, packaging check, documentation mismatch, or local performance issue without changing public command, JSON, TaskFlow, agent-mode, config, installer, or diagnostic semantics,
+3. minor release is required when the pool adds or changes an operating model, diagnostic gate, command or option contract, JSON/status field semantics, TaskFlow or agent-mode flow, config/carrier resolution, release process, CI process, or closes a P0 batch that materially advances self-hosting,
+4. significant or minor release closure must include a README revision pass so public product positioning, installation/use guidance, capability summary, and current release direction match the new release,
+5. release-impact closure must create or update a TaskFlow release task, record the patch/minor decision, bind the selected version and tag, and verify GitHub Actions/release evidence for that exact version before advancing.
 
 Session ownership rule:
 
@@ -156,10 +171,13 @@ For normal write-producing work, delegation is the default.
 Default route:
 
 1. orchestrator shapes,
-2. implementer writes,
-3. coach reviews,
-4. verifier proves,
-5. orchestrator synthesizes.
+2. analyst prepares the bounded handoff when analysis/spec context is required,
+3. test_author/autotester writes or specifies the failing regression proof for test-first defects,
+4. coach reviews test quality before implementation when a new regression test gates the packet,
+5. implementer writes through the cheapest eligible configured write carrier,
+6. coach reviews implementation conformance, then duplication reviewer and independent verifier/prover review closure evidence,
+7. verifier/prover proves closure,
+8. orchestrator synthesizes and updates TaskFlow.
 
 Full-orchestration rule:
 
@@ -168,6 +186,8 @@ Full-orchestration rule:
 3. local departure from this full cycle requires an explicit recorded exception path.
 4. a worker wait timeout, empty poll result, or slow delegated response does not compress the full cycle into one generic development lane or root-session coding; the next lawful step is renewed waiting, bounded inspection, reuse, reroute, or explicit escalation.
 5. in this project, the canonical delegated execution surface for that cycle is the runtime lane flow through `vida agent-init`; host-tool-specific subagent APIs are backend details and must not be treated as the primary legality gate for project delegation.
+6. role, model, cost, and carrier selection must be resolved from `vida.config.yaml` and active agent-extension registries, not hardcoded in prompts, code, or task notes.
+7. after every lane return, diagnostic, blocker, or new defect, update TaskFlow and re-check ordering, priority, dependency edges, and parallel admissibility before launching the next lane.
 
 Keep work local only when:
 
@@ -289,9 +309,9 @@ Use this table by default:
 | Work shape | Default depth | Default lane sequence | Notes |
 |---|---|---|---|
 | bounded read-only analysis | `delivery_task` | orchestrator or verifier-only | keep local when no writer is needed |
-| one coherent write packet | `delivery_task` | orchestrator -> implementer -> coach -> verifier | normal path |
+| one coherent write packet | `delivery_task` | orchestrator -> analyst -> test_author when required -> coach_test_gate when required -> implementer -> coach_implementation_gate -> reviewer/verifier/prover | normal path |
 | broad backlog item with one clear owner but unclear done | split to `delivery_task` first | shaping only until lawful | do not dispatch yet |
-| one delivery task still crossing multiple mutable contracts | `execution_block` | orchestrator -> implementer -> coach/verifier | split before dispatch |
+| one delivery task still crossing multiple mutable contracts | `execution_block` | orchestrator -> analyst -> bounded lane chain after split | split before dispatch |
 | seam or closure bottleneck | `delivery_task` or `execution_block` | orchestrator -> implementer/verifier -> synthesis | choose by contract tightness |
 | unresolved architecture conflict | no normal leaf yet | escalation | do not push an invalid packet downstream |
 

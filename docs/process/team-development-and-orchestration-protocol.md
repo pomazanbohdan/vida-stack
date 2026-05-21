@@ -37,6 +37,8 @@ Project development runs as:
 9. fail-closed on missing packet data or shared-scope ambiguity.
 10. explorer/read-only findings feed packet shaping, not root-session write ownership.
 11. session-scoped: one blocked orchestrator session must not block another session's disjoint task in the same project root.
+12. test-first for runtime/operator defect remediation, with a middle-tier test author before the implementation lane.
+13. TaskFlow-actualized at every layer: new evidence must update task status, parent/child placement, priority, dependencies, proof targets, execution semantics, and sequential/parallel posture before the next lane is dispatched.
 
 ## Team Topology
 
@@ -47,7 +49,7 @@ The active project development team is:
 2. `junior`
    - default low-cost carrier tier for one bounded write-producing packet with `runtime_role=worker`
 3. `middle`
-   - carrier tier for system analyst specification/planning packets and detailed pre-development task briefs with `runtime_role=business_analyst`
+   - carrier tier for system analyst specification/planning packets, high-quality test-authoring packets, and detailed pre-development task briefs with `runtime_role=business_analyst` or the configured test-authoring role
 4. `senior`
    - carrier tier for independent duplication/architecture reuse review, proof, and closure-readiness checks with `runtime_role=verifier`
 5. `architect`
@@ -63,10 +65,12 @@ Multiple orchestrator sessions:
 The configured development chain is:
 
 1. `analyst`: a middle-cost system analyst lane that researches the bounded task, existing code/contracts, architectural context, acceptance targets, owned paths, and duplication risks before implementation.
-2. `developer`: the cheapest eligible write lane that implements only after the analyst handoff is present.
-3. `duplication_reviewer`: an independent review lane that checks whether the implementation reuses existing framework/runtime contracts, avoids duplicate code/config semantics/operator surfaces, and has no dead or unwired helpers.
-4. `coach`: the final coach lane that reviews the completed implementation against the analyst brief, spec, acceptance targets, and duplication-review result.
-5. `tester` / `prover`: independent verification and proof lanes that gate release closure.
+2. `test_author` / `autotester`: a middle-cost lane that writes or specifies the failing regression proof before implementation for test-first defect work.
+3. `coach_test_gate`: a bounded coach review that confirms the failing test matches the spec/runtime evidence and is not a weak fixture.
+4. `developer`: the cheapest eligible write lane that implements only after the analyst and required test-author handoffs are present.
+5. `coach_implementation_gate`: the post-implementation coach lane, resolved through runtime role `coach`, that reviews the completed implementation against the analyst brief, accepted test, spec, acceptance targets, and expected handoff before independent review.
+6. `duplication_reviewer`: an independent review lane that checks whether the implementation reuses existing framework/runtime contracts, avoids duplicate code/config semantics/operator surfaces, and has no dead or unwired helpers.
+7. `tester` / `prover`: independent verification and proof lanes that gate release closure.
 
 ## Canonical Work Unit
 
@@ -107,6 +111,15 @@ Every delegated development packet must include:
 14. `stop_rules`
 15. `blocking_question`
 16. `handoff_target`
+
+TaskFlow actualization rule:
+
+1. every packet must either create, update, or cite the active TaskFlow item that owns it,
+2. lane returns must update task notes or a linked artifact with role, evidence, blockers, proof result, and next lane,
+3. new blockers or defects discovered by any lane must be placed under the correct parent/epic before the next write-producing lane starts,
+4. after each update, the orchestrator must re-evaluate priority, dependencies, parent/child layer, conflict domain, and sequential/parallel admissibility,
+5. diagnostic findings, including global-goal happy-path progress failures, must become task updates or child tasks before the next write-producing lane starts,
+6. stale task ordering, stale dependencies, missing proof targets, or unrecorded lane handoffs are process defects.
 
 Readiness rule:
 
@@ -149,7 +162,7 @@ Use `delivery_task` as the delegated leaf when all are true:
 2. one owner exists,
 3. one bounded write scope or one bounded read-only scope exists,
 4. one verification command or proof target is sufficient for closure,
-5. one implementer -> coach -> verifier cycle can judge closure without further subdivision.
+5. one configured test-first lane cycle can judge closure without further subdivision.
 
 Split further into `execution_block` only when at least one is true:
 
@@ -275,15 +288,19 @@ Escalation is lawful only when:
 For write-producing packets, the default sequence is:
 
 1. orchestrator shaping
-2. implementer
-3. coach
-4. verifier
-5. orchestrator synthesis
+2. analyst
+3. test_author/autotester when test-first proof is required
+4. coach_test_gate when a new failing test is part of the packet
+5. implementer
+6. coach_implementation_gate
+7. duplication_reviewer
+8. verifier/prover
+9. orchestrator synthesis
 
 Explorer-to-writer rule:
 
 1. when explorer or other read-only lanes find a bounded writable gap, that result feeds the next packet,
-2. the next lawful write-producing sequence still remains implementer -> coach -> verifier -> synthesis unless a recorded exception path says otherwise,
+2. the next lawful write-producing sequence still remains the configured test-first agent chain unless a recorded exception path says otherwise,
 3. “the gap is already obvious” is not a valid reason to collapse into local patching.
 
 Partial-return reroute rule:
@@ -331,10 +348,11 @@ Use delegated agents by default for write-producing work.
 Default engagement policy:
 
 1. orchestrator owns shaping, routing, synthesis, and closure decisions,
-2. the runtime-selected `worker` carrier owns one bounded write-producing packet,
-3. the runtime-selected `coach` carrier owns bounded formative review,
-4. the runtime-selected `verifier` carrier owns independent proof and closure readiness,
-5. the runtime-selected `solution_architect` carrier is exceptional and activates only when normal packet closure cannot be made coherent.
+2. the configured `test_author` role and its resolved carrier own the bounded failing-test/regression authoring packet when test-first proof is required,
+3. the runtime-selected `worker` carrier owns one bounded implementation packet,
+4. the runtime-selected `coach` carrier owns bounded test and implementation gate review,
+5. the runtime-selected `verifier` carrier owns independent proof and closure readiness,
+6. the runtime-selected `solution_architect` carrier is exceptional and activates only when normal packet closure cannot be made coherent.
 
 Agent-init interpretation rule:
 

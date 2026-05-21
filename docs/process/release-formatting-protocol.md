@@ -34,22 +34,31 @@ Rules:
 
 ## Body Structure Rule
 
-The public body should keep the release readable and operator-oriented.
+The public body should keep the release readable, business-analytical, and operator-oriented.
 
 Required sections:
 
-1. highlights or hotfix highlights,
-2. what changed or equivalent delta section,
-3. practical outcome or operator impact,
-4. proof snapshot, direction, or release-positioning section when it materially clarifies the slice.
+1. business/product summary,
+2. practical outcome or operator impact,
+3. release positioning or adoption note when it materially clarifies the slice,
+4. commit ledger covering commits since the previous release tag.
 
 Rules:
 
 1. keep the body concise and scannable,
 2. do not duplicate the release title inside the body when GitHub already renders it as the release page title,
 3. prefer the canonical headings already used in the source artifact,
-4. keep exact commands only when they materially help the operator,
-5. avoid internal documentation metadata, internal artifact identifiers, or changelog bookkeeping in the public body.
+4. keep the top narrative free of low-level technical detail, internal implementation traces, raw command logs, and test-command lists,
+5. describe what changed in business or product terms first: what became possible, safer, faster, easier to operate, or closer to the project goal,
+6. keep exact commands only when they materially help the operator and place detailed proof in internal TaskFlow notes rather than the public release body,
+7. avoid internal documentation metadata, internal artifact identifiers, or changelog bookkeeping in the public body.
+
+Commit ledger rule:
+
+1. every public release body must include a bottom section listing all commits between the previous release tag and the current release tag,
+2. each commit entry must include the short SHA and a one-line product-facing summary of the fix or change,
+3. the commit ledger may mention technical nouns needed to identify the fix, but it must not replace the top business/product summary,
+4. merge commits, generated-only churn, or release-note-only commits may be grouped when listing them individually would add noise without clarifying the release.
 
 ## Asset Rule
 
@@ -67,9 +76,11 @@ For the active release line:
 
 1. build the release assets,
 2. confirm the matching `install/release-notes-v*.md` artifact is current,
-3. render the public body from that artifact without the metadata footer and without duplicating the top-level release title heading,
-4. create or edit the GitHub release using the rendered body,
-5. verify the release title, body, tag, and attached assets on GitHub after publication.
+3. confirm the release note starts with a business/product summary and includes a commit ledger for the previous-tag to current-tag range,
+4. for significant or minor releases, revise `README.md` before publication so public positioning, install/use guidance, capability summary, and current release direction match the release,
+5. render the public body from that artifact without the metadata footer and without duplicating the top-level release title heading,
+6. create or edit the GitHub release using the rendered body,
+7. verify the release title, body, tag, commit ledger, README alignment, and attached assets on GitHub after publication.
 
 ## Tooling Rule
 
@@ -90,7 +101,7 @@ For the active release line:
 
 1. public release pages should all follow one title convention: `Vida Stack vX.Y.Z`,
 2. the GitHub title is the only release-title surface; body content starts from the first subsection (for example, highlights),
-3. the public release page is the operator-facing narrative surface,
+3. the public release page is the business/product-facing narrative surface first and an operator-facing artifact ledger second,
 4. the canonical release-note artifact remains the documentation-owned source of truth,
 5. GitHub release formatting drift is a project-process bug and must be corrected through this protocol rather than by informal manual editing alone.
 

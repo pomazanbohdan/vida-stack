@@ -1,5 +1,7 @@
 use super::*;
-use crate::task_cli_render::{print_task_bulk_reparent_result, print_task_direct_children};
+use crate::task_cli_render::{
+    print_task_bulk_reparent_result, print_task_direct_children, print_task_update_graph_blocked,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct TaskReadMetadata {
@@ -44,6 +46,23 @@ fn task_json_success_status() -> &'static str {
 
 fn task_next_lawful_projection_name() -> &'static str {
     "task-next-lawful-latest"
+}
+
+fn task_update_graph_issue_from_invalid_record_reason(
+    reason: &str,
+) -> Option<state_store::TaskGraphIssue> {
+    let rest = reason.strip_prefix("task update would create invalid graph: ")?;
+    let (issue_type, issue_id) = rest.split_once(" on ")?;
+    if issue_type != "open_parent_has_no_open_child" || issue_id.trim().is_empty() {
+        return None;
+    }
+    Some(state_store::TaskGraphIssue {
+        issue_type: issue_type.to_string(),
+        issue_id: issue_id.to_string(),
+        depends_on_id: None,
+        edge_type: Some("parent-child".to_string()),
+        detail: "open or in-progress parent has no direct open or in-progress child".to_string(),
+    })
 }
 
 const TASK_NEXT_LAWFUL_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
@@ -4302,6 +4321,18 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             ExitCode::SUCCESS
                         }
                         Err(error) => {
+                            if command.json {
+                                if let state_store::StateStoreError::InvalidTaskRecord { reason } =
+                                    &error
+                                {
+                                    if let Some(issue) =
+                                        task_update_graph_issue_from_invalid_record_reason(reason)
+                                    {
+                                        print_task_update_graph_blocked(&issue, command.json);
+                                        return ExitCode::from(1);
+                                    }
+                                }
+                            }
                             eprintln!("Failed to update task: {error}");
                             ExitCode::from(1)
                         }

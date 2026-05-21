@@ -6588,6 +6588,127 @@ fn task_create_accepts_metadata_one_shot_for_shell_safe_intake() {
 }
 
 #[test]
+fn task_update_parent_guard_returns_actionable_json_recovery() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let old_parent = run_command_json(
+        &[
+            "task",
+            "create",
+            "old-parent",
+            "Old parent",
+            "--type",
+            "epic",
+            "--status",
+            "closed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(old_parent["status"], "pass");
+
+    let closed_child = run_command_json(
+        &[
+            "task",
+            "create",
+            "closed-child",
+            "Closed child",
+            "--type",
+            "defect",
+            "--status",
+            "closed",
+            "--parent-id",
+            "old-parent",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed_child["status"], "pass");
+
+    let open_child = run_command_json(
+        &[
+            "task",
+            "create",
+            "open-child",
+            "Open child",
+            "--type",
+            "defect",
+            "--status",
+            "open",
+            "--parent-id",
+            "old-parent",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(open_child["status"], "pass");
+
+    let new_parent = run_command_json(
+        &[
+            "task",
+            "create",
+            "new-parent",
+            "New parent",
+            "--type",
+            "epic",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(new_parent["status"], "pass");
+
+    let output = run_command_capture(
+        &[
+            "task",
+            "update",
+            "open-child",
+            "--parent-id",
+            "new-parent",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !output.status.success(),
+        "reparent should fail closed until empty old parent is repaired"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "json failure should be machine-readable on stdout, stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("blocked update json should parse");
+    assert_eq!(parsed["surface"], "vida task update");
+    assert_eq!(parsed["status"], "blocked");
+    assert_eq!(
+        parsed["blocker_codes"],
+        serde_json::json!(["dependency_graph_issues"])
+    );
+    assert_eq!(
+        parsed["graph_issue"]["issue_type"],
+        "open_parent_has_no_open_child"
+    );
+    assert_eq!(parsed["graph_issue"]["issue_id"], "old-parent");
+    assert!(
+        parsed["next_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| {
+                action
+                    .as_str()
+                    .unwrap()
+                    .contains("vida task update old-parent --status closed --json")
+            }),
+        "{parsed}"
+    );
+
+    fs::remove_dir_all(&state_dir).expect("cleanup state dir");
+}
+
+#[test]
 fn task_update_rejects_notes_and_notes_file_together() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

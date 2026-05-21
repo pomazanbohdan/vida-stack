@@ -93,6 +93,42 @@ fn build_pass_operator_surface_payload(
     build_operator_surface_payload(surface, Vec::new(), Vec::new(), extra_fields)
 }
 
+pub(crate) fn print_task_update_graph_blocked(issue: &TaskGraphIssue, as_json: bool) {
+    let next_actions = match issue.issue_type.as_str() {
+        "open_parent_has_no_open_child" => vec![format!(
+            "Repair emptied parent `{}` with `vida task update {} --status closed --json`, then rerun the original task update.",
+            issue.issue_id, issue.issue_id
+        )],
+        _ => vec![
+            "Resolve task graph validation issues and rerun the original `vida task update ... --json` command."
+                .to_string(),
+        ],
+    };
+    let payload = build_operator_surface_payload(
+        "vida task update",
+        crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::DependencyGraphIssues,
+        )
+        .into_iter()
+        .collect(),
+        next_actions,
+        serde_json::json!({
+            "graph_issue": issue,
+        }),
+    );
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task update graph blocked payload should render as json",
+    ) {
+        return;
+    }
+    println!(
+        "blocked\t{}\t{}\t{}",
+        issue.issue_type, issue.issue_id, issue.detail
+    );
+}
+
 fn print_task_record(render: RenderMode, title: &str, task: &TaskRecord) {
     print_surface_header(render, title);
     print_surface_line(render, "id", &task.id);

@@ -130,6 +130,9 @@ Companion rule:
 29. [test-first-runtime-defect-remediation-design.md](test-first-runtime-defect-remediation-design.md)
    Config families: test-first runtime defect repair, cross-surface scenario contracts, operator actionability proof, paused defect reparenting, and one-bounded-defect-at-a-time remediation across TaskFlow runtime-family surfaces
    Registered path: `docs/product/spec/test-first-runtime-defect-remediation-design.md`
+30. [agent-mode-test-first-delivery-flow-design.md](agent-mode-test-first-delivery-flow-design.md)
+   Config families: config-derived agent-mode delivery, middle-tier test authoring, orchestrator-only root posture, continuous TaskFlow actualization, cost/effectiveness telemetry, and sequential/parallel lane gating
+   Registered path: `docs/product/spec/agent-mode-test-first-delivery-flow-design.md`
 
 ### Project And Packaging
 

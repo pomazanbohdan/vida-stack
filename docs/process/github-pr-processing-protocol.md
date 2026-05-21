@@ -9,11 +9,12 @@ This protocol applies to project-local PR triage and batch processing for the ac
 It covers:
 
 1. open PR inventory,
-2. validation of each PR's intended functional fix,
-3. merge versus close decisions,
-4. manual integration of useful fixes from stale, duplicate, conflicting, or failing PRs,
-5. branch cleanup,
-6. return-to-main and push closure.
+2. TaskFlow intake for each PR as a pull-request/work item,
+3. validation of each PR's intended functional fix,
+4. merge versus close decisions,
+5. manual integration of useful fixes from stale, duplicate, conflicting, or failing PRs,
+6. branch cleanup,
+7. return-to-main and push closure.
 
 It does not replace GitHub issue triage, release publication, framework bootstrap law, TaskFlow lane law, or DocFlow document law.
 
@@ -29,7 +30,12 @@ It does not replace GitHub issue triage, release publication, framework bootstra
    - Capture duplicate titles, duplicate commits, conflicting branches, failing checks, pending checks, and stale branches.
    - Do not merge a PR solely because it is open or mergeable.
 
-3. Revalidate each PR's intent.
+3. Create or update TaskFlow PR work items.
+   - PRs are TaskFlow pull-request/work items, not defect tasks by default.
+   - Record PR number, title, URL, branch, base, changed-file summary, checks, mergeability, intended fix, current classification, priority, dependency/conflict hints, and next action.
+   - Re-evaluate priority against active runtime goals and current defect batches before processing order is fixed.
+
+4. Revalidate each PR's intent.
    - Read PR title/body/files/commits.
    - Compare the patch against current `origin/main`.
    - Classify the PR as one of:
@@ -39,31 +45,31 @@ It does not replace GitHub issue triage, release publication, framework bootstra
      - obsolete because current `main` already contains the behavior,
      - invalid or failing without a useful functional change.
 
-4. Inspect failing or pending checks before deciding.
+5. Inspect failing or pending checks before deciding.
    - For failed CI, inspect available job logs.
    - If logs are not yet available but the failure can be reproduced locally, run the relevant local check.
    - When a PR has a useful fix but also a compile/test defect, integrate the useful fix manually and repair the defect in the integration branch rather than merging the failing branch.
 
-5. Integrate useful changes on a fresh branch from current main.
+6. Integrate useful changes on a fresh branch from current main.
    - Fetch and prune first.
    - Create a temporary integration branch from `origin/main`.
    - Cherry-pick or manually port exactly one copy of each unique useful fix.
    - Resolve conflicts against current `main`; preserve current main behavior unless the PR's fix intentionally replaces it.
    - If multiple PRs overlap, keep the logically strongest combined behavior and avoid duplicate commits.
 
-6. Verify before publishing.
+7. Verify before publishing.
    - Run formatting for touched languages when applicable.
    - Run at least one compile-level check for changed code.
    - Run targeted tests for the functional behavior being integrated.
    - If a full test suite is impractical, record the bounded proof that was actually run and any residual risk.
 
-7. Publish through main.
+8. Publish through main.
    - Switch back to `main`.
    - Fast-forward or merge the verified integration branch into `main`.
    - Push `main` to `origin`.
    - Delete the temporary local integration branch after it is fully contained in `main`.
 
-8. Close processed PRs.
+9. Close processed PRs.
    - For PRs manually integrated, close with a comment naming the integration commit or commit range and state that the useful behavior is now present on `main`.
    - For duplicate PRs, close as duplicates after confirming the duplicate behavior is integrated or intentionally rejected.
    - For invalid PRs, close with the validation reason.
@@ -71,7 +77,7 @@ It does not replace GitHub issue triage, release publication, framework bootstra
    - Closing comments are mandatory and automatic. The comment must name the reason for closure, the disposition of the PR's intended fix, any integration commit or replacement task when applicable, and the check or validation evidence that blocked merge when the PR was not mergeable.
    - Delete remote head branches automatically for closed PRs when they are project-owned cleanup branches. Leave a branch only when GitHub permissions deny deletion or when the branch is not project-owned; record that exception in the closure comment/report.
 
-9. Final sanity checks.
+10. Final sanity checks.
    - Fetch with prune.
    - Confirm `git status --short --branch` shows clean `main` tracking `origin/main`.
    - Confirm `gh pr list --state open` is empty or contains only PRs intentionally left open.
@@ -95,7 +101,8 @@ A completed PR-processing batch must report:
 3. commits pushed to `main`,
 4. checks/tests run,
 5. closed PRs and deleted branches,
-6. final branch and worktree state.
+6. TaskFlow item ids updated or closed,
+7. final branch and worktree state.
 
 -----
 artifact_path: process/github-pr-processing-protocol

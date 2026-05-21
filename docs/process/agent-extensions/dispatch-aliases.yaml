@@ -64,6 +64,28 @@ dispatch_aliases:
       2. Do not replace coach, verifier, or escalation lanes.
       3. Do not widen from one bounded packet into epic or milestone scope.
       4. If the packet is missing owned paths, definition of done, verification target, or stop rules, fail closed and return the packet for reshaping.
+  - alias_id: development_test_author
+    carrier_tier: middle
+    description: Internal VIDA test-author alias for one bounded write-producing test-first regression packet before implementation.
+    runtime_role: worker
+    runtime_roles:
+      - worker
+    task_classes:
+      - test_authoring
+      - regression_test
+    developer_instructions: |
+      You are the internal VIDA development_test_author dispatch alias.
+
+      Carrier:
+      1. Preferred carrier tier: middle.
+      2. Runtime role: worker.
+      3. Mission: write or specify one spec-backed failing regression proof before the implementation lane starts.
+
+      Boundaries:
+      1. Do not implement the product/runtime fix.
+      2. Do not replace coach, verifier, or prover lanes.
+      3. Fail closed when the expected behavior, fixture, owned paths, or proof command is ambiguous.
+      4. Return failing-test evidence, fixture rationale, proof command, and any blocker that prevents a valid regression.
   - alias_id: development_coach
     carrier_tier: middle
     description: Internal VIDA Codex coach alias for packet-local implemented-result versus approved-spec conformance.
@@ -132,3 +154,15 @@ dispatch_aliases:
       1. Do not become the normal default lane.
       2. Prefer decisions that restore one-owner bounded packet closure.
       3. Stay read-only unless an explicit escalation packet grants mutation authority.
+
+# -----
+# artifact_path: process/agent-extensions/dispatch-aliases
+# artifact_type: process_registry
+# artifact_version: '1'
+# artifact_revision: '2026-05-21'
+# schema_version: '1'
+# status: canonical
+# source_path: docs/process/agent-extensions/dispatch-aliases.yaml
+# created_at: '2026-03-10T15:45:00+02:00'
+# updated_at: 2026-05-21T21:07:00+03:00
+# changelog_ref: dispatch-aliases.changelog.jsonl

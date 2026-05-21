@@ -103,6 +103,9 @@ host_environment:
               - planning
               - coach
               - implementation_medium
+              - test_authoring
+              - regression_test
+              - quality_gate
             readiness:
               mode: codex_profile
               required: true
@@ -117,6 +120,9 @@ host_environment:
           - planning
           - coach
           - implementation_medium
+          - test_authoring
+          - regression_test
+          - quality_gate
       senior:
         tier: senior
         description: Level 3 Codex lane for independent verification, proof-strength review, and high-confidence closure gates that fail closed on missing evidence.
@@ -539,13 +545,11 @@ dev_team:
         - specification
         - planning
       default_carrier: middle
-      default_model: gpt-5.4
-      default_model_reasoning_effort: medium
       cost_policy:
         budget_units: 4
         selection_rule: cheapest_eligible_specification_carrier
       handoff:
-        next_role: developer
+        next_role: test_author
         required_outputs:
           - detailed_task_brief
           - architectural_context
@@ -555,6 +559,42 @@ dev_team:
           - stop_rules
           - duplication_risk_map
         fail_closed_on_missing_handoff: true
+    test_author:
+      runtime_role: worker
+      task_classes:
+        - test_authoring
+        - regression_test
+      default_carrier: middle
+      cost_policy:
+        budget_units: 4
+        selection_rule: cheapest_eligible_test_authoring_carrier_with_middle_quality_floor
+      handoff:
+        next_role: coach_test_gate
+        required_outputs:
+          - failing_regression_test
+          - fixture_rationale
+          - expected_behavior_reference
+          - proof_command
+          - implementation_handoff_notes
+          - explicit_blockers
+        fail_closed_on_missing_handoff: true
+    coach_test_gate:
+      runtime_role: coach
+      task_classes:
+        - coach
+      default_carrier: middle
+      cost_policy:
+        budget_units: 4
+        selection_rule: configured_coach_carrier_for_test_quality_gate
+      handoff:
+        next_role: developer
+        required_outputs:
+          - test_quality_review
+          - expected_failure_evidence
+          - weak_fixture_or_acceptance_gap_decision
+          - approve_or_rework_decision
+          - explicit_blockers
+        fail_closed_on_missing_handoff: true
     developer:
       runtime_role: worker
       task_classes:
@@ -562,19 +602,35 @@ dev_team:
         - delivery_task
         - execution_block
       default_carrier: junior
-      default_model: gpt-5.4
-      default_model_reasoning_effort: low
       cost_policy:
         budget_units: 1
         fallback_carrier: middle
         selection_rule: cheapest_eligible_write_carrier
       handoff:
-        next_role: duplication_reviewer
+        next_role: coach_implementation_gate
         required_outputs:
           - changed_files
           - verification_notes
           - residual_risks
           - explicit_blockers
+        fail_closed_on_missing_handoff: true
+    coach_implementation_gate:
+      runtime_role: coach
+      task_classes:
+        - coach
+        - review
+      default_carrier: middle
+      cost_policy:
+        budget_units: 4
+        selection_rule: configured_coach_carrier_for_implementation_conformance_gate
+      handoff:
+        next_role: duplication_reviewer
+        required_outputs:
+          - implementation_conformance_review
+          - accepted_test_alignment
+          - spec_conformance_review
+          - rework_or_approve_decision
+          - unresolved_risks
         fail_closed_on_missing_handoff: true
     duplication_reviewer:
       runtime_role: verifier
@@ -583,8 +639,6 @@ dev_team:
         - verification
         - quality_gate
       default_carrier: senior
-      default_model: gpt-5.4
-      default_model_reasoning_effort: high
       cost_policy:
         budget_units: 16
         selection_rule: independent_duplication_and_architecture_reuse_review
@@ -599,31 +653,12 @@ dev_team:
           - no_dead_code_or_unwired_helpers
         fail_closed_on_duplication: true
       handoff:
-        next_role: coach
+        next_role: tester
         required_outputs:
           - duplication_review_report
           - reused_contracts
           - duplicate_risks
           - required_rework_or_clearance
-        fail_closed_on_missing_handoff: true
-    coach:
-      runtime_role: coach
-      task_classes:
-        - coach
-        - review
-      default_carrier: middle
-      default_model: gpt-5.4
-      default_model_reasoning_effort: medium
-      cost_policy:
-        budget_units: 4
-        selection_rule: final_spec_conformance_review_after_duplication_clearance
-      handoff:
-        next_role: tester
-        required_outputs:
-          - final_implementation_review
-          - spec_conformance_review
-          - rework_or_approve_decision
-          - unresolved_risks
         fail_closed_on_missing_handoff: true
     tester:
       runtime_role: verifier
@@ -632,8 +667,6 @@ dev_team:
         - review
         - quality_gate
       default_carrier: senior
-      default_model: gpt-5.4
-      default_model_reasoning_effort: high
       cost_policy:
         budget_units: 16
         selection_rule: independent_verification_before_closure
@@ -651,8 +684,6 @@ dev_team:
         - quality_gate
         - release_readiness
       default_carrier: senior
-      default_model: gpt-5.4
-      default_model_reasoning_effort: high
       cost_policy:
         budget_units: 16
         selection_rule: proof_strength_before_release
@@ -669,8 +700,6 @@ dev_team:
         - release_readiness
         - quality_gate
       default_carrier: senior
-      default_model: gpt-5.4
-      default_model_reasoning_effort: high
       cost_policy:
         budget_units: 16
         selection_rule: fail_closed_until_release_receipt
@@ -684,15 +713,17 @@ dev_team:
   flows:
     default_delivery:
       enabled: true
-      description: System analyst produces the detailed task brief, developer implements on the cheapest write lane, duplication reviewer checks architectural reuse/no duplication, final coach reviews the completed implementation, then tester/prover gates release closure.
+      description: System analyst produces the detailed task brief, test_author writes the test-first regression when required, coach gates test quality, developer implements on the cheapest eligible write lane, coach gates implementation conformance, then independent reviewer/verifier/prover gates release closure.
       sequential: true
       allow_parallel_handoffs: false
       fail_closed_on_missing_step_contract: true
       steps:
         - analyst
+        - test_author
+        - coach_test_gate
         - developer
+        - coach_implementation_gate
         - duplication_reviewer
-        - coach
         - tester
         - prover
         - release_closure
@@ -901,11 +932,13 @@ agent_system:
       execution_block: low
       specification: medium
       planning: medium
+      test_authoring: medium
+      regression_test: medium
       coach: medium
       implementation_medium: medium
       verification: high
       review: high
-      quality_gate: high
+      quality_gate: medium
       release_readiness: high
       architecture: high
       execution_preparation: high
@@ -1008,6 +1041,8 @@ agent_system:
             - planning
             - coach
             - implementation_medium
+            - test_authoring
+            - regression_test
             - analysis
           readiness:
             mode: codex_profile

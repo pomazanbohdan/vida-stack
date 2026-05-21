@@ -59,6 +59,7 @@ Active design docs:
 - `docs/product/spec/taskflow-happy-path-test-catalog-design.md`
 - `docs/product/spec/fix-status-surface-external-cli-readiness-design.md`
 - `docs/product/spec/test-first-runtime-defect-remediation-design.md`
+- `docs/product/spec/agent-mode-test-first-delivery-flow-design.md`
 
 Current promoted runtime-control specs:
 

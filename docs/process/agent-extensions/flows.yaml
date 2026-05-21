@@ -83,8 +83,8 @@ flow_sets:
         completion_blocker: pending_review_clean_evidence
   - flow_id: verified
     flow_class: development
-    description: Verified development flow with design-gate specification, optional execution preparation, implementation, coach review, and independent verification.
-    role_chain: business_analyst,worker,coach,verifier
+    description: Verified test-first development flow with design-gate specification, optional execution preparation, test authoring, coach gates, implementation, and independent verification.
+    role_chain: business_analyst,worker,coach,worker,coach,verifier
     execution_preparation_policy:
       mode: required_for_code_shaped_work
       task_classes: implementation,execution_preparation,architecture,hard_escalation
@@ -108,6 +108,24 @@ flow_sets:
         stage: execution
         inclusion_rule: when_execution_preparation_required
         completion_blocker: pending_execution_preparation_evidence
+      - lane_id: test_author
+        dispatch_target: test_author
+        dispatch_alias: development_test_author
+        task_class: test_authoring
+        packet_template_kind: delivery_task_packet
+        closure_class: proof
+        stage: test_first
+        inclusion_rule: when_test_first_required
+        completion_blocker: pending_test_author_evidence
+      - lane_id: coach_test_gate
+        dispatch_target: coach
+        dispatch_alias: development_coach
+        task_class: coach
+        packet_template_kind: coach_review_packet
+        closure_class: proof
+        stage: test_first
+        inclusion_rule: when_test_author_present
+        completion_blocker: pending_test_gate_evidence
       - lane_id: implementation
         dispatch_target: implementer
         dispatch_alias: development_implementer
@@ -117,7 +135,7 @@ flow_sets:
         stage: execution
         inclusion_rule: always
         completion_blocker: pending_implementation_evidence
-      - lane_id: coach
+      - lane_id: coach_implementation_gate
         dispatch_target: coach
         dispatch_alias: development_coach
         task_class: coach
@@ -144,3 +162,15 @@ flow_sets:
   - flow_id: party_chat_council_modern_full
     description: Expanded modern Party Chat board with analysis, design, QA, accessibility, release, platform, and governance seats.
     role_chain: party_chat_facilitator,party_chat_system_analyst,party_chat_product_designer,party_chat_architect,party_chat_runtime_systems,party_chat_quality_verification,party_chat_qa_tester,party_chat_delivery_cost,party_chat_product_scope,party_chat_security_safety,party_chat_sre_observability,party_chat_accessibility_ux,party_chat_data_contracts,party_chat_dx_tooling,party_chat_pm_process,party_chat_release_manager
+
+# -----
+# artifact_path: process/agent-extensions/flows
+# artifact_type: process_registry
+# artifact_version: '1'
+# artifact_revision: '2026-05-21'
+# schema_version: '1'
+# status: canonical
+# source_path: docs/process/agent-extensions/flows.yaml
+# created_at: '2026-03-10T15:45:00+02:00'
+# updated_at: 2026-05-21T21:07:00+03:00
+# changelog_ref: flows.changelog.jsonl

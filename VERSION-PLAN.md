@@ -40,6 +40,31 @@ The active path to `1.0` / `Release 1` is:
 4. close protocol/proof surface parity so documented operator paths and runtime command surfaces match fail-closed behavior,
 5. finalize release hardening and closure gates for `1.0.0`.
 
+## Transition Version Bump Criteria
+
+During the `0.x` transition line, version bumps are part of release governance, not only packaging mechanics.
+
+Patch bumps advance the last version segment, for example `0.9.7` to `0.9.8`.
+Use a patch bump when the closed pool is compatible and bounded:
+
+1. one defect or a tightly related defect cluster is repaired,
+2. no command, option, alias, help, or operator contract changes,
+3. no JSON, status, TaskFlow, agent-mode, config, installer, release, or diagnostic semantics change,
+4. no schema or migration behavior changes,
+5. the fix is limited to tests, packaging checks, documentation alignment, local performance, or a compatible runtime blocker repair.
+
+Minor bumps advance the second version segment, for example `0.9.7` to `0.10.0`.
+Use a minor bump when the closed pool materially changes product operation:
+
+1. adds or changes an operating model, diagnostic gate, or release gate,
+2. adds or changes CLI commands, options, aliases, help, JSON fields, status fields, next-action semantics, or operator recovery contracts,
+3. changes TaskFlow scheduling, dependency, continuation, agent-mode, lane, role, carrier, or receipt behavior,
+4. changes config schema, carrier resolution, installer behavior, release packaging, CI admission, or post-push diagnostics,
+5. closes a P0 runtime batch that materially improves self-hosting throughput, receipt-backed execution, or release readiness,
+6. makes a formerly informal workflow part of the product contract.
+
+Release-impact closure must record the patch/minor decision in TaskFlow, bind the selected version and tag, and verify that GitHub Actions, GitHub release assets, manifest version, binary `--version` with build timestamp, public release body, README, and installable artifacts match that exact version before the pool is treated as fully released. The public release body must summarize the release in business/product terms first and include a commit ledger for the previous-tag to current-tag range at the bottom. Significant or minor releases also require a README revision pass so the public entrypoint reflects the changed product position, install/use path, capability summary, and current release direction.
+
 ## Version 0.9.0 — Self-Hosting Transition and Runtime Hardening
 
 `0.9.0` is the active transition line.
