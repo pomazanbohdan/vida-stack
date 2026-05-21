@@ -15,12 +15,30 @@ use crate::{
     RenderMode, RuntimeConsumptionLaneSelection,
 };
 use std::collections::BTreeSet;
-use std::process::ExitCode;
+use std::{process::ExitCode, time::Duration};
 use time::format_description::well_known::Rfc3339;
 
 const STALE_PROJECTION_DISPATCH_TIMEOUT_SECONDS: i64 = 10;
 const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS: u64 = 60;
 const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER: &str = "run_graph_dispatch_init_timeout";
+const TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
+
+fn projection_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn recovery_status_projection_name(run_id: &str) -> String {
+    format!("taskflow-recovery-status-{}", projection_component(run_id))
+}
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 struct RecoveryNextAction {
@@ -2132,6 +2150,22 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             if head == "recovery" && subcommand == "status" && flag == "--json" =>
         {
             let state_dir = proxy_state_dir();
+            let projection_name = recovery_status_projection_name(run_id);
+            if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+                &state_dir,
+                &projection_name,
+            ) {
+                println!("{cached}");
+                return ExitCode::SUCCESS;
+            }
+            if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
+                &state_dir,
+                &projection_name,
+                TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE,
+            ) {
+                println!("{cached}");
+                return ExitCode::SUCCESS;
+            }
             match StateStore::open_existing_read_only(state_dir).await {
                 Ok(store) => match store.run_graph_recovery_summary(run_id).await {
                     Ok(summary) => {
@@ -2172,6 +2206,11 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
                                     "{}",
                                     serde_json::to_string_pretty(&payload)
                                         .expect("recovery summary should render as json")
+                                );
+                                crate::operator_projection_cache::write_json_projection(
+                                    &proxy_state_dir(),
+                                    &projection_name,
+                                    &payload,
                                 );
                                 ExitCode::SUCCESS
                             }

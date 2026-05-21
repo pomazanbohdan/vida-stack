@@ -1,9 +1,41 @@
-use std::{path::Path, process::ExitCode};
+use std::{path::Path, process::ExitCode, time::Duration};
 
 use crate::{
     print_surface_header, print_surface_line, state_store::StateStore,
     taskflow_task_bridge::proxy_state_dir, RenderMode,
 };
+
+const TASKFLOW_PACKET_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
+
+fn projection_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn packet_projection_name(
+    requested_run_id: &str,
+    requested_task_id: Option<&str>,
+    latest_mode: bool,
+) -> String {
+    if latest_mode {
+        "taskflow-packet-latest".to_string()
+    } else if let Some(task_id) = requested_task_id {
+        format!("taskflow-packet-task-{}", projection_component(task_id))
+    } else {
+        format!(
+            "taskflow-packet-render-{}",
+            projection_component(requested_run_id)
+        )
+    }
+}
 
 fn read_packet_body(path: &str) -> Result<serde_json::Value, String> {
     let resolved_path = canonicalize_packet_path(path)?;
@@ -229,6 +261,26 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         }
     };
 
+    let projection_name =
+        packet_projection_name(&requested_run_id, requested_task_id.as_deref(), latest_mode);
+    if as_json {
+        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+            &proxy_state_dir(),
+            &projection_name,
+        ) {
+            println!("{cached}");
+            return ExitCode::SUCCESS;
+        }
+        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
+            &proxy_state_dir(),
+            &projection_name,
+            TASKFLOW_PACKET_RECENT_PROJECTION_MAX_AGE,
+        ) {
+            println!("{cached}");
+            return ExitCode::SUCCESS;
+        }
+    }
+
     let store = match StateStore::open_existing(proxy_state_dir()).await {
         Ok(store) => store,
         Err(error) => {
@@ -318,6 +370,11 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
 
     if as_json {
         crate::print_json_pretty(&payload);
+        crate::operator_projection_cache::write_json_projection(
+            &proxy_state_dir(),
+            &projection_name,
+            &payload,
+        );
     } else {
         print_surface_header(RenderMode::Plain, "vida taskflow packet render");
         if latest_mode {
