@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -517,50 +518,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let summary_only = args.summary;
 
     if as_json {
-        let projection_name = doctor_json_projection_name(summary_only);
-        let fresh_projection = if summary_only {
-            crate::operator_projection_cache::read_state_fresh_json_projection(
-                &state_dir,
-                projection_name,
-            )
-        } else {
-            crate::operator_projection_cache::read_fresh_json_projection(
-                &state_dir,
-                projection_name,
-            )
-        };
-        if let Some(cached) = fresh_projection {
+        if let Some(cached) = doctor_cached_json_projection(&state_dir, summary_only) {
             println!("{cached}");
             return ExitCode::SUCCESS;
-        }
-        let recent_projection = if summary_only {
-            crate::operator_projection_cache::read_state_recent_json_projection(
-                &state_dir,
-                projection_name,
-                DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
-            )
-        } else {
-            crate::operator_projection_cache::read_recent_json_projection(
-                &state_dir,
-                projection_name,
-                DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
-            )
-        };
-        if let Some(cached) = recent_projection {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
-        }
-        if summary_only {
-            if let Some(cached) =
-                crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                    &state_dir,
-                    projection_name,
-                    DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
-                )
-            {
-                println!("{cached}");
-                return ExitCode::SUCCESS;
-            }
         }
     }
 
@@ -1320,16 +1280,45 @@ fn doctor_json_projection_name(summary_only: bool) -> &'static str {
     }
 }
 
+fn doctor_cached_json_projection(state_dir: &Path, summary_only: bool) -> Option<String> {
+    let projection_name = doctor_json_projection_name(summary_only);
+    let fresh_projection = if summary_only {
+        crate::operator_projection_cache::read_state_fresh_json_projection(
+            state_dir,
+            projection_name,
+        )
+    } else {
+        crate::operator_projection_cache::read_fresh_json_projection(state_dir, projection_name)
+    };
+    if fresh_projection.is_some() {
+        return fresh_projection;
+    }
+    if summary_only {
+        crate::operator_projection_cache::read_state_recent_json_projection(
+            state_dir,
+            projection_name,
+            DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
+        )
+    } else {
+        crate::operator_projection_cache::read_recent_json_projection(
+            state_dir,
+            projection_name,
+            DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        build_trace_evidence_summary, doctor_operator_blocker_codes,
+        build_trace_evidence_summary, doctor_cached_json_projection, doctor_operator_blocker_codes,
         final_snapshot_missing_release_admission_evidence, selected_effective_bundle_receipt_id,
     };
     use crate::contract_profile_adapter::{
         operator_contracts_consistency_error, shared_operator_output_contract_parity_error,
     };
     use crate::operator_contracts::canonical_release1_operator_contract_status;
+    use std::{fs, time::Duration};
 
     #[test]
     fn release1_operator_contracts_consistency_accepts_blocked_with_actions() {
@@ -1341,6 +1330,32 @@ mod tests {
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
             None
         );
+    }
+
+    #[test]
+    fn doctor_summary_cache_rejects_state_marker_stale_projection() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-doctor-summary-stale-cache-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let payload = serde_json::json!({"surface": "vida doctor", "status": "pass"});
+        crate::operator_projection_cache::write_json_projection(
+            &root,
+            "doctor-summary-latest",
+            &payload,
+        );
+        assert!(doctor_cached_json_projection(&root, true).is_some());
+
+        std::thread::sleep(Duration::from_millis(10));
+        crate::operator_projection_cache::touch_state_mutation_marker(&root);
+
+        assert!(doctor_cached_json_projection(&root, true).is_none());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
