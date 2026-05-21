@@ -1017,11 +1017,6 @@ pub(crate) fn exception_takeover_state(
     {
         return ExceptionTakeoverState::ReceiptRecorded;
     }
-    if local_exception_takeover_gate
-        .is_some_and(|gate| gate.trim() != "blocked_open_delegated_cycle")
-    {
-        return ExceptionTakeoverState::ActiveTakeover;
-    }
     ExceptionTakeoverState::ReceiptRecorded
 }
 
@@ -2965,7 +2960,7 @@ mod tests {
         );
         assert_eq!(
             exception_takeover_state(Some("receipt-1"), None, Some("delegated_cycle_clear")),
-            ExceptionTakeoverState::ActiveTakeover
+            ExceptionTakeoverState::ReceiptRecorded
         );
         assert_eq!(
             exception_takeover_state(
