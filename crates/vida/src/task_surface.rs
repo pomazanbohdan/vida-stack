@@ -46,9 +46,6 @@ fn task_next_lawful_projection_name() -> &'static str {
     "task-next-lawful-latest"
 }
 
-const TASK_NEXT_LAWFUL_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
-    std::time::Duration::from_secs(300);
-
 fn canonical_json_string_array_entries(value: &serde_json::Value) -> Option<Vec<String>> {
     let rows = value.as_array()?;
     let mut entries = Vec::with_capacity(rows.len());
@@ -3915,18 +3912,6 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .state_dir
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
-            if command.json && command.scope.is_none() {
-                if let Some(cached) =
-                    crate::operator_projection_cache::read_state_recent_json_projection(
-                        &state_dir,
-                        task_next_lawful_projection_name(),
-                        TASK_NEXT_LAWFUL_RECENT_PROJECTION_MAX_AGE,
-                    )
-                {
-                    println!("{cached}");
-                    return ExitCode::SUCCESS;
-                }
-            }
             match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => {
                     let tasks = match store.list_tasks(None, true).await {
