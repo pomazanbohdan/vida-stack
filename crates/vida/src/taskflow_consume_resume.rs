@@ -268,7 +268,8 @@ fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> ser
             },
             |run_id| {
                 format!(
-                    "Refresh the active run explicitly with `vida taskflow consume continue --run-id {run_id} --json`."
+                    "Refresh the active run explicitly with `vida taskflow consume continue --run-id {} --json`.",
+                    crate::shell_quote(run_id)
                 )
             },
         );
@@ -14026,10 +14027,11 @@ agent_system:
             payload["blocker_codes"],
             serde_json::json!(["continuation_binding_ambiguous"])
         );
-        assert!(next_actions.iter().any(|action| action
-            .as_str()
-            .unwrap_or_default()
-            .contains("consume continue --run-id run-active-blocked --json")));
+        assert!(next_actions.iter().any(|action| {
+            let action = action.as_str().unwrap_or_default();
+            action.contains("consume continue --run-id run-active-blocked --json")
+                || action.contains("consume continue --run-id 'run-active-blocked' --json")
+        }));
         assert!(next_actions.iter().all(|action| !action
             .as_str()
             .unwrap_or_default()
