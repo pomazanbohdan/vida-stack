@@ -1253,25 +1253,49 @@ fn closure_packet_ready_resume_from_root_receipt(
         receipt.selected_backend.as_deref(),
     )
     .or_else(|| receipt.selected_backend.clone());
+    let closure_execution_recorded = receipt.downstream_dispatch_target.as_deref()
+        == Some("closure")
+        && receipt.downstream_dispatch_status.as_deref() == Some("executed")
+        && receipt
+            .downstream_dispatch_result_path
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|path| !path.is_empty());
+    let dispatch_status = if closure_execution_recorded {
+        "executed"
+    } else {
+        "packet_ready"
+    };
+    let lane_status = if closure_execution_recorded {
+        super::LaneStatus::LaneCompleted.as_str()
+    } else {
+        "packet_ready"
+    };
+    let downstream_dispatch_note = if closure_execution_recorded {
+        "task-close reconcile recorded closure execution evidence"
+    } else {
+        "task-close reconcile completed the bounded task; closure is the next lawful resume target"
+    };
     let closure_receipt = crate::state_store::RunGraphDispatchReceipt {
         run_id: receipt.run_id.clone(),
         dispatch_target: "closure".to_string(),
-        dispatch_status: "packet_ready".to_string(),
-        lane_status: "packet_ready".to_string(),
+        dispatch_status: dispatch_status.to_string(),
+        lane_status: lane_status.to_string(),
         supersedes_receipt_id: None,
         exception_path_receipt_id: None,
         dispatch_kind,
         dispatch_surface,
         dispatch_command: super::runtime_dispatch_command_for_target(&role_selection, "closure"),
         dispatch_packet_path: Some(packet_path.clone()),
-        dispatch_result_path: None,
+        dispatch_result_path: if closure_execution_recorded {
+            receipt.downstream_dispatch_result_path.clone()
+        } else {
+            None
+        },
         blocker_code: None,
         downstream_dispatch_target: None,
         downstream_dispatch_command: None,
-        downstream_dispatch_note: Some(
-            "task-close reconcile completed the bounded task; closure is the next lawful resume target"
-                .to_string(),
-        ),
+        downstream_dispatch_note: Some(downstream_dispatch_note.to_string()),
         downstream_dispatch_ready: false,
         downstream_dispatch_blockers: Vec::new(),
         downstream_dispatch_packet_path: None,
