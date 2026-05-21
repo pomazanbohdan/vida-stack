@@ -6,6 +6,8 @@ use crate::{
 };
 
 const DIAGNOSTICS_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
+const POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME: &str = "diagnostics-post-commit-latest";
+const POST_COMMIT_DIAGNOSTICS_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
 
 fn command_output(program: &str, args: &[&str]) -> serde_json::Value {
     match std::process::Command::new(program).args(args).output() {
@@ -149,12 +151,99 @@ fn status_from_blockers(blockers: &[String]) -> &'static str {
     }
 }
 
+fn diagnostic_exit_code(payload: &serde_json::Value) -> ExitCode {
+    if payload["status"] == "pass" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+fn refresh_cached_post_commit_diagnostics(payload: &str) -> Option<serde_json::Value> {
+    let mut payload = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+    let git_status = git_status_summary();
+    let mut blocker_codes = payload["blocker_codes"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                .filter(|code| code != "git_status_blocked")
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if git_status["status"] != "pass" {
+        blocker_codes.push("git_status_blocked".to_string());
+    }
+    blocker_codes.sort();
+    blocker_codes.dedup();
+    let status = status_from_blockers(&blocker_codes);
+    let project_local_clean_completion = git_status["status"] == "pass";
+    payload["git_status"] = git_status;
+    payload["blocker_codes"] = serde_json::json!(blocker_codes);
+    payload["status"] = serde_json::json!(status);
+    if let Some(workflow) = payload
+        .get_mut("recommended_issue_workflow")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        workflow.insert(
+            "project_local_clean_completion".to_string(),
+            serde_json::json!(project_local_clean_completion),
+        );
+        workflow.insert(
+            "upstream_runtime_defect".to_string(),
+            serde_json::json!(status == "blocked"),
+        );
+    }
+    Some(payload)
+}
+
+fn compact_counted_json_member(value: &serde_json::Value) -> serde_json::Value {
+    let count = value
+        .as_array()
+        .map(|rows| rows.len())
+        .or_else(|| value.as_object().map(|rows| rows.len()))
+        .unwrap_or(0);
+    serde_json::json!({
+        "count": count,
+        "detail": "omitted_from_fast_post_commit_diagnostics"
+    })
+}
+
+fn compact_host_dispatch_preflight_for_diagnostics(
+    payload: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "host_cli_system": payload["host_cli_system"].clone(),
+        "runtime_surface": payload["runtime_surface"].clone(),
+        "runtime_root": payload["runtime_root"].clone(),
+        "effective_execution_posture": payload["effective_execution_posture"].clone(),
+        "mixed_posture": payload["mixed_posture"].clone(),
+        "hybrid_external_cli_relevant": payload["hybrid_external_cli_relevant"].clone(),
+        "agents": compact_counted_json_member(&payload["agents"]),
+        "subagent_backends": compact_counted_json_member(&payload["subagent_backends"]),
+        "internal_dispatch_alias_count": payload["internal_dispatch_alias_count"].clone(),
+        "internal_dispatch_alias_load_error": payload["internal_dispatch_alias_load_error"].clone(),
+        "external_cli_preflight": {
+            "status": payload["external_cli_preflight"]["status"].clone(),
+            "selected_execution_class": payload["external_cli_preflight"]["selected_execution_class"].clone(),
+            "effective_execution_posture": payload["external_cli_preflight"]["effective_execution_posture"].clone(),
+            "requires_external_cli": payload["external_cli_preflight"]["requires_external_cli"].clone(),
+            "hybrid_external_cli_relevant": payload["external_cli_preflight"]["hybrid_external_cli_relevant"].clone(),
+            "blocked_primary_backends": payload["external_cli_preflight"]["blocked_primary_backends"].clone(),
+            "blocked_required_primary_backends": payload["external_cli_preflight"]["blocked_required_primary_backends"].clone(),
+            "blocker_code": payload["external_cli_preflight"]["blocker_code"].clone(),
+        },
+    })
+}
+
 async fn build_post_commit_diagnostics(
     state_dir: std::path::PathBuf,
 ) -> Result<serde_json::Value, String> {
     let git_status = git_status_summary();
     let owner_evidence =
-        crate::orchestrator_session_surface::build_runtime_owner_evidence(&state_dir, true)?;
+        crate::orchestrator_session_surface::compact_runtime_owner_evidence_for_operator(
+            crate::orchestrator_session_surface::build_runtime_owner_evidence(&state_dir, true)?,
+        );
     let store = StateStore::open_existing_read_only_with_timeout(
         state_dir.clone(),
         DIAGNOSTICS_LOCK_TIMEOUT,
@@ -206,6 +295,8 @@ async fn build_post_commit_diagnostics(
                 "next_actions": ["Run `vida status --json` from a VIDA-initialized project root."]
             })
         });
+    let host_dispatch_preflight =
+        compact_host_dispatch_preflight_for_diagnostics(host_dispatch_preflight);
 
     let mut blocker_codes = Vec::<String>::new();
     if git_status["status"] != "pass" {
@@ -299,10 +390,29 @@ async fn run_post_commit(args: DiagnosticsPostCommitArgs) -> ExitCode {
     let state_dir = args
         .state_dir
         .unwrap_or_else(crate::state_store::default_state_dir);
-    match build_post_commit_diagnostics(state_dir).await {
+    if args.json {
+        if let Some(cached) =
+            crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                &state_dir,
+                POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
+                POST_COMMIT_DIAGNOSTICS_RECENT_PROJECTION_MAX_AGE,
+            )
+        {
+            if let Some(payload) = refresh_cached_post_commit_diagnostics(&cached) {
+                crate::print_json_pretty(&payload);
+                return diagnostic_exit_code(&payload);
+            }
+        }
+    }
+    match build_post_commit_diagnostics(state_dir.clone()).await {
         Ok(payload) => {
             if args.json {
                 crate::print_json_pretty(&payload);
+                crate::operator_projection_cache::write_json_projection(
+                    &state_dir,
+                    POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
+                    &payload,
+                );
             } else {
                 println!("VIDA post-commit diagnostics");
                 println!(
@@ -313,11 +423,7 @@ async fn run_post_commit(args: DiagnosticsPostCommitArgs) -> ExitCode {
                     println!("blocker_codes: {}", blockers.len());
                 }
             }
-            if payload["status"] == "pass" {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(1)
-            }
+            diagnostic_exit_code(&payload)
         }
         Err(error) => {
             eprintln!("{error}");
@@ -334,7 +440,29 @@ pub(crate) async fn run_diagnostics(args: DiagnosticsArgs) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::missing_task_actionability;
+    use super::{compact_host_dispatch_preflight_for_diagnostics, missing_task_actionability};
+
+    #[test]
+    fn diagnostics_post_commit_compacts_heavy_operator_evidence() {
+        let payload = serde_json::json!({
+            "agents": {
+                "analyst": {"model": "gpt-5.4"},
+                "coach": {"model": "gpt-5.4"}
+            },
+            "subagent_backends": [
+                {"backend": "codex"},
+                {"backend": "opencode"},
+                {"backend": "hermes"}
+            ],
+            "host_cli_system": "codex"
+        });
+
+        let compacted = compact_host_dispatch_preflight_for_diagnostics(payload);
+
+        assert_eq!(compacted["agents"]["count"], 2);
+        assert_eq!(compacted["subagent_backends"]["count"], 3);
+        assert_eq!(compacted["host_cli_system"], "codex");
+    }
 
     #[test]
     fn diagnostics_blocks_continuation_bind_to_missing_task() {

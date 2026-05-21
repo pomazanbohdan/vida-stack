@@ -496,6 +496,27 @@ pub(crate) fn build_runtime_owner_evidence(
     }))
 }
 
+pub(crate) fn compact_runtime_owner_evidence_for_operator(
+    mut evidence: serde_json::Value,
+) -> serde_json::Value {
+    if let Some(object) = evidence.as_object_mut() {
+        if let Some(stale_sessions) = object.get("stale_sessions").cloned() {
+            let count = stale_sessions
+                .as_array()
+                .map(|sessions| sessions.len())
+                .unwrap_or(0);
+            object.insert(
+                "stale_sessions".to_string(),
+                serde_json::json!({
+                    "count": count,
+                    "detail": "omitted_from_fast_operator_surface"
+                }),
+            );
+        }
+    }
+    evidence
+}
+
 fn session_array_contains_id(array: &serde_json::Value, session_id: &str) -> bool {
     array
         .as_array()
@@ -693,11 +714,11 @@ pub(crate) fn context_summary_map(state_dir: &Path) -> BTreeMap<String, String> 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_runtime_owner_evidence, classify_sessions_with_liveness, context_summary_map,
-        current_session_id, current_session_identity_source, current_session_record,
-        merge_current_session, now_epoch_seconds, read_sessions, stable_local_session_id,
-        OrchestratorSessionLiveness, ProcessLiveness, MAX_SESSION_STORE_BYTES,
-        STALE_SESSION_PURGE_AFTER_SECONDS,
+        build_runtime_owner_evidence, classify_sessions_with_liveness,
+        compact_runtime_owner_evidence_for_operator, context_summary_map, current_session_id,
+        current_session_identity_source, current_session_record, merge_current_session,
+        now_epoch_seconds, read_sessions, stable_local_session_id, OrchestratorSessionLiveness,
+        ProcessLiveness, MAX_SESSION_STORE_BYTES, STALE_SESSION_PURGE_AFTER_SECONDS,
     };
     use crate::temp_state::TempStateHarness;
     use std::sync::{Mutex, OnceLock};
@@ -731,6 +752,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn compact_runtime_owner_evidence_replaces_stale_sessions_with_count() {
+        let evidence = serde_json::json!({
+            "current_session": {"session_id": "current"},
+            "live_other_sessions": [],
+            "stale_sessions": [
+                {"session_id": "stale-1"},
+                {"session_id": "stale-2"}
+            ],
+            "mutation_gate": "current_session_allowed"
+        });
+
+        let compacted = compact_runtime_owner_evidence_for_operator(evidence);
+
+        assert_eq!(compacted["stale_sessions"]["count"], 2);
+        assert_eq!(
+            compacted["stale_sessions"]["detail"],
+            "omitted_from_fast_operator_surface"
+        );
+        assert_eq!(compacted["current_session"]["session_id"], "current");
     }
 
     fn clear_session_env() {

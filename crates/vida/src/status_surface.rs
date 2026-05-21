@@ -589,7 +589,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         eprintln!("Failed to render status json: {error}");
                         return ExitCode::from(1);
                     }
-                    let summary_json = match build_status_json_report(StatusJsonReportInputs {
+                    let mut summary_json = match build_status_json_report(StatusJsonReportInputs {
                         summary_only,
                         operator_contracts,
                         backend_summary: &backend_summary,
@@ -628,6 +628,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
+                    if !summary_only {
+                        compact_status_projection_for_fast_operator_render(&mut summary_json);
+                    }
                     println!(
                         "{}",
                         serde_json::to_string_pretty(&summary_json)

@@ -258,6 +258,109 @@ fn graph_summary_scheduling_projection_json(
     })
 }
 
+fn compact_graph_summary_operator_session_projection(
+    mut projection: serde_json::Value,
+) -> serde_json::Value {
+    if let Some(object) = projection.as_object_mut() {
+        if let Some(owner_evidence) = object.get("runtime_owner_evidence").cloned() {
+            object.insert(
+                "runtime_owner_evidence".to_string(),
+                crate::orchestrator_session_surface::compact_runtime_owner_evidence_for_operator(
+                    owner_evidence,
+                ),
+            );
+        }
+    }
+    projection
+}
+
+fn compact_taskflow_graph_summary_payload(mut payload: serde_json::Value) -> serde_json::Value {
+    let compact_projection = compact_graph_summary_operator_session_projection(
+        payload["operator_session_projection"].clone(),
+    );
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "operator_session_projection".to_string(),
+            compact_projection,
+        );
+        if let Some(dispatch) = object.get("dispatch").cloned() {
+            object.insert(
+                "dispatch".to_string(),
+                serde_json::json!({
+                    "run_id": dispatch["run_id"].clone(),
+                    "dispatch_status": dispatch["dispatch_status"].clone(),
+                    "dispatch_target": dispatch["dispatch_target"].clone(),
+                    "dispatch_kind": dispatch["dispatch_kind"].clone(),
+                    "lane_status": dispatch["lane_status"].clone(),
+                    "selected_backend": dispatch["selected_backend"].clone(),
+                    "exception_path_receipt_id": dispatch["exception_path_receipt_id"].clone(),
+                    "supersedes_receipt_id": dispatch["supersedes_receipt_id"].clone(),
+                    "downstream_dispatch_ready": dispatch["downstream_dispatch_ready"].clone(),
+                    "downstream_dispatch_status": dispatch["downstream_dispatch_status"].clone(),
+                    "downstream_dispatch_active_target": dispatch["downstream_dispatch_active_target"].clone(),
+                    "downstream_dispatch_blockers": dispatch["downstream_dispatch_blockers"].clone(),
+                }),
+            );
+        }
+        if let Some(binding) = object.get("explicit_continuation_binding").cloned() {
+            object.insert(
+                "explicit_continuation_binding".to_string(),
+                serde_json::json!({
+                    "status": binding["status"].clone(),
+                    "run_id": binding["run_id"].clone(),
+                    "task_id": binding["task_id"].clone(),
+                    "binding_source": binding["binding_source"].clone(),
+                    "active_bounded_unit": binding["active_bounded_unit"].clone(),
+                    "sequential_vs_parallel_posture": binding["sequential_vs_parallel_posture"].clone(),
+                }),
+            );
+        }
+        if let Some(critical_path) = object.get("critical_path").cloned() {
+            object.insert(
+                "critical_path".to_string(),
+                serde_json::json!({
+                    "length": critical_path["length"].clone(),
+                    "root_task_id": critical_path["root_task_id"].clone(),
+                    "terminal_task_id": critical_path["terminal_task_id"].clone(),
+                    "node_count": critical_path["nodes"].as_array().map(Vec::len).unwrap_or(0),
+                    "release_1_contract_steps": critical_path["release_1_contract_steps"].clone(),
+                }),
+            );
+        }
+        if let Some(scheduling) = object.get("scheduling").cloned() {
+            object.insert(
+                "scheduling".to_string(),
+                serde_json::json!({
+                    "current_task_id": scheduling["current_task_id"].clone(),
+                    "ready_count": scheduling["ready"].as_array().map(Vec::len).unwrap_or(0),
+                    "blocked_count": scheduling["blocked"].as_array().map(Vec::len).unwrap_or(0),
+                    "parallel_candidates_after_current_count": scheduling["parallel_candidates_after_current"].as_array().map(Vec::len).unwrap_or(0),
+                }),
+            );
+        }
+        if let Some(waves) = object.get("waves").cloned() {
+            object.insert(
+                "waves".to_string(),
+                serde_json::json!({
+                    "count": waves.as_array().map(Vec::len).unwrap_or(0),
+                    "detail": "omitted_from_fast_operator_graph_summary"
+                }),
+            );
+        }
+    }
+    payload
+}
+
+fn render_taskflow_graph_summary_json(payload: &serde_json::Value) -> String {
+    let compact_payload = compact_taskflow_graph_summary_payload(payload.clone());
+    serde_json::to_string_pretty(&compact_payload).expect("graph-summary json should render")
+}
+
+fn compact_cached_taskflow_graph_summary_projection(cached: &str) -> Option<String> {
+    let payload: serde_json::Value = serde_json::from_str(cached).ok()?;
+    Some(render_taskflow_graph_summary_json(&payload))
+}
+
 fn normalize_scheduler_path(path: &str) -> Option<String> {
     let mut value = path.trim().replace('\\', "/");
     while let Some(stripped) = value.strip_prefix("./") {
@@ -4030,8 +4133,22 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             &proxy_state_root,
             TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
         ) {
-            println!("{cached}");
-            return cached_operator_projection_exit_code(&cached);
+            let rendered =
+                compact_cached_taskflow_graph_summary_projection(&cached).unwrap_or(cached);
+            println!("{rendered}");
+            return cached_operator_projection_exit_code(&rendered);
+        }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                &proxy_state_root,
+                TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
+                TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
+            )
+        {
+            let rendered =
+                compact_cached_taskflow_graph_summary_projection(&cached).unwrap_or(cached);
+            println!("{rendered}");
+            return cached_operator_projection_exit_code(&rendered);
         }
     }
 
@@ -4355,11 +4472,12 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     });
 
     if as_json {
-        crate::print_json_pretty(&payload);
+        let compact_payload = compact_taskflow_graph_summary_payload(payload.clone());
+        crate::print_json_pretty(&compact_payload);
         crate::operator_projection_cache::write_json_projection(
             &proxy_state_root,
             TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
-            &payload,
+            &compact_payload,
         );
     } else {
         crate::print_surface_header(RenderMode::Plain, "vida taskflow graph-summary");
@@ -6109,8 +6227,8 @@ mod tests {
     use super::{
         build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
         cached_operator_projection_exit_code, cached_taskflow_next_open_delegated_cycle_projection,
-        graph_summary_scheduling_projection_json, graph_summary_task_rows,
-        taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
+        compact_taskflow_graph_summary_payload, graph_summary_scheduling_projection_json,
+        graph_summary_task_rows, taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
         TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
     };
     use crate::state_store::{
@@ -6144,6 +6262,36 @@ mod tests {
         assert!(!cached_taskflow_next_open_delegated_cycle_projection(
             r#"{"status":"blocked","blocker_codes":["no_ready_task_candidates"]}"#
         ));
+    }
+
+    #[test]
+    fn graph_summary_compacts_operator_session_stale_sessions() {
+        let payload = serde_json::json!({
+            "status": "blocked",
+            "operator_session_projection": {
+                "current_session": {"session_id": "current"},
+                "runtime_owner_evidence": {
+                    "stale_sessions": [
+                        {"session_id": "stale-1"},
+                        {"session_id": "stale-2"},
+                        {"session_id": "stale-3"}
+                    ],
+                    "mutation_gate": "current_session_allowed"
+                }
+            }
+        });
+
+        let compacted = compact_taskflow_graph_summary_payload(payload);
+
+        assert_eq!(
+            compacted["operator_session_projection"]["runtime_owner_evidence"]["stale_sessions"]
+                ["count"],
+            3
+        );
+        assert_eq!(
+            compacted["operator_session_projection"]["current_session"]["session_id"],
+            "current"
+        );
     }
 
     #[test]
