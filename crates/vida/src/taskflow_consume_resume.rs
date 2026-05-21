@@ -726,15 +726,15 @@ async fn validate_run_graph_resume_state(
             status.run_id
         ));
     }
-    if run_graph_resume_task_missing(store, &status).await? {
-        return Err(stale_missing_task_run_graph_resume_error(&status));
-    }
     if status.lifecycle_stage == "closure_complete"
         && status.status == "completed"
         && status.resume_target == "none"
         && matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)))
     {
         return Ok(());
+    }
+    if run_graph_resume_task_missing(store, &status).await? {
+        return Err(stale_missing_task_run_graph_resume_error(&status));
     }
     let active_receipt = store
         .run_graph_dispatch_receipt(run_id)
@@ -776,15 +776,15 @@ async fn validate_run_graph_resume_state_strict(
             status.run_id
         ));
     }
-    if run_graph_resume_task_missing(store, &status).await? {
-        return Err(stale_missing_task_run_graph_resume_error(&status));
-    }
     if status.lifecycle_stage == "closure_complete"
         && status.status == "completed"
         && status.resume_target == "none"
         && matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)))
     {
         return Ok(());
+    }
+    if run_graph_resume_task_missing(store, &status).await? {
+        return Err(stale_missing_task_run_graph_resume_error(&status));
     }
     let active_receipt = store
         .run_graph_dispatch_receipt(run_id)
