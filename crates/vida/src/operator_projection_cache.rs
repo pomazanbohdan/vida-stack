@@ -15,6 +15,13 @@ pub(crate) fn read_fresh_json_projection(
     )
 }
 
+pub(crate) fn read_state_fresh_json_projection(
+    state_dir: &Path,
+    projection_name: &str,
+) -> Option<String> {
+    read_fresh_json_projection_with_dependency_marker(state_dir, projection_name, None)
+}
+
 fn read_fresh_json_projection_with_dependency_marker(
     state_dir: &Path,
     projection_name: &str,
@@ -46,6 +53,14 @@ pub(crate) fn read_recent_json_projection(
         max_age,
         current_launcher_mutation_marker(),
     )
+}
+
+pub(crate) fn read_state_recent_json_projection(
+    state_dir: &Path,
+    projection_name: &str,
+    max_age: Duration,
+) -> Option<String> {
+    read_recent_json_projection_with_dependency_marker(state_dir, projection_name, max_age, None)
 }
 
 fn read_recent_json_projection_with_dependency_marker(
@@ -230,6 +245,7 @@ mod tests {
     use super::{
         read_fresh_json_projection, read_fresh_json_projection_with_dependency_marker,
         read_recent_json_projection, read_recent_json_projection_with_dependency_marker,
+        read_state_fresh_json_projection, read_state_recent_json_projection,
         touch_state_mutation_marker, write_json_projection,
     };
     use std::{fs, time::Duration};
@@ -286,6 +302,39 @@ mod tests {
             Some(dependency_modified)
         )
         .is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn state_bound_json_projection_ignores_launcher_dependency_marker() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-state-bound-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        fs::write(root.join("manifest"), "stable").expect("marker should be writable");
+        let payload = serde_json::json!({"surface": "vida doctor", "status": "pass"});
+        write_json_projection(&root, "doctor-summary-latest", &payload);
+
+        std::thread::sleep(Duration::from_millis(10));
+        let dependency_modified = std::time::SystemTime::now();
+        assert!(read_fresh_json_projection_with_dependency_marker(
+            &root,
+            "doctor-summary-latest",
+            Some(dependency_modified),
+        )
+        .is_none());
+        assert!(read_state_fresh_json_projection(&root, "doctor-summary-latest").is_some());
+        assert!(read_state_recent_json_projection(
+            &root,
+            "doctor-summary-latest",
+            Duration::from_secs(60)
+        )
+        .is_some());
         let _ = fs::remove_dir_all(root);
     }
 
