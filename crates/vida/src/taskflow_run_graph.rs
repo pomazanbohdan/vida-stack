@@ -4057,6 +4057,7 @@ pub(crate) async fn derive_seeded_run_graph_status(
         resolve_seed_task_id_for_runtime_run(store, requested_run_id, request_text).await?;
     let snapshot = read_or_sync_launcher_activation_snapshot(store).await?;
     let mut payload = build_seeded_run_graph_status_from_activation_snapshot(
+        requested_run_id,
         &bounded_task_id,
         request_text,
         &snapshot,
@@ -4504,6 +4505,7 @@ fn taskflow_task_status_is_terminal_for_dispatch_init(status: &str) -> bool {
 }
 
 fn build_seeded_run_graph_status_from_activation_snapshot(
+    requested_run_id: &str,
     bounded_task_id: &str,
     request_text: &str,
     snapshot: &crate::state_store::LauncherActivationSnapshot,
@@ -4596,7 +4598,7 @@ fn build_seeded_run_graph_status_from_activation_snapshot(
         || json_bool_field(route, "coach_required").unwrap_or(false)
         || json_bool_field(route, "independent_verification_required").unwrap_or(false);
     let seed_base = RunGraphStatus {
-        run_id: bounded_task_id.to_string(),
+        run_id: requested_run_id.to_string(),
         task_id: bounded_task_id.to_string(),
         task_class,
         active_node: "planning".to_string(),
@@ -4610,7 +4612,7 @@ fn build_seeded_run_graph_status_from_activation_snapshot(
             "implementation".to_string()
         },
         selected_backend,
-        ..default_run_graph_status(bounded_task_id, "planning", "implementation")
+        ..default_run_graph_status(requested_run_id, "planning", "implementation")
     };
     let mut status = run_graph_transition(
         &seed_base,
