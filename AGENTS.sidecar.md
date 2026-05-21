@@ -249,6 +249,18 @@ Default agent-gated parent work strategy:
 13. Future-looking advisory lanes must remain bounded and actionable; drop or pause any lane category that produces repetitive, schema-invalid, too broad, or non-actionable artifacts.
 14. Advisory lanes do not grant write authority, completion receipts, exception takeover, or TaskFlow closure; the parent owns validation and lawful VIDA routing.
 
+Sidecar advisory agent timing:
+
+1. Launch or refresh one read-only advisory sidecar immediately after each bounded defect is proven, committed, pushed, and installed evidence is current. Its default job is next-batch triage: which defect still reproduces, which candidate is root cause versus symptom, likely file owners, proof targets, risk, and sequential/parallel posture.
+2. Launch advisory sidecars during long proof gates only when useful non-overlapping read-only work exists, such as release builds, wide test runs, install/diagnostic refreshes, or other commands where the parent can continue the active bounded fix independently.
+3. Launch advisory sidecars before choosing the next write scope when two or more plausible runtime defects compete, especially route parity versus carrier execution, status semantics versus nested blockers, latency versus cold-cache noise, or output/actionability defects versus deeper runtime blockers.
+4. Do not launch an advisory lane for single-command checks, one-file reads, already-obvious code patches, or duplicate analysis the parent is actively performing. Prefer a different evidence angle: while the parent fixes one bounded file, a sidecar may inspect adjacent surfaces, specs, tests, and proof strategy.
+5. If a sidecar result arrives after the parent has entered `Крок 3/3: code fix` for the current bounded unit, do not switch scope mid-fix unless the current fix is proven invalid. Finish the current bounded defect through proof, release build/install, commit, and push, then synthesize the sidecar result for the next bounded unit.
+6. Waiting for a sidecar is required only when the next bounded unit is ambiguous, when root cause versus symptom is unresolved, or when advisory findings conflict with parent evidence on a material point. Otherwise keep the critical path moving and classify late/irrelevant sidecar output explicitly.
+7. Sidecar prompts must ask for evidence-backed defect validation, not speed-only summaries. Required outputs for next-batch triage are `active_bounded_unit`, `why_this_unit`, `sequential_vs_parallel_posture`, reproduction commands and observed fields, likely files/functions, targeted proof commands, risks, and what to defer.
+8. Advisory sidecars must never hardcode or select agent ids, host CLI systems, carrier names, or model refs as authority. They may report concrete observed values from runtime/config evidence, but proposed fixes must derive from active configuration, carrier registries, route/runtime assignment truth, and operator contracts.
+9. If no advisory sidecar can be launched because of host limits or unavailable carriers, close or reclaim completed advisory handles when safe and retry once. If still blocked, record the blocker in a progress update and continue with direct parent validation.
+
 Concurrency policy:
 
 1. Prefer independent single async advisory runs over grouped `tasks:[...]` parallel wrapper for fallback advisory work.
