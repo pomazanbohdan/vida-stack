@@ -57,16 +57,17 @@ pub(crate) fn write_json_projection(
 
 pub(crate) fn touch_state_mutation_marker(state_dir: &Path) {
     let path = state_dir.join(".operator-projection-cache-state-marker");
-    let _ = std::fs::write(
-        path,
-        format!(
-            "{}",
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0)
-        ),
+    if path_is_symlink(&path) {
+        return;
+    }
+    let body = format!(
+        "{}",
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
     );
+    let _ = write_bytes_without_following_symlinks(&path, body.as_bytes());
 }
 
 fn projection_path(state_dir: &Path, projection_name: &str) -> PathBuf {
@@ -135,6 +136,11 @@ fn read_json_without_following_symlinks(path: &Path) -> std::io::Result<String> 
 
 #[cfg(unix)]
 fn write_json_without_following_symlinks(path: &Path, body: &str) -> std::io::Result<()> {
+    write_bytes_without_following_symlinks(path, body.as_bytes())
+}
+
+#[cfg(unix)]
+fn write_bytes_without_following_symlinks(path: &Path, body: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -144,11 +150,16 @@ fn write_json_without_following_symlinks(path: &Path, body: &str) -> std::io::Re
         .truncate(true)
         .custom_flags(O_NOFOLLOW_FLAG)
         .open(path)?;
-    file.write_all(body.as_bytes())
+    file.write_all(body)
 }
 
 #[cfg(not(unix))]
 fn write_json_without_following_symlinks(path: &Path, body: &str) -> std::io::Result<()> {
+    write_bytes_without_following_symlinks(path, body.as_bytes())
+}
+
+#[cfg(not(unix))]
+fn write_bytes_without_following_symlinks(path: &Path, body: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, body)
 }
 
@@ -233,6 +244,42 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         touch_state_mutation_marker(&root);
         assert!(read_fresh_json_projection(&root, "taskflow-graph-summary-latest").is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_mutation_marker_touch_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-marker-symlink-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+
+        let outside = root.with_extension("outside-marker-target");
+        fs::write(&outside, "outside-original").expect("outside file should be writable");
+
+        let marker_link = root.join(".operator-projection-cache-state-marker");
+        symlink(&outside, &marker_link).expect("marker symlink should be creatable");
+
+        touch_state_mutation_marker(&root);
+
+        assert_eq!(
+            fs::read_to_string(&outside).expect("outside file should remain readable"),
+            "outside-original"
+        );
+        assert!(std::fs::symlink_metadata(&marker_link)
+            .expect("marker symlink should remain readable")
+            .file_type()
+            .is_symlink());
+
+        let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(root);
     }
 
