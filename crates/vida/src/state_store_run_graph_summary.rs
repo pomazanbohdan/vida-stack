@@ -1269,6 +1269,64 @@ impl StateStore {
         Ok(())
     }
 
+    async fn ensure_current_session_mutation_claim_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<(), StateStoreError> {
+        let evidence = self.current_runtime_owner_evidence()?;
+        let current_session_id = evidence["current_session"]["session_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| StateStoreError::InvalidTaskRecord {
+                reason: "run-graph mutation requires an active current session id".to_string(),
+            })?
+            .to_string();
+
+        let claims = self.active_orchestrator_claims().await?;
+        if claims.iter().any(|claim| {
+            claim.orchestrator_session_id == current_session_id
+                && claim
+                    .run_id
+                    .as_ref()
+                    .is_some_and(|claim_run_id| claim_run_id.trim() == run_id)
+        }) {
+            return Ok(());
+        }
+
+        if self.run_graph_legacy_ownerless(run_id).await? {
+            return Ok(());
+        }
+
+        let mut owner_query = self
+            .db
+            .query(
+                "SELECT * FROM run_graph_owner_evidence \
+                 WHERE run_id = $run_id \
+                 ORDER BY recorded_at DESC, artifact_id DESC \
+                 LIMIT 1;",
+            )
+            .bind(("run_id", run_id.to_string()))
+            .await?;
+        let owner_records: Vec<RunGraphOwnerEvidenceRecord> = owner_query.take(0)?;
+        if owner_records.iter().any(|record| {
+            record
+                .runtime_owner_evidence
+                .get("current_session")
+                .and_then(|session| session.get("session_id"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|session_id| session_id.trim() == current_session_id)
+        }) {
+            return Ok(());
+        }
+
+        Err(StateStoreError::InvalidTaskRecord {
+            reason: format!(
+                "run-graph mutation blocked: current session does not own run `{run_id}`"
+            ),
+        })
+    }
+
     async fn record_run_graph_owner_evidence(
         &self,
         run_id: &str,
@@ -1276,6 +1334,8 @@ impl StateStore {
     ) -> Result<(), StateStoreError> {
         let evidence = self.current_runtime_owner_evidence()?;
         Self::ensure_runtime_owner_mutation_allowed(&evidence)?;
+        self.ensure_current_session_mutation_claim_for_run(run_id)
+            .await?;
         let artifact_id = Self::run_graph_owner_evidence_record_id(run_id, artifact_kind);
         let record = RunGraphOwnerEvidenceRecord {
             run_id: run_id.to_string(),
@@ -3354,6 +3414,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_graph_mutation_blocks_foreign_session_without_claim() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-owner");
+        }
+        let root = temp_run_graph_root("vida-run-graph-mutation-claim-block");
+        let owner_store = StateStore::open(root.clone()).await.expect("open owner store");
+        owner_store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "owner-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-owner".to_string(),
+                task_id: Some("task-owner".to_string()),
+                run_id: Some("run-owned".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("owner-domain".to_string()),
+                owned_paths: vec!["owner/path.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire owner claim");
+        owner_store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-owned".to_string(),
+                task_id: "task-owner".to_string(),
+                lane_id: None,
+                dispatch_status: "routed".to_string(),
+                dispatch_target: "execution".to_string(),
+                artifact_id: "owner-artifact".to_string(),
+                dispatch_recorded_at: "2026-05-21T00:00:00Z".to_string(),
+                rejection_reason: None,
+                dispatch_trace_id: None,
+                packet_id: None,
+                ticket_id: None,
+                routed_via: None,
+                selected_lane_mode: None,
+                selected_carrier_id: None,
+                selected_role: None,
+                selected_task_class: None,
+                arbitration_policy: None,
+                arbitration_score: None,
+                timeout_ms: None,
+                downstream_blockers: Vec::new(),
+            })
+            .await
+            .expect("persist owner receipt");
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-foreign");
+        }
+        let foreign_store = StateStore::open(root.clone()).await.expect("open foreign store");
+        let result = foreign_store
+            .record_run_graph_continuation_binding(&sample_explicit_binding(
+                "run-owned",
+                "task-owner",
+                "2026-05-21T01:00:00Z",
+            ))
+            .await;
+        assert!(result.is_err());
+
+        let _ = fs::remove_dir_all(&root);
+        restore_vida_session_id(saved_session_id);
+    }
+
     async fn latest_explicit_continuation_binding_for_current_session_skips_foreign_binding() {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
