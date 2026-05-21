@@ -550,6 +550,18 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             println!("{cached}");
             return ExitCode::SUCCESS;
         }
+        if summary_only {
+            if let Some(cached) =
+                crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                    &state_dir,
+                    projection_name,
+                    DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
+                )
+            {
+                println!("{cached}");
+                return ExitCode::SUCCESS;
+            }
+        }
     }
 
     match super::StateStore::open_existing_read_only_with_timeout(
