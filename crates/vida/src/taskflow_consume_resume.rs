@@ -221,7 +221,11 @@ fn emit_consume_continue_state_access_blocker_json(
 }
 
 fn consume_continue_resume_error_blocker_code(error: &str) -> &'static str {
-    if error.contains("Latest continuation binding") && error.contains("ambiguous") {
+    if error.contains("Stale missing-task run graph")
+        || error.contains("references missing TaskFlow task")
+    {
+        "stale_missing_task_run_graph"
+    } else if error.contains("Latest continuation binding") && error.contains("ambiguous") {
         "continuation_binding_ambiguous"
     } else if error.contains("Latest explicit continuation binding points to run") {
         "continuation_binding_mismatch"
@@ -239,7 +243,12 @@ fn consume_continue_resume_error_blocker_code(error: &str) -> &'static str {
 }
 
 fn consume_continue_resume_error_run_id(error: &str) -> Option<String> {
-    for marker in ["Run-graph resume gate denied for `", "run `", "run_id `"] {
+    for marker in [
+        "Stale missing-task run graph `",
+        "Run-graph resume gate denied for `",
+        "run `",
+        "run_id `",
+    ] {
         let Some(start) = error.find(marker).map(|index| index + marker.len()) else {
             continue;
         };
@@ -258,7 +267,26 @@ fn consume_continue_resume_error_run_id(error: &str) -> Option<String> {
 fn consume_continue_resume_error_payload(error: &str, surface_name: &str) -> serde_json::Value {
     let blocker_code = consume_continue_resume_error_blocker_code(error);
     let run_id = consume_continue_resume_error_run_id(error);
-    let next_actions = if blocker_code == "continuation_binding_ambiguous"
+    let next_actions = if blocker_code == "stale_missing_task_run_graph" {
+        let retire_action = run_id.as_ref().map_or_else(
+            || {
+                "Inspect `vida taskflow recovery latest --json`; if it reports a missing-task stale run, retire that concrete run with `vida lane retire <run-id> --receipt-id <receipt-id> --reason \"missing TaskFlow task stale run\" --json`."
+                    .to_string()
+            },
+            |run_id| {
+                format!(
+                    "Retire the stale missing-task run with `vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json`.",
+                    crate::shell_quote(run_id),
+                    crate::shell_quote(run_id)
+                )
+            },
+        );
+        serde_json::json!([
+            retire_action,
+            "Refresh continuation evidence with `vida status --json` and `vida taskflow recovery latest --json` before retrying `vida taskflow consume continue --json`.",
+            "Do not bind recovery to the missing TaskFlow task."
+        ])
+    } else if blocker_code == "continuation_binding_ambiguous"
         && error.contains("has not reached closure_complete")
     {
         let refresh_action = run_id.as_ref().map_or_else(
@@ -648,6 +676,33 @@ fn canonical_runtime_packet_identity(path: &str) -> Result<std::path::PathBuf, S
     Ok(canonical)
 }
 
+async fn run_graph_resume_task_missing(
+    store: &super::StateStore,
+    status: &crate::state_store::RunGraphStatus,
+) -> Result<bool, String> {
+    let task_id = status.task_id.trim();
+    if task_id.is_empty() {
+        return Ok(false);
+    }
+    match store.show_task(task_id).await {
+        Ok(_) => Ok(false),
+        Err(error) if error.to_string().contains("task is missing") => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+fn stale_missing_task_run_graph_resume_error(
+    status: &crate::state_store::RunGraphStatus,
+) -> String {
+    format!(
+        "Stale missing-task run graph `{}` references missing TaskFlow task `{}`; retire the stale run with `vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json` before consuming continuation.",
+        status.run_id,
+        status.task_id,
+        crate::shell_quote(&status.run_id),
+        crate::shell_quote(&status.run_id)
+    )
+}
+
 async fn validate_run_graph_resume_state(
     store: &super::StateStore,
     run_id: &str,
@@ -670,6 +725,9 @@ async fn validate_run_graph_resume_state(
             "Persisted run-graph state mismatch: requested run_id `{run_id}` resolved to `{}`",
             status.run_id
         ));
+    }
+    if run_graph_resume_task_missing(store, &status).await? {
+        return Err(stale_missing_task_run_graph_resume_error(&status));
     }
     if status.lifecycle_stage == "closure_complete"
         && status.status == "completed"
@@ -717,6 +775,9 @@ async fn validate_run_graph_resume_state_strict(
             "Persisted run-graph state mismatch: requested run_id `{run_id}` resolved to `{}`",
             status.run_id
         ));
+    }
+    if run_graph_resume_task_missing(store, &status).await? {
+        return Err(stale_missing_task_run_graph_resume_error(&status));
     }
     if status.lifecycle_stage == "closure_complete"
         && status.status == "completed"
@@ -14737,6 +14798,71 @@ agent_system:
             .as_str()
             .unwrap_or_default()
             .contains("continuation bind")));
+    }
+
+    #[test]
+    fn consume_continue_resume_error_payload_recommends_retire_for_missing_task_stale_run() {
+        let error = "Stale missing-task run graph `run-stale` references missing TaskFlow task `task-missing`; retire the stale run with `vida lane retire run-stale --receipt-id run-stale --reason \"missing TaskFlow task stale run\" --json` before consuming continuation.";
+        let payload =
+            consume_continue_resume_error_payload(error, "vida taskflow consume continue");
+        let next_actions = payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be array");
+
+        assert_eq!(payload["run_id"], "run-stale");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["stale_missing_task_run_graph"])
+        );
+        assert!(next_actions.iter().any(|action| {
+            action
+                .as_str()
+                .unwrap_or_default()
+                .contains("vida lane retire run-stale --receipt-id run-stale")
+        }));
+        assert!(next_actions.iter().all(|action| !action
+            .as_str()
+            .unwrap_or_default()
+            .contains("continuation bind")));
+    }
+
+    #[tokio::test]
+    async fn validate_run_graph_resume_state_rejects_missing_task_stale_run_with_retire_action() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-missing-task-stale-run-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-missing-task-stale";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "analysis", "delivery");
+        status.task_id = "task-missing".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analysis_blocked".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist stale run graph status");
+
+        let error = validate_run_graph_resume_state(&store, run_id)
+            .await
+            .expect_err("missing task stale run must fail closed");
+        assert!(
+            error.contains("Stale missing-task run graph `run-missing-task-stale`"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("vida lane retire run-missing-task-stale"),
+            "unexpected error: {error}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
