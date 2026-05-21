@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use time::format_description::well_known::Rfc3339;
@@ -2571,6 +2572,98 @@ pub(crate) fn load_project_overlay_yaml_for_root(
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     serde_yaml::from_str(&raw)
         .map_err(|error| format!("failed to parse {}: {error}", path.display()))
+}
+
+pub(crate) type ModelProfileCatalog = BTreeMap<String, BTreeSet<String>>;
+
+fn collect_model_profiles_from_yaml(value: &serde_yaml::Value, profiles: &mut ModelProfileCatalog) {
+    match value {
+        serde_yaml::Value::Mapping(mapping) => {
+            if let Some(model_profiles) =
+                mapping.get(serde_yaml::Value::String("model_profiles".to_string()))
+            {
+                if let serde_yaml::Value::Mapping(profile_mapping) = model_profiles {
+                    for (profile_id, profile_value) in profile_mapping {
+                        let Some(profile_id) = profile_id.as_str().map(str::trim) else {
+                            continue;
+                        };
+                        if profile_id.is_empty() {
+                            continue;
+                        }
+                        let model_ref = yaml_lookup(profile_value, &["model_ref"])
+                            .and_then(serde_yaml::Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .unwrap_or(profile_id);
+                        profiles
+                            .entry(profile_id.to_string())
+                            .or_default()
+                            .insert(model_ref.to_string());
+                    }
+                }
+            }
+            for child in mapping.values() {
+                collect_model_profiles_from_yaml(child, profiles);
+            }
+        }
+        serde_yaml::Value::Sequence(values) => {
+            for child in values {
+                collect_model_profiles_from_yaml(child, profiles);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn model_profile_catalog_from_overlay(
+    overlay: &serde_yaml::Value,
+) -> ModelProfileCatalog {
+    let mut profiles = BTreeMap::new();
+    collect_model_profiles_from_yaml(overlay, &mut profiles);
+    profiles
+}
+
+pub(crate) fn current_project_model_profile_catalog_for_root(
+    project_root: &Path,
+) -> ModelProfileCatalog {
+    load_project_overlay_yaml_for_root(project_root)
+        .map(|overlay| model_profile_catalog_from_overlay(&overlay))
+        .unwrap_or_default()
+}
+
+pub(crate) fn route_assignment_catalog_drift_payload(
+    route: &serde_json::Value,
+    catalog: &ModelProfileCatalog,
+) -> Option<serde_json::Value> {
+    if catalog.is_empty() {
+        return None;
+    }
+    let selected_profile = route["selected_model_profile_id"].as_str()?.trim();
+    if selected_profile.is_empty() {
+        return None;
+    }
+    let selected_model_ref = route["selected_model_ref"].as_str().map(str::trim);
+    let Some(current_model_refs) = catalog.get(selected_profile) else {
+        return Some(serde_json::json!({
+            "status": "blocked",
+            "reason": "selected_model_profile_not_in_current_config",
+            "selected_model_profile_id": selected_profile,
+            "selected_model_ref": selected_model_ref,
+            "current_model_refs": serde_json::Value::Null,
+        }));
+    };
+    if let Some(selected_model_ref) = selected_model_ref {
+        if !selected_model_ref.is_empty() && !current_model_refs.contains(selected_model_ref) {
+            return Some(serde_json::json!({
+                "status": "blocked",
+                "reason": "selected_model_ref_mismatch_current_config",
+                "selected_model_profile_id": selected_profile,
+                "selected_model_ref": selected_model_ref,
+                "current_model_refs": current_model_refs,
+            }));
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19230,16 +19323,16 @@ fn runtime_dispatch_internal_activation_view_only_result(
         )
     } else if blocker_code == INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT {
         (
-                "internal host dispatch was blocked before launching nested carrier execution because the configured host bridge cannot provide receipt-backed completion evidence",
-                "configured internal host bridge does not support receipt-backed completion; timeout avoided by recording a terminal blocker before launch",
-                "internal host handoff blocked before launch to avoid waiting for a configured non-receipted carrier path",
-            )
+            "internal host dispatch was blocked before launching nested carrier execution because the configured host bridge cannot provide receipt-backed completion evidence",
+            "configured internal host bridge does not support receipt-backed completion; timeout avoided by recording a terminal blocker before launch",
+            "internal host handoff blocked before launch to avoid waiting for a configured non-receipted carrier path",
+        )
     } else {
         (
-                "dispatch packet declares activation-view-only handoff without receipt-backed execution evidence",
-                "internal host dispatch is not launched for activation-view-only packets without execution authority",
-                "internal host activation-view-only handoff blocked before launching nested carrier execution",
-            )
+            "dispatch packet declares activation-view-only handoff without receipt-backed execution evidence",
+            "internal host dispatch is not launched for activation-view-only packets without execution authority",
+            "internal host activation-view-only handoff blocked before launching nested carrier execution",
+        )
     };
     serde_json::json!({
         "surface": receipt.dispatch_surface,
@@ -19710,7 +19803,9 @@ async fn persist_prelaunch_blocked_dispatch_state(
         .record_run_graph_dispatch_receipt(receipt)
         .await
         .map_err(|error| {
-            format!("Failed to persist blocked dispatch receipt after prelaunch dispatch block: {error}")
+            format!(
+                "Failed to persist blocked dispatch receipt after prelaunch dispatch block: {error}"
+            )
         })?;
     Ok(())
 }
@@ -20020,7 +20115,9 @@ async fn persist_failed_dispatch_handoff_state(
         .record_run_graph_dispatch_receipt(receipt)
         .await
         .map_err(|error| {
-            format!("Failed to persist blocked dispatch receipt after dispatch handoff failure: {error}")
+            format!(
+                "Failed to persist blocked dispatch receipt after dispatch handoff failure: {error}"
+            )
         })?;
     Ok(())
 }

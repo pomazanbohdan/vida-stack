@@ -4094,6 +4094,86 @@ pub(crate) fn run_graph_dispatch_context_from_seed_payload(
     }
 }
 
+fn dispatch_init_route_targets(execution_plan: &serde_json::Value) -> Vec<String> {
+    let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
+    let mut targets =
+        crate::taskflow_routing::dispatch_contract_execution_lane_sequence(dispatch_contract);
+    targets.push("implementation".to_string());
+    if targets.is_empty() {
+        targets.extend(
+            ["implementation", "coach", "verification"]
+                .into_iter()
+                .map(str::to_string),
+        );
+    }
+    let mut unique = BTreeSet::new();
+    targets
+        .into_iter()
+        .map(|target| match target.as_str() {
+            "implementer" | "analysis" => "implementation".to_string(),
+            "execution_preparation" => "architecture".to_string(),
+            _ => target,
+        })
+        .filter(|target| !target.trim().is_empty())
+        .filter(|target| unique.insert(target.clone()))
+        .collect()
+}
+
+fn dispatch_context_route_assignment_catalog_drift(
+    state_root: &std::path::Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+) -> Option<serde_json::Value> {
+    let project_root =
+        crate::runtime_dispatch_state::runtime_dispatch_project_root_from_state_root(state_root);
+    let catalog = crate::runtime_dispatch_state::current_project_model_profile_catalog_for_root(
+        project_root.as_ref(),
+    );
+    if catalog.is_empty() {
+        return None;
+    }
+    for target in dispatch_init_route_targets(&role_selection.execution_plan) {
+        let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
+            &role_selection.execution_plan,
+            &target,
+        );
+        let payload = crate::taskflow_routing::route_explain_payload(
+            &role_selection.execution_plan,
+            &target,
+            route,
+        );
+        if let Some(drift) = crate::runtime_dispatch_state::route_assignment_catalog_drift_payload(
+            &payload, &catalog,
+        ) {
+            return Some(serde_json::json!({
+                "dispatch_target": target,
+                "drift": drift,
+            }));
+        }
+    }
+    None
+}
+
+async fn reseed_dispatch_context_after_route_assignment_drift(
+    store: &StateStore,
+    status: &RunGraphStatus,
+    context: &RunGraphDispatchContext,
+) -> Result<TaskflowRunGraphSeedPayload, String> {
+    let task_id = if status.task_id.trim().is_empty() {
+        context.task_id.as_str()
+    } else {
+        status.task_id.as_str()
+    };
+    if let Ok(task) = store.show_task(task_id).await {
+        if taskflow_task_status_is_terminal_for_dispatch_init(&task.status) {
+            return Err(format!(
+                "Dispatch-init cannot refresh stale route assignment for terminal TaskFlow task `{task_id}` with status `{}`; bind a non-terminal bounded unit before dispatch-init.",
+                task.status
+            ));
+        }
+    }
+    derive_seeded_run_graph_status(store, task_id, &context.request_text).await
+}
+
 pub(crate) async fn persist_seed_artifacts(
     store: &StateStore,
     payload: &TaskflowRunGraphSeedPayload,
@@ -4192,9 +4272,17 @@ pub(crate) fn run_graph_dispatch_init_fast_cache_path(
         .join(format!("{}.json", dispatch_init_cache_record_id(run_id)))
 }
 
+fn current_dispatch_init_cache_config_digest(state_root: &std::path::Path) -> Option<String> {
+    let project_root =
+        crate::runtime_dispatch_state::runtime_dispatch_project_root_from_state_root(state_root);
+    crate::launcher_activation_snapshot::config_file_digest(&project_root.join("vida.config.yaml"))
+        .ok()
+}
+
 fn dispatch_init_fast_cache_payload_is_reusable(
     payload: &serde_json::Value,
     requested_run_id: &str,
+    current_config_digest: Option<&str>,
 ) -> bool {
     let requested_matches = payload["requested_run_id"].as_str() == Some(requested_run_id)
         || payload["run_id"].as_str() == Some(requested_run_id);
@@ -4202,6 +4290,11 @@ fn dispatch_init_fast_cache_payload_is_reusable(
         || payload["surface"].as_str() != Some("vida taskflow run-graph dispatch-init")
     {
         return false;
+    }
+    if let Some(current_config_digest) = current_config_digest {
+        if payload["source_config_digest"].as_str() != Some(current_config_digest) {
+            return false;
+        }
     }
     if payload
         .get("authoritative_persistence")
@@ -4234,7 +4327,13 @@ pub(crate) fn read_run_graph_dispatch_init_fast_cache(
     let path = run_graph_dispatch_init_fast_cache_path(state_root, requested_run_id);
     let body = std::fs::read_to_string(path).ok()?;
     let payload = serde_json::from_str::<serde_json::Value>(&body).ok()?;
-    dispatch_init_fast_cache_payload_is_reusable(&payload, requested_run_id).then_some(payload)
+    let current_config_digest = current_dispatch_init_cache_config_digest(state_root);
+    dispatch_init_fast_cache_payload_is_reusable(
+        &payload,
+        requested_run_id,
+        current_config_digest.as_deref(),
+    )
+    .then_some(payload)
 }
 
 fn read_run_graph_status_json_from_dispatch_init_fast_cache(
@@ -4260,7 +4359,11 @@ fn write_run_graph_dispatch_init_fast_cache(
         .join("dispatch-init-cache");
     std::fs::create_dir_all(&cache_dir)
         .map_err(|error| format!("Failed to create dispatch-init fast cache dir: {error}"))?;
-    let body = serde_json::to_string_pretty(payload)
+    let mut payload = payload.clone();
+    if let Some(digest) = current_dispatch_init_cache_config_digest(state_root) {
+        payload["source_config_digest"] = serde_json::Value::String(digest);
+    }
+    let body = serde_json::to_string_pretty(&payload)
         .map_err(|error| format!("Failed to encode dispatch-init fast cache: {error}"))?;
     for cache_id in [requested_run_id, run_id] {
         let path = run_graph_dispatch_init_fast_cache_path(state_root, cache_id);
@@ -4355,6 +4458,9 @@ async fn existing_routed_dispatch_init_artifacts(
     let role_selection = context
         .role_selection()
         .map_err(|error| format!("Failed to decode existing seeded dispatch context: {error}"))?;
+    if dispatch_context_route_assignment_catalog_drift(store.root(), &role_selection).is_some() {
+        return Ok(None);
+    }
     let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
     let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
     Ok(Some(RunGraphDispatchInitArtifacts {
@@ -4725,25 +4831,38 @@ async fn preview_run_graph_dispatch_init_artifacts(
     let mut role_selection = context
         .role_selection()
         .map_err(|error| format!("Failed to decode persisted seeded dispatch context: {error}"))?;
+    let route_assignment_drift =
+        dispatch_context_route_assignment_catalog_drift(store.root(), &role_selection);
+    if route_assignment_drift.is_some() {
+        let payload =
+            reseed_dispatch_context_after_route_assignment_drift(store, &status, &context).await?;
+        status = reconcile_dispatch_init_status_for_active_exception(store, payload.status.clone())
+            .await?;
+        role_selection = payload.role_selection.clone();
+        seed_payload = Some(payload);
+    }
     let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
     let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
-    if let Some(existing_receipt) = store
-        .run_graph_dispatch_receipt(&effective_run_id)
-        .await
-        .map_err(|error| format!("Failed to read existing dispatch receipt: {error}"))?
-    {
-        if let Some(dispatch_packet_path) = reusable_routed_dispatch_receipt(&existing_receipt) {
-            return Ok(RunGraphDispatchInitPreview::Existing(
-                RunGraphDispatchInitArtifacts {
-                    requested_run_id: run_id.to_string(),
-                    run_id: effective_run_id,
-                    role_selection,
-                    run_graph_bootstrap,
-                    taskflow_handoff_plan,
-                    dispatch_receipt: existing_receipt,
-                    dispatch_packet_path,
-                },
-            ));
+    if route_assignment_drift.is_none() {
+        if let Some(existing_receipt) = store
+            .run_graph_dispatch_receipt(&effective_run_id)
+            .await
+            .map_err(|error| format!("Failed to read existing dispatch receipt: {error}"))?
+        {
+            if let Some(dispatch_packet_path) = reusable_routed_dispatch_receipt(&existing_receipt)
+            {
+                return Ok(RunGraphDispatchInitPreview::Existing(
+                    RunGraphDispatchInitArtifacts {
+                        requested_run_id: run_id.to_string(),
+                        run_id: effective_run_id,
+                        role_selection,
+                        run_graph_bootstrap,
+                        taskflow_handoff_plan,
+                        dispatch_receipt: existing_receipt,
+                        dispatch_packet_path,
+                    },
+                ));
+            }
         }
     }
     if let Ok(task) = store.show_task(&effective_run_id).await {
@@ -6373,7 +6492,9 @@ mod tests {
         assert!(truth.stale_state_suspected);
         assert_eq!(
             truth.next_lawful_operator_action.as_deref(),
-            Some("vida lane retire runtime-missing-task-stale-run --receipt-id runtime-missing-task-stale-run --reason \"missing TaskFlow task stale run\" --json")
+            Some(
+                "vida lane retire runtime-missing-task-stale-run --receipt-id runtime-missing-task-stale-run --reason \"missing TaskFlow task stale run\" --json"
+            )
         );
         assert!(truth.continuation_binding.is_none());
     }
@@ -8130,6 +8251,27 @@ mod tests {
         Ok(())
     }
 
+    fn force_selected_model_ref(value: &mut serde_json::Value, model_ref: &str) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(selected_model_ref) = map.get_mut("selected_model_ref") {
+                    if selected_model_ref.is_string() {
+                        *selected_model_ref = serde_json::Value::String(model_ref.to_string());
+                    }
+                }
+                for child in map.values_mut() {
+                    force_selected_model_ref(child, model_ref);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for child in values {
+                    force_selected_model_ref(child, model_ref);
+                }
+            }
+            _ => {}
+        }
+    }
+
     #[tokio::test]
     async fn derive_seeded_run_graph_prefers_worker_for_bound_repair_with_file_scope_terms() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -9543,6 +9685,96 @@ mod tests {
             "task-dispatch-init-idempotent-fast-path"
         )
         .is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_refreshes_stale_route_assignment_after_model_catalog_change() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "task-dispatch-init-route-drift-refresh",
+                title: "Dispatch init refreshes stale route assignment",
+                display_id: None,
+                description: "Repeated dispatch-init must rebuild stale model route assignments from the current carrier catalog.",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &["runtime-recovery".to_string()],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_refreshes_stale_route_assignment_after_model_catalog_change -- --nocapture"
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create route drift refresh task");
+
+        let first = run_graph_dispatch_init(&store, "task-dispatch-init-route-drift-refresh")
+            .await
+            .expect("first dispatch-init should seed and route");
+        assert_eq!(first["run_id"], "task-dispatch-init-route-drift-refresh");
+
+        let mut context = store
+            .run_graph_dispatch_context("task-dispatch-init-route-drift-refresh")
+            .await
+            .expect("context lookup should succeed")
+            .expect("dispatch context should exist");
+        force_selected_model_ref(&mut context.role_selection, "gpt-5.5");
+        store
+            .record_run_graph_dispatch_context(&context)
+            .await
+            .expect("stale dispatch context should persist");
+        let stale_selection = context
+            .role_selection()
+            .expect("stale role selection should still decode");
+        assert!(
+            dispatch_context_route_assignment_catalog_drift(store.root(), &stale_selection)
+                .is_some()
+        );
+
+        let second = run_graph_dispatch_init(&store, "task-dispatch-init-route-drift-refresh")
+            .await
+            .expect("second dispatch-init should refresh stale route assignment");
+        assert_eq!(second["run_id"], "task-dispatch-init-route-drift-refresh");
+
+        let refreshed_context = store
+            .run_graph_dispatch_context("task-dispatch-init-route-drift-refresh")
+            .await
+            .expect("refreshed context lookup should succeed")
+            .expect("refreshed dispatch context should exist");
+        let refreshed_selection = refreshed_context
+            .role_selection()
+            .expect("refreshed role selection should decode");
+        assert!(dispatch_context_route_assignment_catalog_drift(
+            store.root(),
+            &refreshed_selection
+        )
+        .is_none());
+
+        let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
+            &refreshed_selection.execution_plan,
+            "implementation",
+        );
+        let payload = crate::taskflow_routing::route_explain_payload(
+            &refreshed_selection.execution_plan,
+            "implementation",
+            route,
+        );
+        assert_ne!(payload["selected_model_ref"], "gpt-5.5");
     }
 
     #[tokio::test]

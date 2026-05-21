@@ -5434,91 +5434,14 @@ fn selected_backend_readiness_payload(
     )
 }
 
-fn collect_model_profiles_from_yaml(
-    value: &serde_yaml::Value,
-    profiles: &mut BTreeMap<String, BTreeSet<String>>,
-) {
-    match value {
-        serde_yaml::Value::Mapping(mapping) => {
-            if let Some(model_profiles) =
-                mapping.get(serde_yaml::Value::String("model_profiles".to_string()))
-            {
-                if let serde_yaml::Value::Mapping(profile_mapping) = model_profiles {
-                    for (profile_id, profile_value) in profile_mapping {
-                        let Some(profile_id) = profile_id.as_str().map(str::trim) else {
-                            continue;
-                        };
-                        if profile_id.is_empty() {
-                            continue;
-                        }
-                        let model_ref = crate::yaml_lookup(profile_value, &["model_ref"])
-                            .and_then(serde_yaml::Value::as_str)
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .unwrap_or(profile_id);
-                        profiles
-                            .entry(profile_id.to_string())
-                            .or_default()
-                            .insert(model_ref.to_string());
-                    }
-                }
-            }
-            for child in mapping.values() {
-                collect_model_profiles_from_yaml(child, profiles);
-            }
-        }
-        serde_yaml::Value::Sequence(values) => {
-            for child in values {
-                collect_model_profiles_from_yaml(child, profiles);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn current_project_model_profile_catalog() -> BTreeMap<String, BTreeSet<String>> {
+fn current_project_model_profile_catalog() -> crate::runtime_dispatch_state::ModelProfileCatalog {
     let project_root = crate::state_store::repo_root();
-    let Ok(overlay) =
-        crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(&project_root)
-    else {
-        return BTreeMap::new();
-    };
-    let mut profiles = BTreeMap::new();
-    collect_model_profiles_from_yaml(&overlay, &mut profiles);
-    profiles
+    crate::runtime_dispatch_state::current_project_model_profile_catalog_for_root(&project_root)
 }
 
 fn route_assignment_catalog_drift_payload(route: &serde_json::Value) -> Option<serde_json::Value> {
-    let selected_profile = route["selected_model_profile_id"].as_str()?.trim();
-    if selected_profile.is_empty() {
-        return None;
-    }
-    let selected_model_ref = route["selected_model_ref"].as_str().map(str::trim);
     let catalog = current_project_model_profile_catalog();
-    if catalog.is_empty() {
-        return None;
-    }
-    let Some(current_model_refs) = catalog.get(selected_profile) else {
-        return Some(serde_json::json!({
-            "status": "blocked",
-            "reason": "selected_model_profile_not_in_current_config",
-            "selected_model_profile_id": selected_profile,
-            "selected_model_ref": selected_model_ref,
-            "current_model_refs": serde_json::Value::Null,
-        }));
-    };
-    if let Some(selected_model_ref) = selected_model_ref {
-        if !selected_model_ref.is_empty() && !current_model_refs.contains(selected_model_ref) {
-            return Some(serde_json::json!({
-                "status": "blocked",
-                "reason": "selected_model_ref_mismatch_current_config",
-                "selected_model_profile_id": selected_profile,
-                "selected_model_ref": selected_model_ref,
-                "current_model_refs": current_model_refs,
-            }));
-        }
-    }
-    None
+    crate::runtime_dispatch_state::route_assignment_catalog_drift_payload(route, &catalog)
 }
 
 fn route_assignment_reseed_next_actions(run_id: &str, task_id: &str) -> Vec<String> {

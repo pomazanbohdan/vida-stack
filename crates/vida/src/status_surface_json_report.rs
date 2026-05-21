@@ -259,7 +259,7 @@ fn host_agents_json_value(host_agents: Option<&serde_json::Value>) -> serde_json
         .unwrap_or_else(|| serde_json::json!({}))
 }
 
-fn enrich_run_graph_status(
+pub(crate) fn enrich_run_graph_status(
     status: Option<&crate::state_store::RunGraphStatus>,
     mixed_posture: Option<&serde_json::Value>,
     activation_vs_execution_evidence: Option<&serde_json::Value>,
@@ -283,7 +283,7 @@ fn enrich_run_graph_status(
     value
 }
 
-fn enrich_run_graph_dispatch_receipt(
+pub(crate) fn enrich_run_graph_dispatch_receipt(
     receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     mixed_posture: Option<&serde_json::Value>,
     activation_vs_execution_evidence: Option<&serde_json::Value>,
