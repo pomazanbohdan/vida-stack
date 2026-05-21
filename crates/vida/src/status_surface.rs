@@ -117,25 +117,6 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 return ExitCode::SUCCESS;
             }
         }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &state_dir,
-                status_json_projection_name(summary_only),
-                STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
-            )
-        {
-            if cached_status_projection_admissible(&state_dir, summary_only, &cached) {
-                if let Some(refreshed) =
-                    refresh_cached_status_projection_runtime_fields(&state_dir, &cached).await
-                {
-                    println!(
-                        "{}",
-                        render_cached_status_projection_for_operator(summary_only, &refreshed)
-                    );
-                    return ExitCode::SUCCESS;
-                }
-            }
-        }
     }
 
     match StateStore::open_existing_read_only_with_timeout(
