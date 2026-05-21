@@ -1109,11 +1109,6 @@ impl StateStore {
                 reason: format!("task `{task_id}` title is empty"),
             });
         }
-        if self.show_task(task_id).await.is_ok() {
-            return Err(StateStoreError::InvalidTaskRecord {
-                reason: format!("task already exists: {task_id}"),
-            });
-        }
         let normalized_parent_id = parent_id.and_then(|value| {
             let trimmed = value.trim();
             if trimmed.is_empty() {
@@ -1125,8 +1120,14 @@ impl StateStore {
         let normalized_display_id = self
             .validate_task_display_id_alias(task_id, display_id)
             .await?;
+        let mut tasks = self.all_tasks().await?;
+        if tasks.iter().any(|task| task.id == task_id) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!("task already exists: {task_id}"),
+            });
+        }
         if let Some(parent_id) = normalized_parent_id.as_deref() {
-            if self.show_task(parent_id).await.is_err() {
+            if !tasks.iter().any(|task| task.id == parent_id) {
                 return Err(StateStoreError::MissingTask {
                     task_id: parent_id.to_string(),
                 });
@@ -1183,7 +1184,6 @@ impl StateStore {
             task.closed_at = Some(now.clone());
         }
 
-        let mut tasks = self.all_tasks().await?;
         let reopened_parents = if task.status != "closed" {
             Self::reopen_closed_parent_chain_for_extension(
                 &mut tasks,
