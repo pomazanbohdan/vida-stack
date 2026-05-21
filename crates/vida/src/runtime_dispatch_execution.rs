@@ -262,6 +262,14 @@ pub(crate) fn internal_codex_external_fallback_backend(
         else {
             return false;
         };
+        if crate::runtime_dispatch_state::configured_external_backend_dispatch_blocker(
+            candidate,
+            backend_entry,
+        )
+        .is_some()
+        {
+            return false;
+        }
         let selected_model_profile_id =
             crate::runtime_dispatch_state::preferred_selected_model_profile_for_dispatch_target(
                 role_selection,
@@ -332,6 +340,14 @@ fn ready_external_readiness_fallback_backend(
         else {
             return false;
         };
+        if crate::runtime_dispatch_state::configured_external_backend_dispatch_blocker(
+            candidate,
+            backend_entry,
+        )
+        .is_some()
+        {
+            return false;
+        }
         let selected_model_profile_id =
             crate::runtime_dispatch_state::preferred_selected_model_profile_for_dispatch_target(
                 role_selection,
@@ -3631,6 +3647,73 @@ agent_system:
             )
             .as_deref(),
             Some("qwen_cli")
+        );
+    }
+
+    #[test]
+    fn external_readiness_fallback_rejects_disabled_external_candidate() {
+        let overlay = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    hermes_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      dispatch:
+        command: vida-missing-hermes-test-command
+        prompt_mode: positional
+    qwen_cli:
+      enabled: false
+      subagent_backend_class: external_cli
+      dispatch:
+        command: cargo
+        static_args: ["--version"]
+        prompt_mode: positional
+"#,
+        )
+        .expect("overlay should parse");
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "runtime_assignment": {
+                "selected_backend_id": "qwen_cli",
+                "selected_tier": "external_write_guarded",
+                "activation_agent_type": "qwen_cli"
+            },
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "hermes_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "coach": true,
+                        "review": true
+                    }
+                },
+                {
+                    "backend_id": "qwen_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "coach": true,
+                        "review": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "coach": {
+                    "executor_backend": "hermes_cli",
+                    "fallback_executor_backend": "qwen_cli"
+                }
+            }
+        }));
+
+        assert!(
+            ready_external_readiness_fallback_backend(
+                &role_selection,
+                "coach",
+                "hermes_cli",
+                &overlay,
+                Some("qwen_cli")
+            )
+            .is_none(),
+            "dispatch-blocked external fallback candidate must not be selected"
         );
     }
 
