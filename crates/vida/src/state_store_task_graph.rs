@@ -681,7 +681,17 @@ impl StateStore {
                         .map(|child| child.status == "open" || child.status == "in_progress")
                         .unwrap_or(false)
                 });
-                if !has_open_child {
+                let has_unresolved_non_parent_dependency = task
+                    .dependencies
+                    .iter()
+                    .filter(|dependency| dependency.edge_type != "parent-child")
+                    .any(|dependency| {
+                        by_id
+                            .get(&dependency.depends_on_id)
+                            .map(|dependency_task| dependency_task.status != "closed")
+                            .unwrap_or(true)
+                    });
+                if !has_open_child && !has_unresolved_non_parent_dependency {
                     issues.push(TaskGraphIssue {
                         issue_type: "open_parent_has_no_open_child".to_string(),
                         issue_id: task.id.clone(),

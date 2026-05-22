@@ -592,13 +592,6 @@ fn orchestrator_init_projection_name(full: bool) -> &'static str {
     }
 }
 
-fn read_orchestrator_init_cached_projection(state_dir: &Path, full: bool) -> Option<String> {
-    crate::operator_projection_cache::read_fresh_json_projection(
-        state_dir,
-        orchestrator_init_projection_name(full),
-    )
-}
-
 fn compact_project_activation_summary(init_view: &serde_json::Value) -> serde_json::Value {
     let project_activation = &init_view["project_activation"];
     serde_json::json!({
@@ -1114,7 +1107,7 @@ mod tests {
     };
     use crate::state_store::{RunGraphDispatchReceipt, RunGraphStatus, StateStore};
     use crate::temp_state::TempStateHarness;
-    use crate::test_cli_support::{cli, guard_current_dir};
+    use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
     use clap::CommandFactory;
     use serde_json::json;
     use std::fs;
@@ -1157,12 +1150,24 @@ mod tests {
             &payload,
         );
 
-        assert!(read_orchestrator_init_cached_projection(harness.path(), false).is_some());
+        assert!(
+            crate::operator_projection_cache::read_fresh_json_projection(
+                harness.path(),
+                orchestrator_init_projection_name(false)
+            )
+            .is_some()
+        );
 
         std::thread::sleep(Duration::from_millis(10));
         crate::operator_projection_cache::touch_state_mutation_marker(harness.path());
 
-        assert!(read_orchestrator_init_cached_projection(harness.path(), false).is_none());
+        assert!(
+            crate::operator_projection_cache::read_fresh_json_projection(
+                harness.path(),
+                orchestrator_init_projection_name(false)
+            )
+            .is_none()
+        );
     }
 
     fn run_on_cli_runtime_stack(name: &str, test: impl FnOnce() + Send + 'static) {
@@ -1405,6 +1410,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
         fs::write(
             harness.path().join("AGENTS.md"),
             "project documentation: docs/\n",
@@ -1436,6 +1442,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
 
         fs::write(
             harness.path().join("AGENTS.md"),
@@ -1488,6 +1495,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
         let source_root = harness.path().join("source");
         let instruction_source = source_root.join("framework-source");
         let memory_source = source_root.join("framework-memory-source");
@@ -1566,6 +1574,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         fs::remove_dir_all(
@@ -1668,6 +1677,7 @@ mod tests {
                 let harness =
                     TempStateHarness::new().expect("temp state harness should initialize");
                 let _cwd = guard_current_dir(harness.path());
+                let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
 
                 assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
                 wait_for_state_unlock(harness.path());
@@ -1729,12 +1739,12 @@ mod tests {
                 let fake_codex_command = fake_codex.to_string_lossy().replace('\\', "/");
                 let updated = if cfg!(windows) {
                     config.replacen(
-                "        command: codex\n        static_args:\n          - exec\n          - --json\n",
-                &format!(
-                    "        command: cmd\n        static_args:\n          - /C\n          - '{fake_codex_command}'\n"
-                ),
-                1,
-            )
+                        "        command: codex\n        receipt_backed_completion_supported: true\n        static_args:\n          - exec\n          - --json\n",
+                        &format!(
+                            "        command: cmd\n        receipt_backed_completion_supported: true\n        static_args:\n          - /C\n          - '{fake_codex_command}'\n"
+                        ),
+                        1,
+                    )
                 } else {
                     config.replacen(
                         "        command: codex\n",
@@ -1757,6 +1767,23 @@ mod tests {
                 let store = runtime
                     .block_on(StateStore::open(state_root.clone()))
                     .expect("state store should open");
+                runtime
+                    .block_on(store.create_task(crate::state_store::CreateTaskRequest {
+                        task_id: "run-agent-init-timeout",
+                        title: "Timeout dispatch fixture",
+                        display_id: None,
+                        description: "TaskFlow task backing the timeout dispatch fixture",
+                        issue_type: "defect",
+                        status: "open",
+                        priority: 1,
+                        parent_id: None,
+                        labels: &[],
+                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                        created_by: "test",
+                        source_repo: "",
+                    }))
+                    .expect("timeout fixture task should exist");
                 let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -3102,12 +3129,8 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
     let framework_memory_source_root =
         PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
 
-    if args.json {
-        if let Some(cached) = read_orchestrator_init_cached_projection(&state_dir, args.full) {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
-        }
-    }
+    // Security: orchestrator-init JSON must come from authoritative state computation,
+    // not project-controlled projection cache files.
 
     match tokio::time::timeout(
         std::time::Duration::from_secs(COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS),
@@ -5376,7 +5399,7 @@ mod agent_init_surface_tests {
     use super::*;
     use crate::run;
     use crate::temp_state::TempStateHarness;
-    use crate::test_cli_support::{cli, guard_current_dir};
+    use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
     use crate::RuntimeConsumptionLaneSelection;
     use std::fs;
     use std::path::Path;
@@ -6350,6 +6373,7 @@ mod agent_init_surface_tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -6609,6 +6633,7 @@ mod agent_init_surface_tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
@@ -6624,6 +6649,7 @@ mod agent_init_surface_tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);

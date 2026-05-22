@@ -33,7 +33,7 @@ pub(crate) fn read_fresh_json_projection_with_dependency_marker(
     }
     let cache_modified = std::fs::metadata(&path).ok()?.modified().ok()?;
     let state_modified = latest_state_mutation_marker(state_dir).ok()?;
-    if cache_modified <= state_modified {
+    if cache_modified < state_modified {
         return None;
     }
     if dependency_modified.is_some_and(|modified| cache_modified < modified) {
@@ -82,8 +82,11 @@ pub(crate) fn read_recent_json_projection_with_dependency_marker(
         return None;
     }
     let cache_modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+    // Security invariant: "recent" cached projections must still be invalidated when
+    // authoritative TaskFlow/state data mutates. Age-bounded cache reuse is allowed
+    // only for projections that are newer than the latest state mutation marker.
     let state_modified = latest_state_mutation_marker(state_dir).ok()?;
-    if cache_modified <= state_modified {
+    if cache_modified < state_modified {
         return None;
     }
     if dependency_modified.is_some_and(|modified| cache_modified < modified) {

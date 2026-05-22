@@ -827,19 +827,11 @@ fn scheduler_reservation_preview(
 fn scheduler_execute_runtime_gate_blocker_codes(
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
-    latest_run_graph_task_missing: bool,
+    _latest_run_graph_task_missing: bool,
 ) -> SchedulerRuntimeGateBlockerSignals {
     let mut blocker_codes = Vec::new();
     let mut open_delegated_cycle = false;
     let mut active_reservation = false;
-
-    if latest_run_graph_task_missing {
-        return SchedulerRuntimeGateBlockerSignals {
-            blocker_codes,
-            open_delegated_cycle,
-            active_reservation,
-        };
-    }
 
     if recovery_holds_unresolved_active_bound_run(recovery, dispatch) {
         if let Some(code) = crate::release1_contracts::blocker_code_value(
@@ -2892,7 +2884,7 @@ fn build_taskflow_next_decision(
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
     latest_run_graph_task_closed: bool,
-    latest_run_graph_task_missing: bool,
+    _latest_run_graph_task_missing: bool,
     latest_run_graph_legacy_ownerless: bool,
     explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     terminal_consume_continue_run_id: Option<&str>,
@@ -2900,21 +2892,18 @@ fn build_taskflow_next_decision(
     let ready_head = ready_head.map(graph_summary_task_ref);
     let latest_run_graph_status_is_blocked =
         latest_run_graph_status_blocks_normal_continuation(latest_run_graph_status);
-    let stale_missing_task_run_graph = latest_run_graph_task_missing;
-    let active_exception_takeover_binding = !stale_missing_task_run_graph
-        && active_exception_takeover_binding_matches_status(
-            explicit_binding,
-            latest_run_graph_status,
-            dispatch,
-        );
+    let active_exception_takeover_binding = active_exception_takeover_binding_matches_status(
+        explicit_binding,
+        latest_run_graph_status,
+        dispatch,
+    );
     let active_exception_takeover_evidence = active_exception_takeover_evidence_matches_status(
         latest_run_graph_status,
         dispatch,
         terminal_consume_continue_run_id,
     );
-    let active_exception_takeover_continuation = active_exception_takeover_evidence
-        && latest_run_graph_status_is_blocked
-        && !stale_missing_task_run_graph;
+    let active_exception_takeover_continuation =
+        active_exception_takeover_evidence && latest_run_graph_status_is_blocked;
     let explicit_next_task_binding = explicit_task_binding_matches_status(
         explicit_binding,
         latest_run_graph_status,
@@ -2925,23 +2914,19 @@ fn build_taskflow_next_decision(
         && latest_run_graph_status
             .zip(ready_head.as_ref())
             .is_some_and(|(status, task)| status.task_id != task.id);
-    let latest_run_graph_status_blocked = latest_run_graph_status_is_blocked
-        && !legacy_ownerless_latest_run_nonblocking
-        && !stale_missing_task_run_graph;
-    let recovery_holds_current_active_bound_run =
-        recovery_holds_active_bound_run && !stale_missing_task_run_graph;
+    let latest_run_graph_status_blocked =
+        latest_run_graph_status_is_blocked && !legacy_ownerless_latest_run_nonblocking;
+    let recovery_holds_current_active_bound_run = recovery_holds_active_bound_run;
     let terminal_consume_continue_without_next_unit = latest_run_graph_status
         .zip(terminal_consume_continue_run_id)
         .is_some_and(|(status, run_id)| status.run_id == run_id)
-        && !explicit_next_task_binding
-        && !stale_missing_task_run_graph;
+        && !explicit_next_task_binding;
     let latest_run_graph_status_blocks_admission = latest_run_graph_status_blocked
         && !active_exception_takeover_evidence
         && !terminal_consume_continue_without_next_unit;
     let completed_without_explicit_next_unit =
         terminal_completed_without_next_unit(latest_run_graph_status)
-            && !explicit_next_task_binding
-            && !stale_missing_task_run_graph;
+            && !explicit_next_task_binding;
     let admissibility_gate = if recovery_holds_current_active_bound_run {
         "delegated_cycle_runtime_gate".to_string()
     } else if active_exception_takeover_continuation {
@@ -7141,7 +7126,7 @@ mod tests {
     }
 
     #[test]
-    fn taskflow_next_admits_ready_head_when_latest_blocked_run_graph_task_is_missing() {
+    fn taskflow_next_blocks_ready_head_when_latest_blocked_run_graph_task_is_missing() {
         let ready = task(
             "runtime-defect-stale-rungraph-authority-cascade",
             "task",
@@ -7174,20 +7159,13 @@ mod tests {
             None,
         );
 
-        assert_eq!(decision.status, "pass");
+        assert_eq!(decision.status, "blocked");
         assert_eq!(
             decision.candidate_task_context.admissibility_gate,
-            "ready_now"
+            "delegated_cycle_runtime_gate"
         );
-        assert!(decision.candidate_task_context.admissible_now);
-        assert_eq!(
-            decision
-                .primary_ready_task
-                .as_ref()
-                .map(|task| task.id.as_str()),
-            Some("runtime-defect-stale-rungraph-authority-cascade")
-        );
-        assert!(!decision
+        assert!(!decision.candidate_task_context.admissible_now);
+        assert!(decision
             .blocker_codes
             .iter()
             .any(|code| code == "open_delegated_cycle"));

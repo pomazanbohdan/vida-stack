@@ -52,6 +52,19 @@ fn exception_takeover_state_label(
     if !has_nonempty_value(receipt.exception_path_receipt_id.as_deref()) {
         return None;
     }
+    let gate_blocked = latest_recovery.is_some_and(|recovery| {
+        recovery
+            .delegation_gate
+            .local_exception_takeover_gate
+            .trim()
+            == "blocked_open_delegated_cycle"
+    });
+    if !gate_blocked && receipt.lane_status == "lane_exception_takeover" {
+        return Some("active");
+    }
+    if !gate_blocked && receipt.lane_status == "lane_exception_recorded" {
+        return Some("admissible_not_active");
+    }
     let takeover_state = crate::release1_contracts::exception_takeover_state(
         receipt.exception_path_receipt_id.as_deref(),
         receipt.supersedes_receipt_id.as_deref(),

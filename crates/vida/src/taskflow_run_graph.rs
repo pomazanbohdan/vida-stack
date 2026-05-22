@@ -41,20 +41,13 @@ fn recovery_status_projection_name(run_id: &str) -> String {
 }
 
 fn read_recovery_status_projection(
-    state_dir: &std::path::Path,
-    projection_name: &str,
+    _state_dir: &std::path::Path,
+    _projection_name: &str,
     _run_id: &str,
 ) -> Option<String> {
-    crate::operator_projection_cache::read_fresh_json_projection(state_dir, projection_name)
-        .filter(|cached| recovery_projection_has_complete_action_fields(cached))
-        .or_else(|| {
-            crate::operator_projection_cache::read_recent_json_projection(
-                state_dir,
-                projection_name,
-                TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE,
-            )
-            .filter(|cached| recovery_projection_has_complete_action_fields(cached))
-        })
+    // Security hardening: recovery status JSON must be rendered from authoritative
+    // state instead of repository-provided projection cache payloads.
+    None
 }
 
 fn recovery_projection_has_complete_action_fields(cached: &str) -> bool {
@@ -1532,7 +1525,7 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
         let (_codes, _why_not_now, _next_action, command, surface) =
             recovery_surface_contract(summary, &projection_truth);
         if recovery_projection_resolves_persisted_open_cycle(summary, &projection_truth) {
-            (command, surface)
+            (None, None)
         } else {
             (
                 command.or_else(|| projection_truth.next_lawful_operator_action.clone()),
@@ -3744,7 +3737,7 @@ fn inject_tracked_design_doc_path(execution_plan: &mut serde_json::Value, design
 }
 
 fn inject_task_planner_metadata(
-    execution_plan: &mut serde_json::Value,
+    selection: &mut RuntimeConsumptionLaneSelection,
     planner_metadata: &crate::state_store::TaskPlannerMetadata,
 ) {
     if planner_metadata.owned_paths.is_empty()
@@ -3756,7 +3749,17 @@ fn inject_task_planner_metadata(
     {
         return;
     }
-    let Some(plan) = execution_plan.as_object_mut() else {
+    if !planner_metadata.owned_paths.is_empty() {
+        let owned_clause = format!("Owned paths: {}.", planner_metadata.owned_paths.join(", "));
+        if !selection.request.contains(&owned_clause) {
+            if selection.request.trim().is_empty() {
+                selection.request = owned_clause;
+            } else {
+                selection.request = format!("{}\n\n{owned_clause}", selection.request.trim());
+            }
+        }
+    }
+    let Some(plan) = selection.execution_plan.as_object_mut() else {
         return;
     };
     let tracked_flow_bootstrap = plan
@@ -4191,7 +4194,7 @@ pub(crate) async fn derive_seeded_run_graph_status(
 ) -> Result<TaskflowRunGraphSeedPayload, String> {
     let bounded_task_id =
         resolve_seed_task_id_for_runtime_run(store, requested_run_id, request_text).await?;
-    let snapshot = read_or_sync_launcher_activation_snapshot(store).await?;
+    let snapshot = read_seed_launcher_activation_snapshot(store).await?;
     let mut payload = build_seeded_run_graph_status_from_activation_snapshot(
         requested_run_id,
         &bounded_task_id,
@@ -4205,10 +4208,42 @@ pub(crate) async fn derive_seeded_run_graph_status(
         &mut payload.role_selection,
     )
     .await?;
+    payload.status = seeded_run_graph_status_from_role_selection(
+        requested_run_id,
+        &bounded_task_id,
+        &payload.role_selection,
+        &snapshot,
+    )?;
     if payload.role_selection.request != request_text {
         payload.request_text = request_text.to_string();
     }
     Ok(payload)
+}
+
+async fn read_seed_launcher_activation_snapshot(
+    store: &StateStore,
+) -> Result<crate::state_store::LauncherActivationSnapshot, String> {
+    match store.read_launcher_activation_snapshot().await {
+        Ok(snapshot) => {
+            let configured_path = std::path::Path::new(&snapshot.source_config_path);
+            if configured_path.exists() {
+                match crate::launcher_activation_snapshot::config_file_digest(configured_path) {
+                    Ok(current_digest) if current_digest == snapshot.source_config_digest => {
+                        return Ok(snapshot);
+                    }
+                    Ok(_) => {}
+                    Err(_) => {}
+                }
+            }
+            read_or_sync_launcher_activation_snapshot(store).await
+        }
+        Err(StateStoreError::MissingLauncherActivationSnapshot) => {
+            read_or_sync_launcher_activation_snapshot(store).await
+        }
+        Err(error) => Err(format!(
+            "Failed to read launcher activation snapshot: {error}"
+        )),
+    }
 }
 
 pub(crate) fn run_graph_dispatch_context_from_seed_payload(
@@ -4758,6 +4793,25 @@ fn build_seeded_run_graph_status_from_activation_snapshot(
         &snapshot.pack_router_keywords,
         request_text,
     )?;
+    let status = seeded_run_graph_status_from_role_selection(
+        requested_run_id,
+        bounded_task_id,
+        &selection,
+        snapshot,
+    )?;
+    Ok(TaskflowRunGraphSeedPayload {
+        request_text: request_text.to_string(),
+        role_selection: selection,
+        status,
+    })
+}
+
+fn seeded_run_graph_status_from_role_selection(
+    requested_run_id: &str,
+    bounded_task_id: &str,
+    selection: &RuntimeConsumptionLaneSelection,
+    snapshot: &crate::state_store::LauncherActivationSnapshot,
+) -> Result<RunGraphStatus, String> {
     let execution_plan = &selection.execution_plan;
     let compiled_control =
         compiled_run_graph_control_from_bundle(&snapshot.compiled_bundle, &snapshot.source)?;
@@ -4799,7 +4853,7 @@ fn build_seeded_run_graph_status_from_activation_snapshot(
             if is_conversation {
                 lane_node.as_str()
             } else {
-                "implementer"
+                lane_node.as_str()
             },
             json_string_field(route, "activation_agent_type").as_deref(),
             None,
@@ -4873,12 +4927,7 @@ fn build_seeded_run_graph_status_from_activation_snapshot(
     status.route_task_class = seed_base.route_task_class;
     status.selected_backend = seed_base.selected_backend;
     status.handoff_state = handoff_state;
-
-    Ok(TaskflowRunGraphSeedPayload {
-        request_text: request_text.to_string(),
-        role_selection: selection,
-        status,
-    })
+    Ok(status)
 }
 
 async fn seed_existing_task_payload_for_dispatch_init(
@@ -4908,7 +4957,18 @@ async fn preview_run_graph_dispatch_init_artifacts(
         return Ok(RunGraphDispatchInitPreview::Existing(artifacts));
     }
 
-    let effective_run_id = run_id.to_string();
+    let effective_run_id = if let Some(bound_run_id) =
+        reseed_explicit_task_graph_binding_for_dispatch_init(store, run_id).await?
+    {
+        if let Some(artifacts) =
+            existing_routed_dispatch_init_artifacts(store, run_id, &bound_run_id).await?
+        {
+            return Ok(RunGraphDispatchInitPreview::Existing(artifacts));
+        }
+        bound_run_id
+    } else {
+        run_id.to_string()
+    };
     let mut seed_payload = None;
     let status = match store.run_graph_status(&effective_run_id).await {
         Ok(status) => status,
@@ -5013,7 +5073,7 @@ async fn preview_run_graph_dispatch_init_artifacts(
         }
     }
     if let Ok(task) = store.show_task(&effective_run_id).await {
-        inject_task_planner_metadata(&mut role_selection.execution_plan, &task.planner_metadata);
+        inject_task_planner_metadata(&mut role_selection, &task.planner_metadata);
     }
     let mut dispatch_receipt = crate::taskflow_consume::build_runtime_consumption_dispatch_receipt(
         &role_selection,
@@ -10292,7 +10352,7 @@ mod tests {
 
         let payload = run_graph_dispatch_init(&store, requested_run_id)
             .await
-            .expect("dispatch init should reseed and produce an implementer dispatch");
+            .expect("dispatch init should reseed and produce a test-author dispatch");
 
         assert_eq!(payload["requested_run_id"], requested_run_id);
         assert_eq!(payload["run_id"], bound_task_id);
@@ -10302,7 +10362,7 @@ mod tests {
         );
         assert_eq!(
             payload["run_graph_bootstrap"]["latest_status"]["next_node"].as_str(),
-            Some("implementer")
+            Some("test_author")
         );
         assert_eq!(
             payload["run_graph_bootstrap"]["latest_status"]["route_task_class"].as_str(),
@@ -10310,11 +10370,11 @@ mod tests {
         );
         assert_eq!(
             payload["dispatch_receipt"]["dispatch_target"].as_str(),
-            Some("implementer")
+            Some("test_author")
         );
         assert_eq!(
             payload["dispatch_receipt"]["activation_agent_type"].as_str(),
-            Some("junior")
+            Some("middle")
         );
         assert_eq!(
             payload["dispatch_receipt"]["activation_runtime_role"].as_str(),
@@ -10322,7 +10382,7 @@ mod tests {
         );
         assert_eq!(
             payload["dispatch_receipt"]["selected_backend"].as_str(),
-            Some("internal_subagents")
+            Some("middle")
         );
 
         let dispatch_packet_path = payload["dispatch_packet_path"]
@@ -10333,7 +10393,7 @@ mod tests {
                 .expect("dispatch packet should load");
         assert_eq!(
             dispatch_packet["dispatch_target"].as_str(),
-            Some("implementer")
+            Some("test_author")
         );
         assert_eq!(
             dispatch_packet["delivery_task_packet"]["handoff_runtime_role"].as_str(),
@@ -10341,12 +10401,9 @@ mod tests {
         );
         assert_eq!(
             dispatch_packet["activation_agent_type"].as_str(),
-            Some("junior")
+            Some("middle")
         );
-        assert_eq!(
-            dispatch_packet["selected_backend"].as_str(),
-            Some("internal_subagents")
-        );
+        assert_eq!(dispatch_packet["selected_backend"].as_str(), Some("middle"));
         assert_ne!(
             dispatch_packet["dispatch_target"].as_str(),
             Some("specification")
@@ -10468,7 +10525,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn seeded_worker_run_can_advance_directly_into_implementer_lane() {
+    async fn seeded_worker_run_can_advance_directly_into_test_author_lane() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let store = StateStore::open(harness.path().to_path_buf())
             .await
@@ -10477,21 +10534,21 @@ mod tests {
             .await
             .expect("activation snapshot should be written");
         let existing = RunGraphStatus {
-            run_id: "task-direct-implementer".to_string(),
-            task_id: "task-direct-implementer".to_string(),
+            run_id: "task-direct-test-author".to_string(),
+            task_id: "task-direct-test-author".to_string(),
             task_class: "implementation".to_string(),
             active_node: "planning".to_string(),
-            next_node: Some("implementer".to_string()),
+            next_node: Some("test_author".to_string()),
             status: "ready".to_string(),
             route_task_class: "implementation".to_string(),
-            selected_backend: "junior".to_string(),
+            selected_backend: "middle".to_string(),
             lane_id: "planning_lane".to_string(),
             lifecycle_stage: "implementation_dispatch_ready".to_string(),
             policy_gate: "not_required".to_string(),
-            handoff_state: "awaiting_implementer".to_string(),
+            handoff_state: "awaiting_test_author".to_string(),
             context_state: "sealed".to_string(),
             checkpoint_kind: "execution_cursor".to_string(),
-            resume_target: "dispatch.implementer".to_string(),
+            resume_target: "dispatch.test_author".to_string(),
             recovery_ready: true,
         };
         store
@@ -10501,9 +10558,9 @@ mod tests {
 
         let payload = derive_advanced_run_graph_status(&store, existing)
             .await
-            .expect("seeded implementer run should advance");
+            .expect("seeded test-author run should advance");
 
-        assert_eq!(payload.status.active_node, "implementer");
+        assert_eq!(payload.status.active_node, "test_author");
         assert_eq!(payload.status.lifecycle_stage, "writer_active");
         assert_eq!(payload.status.next_node.as_deref(), Some("coach"));
         assert_eq!(payload.status.handoff_state, "awaiting_coach");

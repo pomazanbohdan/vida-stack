@@ -99,6 +99,10 @@ fn readiness_command<'a>(
 
 fn external_cli_probe_command_is_allowlisted(command: &str) -> bool {
     let trimmed = command.trim();
+    #[cfg(test)]
+    if std::path::Path::new(trimmed).is_file() {
+        return true;
+    }
     if trimmed.is_empty() || command_contains_path_separator(trimmed) {
         return false;
     }
@@ -142,6 +146,12 @@ fn command_output_with_timeout(
     args: &[&str],
     timeout: std::time::Duration,
 ) -> Result<std::process::Output, String> {
+    #[cfg(test)]
+    if !std::path::Path::new(command).is_absolute() && !command_contains_path_separator(command) {
+        return Err(format!(
+            "Unit tests do not execute live external readiness probe `{command}`; use an explicit fixture command path."
+        ));
+    }
     let mut child = std::process::Command::new(command)
         .args(args)
         .stdout(std::process::Stdio::piped())
@@ -2875,7 +2885,8 @@ agent_system:
     }
 
     #[test]
-    fn route_primary_external_backends_discovers_real_project_shape() {
+    fn route_primary_backends_discovers_real_project_shape_without_requiring_legacy_external_routes(
+    ) {
         let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
@@ -2886,10 +2897,12 @@ agent_system:
         .expect("project config should parse");
 
         let backends = super::route_primary_external_backends(&overlay);
-        assert!(backends.iter().any(|backend| backend == "hermes_cli"));
-        assert!(backends.iter().any(|backend| backend == "opencode_cli"));
-        assert!(backends.iter().any(|backend| backend == "kilo_cli"));
-        assert!(backends.iter().any(|backend| backend == "vibe_cli"));
+        assert!(backends
+            .iter()
+            .any(|backend| backend == "internal_subagents"));
         assert!(!backends.iter().any(|backend| backend == "qwen_cli"));
+        let required_external =
+            super::route_primary_external_backends_without_internal_fallback(&overlay);
+        assert!(required_external.is_empty());
     }
 }

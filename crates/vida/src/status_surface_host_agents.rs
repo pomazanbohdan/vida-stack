@@ -332,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn project_config_exposes_four_internal_and_three_external_agent_surfaces() {
+    fn project_config_exposes_internal_carriers_and_keeps_external_surfaces_disabled_by_default() {
         let project_root = repo_root();
         let overlay = crate::project_activator_surface::read_yaml_file_checked(
             &project_root.join("vida.config.yaml"),
@@ -365,7 +365,10 @@ mod tests {
                     }
                 })
                 .collect::<Vec<_>>();
-        assert_eq!(enabled_external_systems, vec!["hermes", "opencode"]);
+        assert!(
+            enabled_external_systems.is_empty(),
+            "external host systems should stay disabled until explicitly selected"
+        );
 
         let enabled_external_backends =
             crate::yaml_lookup(&overlay, &["agent_system", "subagents"])
@@ -385,9 +388,6 @@ mod tests {
                     }
                 })
                 .collect::<Vec<_>>();
-        assert_eq!(
-            enabled_external_backends,
-            vec!["hermes_cli", "opencode_cli", "kilo_cli", "vibe_cli"]
-        );
+        assert_eq!(enabled_external_backends, vec!["pi_cli"]);
     }
 }
