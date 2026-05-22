@@ -74,6 +74,7 @@ Source-neutral intake shorthand:
 1. Before any bounded item enters implementation, classify the source type and consult the mapped spec/process surface for that source class.
 2. Record the active TaskFlow item, source evidence, priority reason, owned/read-only paths, role chain, proof target, and sequential/parallel posture.
 3. If VIDA cannot execute the configured role chain, record the runtime defect separately and use bounded Defective Runtime Emulation Mode without dropping the same evidence chain.
+4. Treat source-specific protocols such as GitHub PR processing as extra closure/evidence layers only; every non-PR source keeps the same spec-first TaskFlow and role-chain requirements.
 
 ## Local-Work Boundary
 
@@ -113,5 +114,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-packet-and-lane-runtime-capsule.md
 created_at: '2026-03-13T18:05:15+02:00'
-updated_at: 2026-05-22T02:44:40Z
+updated_at: 2026-05-22T03:06:52Z
 changelog_ref: project-packet-and-lane-runtime-capsule.changelog.jsonl

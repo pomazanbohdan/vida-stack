@@ -128,8 +128,10 @@ Source-neutral intake rule:
 2. Every bounded source must be classified before write-producing work: `pull_request`, `external_downstream_report`, `runtime_defect`, `ci_failure`, `release_task`, `optimization`, `documentation_process`, `operator_surface_gap`, or a more specific project-approved source type.
 3. The orchestrator must consult the mapped canonical spec or process surface for that source class before implementation, then record the consulted surface, expected behavior, acceptance target, proof target, priority reason, role chain, and sequential/parallel posture on the TaskFlow item or linked artifact.
 4. If the mapped spec is missing, contradictory, or too weak to define acceptance, create or update a specification-clarification task before changing implementation code.
-5. When VIDA cannot execute the configured agent chain because the runtime itself is defective, record or update that runtime defect separately and enter bounded Defective Runtime Emulation Mode while preserving the same analyst -> test_author -> coach_test_gate -> developer -> coach_implementation_gate -> duplication_reviewer -> tester/prover -> release_closure -> orchestrator synthesis evidence chain manually.
-6. No defect, downstream report, PR finding, CI/release signal, optimization idea, command-surface gap, or process correction may remain only as chat/session memory when TaskFlow mutation is available.
+5. Source-specific protocols add source evidence and closure details only; they do not replace the generic intake, role-chain, proof, or closure law.
+6. Defects, downstream reports, CI failures, release tasks, optimization work, documentation/process tasks, diagnostics, and operator-surface gaps must be handled with the same TaskFlow and configured-role discipline as PRs.
+7. When VIDA cannot execute the configured agent chain because the runtime itself is defective, record or update that runtime defect separately and enter bounded Defective Runtime Emulation Mode while preserving the same analyst -> test_author -> coach_test_gate -> developer -> coach_implementation_gate -> duplication_reviewer -> tester/prover -> release_closure -> orchestrator synthesis evidence chain manually.
+8. No defect, downstream report, PR finding, CI/release signal, optimization idea, command-surface gap, or process correction may remain only as chat/session memory when TaskFlow mutation is available.
 
 Readiness rule:
 
@@ -454,5 +456,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/team-development-and-orchestration-protocol.md
 created_at: '2026-03-13T17:00:00+02:00'
-updated_at: 2026-05-22T02:44:40Z
+updated_at: 2026-05-22T03:06:52Z
 changelog_ref: team-development-and-orchestration-protocol.changelog.jsonl

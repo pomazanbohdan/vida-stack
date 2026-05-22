@@ -164,6 +164,19 @@ Launch-readiness rule:
 2. launch readiness does not require the full backlog to be pre-split into `execution_block` leaves,
 3. `execution_block` is a just-in-time refinement for the next active item or near-critical-path item only.
 
+## Source-Neutral Work Rule
+
+PR processing is a source-specific protocol under the project law, not the project law itself.
+
+Before any bounded work source moves into implementation, the orchestrator must:
+
+1. classify the source type,
+2. consult the mapped spec or process surface for that source,
+3. create or update the owning TaskFlow item with source evidence, priority reason, dependencies, owned/read-only paths, proof target, role chain, and sequential/parallel posture,
+4. route through the configured role chain when VIDA dispatch is available,
+5. record a separate runtime defect and use bounded Defective Runtime Emulation Mode when VIDA cannot execute that chain,
+6. apply the source's own closure evidence without weakening the generic proof gate.
+
 ## Delegation Rule
 
 For normal write-producing work, delegation is the default.
