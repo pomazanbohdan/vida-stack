@@ -591,6 +591,9 @@ fn dispatch_receipt_resolution_reason_class(receipt: &RunGraphDispatchReceipt) -
     if receipt.blocker_code.as_deref() == Some("internal_codex_carrier_unavailable") {
         return Some("internal_codex_carrier_unavailable");
     }
+    if receipt.blocker_code.as_deref() == Some("internal_codex_windows_sandbox_unavailable") {
+        return Some("internal_codex_windows_sandbox_unavailable");
+    }
     if receipt
         .downstream_dispatch_blockers
         .iter()

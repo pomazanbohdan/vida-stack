@@ -1148,6 +1148,34 @@ fn internal_codex_output_confirms_execution(
             .is_some_and(|value| !value.is_empty())
 }
 
+fn internal_codex_provider_failure_blocker_code(
+    selected_cli_system: &str,
+    stderr: &str,
+    error_messages: &[String],
+) -> Option<&'static str> {
+    if selected_cli_system != "codex" {
+        return None;
+    }
+    let windows_sandbox_spawn_failed = stderr.contains("windows sandbox: spawn setup refresh")
+        || error_messages
+            .iter()
+            .any(|message| message.contains("windows sandbox: spawn setup refresh"));
+    windows_sandbox_spawn_failed.then_some("internal_codex_windows_sandbox_unavailable")
+}
+
+fn internal_codex_provider_failure_blocker_reason(
+    selected_cli_system: &str,
+    blocker_code: &str,
+    fallback_reason: String,
+) -> String {
+    if selected_cli_system == "codex"
+        && blocker_code == "internal_codex_windows_sandbox_unavailable"
+    {
+        return "Internal Codex carrier reached `codex exec`, but the Windows sandbox failed while spawning worker shell commands. Retry with a configured backend/runtime profile whose sandbox is supported on this host, or route through a configured external CLI backend before claiming receipt-backed execution.".to_string();
+    }
+    fallback_reason
+}
+
 fn should_render_store_backed_activation_view_for_internal_failure(
     activation_only: bool,
     success: bool,
@@ -2275,7 +2303,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         refresh_execution_truth(body, role_selection, receipt, Some(carrier_id), "missing");
     } else {
         let blocker_reason = if !stderr.is_empty() {
-            stderr
+            stderr.clone()
         } else if !parsed_output.error_messages.is_empty() {
             parsed_output.error_messages.join("\n")
         } else if output.status.success() {
@@ -2287,10 +2315,18 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
                 "internal host carrier for `{selected_cli_system}` exited without returning receipt-backed completion"
             )
         };
-        body.insert(
-            "blocker_code".to_string(),
-            serde_json::json!("configured_backend_dispatch_failed"),
+        let blocker_code = internal_codex_provider_failure_blocker_code(
+            &selected_cli_system,
+            &stderr,
+            &parsed_output.error_messages,
+        )
+        .unwrap_or("configured_backend_dispatch_failed");
+        let blocker_reason = internal_codex_provider_failure_blocker_reason(
+            &selected_cli_system,
+            blocker_code,
+            blocker_reason,
         );
+        body.insert("blocker_code".to_string(), serde_json::json!(blocker_code));
         body.insert(
             "blocker_reason".to_string(),
             serde_json::json!(blocker_reason),
@@ -3190,6 +3226,27 @@ dispatch:
             "",
             false
         ));
+    }
+
+    #[test]
+    fn internal_codex_windows_sandbox_spawn_failure_gets_specific_blocker() {
+        let stderr =
+            "2026-05-22T02:27:30Z ERROR codex_core::exec: exec error: windows sandbox: spawn setup refresh";
+
+        assert_eq!(
+            super::internal_codex_provider_failure_blocker_code("codex", stderr, &[]),
+            Some("internal_codex_windows_sandbox_unavailable")
+        );
+        assert_eq!(
+            super::internal_codex_provider_failure_blocker_code("opencode", stderr, &[]),
+            None
+        );
+        assert!(super::internal_codex_provider_failure_blocker_reason(
+            "codex",
+            "internal_codex_windows_sandbox_unavailable",
+            stderr.to_string()
+        )
+        .contains("configured backend/runtime profile whose sandbox is supported"));
     }
 
     #[test]
