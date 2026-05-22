@@ -743,6 +743,13 @@ fn timeout_exit_status() -> ExitStatus {
     ExitStatus::from_raw(124)
 }
 
+#[cfg(unix)]
+fn timeout_exit_status() -> ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+
+    ExitStatus::from_raw(124 << 8)
+}
+
 fn run_protocol_binding_check_with_timeout(state_dir: &std::path::Path) -> std::process::Output {
     bounded_vida_output(
         &["-k", "5s", "60s"],
