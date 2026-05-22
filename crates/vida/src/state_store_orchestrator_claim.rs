@@ -349,6 +349,41 @@ impl StateStore {
         Ok(rows)
     }
 
+    pub(crate) async fn transfer_active_orchestrator_claims_to_session(
+        &self,
+        from_session_id: &str,
+        to_session_id: &str,
+    ) -> Result<Vec<OrchestratorClaim>, StateStoreError> {
+        let from_session_id = from_session_id.trim();
+        let to_session_id = to_session_id.trim();
+        if from_session_id.is_empty() || to_session_id.is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "orchestrator claim transfer requires non-empty session ids".to_string(),
+            });
+        }
+
+        self.expire_stale_orchestrator_claims().await?;
+        let now = claim_timestamp(claim_time());
+        let active = self.active_orchestrator_claims().await?;
+        let mut transferred = Vec::new();
+        for mut claim in active
+            .into_iter()
+            .filter(|claim| claim.orchestrator_session_id == from_session_id)
+        {
+            claim.orchestrator_session_id = to_session_id.to_string();
+            claim.status = OrchestratorClaimStatus::Renewed.as_str().to_string();
+            claim.last_heartbeat_at = now.clone();
+            claim.resource_revision += 1;
+            let _: Option<OrchestratorClaim> = self
+                .db
+                .upsert(("orchestrator_claim", claim.claim_id.as_str()))
+                .content(claim.clone())
+                .await?;
+            transferred.push(claim);
+        }
+        Ok(transferred)
+    }
+
     pub(crate) async fn expired_orchestrator_claims(
         &self,
     ) -> Result<Vec<OrchestratorClaim>, StateStoreError> {
@@ -1151,5 +1186,41 @@ mod tests {
             .expect("replacement claim after supersede");
         assert_eq!(replacement.status, "active");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn transfer_active_claims_rebinds_task_to_new_session() {
+        let root = temp_state_dir("claim-transfer-session");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .acquire_orchestrator_claim(claim_request(
+                "claim-transfer",
+                "session-old",
+                "task-transfer",
+                "run-transfer",
+                "domain-transfer",
+                &["crates/vida/src/transfer.rs"],
+            ))
+            .await
+            .expect("acquire claim");
+
+        let transferred = store
+            .transfer_active_orchestrator_claims_to_session("session-old", "session-new")
+            .await
+            .expect("transfer claims");
+
+        assert_eq!(transferred.len(), 1);
+        assert_eq!(transferred[0].orchestrator_session_id, "session-new");
+        assert_eq!(transferred[0].status, "renewed");
+        assert_eq!(transferred[0].resource_revision, 2);
+        let active = store
+            .active_orchestrator_claims()
+            .await
+            .expect("active claims");
+        assert!(active.iter().any(|claim| {
+            claim.claim_id == "claim-transfer" && claim.orchestrator_session_id == "session-new"
+        }));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

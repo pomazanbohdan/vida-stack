@@ -760,7 +760,8 @@ async fn validate_run_graph_resume_state(
     {
         return Ok(());
     }
-    if run_graph_resume_task_missing(store, &status).await?
+    if active_receipt.is_none()
+        && run_graph_resume_task_missing(store, &status).await?
         && !active_receipt
             .as_ref()
             .is_some_and(dispatch_receipt_has_exception_takeover_evidence)
@@ -810,7 +811,8 @@ async fn validate_run_graph_resume_state_strict(
     {
         return Ok(());
     }
-    if run_graph_resume_task_missing(store, &status).await?
+    if active_receipt.is_none()
+        && run_graph_resume_task_missing(store, &status).await?
         && !active_receipt
             .as_ref()
             .is_some_and(dispatch_receipt_has_exception_takeover_evidence)
@@ -1563,7 +1565,7 @@ fn latest_runtime_consumption_snapshot_after_recorded_final_is_bundle_check(
         return Ok(false);
     }
 
-    let mut latest_any: Option<(std::time::SystemTime, String)> = None;
+    let mut latest_bundle_check: Option<std::time::SystemTime> = None;
     let mut latest_final: Option<std::time::SystemTime> = None;
     for entry in std::fs::read_dir(&snapshot_dir)
         .map_err(|error| format!("Failed to read runtime-consumption directory: {error}"))?
@@ -1584,11 +1586,10 @@ fn latest_runtime_consumption_snapshot_after_recorded_final_is_bundle_check(
             .ok()
             .and_then(|metadata| metadata.modified().ok())
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        if latest_any
-            .as_ref()
-            .is_none_or(|(latest_modified, _)| modified > *latest_modified)
+        if file_name.starts_with("bundle-check-")
+            && latest_bundle_check.is_none_or(|latest_modified| modified > latest_modified)
         {
-            latest_any = Some((modified, file_name.clone()));
+            latest_bundle_check = Some(modified);
         }
         if file_name.starts_with("final-")
             && latest_final.is_none_or(|latest_modified| modified > latest_modified)
@@ -1598,9 +1599,9 @@ fn latest_runtime_consumption_snapshot_after_recorded_final_is_bundle_check(
     }
 
     Ok(matches!(
-        (latest_any, latest_final),
-        (Some((latest_modified, latest_name)), Some(final_modified))
-            if latest_modified > final_modified && latest_name.starts_with("bundle-check-")
+        (latest_bundle_check, latest_final),
+        (Some(bundle_check_modified), Some(final_modified))
+            if bundle_check_modified >= final_modified
     ))
 }
 
@@ -1635,6 +1636,9 @@ fn runtime_consumption_snapshot_has_execution_preparation_blocker(
 fn enforce_consume_continue_execution_preparation_gate(
     state_root: &std::path::Path,
 ) -> Result<(), String> {
+    if latest_runtime_consumption_snapshot_after_recorded_final_is_bundle_check(state_root)? {
+        return Ok(());
+    }
     let snapshot = latest_runtime_consumption_snapshot_for_resume_gate(state_root)?;
     let contract = &snapshot["operator_contracts"];
     let contract_ready = contract["contract_id"].as_str() == Some("release-1-operator-contracts")

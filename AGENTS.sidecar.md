@@ -85,6 +85,20 @@ Project-routing rule:
 
 1. Use `AGENTS.md` for lane routing and hard invariants.
 2. Use this sidecar for project-local agent instructions, project operating rules, and project-document orientation.
+3. **MANDATORY TODO BEFORE WRITE-PRODUCING ACTION:** Before every write-producing action (file edit, file create, file delete, config change, code modification, project mutation), first create a `todo` task with:
+   - `subject` — one-line imperative description of the bounded action
+   - `description` — what will be done, why, and the expected outcome
+   - `activeForm` — present-continuous label used while `in_progress`
+   - `status` — set to `in_progress` immediately after creation
+   - `blockedBy` — if the action depends on another todo task, record the dependency
+   - `owner` — the agent or role executing the action
+4. **EXPLICIT STOP-CRITERION BEFORE EACH STEP:** Before every write-producing move, state explicitly:
+   - `STEP N`: what will be done
+   - `STOP`: what condition signals completion or a blocker
+   - `IF_BLOCKED`: the immediate fallback when the stop-criterion is not met
+   - If the stop-criterion cannot be stated, do NOT proceed. Ask the user to clarify the acceptance target before continuing.
+5. **NO WRITE WITHOUT TODO:** After creating the todo, execute only the single bounded action. Do not chain multiple write-producing actions in one turn without updating the todo list. After completing the action, mark the task `completed` and create the next task before the following write-producing move. This prevents the "unbounded action loop" pattern where the model repeats the same action indefinitely without explicit stop conditions.
+6. **READ-ONLY EXCEPTION:** This rule does not apply to read-only actions: file reads, code analysis, diagnostic commands, searches, git log, status checks, or any operation that does not modify project files or state.
 3. Prefer the project canonical maps here over broad manual repo scanning when the task depends on project/product understanding.
 4. Documentation tooling and operator commands are mapped in `docs/process/documentation-tooling-map.md`.
 5. For documentation-shaped, spec-shaped, canonical-map, or runtime-law documentation work, activate the documentation tooling path early rather than treating it as a late optional step.

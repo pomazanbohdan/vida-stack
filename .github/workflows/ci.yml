@@ -16,6 +16,7 @@ env:
 jobs:
   build-rust:
     name: Build Rust (${{ matrix.os }})
+    needs: validate
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -104,6 +105,31 @@ jobs:
           cargo build -p vida-pi-agent --bins --locked
           bash -n scripts/external-cli-carrier-smoke.sh
           VIDA_EXTERNAL_CLI_SMOKE_ONLY_PI=1 PATH="$PWD/target/debug:$PATH" bash scripts/external-cli-carrier-smoke.sh
+
+      - name: Run docflow validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run -p vida -- docflow check-file --path README.md
+          cargo run -p vida -- docflow check-file --path VERSION-PLAN.md
+          cargo run -p vida -- docflow readiness-check --profile active-canon
+
+      - name: Run runtime smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATE_DIR="_temp/ci-runtime-state"
+          rm -rf "$STATE_DIR"
+          cargo run -p vida -- boot --state-dir "$STATE_DIR"
+          cargo run -p vida -- status --state-dir "$STATE_DIR" --json >/tmp/ci-status.json
+          cargo run -p vida -- doctor --state-dir "$STATE_DIR" --json >/tmp/ci-doctor.json
+          cargo run -p vida -- task list --state-dir "$STATE_DIR" --json >/tmp/ci-task-list.json
+          cargo run -p vida -- task ready --state-dir "$STATE_DIR" --json >/tmp/ci-task-ready.json
+          cargo run -p vida -- task blocked --state-dir "$STATE_DIR" --json >/tmp/ci-task-blocked.json
+          cargo run -p vida -- orchestrator-init --state-dir "$STATE_DIR" --json >/tmp/ci-orchestrator-init.json
+          cargo run -p vida -- agent-init --role worker --state-dir "$STATE_DIR" --json >/tmp/ci-agent-init.json
+          cargo run -p vida -- project-activator --json >/tmp/ci-project-activator.json
+          cargo run -p vida -- protocol view bootstrap/router >/tmp/ci-protocol-router.txt
 
       - name: Build release assets and verify runtime-only package
         shell: bash
@@ -207,31 +233,6 @@ jobs:
           test -f "$TMP_PROJECT/AGENTS.md"
           test -f "$TMP_PROJECT/AGENTS.sidecar.md"
           test -f "$TMP_PROJECT/vida.config.yaml"
-
-      - name: Run docflow validation
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo run -p vida -- docflow check-file --path README.md
-          cargo run -p vida -- docflow check-file --path VERSION-PLAN.md
-          cargo run -p vida -- docflow readiness-check --profile active-canon
-
-      - name: Run runtime smoke
-        shell: bash
-        run: |
-          set -euo pipefail
-          STATE_DIR="_temp/ci-runtime-state"
-          rm -rf "$STATE_DIR"
-          cargo run -p vida -- boot --state-dir "$STATE_DIR"
-          cargo run -p vida -- status --state-dir "$STATE_DIR" --json >/tmp/ci-status.json
-          cargo run -p vida -- doctor --state-dir "$STATE_DIR" --json >/tmp/ci-doctor.json
-          cargo run -p vida -- task list --state-dir "$STATE_DIR" --json >/tmp/ci-task-list.json
-          cargo run -p vida -- task ready --state-dir "$STATE_DIR" --json >/tmp/ci-task-ready.json
-          cargo run -p vida -- task blocked --state-dir "$STATE_DIR" --json >/tmp/ci-task-blocked.json
-          cargo run -p vida -- orchestrator-init --state-dir "$STATE_DIR" --json >/tmp/ci-orchestrator-init.json
-          cargo run -p vida -- agent-init --role worker --state-dir "$STATE_DIR" --json >/tmp/ci-agent-init.json
-          cargo run -p vida -- project-activator --json >/tmp/ci-project-activator.json
-          cargo run -p vida -- protocol view bootstrap/router >/tmp/ci-protocol-router.txt
 
   validate-windows-installer:
     needs: build-rust

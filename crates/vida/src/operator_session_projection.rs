@@ -14,7 +14,31 @@ pub(crate) async fn build_operator_session_projection(
         crate::orchestrator_session_surface::stale_orchestrator_session_ids_from_evidence(
             &owner_evidence,
         );
+    let auto_claim_summary =
+        ensure_current_session_claims_for_active_tasks(store, &current_session).await?;
     let active_claims = store.active_orchestrator_claims().await?;
+    let current_session_task_claims = active_claims
+        .iter()
+        .filter(|claim| claim.orchestrator_session_id == current_session_id)
+        .filter(|claim| {
+            claim
+                .task_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+        .map(|claim| {
+            serde_json::json!({
+                "claim_id": claim.claim_id,
+                "task_id": claim.task_id,
+                "run_id": claim.run_id,
+                "lane_id": claim.lane_id,
+                "conflict_domain": claim.conflict_domain,
+                "lease_mode": claim.lease_mode,
+                "status": claim.status,
+                "lease_expires_at": claim.lease_expires_at,
+            })
+        })
+        .collect::<Vec<_>>();
     let project_foreign_claims = active_claims
         .iter()
         .filter(|claim| claim.orchestrator_session_id != current_session_id)
@@ -95,6 +119,9 @@ pub(crate) async fn build_operator_session_projection(
         "current_session": current_session,
         "project_foreign_runs": project_foreign_runs,
         "project_foreign_blockers": project_foreign_blockers,
+        "current_session_task_claims": current_session_task_claims,
+        "auto_claimed_active_tasks": auto_claim_summary["auto_claimed_active_tasks"].clone(),
+        "active_task_claim_blockers": auto_claim_summary["active_task_claim_blockers"].clone(),
         "global_blockers": global_blockers,
         "claim_conflicts": claim_conflicts,
         "runtime_owner_evidence": {
@@ -104,6 +131,113 @@ pub(crate) async fn build_operator_session_projection(
             "legacy_ownerless_rows": owner_evidence["legacy_ownerless_rows"].clone(),
         }
     }))
+}
+
+async fn ensure_current_session_claims_for_active_tasks(
+    store: &crate::state_store::StateStore,
+    current_session: &serde_json::Value,
+) -> Result<serde_json::Value, crate::state_store::StateStoreError> {
+    let current_session_id = current_session["session_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown-session");
+    let worktree_environment_id = current_session["worktree_environment_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown-worktree");
+    let state_root_id = store.root().display().to_string();
+    let existing_claims = store.active_orchestrator_claims().await?;
+    let tasks = store.list_tasks(None, true).await?;
+    let active_tasks = tasks
+        .iter()
+        .filter(|task| task.status == "in_progress" && task.issue_type != "epic")
+        .collect::<Vec<_>>();
+    let mut auto_claimed = Vec::new();
+    let mut blockers = Vec::new();
+
+    for task in active_tasks {
+        if let Some(existing) = existing_claims
+            .iter()
+            .find(|claim| claim.task_id.as_deref() == Some(task.id.as_str()))
+        {
+            if existing.orchestrator_session_id != current_session_id {
+                blockers.push(serde_json::json!({
+                    "task_id": task.id,
+                    "claim_id": existing.claim_id,
+                    "orchestrator_session_id": existing.orchestrator_session_id,
+                    "blocker_code": "active_task_claimed_by_foreign_session",
+                    "next_action": format!(
+                        "Run `vida orchestrator-session transfer {} --to-current --json` to continue task `{}` from the current session when the handoff is intentional.",
+                        existing.orchestrator_session_id,
+                        task.id
+                    ),
+                }));
+            }
+            continue;
+        }
+
+        let claim_id = format!(
+            "active-task-{}-{}",
+            sanitize_projection_claim_id(current_session_id),
+            sanitize_projection_claim_id(&task.id)
+        );
+        let conflict_domain = task
+            .execution_semantics
+            .conflict_domain
+            .clone()
+            .unwrap_or_else(|| format!("task:{}", task.id));
+        match store
+            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
+                claim_id: claim_id.clone(),
+                state_root_id: state_root_id.clone(),
+                worktree_environment_id: worktree_environment_id.to_string(),
+                orchestrator_session_id: current_session_id.to_string(),
+                task_id: Some(task.id.clone()),
+                run_id: None,
+                lane_id: None,
+                claim_kind: "active_task_session_claim".to_string(),
+                conflict_domain: Some(conflict_domain),
+                owned_paths: task.planner_metadata.owned_paths.clone(),
+                read_only_paths: Vec::new(),
+                lease_mode: crate::state_store::LeaseMode::Exclusive,
+                lease_seconds: 3600,
+            })
+            .await
+        {
+            Ok(claim) => auto_claimed.push(serde_json::json!({
+                "task_id": task.id,
+                "claim_id": claim.claim_id,
+                "orchestrator_session_id": claim.orchestrator_session_id,
+                "status": claim.status,
+            })),
+            Err(error) => blockers.push(serde_json::json!({
+                "task_id": task.id,
+                "blocker_code": "active_task_claim_acquire_failed",
+                "error": error.to_string(),
+            })),
+        }
+    }
+
+    Ok(serde_json::json!({
+        "auto_claimed_active_tasks": auto_claimed,
+        "active_task_claim_blockers": blockers,
+    }))
+}
+
+fn sanitize_projection_claim_id(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    sanitized.trim_matches('-').chars().take(96).collect()
 }
 
 #[cfg(test)]
@@ -129,6 +263,31 @@ mod tests {
         other["process_id"] = serde_json::Value::Number(process_id.into());
         other["owner_annotation"] = serde_json::Value::String("foreign_session".to_string());
         other
+    }
+
+    fn task_record(task_id: &str, status: &str) -> crate::state_store::TaskRecord {
+        crate::state_store::TaskRecord {
+            id: task_id.to_string(),
+            display_id: None,
+            title: task_id.to_string(),
+            description: task_id.to_string(),
+            status: status.to_string(),
+            priority: 1,
+            issue_type: "task".to_string(),
+            created_at: "2026-05-22T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "2026-05-22T00:00:00Z".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+            planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+            dependencies: Vec::new(),
+        }
     }
 
     #[tokio::test]
@@ -200,6 +359,88 @@ mod tests {
             projection["runtime_owner_evidence"]["mutation_gate"],
             "current_session_allowed"
         );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn projection_auto_claims_ownerless_active_tasks_for_current_session() {
+        let root = temp_state_dir("auto-claim-active-task");
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        store
+            .persist_task_record(task_record("active-ownerless", "in_progress"))
+            .await
+            .expect("persist active task");
+
+        let projection = build_operator_session_projection(&store)
+            .await
+            .expect("projection");
+
+        assert!(projection["auto_claimed_active_tasks"]
+            .as_array()
+            .expect("auto claimed")
+            .iter()
+            .any(|claim| claim["task_id"] == "active-ownerless"));
+        assert!(projection["current_session_task_claims"]
+            .as_array()
+            .expect("current claims")
+            .iter()
+            .any(|claim| claim["task_id"] == "active-ownerless"));
+        assert!(projection["active_task_claim_blockers"]
+            .as_array()
+            .expect("claim blockers")
+            .is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn projection_reports_foreign_active_task_claim_for_transfer() {
+        let root = temp_state_dir("foreign-active-task-transfer");
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        store
+            .persist_task_record(task_record("active-foreign", "in_progress"))
+            .await
+            .expect("persist active task");
+        store
+            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
+                claim_id: "foreign-active-task-claim".to_string(),
+                state_root_id: root.display().to_string(),
+                worktree_environment_id: "worktree".to_string(),
+                orchestrator_session_id: "foreign-session".to_string(),
+                task_id: Some("active-foreign".to_string()),
+                run_id: None,
+                lane_id: None,
+                claim_kind: "active_task_session_claim".to_string(),
+                conflict_domain: Some("task:active-foreign".to_string()),
+                owned_paths: Vec::new(),
+                read_only_paths: Vec::new(),
+                lease_mode: crate::state_store::LeaseMode::Exclusive,
+                lease_seconds: 3600,
+            })
+            .await
+            .expect("foreign claim");
+
+        let projection = build_operator_session_projection(&store)
+            .await
+            .expect("projection");
+
+        assert!(projection["auto_claimed_active_tasks"]
+            .as_array()
+            .expect("auto claimed")
+            .is_empty());
+        assert!(projection["active_task_claim_blockers"]
+            .as_array()
+            .expect("claim blockers")
+            .iter()
+            .any(|blocker| {
+                blocker["task_id"] == "active-foreign"
+                    && blocker["blocker_code"] == "active_task_claimed_by_foreign_session"
+            }));
 
         let _ = std::fs::remove_dir_all(root);
     }

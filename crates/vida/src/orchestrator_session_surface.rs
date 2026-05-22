@@ -659,7 +659,7 @@ fn run_reclaim(args: OrchestratorSessionReclaimArgs) -> ExitCode {
     }
 }
 
-fn run_transfer(args: OrchestratorSessionTransferArgs) -> ExitCode {
+async fn run_transfer(args: OrchestratorSessionTransferArgs) -> ExitCode {
     if !args.to_current {
         eprintln!("transfer requires --to-current");
         return ExitCode::from(1);
@@ -667,14 +667,54 @@ fn run_transfer(args: OrchestratorSessionTransferArgs) -> ExitCode {
     let state_dir = args
         .state_dir
         .unwrap_or_else(crate::state_store::default_state_dir);
-    match mutate_session(state_dir, &args.session_id, "transferred_to_current") {
+    let current_session_id = current_session_id(&state_dir);
+    match mutate_session(
+        state_dir.clone(),
+        &args.session_id,
+        "transferred_to_current",
+    ) {
         Ok(evidence) => {
+            let transferred_claims =
+                match crate::state_store::StateStore::open_existing(state_dir.clone()).await {
+                    Ok(store) => match store
+                        .transfer_active_orchestrator_claims_to_session(
+                            &args.session_id,
+                            &current_session_id,
+                        )
+                        .await
+                    {
+                        Ok(claims) => serde_json::Value::Array(
+                            claims
+                                .into_iter()
+                                .map(|claim| {
+                                    serde_json::json!({
+                                        "claim_id": claim.claim_id,
+                                        "task_id": claim.task_id,
+                                        "run_id": claim.run_id,
+                                        "orchestrator_session_id": claim.orchestrator_session_id,
+                                        "status": claim.status,
+                                    })
+                                })
+                                .collect(),
+                        ),
+                        Err(error) => serde_json::json!({
+                            "error": error.to_string(),
+                            "status": "claim_transfer_failed"
+                        }),
+                    },
+                    Err(error) => serde_json::json!({
+                        "error": error.to_string(),
+                        "status": "claim_transfer_unavailable"
+                    }),
+                };
             let payload = serde_json::json!({
                 "surface": "vida orchestrator-session transfer",
                 "status": "pass",
                 "blocker_codes": [],
                 "next_actions": [],
                 "transferred_session_id": args.session_id,
+                "transferred_to_session_id": current_session_id,
+                "transferred_claims": transferred_claims,
                 "runtime_owner_evidence": evidence,
             });
             print_or_plain(&payload, args.json);
@@ -691,7 +731,7 @@ pub(crate) async fn run_orchestrator_session(args: OrchestratorSessionArgs) -> E
     match args.command {
         OrchestratorSessionCommand::Show(args) => run_show(args),
         OrchestratorSessionCommand::Reclaim(args) => run_reclaim(args),
-        OrchestratorSessionCommand::Transfer(args) => run_transfer(args),
+        OrchestratorSessionCommand::Transfer(args) => run_transfer(args).await,
     }
 }
 
