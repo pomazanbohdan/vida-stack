@@ -502,11 +502,13 @@ fn sanitized_placeholder_continuation_bind_command(
     run_id: Option<&str>,
     command: Option<String>,
 ) -> Option<String> {
-    let has_placeholder_bind = command.as_deref().is_some_and(|command| {
+    let has_unsafe_task_bind = command.as_deref().is_some_and(|command| {
         command.starts_with("vida taskflow continuation bind")
-            && (command.contains("<task-id>") || command.contains("<run-id>"))
+            && (command.contains("--task-id")
+                || command.contains("<task-id>")
+                || command.contains("<run-id>"))
     });
-    if !has_placeholder_bind {
+    if !has_unsafe_task_bind {
         return command;
     }
     run_id
@@ -2410,6 +2412,20 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
             print_taskflow_proxy_help(Some("run-graph"));
             ExitCode::SUCCESS
         }
+        [head, subcommand, flag]
+            if head == "run-graph"
+                && subcommand == "status"
+                && matches!(flag.as_str(), "--help" | "-h") =>
+        {
+            eprintln!("Usage: vida taskflow run-graph status <run-id> [--json]");
+            ExitCode::SUCCESS
+        }
+        [head, subcommand, flag]
+            if head == "run-graph" && subcommand == "status" && flag == "--json" =>
+        {
+            print_run_graph_status_missing_run_id_json();
+            ExitCode::from(2)
+        }
         [head, subcommand, run_id, flag]
             if head == "run-graph" && subcommand == "dispatch-init" && flag == "--json" =>
         {
@@ -2991,6 +3007,28 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         }
         _ => ExitCode::from(2),
     }
+}
+
+fn print_run_graph_status_missing_run_id_json() {
+    let payload = run_graph_status_missing_run_id_json_payload();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&payload)
+            .expect("missing run id payload should render as json")
+    );
+}
+
+fn run_graph_status_missing_run_id_json_payload() -> serde_json::Value {
+    serde_json::json!({
+        "surface": "vida taskflow run-graph status",
+        "status": "blocked",
+        "blocker_codes": ["missing_run_id"],
+        "error": "Missing required <run-id> for `vida taskflow run-graph status`.",
+        "next_actions": [
+            "Run `vida taskflow run-graph status <run-id> --json` with the concrete run id.",
+            "Use `vida taskflow run-graph latest --json` to inspect the latest run when the run id is unknown."
+        ],
+    })
 }
 
 fn print_run_graph_json_error(
@@ -11596,5 +11634,47 @@ mod tests {
         assert!(next_action
             .reason
             .contains("inspect the authoritative run state"));
+    }
+
+    #[test]
+    fn sanitize_concrete_task_bind_next_action_fails_closed_to_run_graph_status() {
+        let next_action = RecoveryNextAction {
+            command: "vida taskflow continuation bind run-open --task-id task-open --json"
+                .to_string(),
+            surface: "vida taskflow continuation bind".to_string(),
+            reason: "illegal lifecycle bind".to_string(),
+        };
+
+        let next_action =
+            sanitize_placeholder_continuation_bind_next_action(Some("run-open"), Some(next_action))
+                .expect("next action should remain present");
+
+        assert_eq!(
+            next_action.command,
+            "vida taskflow run-graph status run-open --json"
+        );
+        assert_eq!(next_action.surface, "vida taskflow run-graph status");
+        assert!(next_action
+            .reason
+            .contains("inspect the authoritative run state"));
+    }
+
+    #[test]
+    fn run_graph_status_missing_run_id_json_is_actionable() {
+        let payload = run_graph_status_missing_run_id_json_payload();
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["blocker_codes"][0], "missing_run_id");
+        assert!(payload["error"]
+            .as_str()
+            .expect("error should be a string")
+            .contains("<run-id>"));
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array")
+            .iter()
+            .any(|value| value
+                .as_str()
+                .is_some_and(|action| action.contains("run-graph latest --json"))));
     }
 }

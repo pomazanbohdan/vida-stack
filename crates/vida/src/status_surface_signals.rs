@@ -55,7 +55,7 @@ pub(crate) fn runtime_binding_task_missing_next_action(
         .zip((!task_id.is_empty()).then_some(task_id))
     {
         Some((run_id, task_id)) => format!(
-            "Runtime binding points to missing task `{task_id}` for run `{run_id}`. Inspect the concrete recovery state with `vida taskflow recovery status {run_id} --json`; if user intent still names a live bounded task, rebind it explicitly with `vida taskflow continuation bind {run_id} --task-id <task-id> --json`, otherwise reconcile or retire the stale run before continuing."
+            "Runtime binding points to missing task `{task_id}` for run `{run_id}`. Inspect the concrete recovery state with `vida taskflow recovery status {run_id} --json`; only bind a new explicit task after the run reaches closure_complete, otherwise reconcile the recovery blocker or retire the stale run before continuing."
         ),
         None => continuation_binding_ambiguous_next_action().to_string(),
     }
@@ -69,10 +69,10 @@ pub(crate) fn recovery_resume_target_missing_next_action(
     let task_id = task_id.map(str::trim).filter(|value| !value.is_empty());
     match (run_id, task_id) {
         (Some(run_id), Some(task_id)) => format!(
-            "Recovery for run `{run_id}` has no dispatch resume_target for task `{task_id}`. Inspect `vida taskflow recovery status {run_id} --json`; if that bounded task is still the live continuation target, rebind it explicitly with `vida taskflow continuation bind {run_id} --task-id <task-id> --json`, otherwise reconcile or retire the stale run before continuing."
+            "Recovery for run `{run_id}` has no dispatch resume_target for task `{task_id}`. Inspect `vida taskflow recovery status {run_id} --json`; if the run is still inside an open delegated cycle, resolve that blocker through lane recovery before any explicit task bind. Only bind a new explicit task after closure_complete."
         ),
         (Some(run_id), None) => format!(
-            "Recovery for run `{run_id}` has no dispatch resume_target. Inspect `vida taskflow recovery status {run_id} --json`; if user intent still names the live bounded unit, bind it explicitly with `vida taskflow continuation bind {run_id} --task-id <task-id> --json`, otherwise reconcile or retire the stale run before continuing."
+            "Recovery for run `{run_id}` has no dispatch resume_target. Inspect `vida taskflow recovery status {run_id} --json`; if the run is still inside an open delegated cycle, resolve that blocker through lane recovery before any explicit task bind. Only bind a new explicit task after closure_complete."
         ),
         _ => continuation_binding_ambiguous_next_action().to_string(),
     }
