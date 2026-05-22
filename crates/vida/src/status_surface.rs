@@ -91,34 +91,6 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
-    if as_json {
-        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
-            &state_dir,
-            status_json_projection_name(summary_only),
-        ) {
-            if cached_status_projection_admissible(&state_dir, summary_only, &cached) {
-                println!(
-                    "{}",
-                    render_cached_status_projection_for_operator(summary_only, &cached)
-                );
-                return ExitCode::SUCCESS;
-            }
-        }
-        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
-            &state_dir,
-            status_json_projection_name(summary_only),
-            STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
-        ) {
-            if cached_status_projection_admissible(&state_dir, summary_only, &cached) {
-                println!(
-                    "{}",
-                    render_cached_status_projection_for_operator(summary_only, &cached)
-                );
-                return ExitCode::SUCCESS;
-            }
-        }
-    }
-
     match StateStore::open_existing_read_only_with_timeout(
         state_dir.clone(),
         STATUS_SURFACE_LOCK_TIMEOUT,
