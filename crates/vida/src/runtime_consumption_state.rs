@@ -582,7 +582,14 @@ pub(crate) fn latest_terminal_consume_continue_snapshot_run_id(
             .get("blocker_codes")
             .and_then(serde_json::Value::as_array)
             .is_none_or(|blockers| blockers.is_empty());
-        if !(top_level_next_actions_empty && operator_next_actions_empty && blockers_empty) {
+        let deferred_handoff_projection = snapshot
+            .get("projection_truth")
+            .and_then(|truth| truth.get("projection_source"))
+            .and_then(serde_json::Value::as_str)
+            == Some("deferred_agent_handoff_receipt");
+        if !((top_level_next_actions_empty && operator_next_actions_empty && blockers_empty)
+            || (deferred_handoff_projection && blockers_empty))
+        {
             return None;
         }
         runtime_consumption_snapshot_source_run_id(snapshot).map(str::to_string)
@@ -1208,6 +1215,37 @@ mod tests {
             .expect("terminal continue lookup should succeed")
             .expect("terminal continue run id should resolve");
         assert_eq!(run_id, "run-terminal");
+
+        thread::sleep(Duration::from_millis(5));
+
+        let deferred_handoff_path = runtime_dir.join("final-deferred-handoff-continue.json");
+        fs::write(
+            &deferred_handoff_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume continue",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": ["inspect lane"],
+                "operator_contracts": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": ["inspect lane"],
+                    "artifact_refs": {
+                        "latest_run_graph_dispatch_receipt_id": "run-deferred-handoff"
+                    }
+                },
+                "projection_truth": {
+                    "projection_source": "deferred_agent_handoff_receipt"
+                }
+            })
+            .to_string(),
+        )
+        .expect("deferred handoff continue snapshot should be writable");
+
+        let run_id = latest_terminal_consume_continue_snapshot_run_id(&root)
+            .expect("terminal continue lookup should succeed")
+            .expect("deferred handoff continue run id should resolve");
+        assert_eq!(run_id, "run-deferred-handoff");
 
         let _ = fs::remove_dir_all(root);
     }

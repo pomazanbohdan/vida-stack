@@ -312,6 +312,54 @@ pub(crate) fn build_continuation_binding_summary_with_idle_policy(
     )
 }
 
+pub(crate) fn dispatch_summary_has_clean_ready_downstream_handoff(
+    receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    run_id: &str,
+) -> bool {
+    receipt.is_some_and(|receipt| {
+        receipt.run_id == run_id
+            && receipt.dispatch_status == "executed"
+            && receipt.blocker_code.is_none()
+            && receipt.downstream_dispatch_ready
+            && receipt.downstream_dispatch_blockers.is_empty()
+            && receipt
+                .downstream_dispatch_status
+                .as_deref()
+                .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"))
+    })
+}
+
+fn continuation_next_actions_for_run(
+    run_id: &str,
+    latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    terminal_consume_continue_run_id: Option<&str>,
+) -> Vec<String> {
+    let mut next_actions = vec![
+        "Do not stop on commentary, status output, or intermediate reporting while the delegated cycle is still open."
+            .to_string(),
+    ];
+    if dispatch_summary_has_clean_ready_downstream_handoff(
+        latest_run_graph_dispatch_receipt,
+        run_id,
+    ) && terminal_consume_continue_run_id == Some(run_id)
+    {
+        next_actions.push(format!(
+            "Inspect the active delegated lane with `vida lane show {run_id} --json`."
+        ));
+        next_actions.push(format!(
+            "Inspect the live delegated-cycle recovery state with `vida taskflow recovery status {run_id} --json` if routing context is needed before the next step."
+        ));
+        return next_actions;
+    }
+    next_actions.push(format!(
+        "Continue the active bounded unit with `vida taskflow consume continue --run-id {run_id} --json`."
+    ));
+    next_actions.push(format!(
+        "Inspect the live delegated-cycle recovery state with `vida taskflow recovery status {run_id} --json` if routing context is needed before the next step."
+    ));
+    next_actions
+}
+
 pub(crate) fn build_continuation_binding_summary_with_task_authority(
     explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
@@ -335,16 +383,11 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
     let continuation_next_actions = active_run_id
         .filter(|run_id| !run_id.trim().is_empty())
         .map(|run_id| {
-            vec![
-                "Do not stop on commentary, status output, or intermediate reporting while the delegated cycle is still open."
-                    .to_string(),
-                format!(
-                    "Continue the active bounded unit with `vida taskflow consume continue --run-id {run_id} --json`."
-                ),
-                format!(
-                    "Inspect the live delegated-cycle recovery state with `vida taskflow recovery status {run_id} --json` if routing context is needed before the next step."
-                ),
-            ]
+            continuation_next_actions_for_run(
+                run_id,
+                latest_run_graph_dispatch_receipt,
+                terminal_consume_continue_run_id,
+            )
         })
         .unwrap_or_default();
     if let Some(status) = latest_run_graph_status {

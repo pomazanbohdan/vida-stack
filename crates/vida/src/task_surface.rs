@@ -3387,7 +3387,21 @@ fn pass_exception_takeover_task_next_lawful_receipt(
 fn pass_ready_downstream_handoff_task_next_lawful_receipt(
     binding: &state_store::RunGraphContinuationBinding,
     ready_task_candidates: Vec<TaskContinuationCandidate>,
+    terminal_consume_continue_run_id: Option<&str>,
 ) -> TaskNextLawfulReceipt {
+    let next_action = if terminal_consume_continue_run_id == Some(binding.run_id.as_str()) {
+        format!(
+            "Inspect `{}` with `vida lane show {} --json`.",
+            binding.task_id,
+            crate::shell_quote(&binding.run_id)
+        )
+    } else {
+        format!(
+            "Continue `{}` with `vida taskflow consume continue --run-id {} --json`.",
+            binding.task_id,
+            crate::shell_quote(&binding.run_id)
+        )
+    };
     pass_task_next_lawful_receipt(
         binding.active_bounded_unit.clone(),
         Some("latest_run_graph_ready_downstream_handoff".to_string()),
@@ -3397,11 +3411,7 @@ fn pass_ready_downstream_handoff_task_next_lawful_receipt(
         ),
         &binding.sequential_vs_parallel_posture,
         ready_task_candidates,
-        format!(
-            "Continue `{}` with `vida taskflow consume continue --run-id {} --json`.",
-            binding.task_id,
-            crate::shell_quote(&binding.run_id)
-        ),
+        next_action,
     )
 }
 
@@ -4176,6 +4186,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
+                    let terminal_consume_continue_run_id =
+                        crate::latest_terminal_consume_continue_snapshot_run_id(&state_dir)
+                            .ok()
+                            .flatten();
                     let receipt = match scoped_runtime_binding {
                         Some(binding)
                             if latest_dispatch_receipt.as_ref().is_some_and(|dispatch| {
@@ -4188,6 +4202,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             pass_ready_downstream_handoff_task_next_lawful_receipt(
                                 binding,
                                 ready_task_candidates,
+                                terminal_consume_continue_run_id.as_deref(),
                             )
                         }
                         Some(binding)
@@ -6276,13 +6291,37 @@ mod tests {
             Some(&recovery),
             Some(&dispatch)
         ));
-        let receipt = pass_ready_downstream_handoff_task_next_lawful_receipt(&binding, Vec::new());
+        let receipt =
+            pass_ready_downstream_handoff_task_next_lawful_receipt(&binding, Vec::new(), None);
 
         assert_eq!(receipt.status, "pass");
         assert!(receipt.blocker_codes.is_empty());
         assert!(receipt.next_action.as_deref().is_some_and(|action| {
             action.contains("vida taskflow consume continue --run-id running-run --json")
         }));
+    }
+
+    #[test]
+    fn task_next_lawful_uses_lane_show_after_terminal_ready_downstream_handoff() {
+        let binding = test_continuation_binding(
+            "running-run",
+            "running-runtime-task",
+            "dispatch_execution",
+            "run_graph_task",
+        );
+
+        let receipt = pass_ready_downstream_handoff_task_next_lawful_receipt(
+            &binding,
+            Vec::new(),
+            Some("running-run"),
+        );
+
+        assert_eq!(receipt.status, "pass");
+        assert!(receipt.blocker_codes.is_empty());
+        assert!(receipt
+            .next_action
+            .as_deref()
+            .is_some_and(|action| action.contains("vida lane show running-run --json")));
     }
 
     #[test]

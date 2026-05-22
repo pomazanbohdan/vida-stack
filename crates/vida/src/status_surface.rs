@@ -363,8 +363,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         latest_run_graph_recovery.as_ref(),
                         latest_run_graph_dispatch_receipt.as_ref(),
                         if latest_run_graph_dispatch_receipt.as_ref().is_some_and(|receipt| {
-                            receipt.supersedes_receipt_id.is_some()
-                                && receipt.exception_path_receipt_id.is_some()
+                            (receipt.supersedes_receipt_id.is_some()
+                                && receipt.exception_path_receipt_id.is_some())
+                                || crate::continuation_binding_summary::dispatch_summary_has_clean_ready_downstream_handoff(
+                                    Some(receipt),
+                                    receipt.run_id.as_str(),
+                                )
                         }) {
                             crate::latest_terminal_consume_continue_snapshot_run_id(store.root())
                                 .ok()
@@ -848,7 +852,11 @@ async fn refresh_cached_status_projection_runtime_fields(
     let terminal_consume_continue_run_id = if latest_run_graph_dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
-            receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some()
+            (receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some())
+                || crate::continuation_binding_summary::dispatch_summary_has_clean_ready_downstream_handoff(
+                    Some(receipt),
+                    receipt.run_id.as_str(),
+                )
         }) {
         crate::latest_terminal_consume_continue_snapshot_run_id(store.root())
             .ok()

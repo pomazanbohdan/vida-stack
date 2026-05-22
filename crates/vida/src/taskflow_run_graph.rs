@@ -46,12 +46,14 @@ fn read_recovery_status_projection(
     run_id: &str,
 ) -> Option<String> {
     crate::operator_projection_cache::read_fresh_json_projection(state_dir, projection_name)
+        .filter(|cached| recovery_projection_has_complete_action_fields(cached))
         .or_else(|| {
             crate::operator_projection_cache::read_recent_json_projection(
                 state_dir,
                 projection_name,
                 TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE,
             )
+            .filter(|cached| recovery_projection_has_complete_action_fields(cached))
         })
         .or_else(|| {
             let cached = crate::operator_projection_cache::read_state_stale_recent_json_projection(
@@ -59,12 +61,39 @@ fn read_recovery_status_projection(
                 projection_name,
                 TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE,
             )?;
-            if stale_recovery_projection_matches_lane_truth(state_dir, run_id, &cached) {
+            if recovery_projection_has_complete_action_fields(&cached)
+                && stale_recovery_projection_matches_lane_truth(state_dir, run_id, &cached)
+            {
                 Some(cached)
             } else {
                 None
             }
         })
+}
+
+fn recovery_projection_has_complete_action_fields(cached: &str) -> bool {
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(cached) else {
+        return false;
+    };
+    let expected_command = payload
+        .get("projection_truth")
+        .and_then(|truth| truth.get("next_lawful_operator_action"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(expected_command) = expected_command else {
+        return true;
+    };
+    let next_action_command = payload
+        .get("next_action")
+        .and_then(|next_action| next_action.get("command"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let recommended_command = payload
+        .get("recommended_command")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    next_action_command == Some(expected_command) && recommended_command == Some(expected_command)
 }
 
 fn stale_recovery_projection_matches_lane_truth(
@@ -125,7 +154,7 @@ fn run_graph_operator_artifact_refs(surface: &str, run_id: &str) -> serde_json::
     })
 }
 
-fn blocked_next_actions_for_operator_surface(
+fn operator_next_actions_for_operator_surface(
     blocker_codes: &[String],
     next_action: Option<&RecoveryNextAction>,
     why_not_now: Option<&RecoveryWhyNotNow>,
@@ -140,17 +169,17 @@ fn blocked_next_actions_for_operator_surface(
     {
         return vec![reason.to_string()];
     }
-    if let Some(summary) = why_not_now
-        .map(|value| value.summary.trim())
-        .filter(|value| !value.is_empty())
-    {
-        return vec![summary.to_string()];
-    }
     if let Some(command) = recommended_command
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
         return vec![format!("run `{command}`")];
+    }
+    if let Some(summary) = why_not_now
+        .map(|value| value.summary.trim())
+        .filter(|value| !value.is_empty())
+    {
+        return vec![summary.to_string()];
     }
     vec!["inspect authoritative run-graph state".to_string()]
 }
@@ -239,7 +268,7 @@ fn build_recovery_json_payload(
         value.blocking_surface = Some(surface.to_string());
         value
     });
-    let next_actions = blocked_next_actions_for_operator_surface(
+    let next_actions = operator_next_actions_for_operator_surface(
         &blocker_codes,
         next_action.as_ref(),
         why_not_now.as_ref(),
@@ -265,7 +294,7 @@ fn build_run_graph_diagnosis_json_payload_for_surface(
     surface: &str,
     diagnosis: &RunGraphDiagnosis,
 ) -> Result<serde_json::Value, String> {
-    let next_actions = blocked_next_actions_for_operator_surface(
+    let next_actions = operator_next_actions_for_operator_surface(
         &diagnosis.blocker_codes,
         diagnosis.next_action.as_ref(),
         diagnosis.why_not_now.as_ref(),
@@ -323,7 +352,7 @@ fn build_run_graph_status_json_payload(
     projection_truth: &RunGraphProjectionTruth,
 ) -> Result<serde_json::Value, String> {
     let blocker_codes = run_graph_status_surface_blocker_codes(status, projection_truth);
-    let next_actions = blocked_next_actions_for_operator_surface(
+    let next_actions = operator_next_actions_for_operator_surface(
         &blocker_codes,
         None,
         None,
@@ -579,6 +608,11 @@ fn next_lawful_operator_action_for_dispatch_resolution(
     receipt: &RunGraphDispatchReceipt,
     terminal_consume_continue_run_id: Option<&str>,
 ) -> Option<String> {
+    if dispatch_receipt_has_clean_ready_downstream_handoff(receipt)
+        && terminal_consume_continue_run_id == Some(status.run_id.as_str())
+    {
+        return Some(format!("vida lane show {} --json", status.run_id));
+    }
     let _reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
     if let Some(receipt_id) = receipt
         .exception_path_receipt_id
@@ -608,6 +642,17 @@ fn next_lawful_operator_action_for_dispatch_resolution(
         });
     }
     Some(format!("vida lane show {} --json", status.run_id))
+}
+
+fn dispatch_receipt_has_clean_ready_downstream_handoff(receipt: &RunGraphDispatchReceipt) -> bool {
+    receipt.dispatch_status == "executed"
+        && receipt.blocker_code.is_none()
+        && receipt.downstream_dispatch_ready
+        && receipt.downstream_dispatch_blockers.is_empty()
+        && receipt
+            .downstream_dispatch_status
+            .as_deref()
+            .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"))
 }
 
 pub(crate) fn dispatch_receipt_can_use_terminal_continue_evidence(
@@ -808,18 +853,14 @@ fn recovery_surface_contract(
     blocker_codes.extend(projection_truth_blocker_codes(projection_truth));
     let blocker_codes = normalize_run_graph_blocker_codes(&blocker_codes, false);
 
-    let next_action = if projection_resolves_open_cycle {
-        None
-    } else {
-        projection_truth
-            .next_lawful_operator_action
-            .as_deref()
-            .map(|command| RecoveryNextAction {
-                command: command.to_string(),
-                surface: recommended_surface_for_command(command),
-                reason: recovery_next_action_reason(command, summary, projection_truth),
-            })
-    };
+    let next_action = projection_truth
+        .next_lawful_operator_action
+        .as_deref()
+        .map(|command| RecoveryNextAction {
+            command: command.to_string(),
+            surface: recommended_surface_for_command(command),
+            reason: recovery_next_action_reason(command, summary, projection_truth),
+        });
     let why_not_now = (!blocker_codes.is_empty()).then(|| {
         let delegated_cycle_open = summary.delegation_gate.delegated_cycle_open;
         let stale_state_suspected = projection_truth.stale_state_suspected;
@@ -1607,6 +1648,7 @@ pub(crate) async fn run_graph_projection_truth(
     };
     let terminal_consume_continue_run_id = if dispatch_receipt.as_ref().is_some_and(|receipt| {
         blocked_external_dispatch_artifact_mismatched_as_internal_activation(receipt)
+            || dispatch_receipt_has_clean_ready_downstream_handoff(receipt)
             || (dispatch_receipt_resolution_reason_class(receipt).is_some()
                 && dispatch_receipt_can_use_terminal_continue_evidence(receipt)
                 && status.recovery_ready
@@ -6148,6 +6190,39 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 mod tests {
     use super::*;
 
+    fn clean_ready_downstream_dispatch_receipt(run_id: &str) -> RunGraphDispatchReceipt {
+        RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec".to_string()),
+            dispatch_packet_path: Some("packet.json".to_string()),
+            dispatch_result_path: Some("result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("writer".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: Some("downstream-packet.json".to_string()),
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("downstream-result.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("developer".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-22T01:00:00Z".to_string(),
+        }
+    }
+
     #[test]
     fn dispatch_init_timeout_error_surfaces_blocker_evidence() {
         let message = run_graph_dispatch_init_timeout_message("run-timeout");
@@ -6203,6 +6278,35 @@ mod tests {
         .is_none());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recovery_projection_rejects_missing_action_fields_when_projection_has_next_command() {
+        let incomplete = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "next_action": null,
+            "recommended_command": null,
+            "projection_truth": {
+                "next_lawful_operator_action": "vida lane show run-action-cache --json"
+            }
+        })
+        .to_string();
+        let complete = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "next_action": {
+                "command": "vida lane show run-action-cache --json"
+            },
+            "recommended_command": "vida lane show run-action-cache --json",
+            "projection_truth": {
+                "next_lawful_operator_action": "vida lane show run-action-cache --json"
+            }
+        })
+        .to_string();
+
+        assert!(!recovery_projection_has_complete_action_fields(&incomplete));
+        assert!(recovery_projection_has_complete_action_fields(&complete));
     }
 
     #[test]
@@ -10841,6 +10945,99 @@ mod tests {
             next_lawful_operator_action_for_status(&status).as_deref(),
             Some("vida taskflow consume continue --run-id run-projection-continue --json")
         );
+    }
+
+    #[test]
+    fn next_lawful_operator_action_uses_lane_show_after_terminal_ready_downstream_handoff() {
+        let status = RunGraphStatus {
+            run_id: "run-terminal-ready-handoff".to_string(),
+            task_id: "task-terminal-ready-handoff".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: Some("writer".to_string()),
+            status: "blocked".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "analysis_lane".to_string(),
+            lifecycle_stage: "analysis_active".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "awaiting_writer".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.writer_lane".to_string(),
+            recovery_ready: true,
+        };
+        let receipt = clean_ready_downstream_dispatch_receipt("run-terminal-ready-handoff");
+
+        assert_eq!(
+            next_lawful_operator_action_for_projection(
+                &status,
+                Some(&receipt),
+                Some("run-terminal-ready-handoff"),
+                false,
+            )
+            .as_deref(),
+            Some("vida lane show run-terminal-ready-handoff --json")
+        );
+    }
+
+    #[test]
+    fn recovery_surface_contract_pass_retains_projection_next_action() {
+        let summary = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-recovery-pass-action".to_string(),
+            task_id: "run-recovery-pass-action".to_string(),
+            active_node: "analysis".to_string(),
+            lifecycle_stage: "analysis_active".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.writer_lane".to_string(),
+            resume_node: Some("writer".to_string()),
+            resume_status: "ready".to_string(),
+            recovery_ready: true,
+            handoff_state: "awaiting_writer".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "analysis".to_string(),
+                lifecycle_stage: "analysis_active".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "handoff_pending".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+            },
+        };
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason:
+                "run-graph status was reconciled against persisted dispatch receipt evidence"
+                    .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: true,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(
+                "vida lane show run-recovery-pass-action --json".to_string(),
+            ),
+            dispatch_receipt: Some(clean_ready_downstream_dispatch_receipt(
+                "run-recovery-pass-action",
+            )),
+            continuation_binding: None,
+        };
+
+        let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
+            recovery_surface_contract(&summary, &projection_truth);
+
+        assert!(blocker_codes.is_empty());
+        assert!(why_not_now.is_none());
+        assert_eq!(
+            next_action.as_ref().map(|value| value.command.as_str()),
+            Some("vida lane show run-recovery-pass-action --json")
+        );
+        assert_eq!(
+            recommended_command.as_deref(),
+            Some("vida lane show run-recovery-pass-action --json")
+        );
+        assert_eq!(recommended_surface.as_deref(), Some("vida lane show"));
     }
 
     #[test]
