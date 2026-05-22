@@ -1651,6 +1651,41 @@ fn internal_codex_app_bridge_requires_fail_closed(
     Some("internal Codex carrier unavailable; external codex_cli fallback disabled")
 }
 
+fn internal_codex_windows_sandbox_preflight_blocker(
+    is_windows: bool,
+    selected_cli_system: &str,
+    selected_cli_entry: Option<&serde_yaml::Value>,
+    command: &str,
+    args: &[String],
+    sandbox_mode: Option<&str>,
+) -> Option<(&'static str, String)> {
+    if !is_windows || selected_cli_system != "codex" || command_name(command) != "codex" {
+        return None;
+    }
+    if !args.iter().any(|arg| arg.trim() == "exec") {
+        return None;
+    }
+    let sandbox_mode = sandbox_mode
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if sandbox_mode != "workspace-write" {
+        return None;
+    }
+    let windows_sandbox_spawn_supported = selected_cli_entry
+        .and_then(|entry| yaml_lookup(entry, &["dispatch", "windows_sandbox_spawn_supported"]))
+        .and_then(serde_yaml::Value::as_bool)
+        .unwrap_or(false);
+    if windows_sandbox_spawn_supported {
+        return None;
+    }
+    Some((
+        "internal_codex_windows_sandbox_unavailable",
+        format!(
+            "Internal Codex carrier is configured for `codex exec` with sandbox_mode `{sandbox_mode}` on Windows, but this host has not declared `dispatch.windows_sandbox_spawn_supported=true`; failing before process launch avoids a long no-receipt timeout. Route through a configured backend/runtime profile whose sandbox is supported on this host, or enable the support flag only after proving receipt-backed execution."
+        ),
+    ))
+}
+
 pub(crate) fn agent_lane_dispatch_result(
     mut activation_view: serde_json::Value,
     dispatch_packet_path: &str,
@@ -1977,13 +2012,25 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         dispatch_packet_path,
         &carrier,
     )?;
-    if let Some(blocker_reason) = internal_codex_app_bridge_requires_fail_closed(
+    let preflight_blocker = internal_codex_app_bridge_requires_fail_closed(
         &selected_cli_system,
         selected_cli_entry.as_ref(),
         &overlay,
         &command,
         &args,
-    ) {
+    )
+    .map(|reason| ("internal_codex_carrier_unavailable", reason.to_string()))
+    .or_else(|| {
+        internal_codex_windows_sandbox_preflight_blocker(
+            cfg!(windows),
+            &selected_cli_system,
+            selected_cli_entry.as_ref(),
+            &command,
+            &args,
+            carrier["sandbox_mode"].as_str(),
+        )
+    });
+    if let Some((blocker_code, blocker_reason)) = preflight_blocker {
         if allow_internal_codex_external_fallback {
             if let Some(fallback_backend) = internal_codex_external_fallback_backend(
                 role_selection,
@@ -2006,7 +2053,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
                         "internal_codex_external_fallback".to_string(),
                         serde_json::json!({
                             "blocked_backend": backend_id,
-                            "blocker_code": "internal_codex_carrier_unavailable",
+                            "blocker_code": blocker_code,
                             "blocker_reason": blocker_reason,
                             "fallback_backend": fallback_backend,
                             "fallback_source": "route_admissible_external_backend",
@@ -2047,13 +2094,10 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
                 )
             ),
         );
-        body.insert(
-            "blocker_code".to_string(),
-            serde_json::json!("internal_codex_carrier_unavailable"),
-        );
+        body.insert("blocker_code".to_string(), serde_json::json!(blocker_code));
         body.insert(
             "blocker_reason".to_string(),
-            serde_json::json!(blocker_reason),
+            serde_json::json!(blocker_reason.clone()),
         );
         if let Some(dispatch) = body
             .get_mut("backend_dispatch")
@@ -2064,6 +2108,18 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             dispatch.insert(
                 "carrier_id".to_string(),
                 serde_json::json!(carrier["role_id"].clone()),
+            );
+            dispatch.insert(
+                "sandbox_mode".to_string(),
+                serde_json::json!(carrier["sandbox_mode"].clone()),
+            );
+            dispatch.insert(
+                "preflight_blocker_code".to_string(),
+                serde_json::json!(blocker_code),
+            );
+            dispatch.insert(
+                "preflight_blocker_reason".to_string(),
+                serde_json::json!(blocker_reason),
             );
             dispatch.insert(
                 "executor_backend".to_string(),
@@ -2959,6 +3015,7 @@ mod tests {
         dispatch_packet_path_should_render_as_downstream, dispatch_packet_prompt,
         execute_external_agent_lane_dispatch, external_provider_output_confirms_execution,
         internal_codex_app_bridge_requires_fail_closed, internal_codex_output_confirms_execution,
+        internal_codex_windows_sandbox_preflight_blocker,
         internal_host_activation_only_blocker_code, mark_dispatch_result_execution_evidence,
         parse_external_provider_output, parse_internal_codex_exec_output,
         ready_external_readiness_fallback_backend,
@@ -3516,6 +3573,80 @@ dispatch:
                 &overlay,
                 "codex",
                 &args
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn internal_codex_windows_workspace_write_preflight_fails_fast_without_support_flag() {
+        let selected_cli_entry = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: codex
+  static_args: ["exec", "--json"]
+"#,
+        )
+        .expect("selected cli entry should parse");
+        let args = vec!["exec".to_string(), "--json".to_string()];
+
+        let blocker = internal_codex_windows_sandbox_preflight_blocker(
+            true,
+            "codex",
+            Some(&selected_cli_entry),
+            "codex",
+            &args,
+            Some("workspace-write"),
+        )
+        .expect("workspace-write codex exec should fail closed on Windows");
+
+        assert_eq!(blocker.0, "internal_codex_windows_sandbox_unavailable");
+        assert!(blocker.1.contains("failing before process launch"));
+        assert_eq!(
+            internal_codex_windows_sandbox_preflight_blocker(
+                false,
+                "codex",
+                Some(&selected_cli_entry),
+                "codex",
+                &args,
+                Some("workspace-write"),
+            ),
+            None
+        );
+        assert_eq!(
+            internal_codex_windows_sandbox_preflight_blocker(
+                true,
+                "codex",
+                Some(&selected_cli_entry),
+                "codex",
+                &args,
+                Some("read-only"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn internal_codex_windows_workspace_write_preflight_honors_support_flag() {
+        let selected_cli_entry = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: codex
+  static_args: ["exec", "--json"]
+  windows_sandbox_spawn_supported: true
+"#,
+        )
+        .expect("selected cli entry should parse");
+        let args = vec!["exec".to_string(), "--json".to_string()];
+
+        assert_eq!(
+            internal_codex_windows_sandbox_preflight_blocker(
+                true,
+                "codex",
+                Some(&selected_cli_entry),
+                "codex",
+                &args,
+                Some("workspace-write"),
             ),
             None
         );
