@@ -1269,6 +1269,29 @@ impl StateStore {
                 scope.push_task_id(task_id);
             }
         }
+        let scoped_task_ids = scope.task_ids.clone();
+        for task_id in scoped_task_ids {
+            let mut run_query = self
+                .db
+                .query(
+                    "SELECT run_id FROM execution_plan_state \
+                     WHERE task_id = $task_id \
+                     ORDER BY run_id DESC;",
+                )
+                .bind(("task_id", task_id))
+                .await?;
+            let rows: Vec<serde_json::Value> = run_query.take(0)?;
+            for row in rows {
+                if let Some(run_id) = row
+                    .get("run_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    scope.push_run_id(run_id.to_string());
+                }
+            }
+        }
 
         if scope.is_empty() {
             let mut owner_query = self
@@ -1351,12 +1374,28 @@ impl StateStore {
             .map(str::trim)
             .filter(|value| !value.is_empty());
 
-        for claim in self.active_orchestrator_claims().await? {
+        let active_claims = self.active_orchestrator_claims().await?;
+        let run_task_id = self
+            .run_graph_task_id_for_mutation_claim(run_id)
+            .await?
+            .map(|task_id| task_id.trim().to_string())
+            .filter(|task_id| !task_id.is_empty());
+        for claim in active_claims {
             if claim.orchestrator_session_id == current_session_id
                 && claim
                     .run_id
                     .as_deref()
                     .is_some_and(|claim_run_id| claim_run_id.trim() == run_id)
+            {
+                return Ok(());
+            }
+            if claim.orchestrator_session_id == current_session_id
+                && run_task_id.as_deref().is_some_and(|task_id| {
+                    claim
+                        .task_id
+                        .as_deref()
+                        .is_some_and(|claim_task_id| claim_task_id.trim() == task_id)
+                })
             {
                 return Ok(());
             }
@@ -1392,6 +1431,21 @@ impl StateStore {
                 "run-graph mutation blocked: current session does not own run `{run_id}`"
             ),
         })
+    }
+
+    async fn run_graph_task_id_for_mutation_claim(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<String>, StateStoreError> {
+        let execution: Option<ExecutionPlanStateRow> =
+            self.db.select(("execution_plan_state", run_id)).await?;
+        if let Some(execution) = execution {
+            return Ok(Some(execution.task_id));
+        }
+        Ok(self
+            .run_graph_dispatch_context(run_id)
+            .await?
+            .map(|context| context.task_id))
     }
 
     async fn record_run_graph_owner_evidence(
@@ -2958,6 +3012,31 @@ mod tests {
         status
     }
 
+    fn test_task_record(task_id: &str, status: &str) -> TaskRecord {
+        TaskRecord {
+            id: task_id.to_string(),
+            display_id: None,
+            title: task_id.to_string(),
+            description: task_id.to_string(),
+            status: status.to_string(),
+            priority: 1,
+            issue_type: "task".to_string(),
+            created_at: "2026-05-22T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "2026-05-22T00:00:00Z".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: TaskExecutionSemantics::default(),
+            planner_metadata: TaskPlannerMetadata::default(),
+            dependencies: Vec::new(),
+        }
+    }
+
     fn sample_explicit_binding(
         run_id: &str,
         task_id: &str,
@@ -3483,6 +3562,139 @@ mod tests {
         foreign_status.task_id = "task-owner".to_string();
         let status_result = owner_store.record_run_graph_status(&foreign_status).await;
         assert!(status_result.is_err());
+
+        let _ = fs::remove_dir_all(&root);
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test]
+    async fn run_graph_mutation_allows_current_session_task_claim_for_run_task() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-owner");
+        }
+        let root = temp_run_graph_root("vida-run-graph-mutation-task-claim");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-task-claim".to_string();
+        status.task_id = "task-task-claim".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist owner status");
+        store
+            .record_run_graph_dispatch_receipt(&sample_dispatch_receipt("run-task-claim"))
+            .await
+            .expect("persist owner receipt");
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-current");
+        }
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "current-task-only-claim".to_string(),
+                state_root_id: root.display().to_string(),
+                worktree_environment_id: root.display().to_string(),
+                orchestrator_session_id: "session-current".to_string(),
+                task_id: Some("task-task-claim".to_string()),
+                run_id: None,
+                lane_id: None,
+                claim_kind: "active_task_session_claim".to_string(),
+                conflict_domain: Some("task:task-task-claim".to_string()),
+                owned_paths: Vec::new(),
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Observe,
+                lease_seconds: 3600,
+            })
+            .await
+            .expect("current task claim");
+
+        store
+            .record_run_graph_continuation_binding(&sample_explicit_binding(
+                "run-task-claim",
+                "task-task-claim",
+                "2026-05-21T01:00:00Z",
+            ))
+            .await
+            .expect("task claim should authorize run continuation mutation");
+
+        let _ = fs::remove_dir_all(&root);
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test]
+    async fn latest_explicit_binding_for_current_session_uses_task_claim_run_scope() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-owner");
+        }
+        let root = temp_run_graph_root("vida-current-session-task-claim-run-scope");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-scope-from-task".to_string();
+        status.task_id = "task-scope-from-task".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist owner status");
+        store
+            .record_run_graph_dispatch_receipt(&sample_dispatch_receipt("run-scope-from-task"))
+            .await
+            .expect("persist owner receipt");
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-current");
+        }
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "current-task-scope-claim".to_string(),
+                state_root_id: root.display().to_string(),
+                worktree_environment_id: root.display().to_string(),
+                orchestrator_session_id: "session-current".to_string(),
+                task_id: Some("task-scope-from-task".to_string()),
+                run_id: None,
+                lane_id: None,
+                claim_kind: "active_task_session_claim".to_string(),
+                conflict_domain: Some("task:task-scope-from-task".to_string()),
+                owned_paths: Vec::new(),
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Observe,
+                lease_seconds: 3600,
+            })
+            .await
+            .expect("current task claim");
+        store
+            .persist_task_record(test_task_record("next-bound-task", "open"))
+            .await
+            .expect("persist bound task");
+        let mut binding = sample_explicit_binding(
+            "run-scope-from-task",
+            "next-bound-task",
+            "2026-05-21T01:00:00Z",
+        );
+        binding.binding_source = "explicit_continuation_bind_task".to_string();
+        binding.active_bounded_unit = serde_json::json!({
+            "kind": "task_graph_task",
+            "run_id": "run-scope-from-task",
+            "task_id": "next-bound-task",
+        });
+        store
+            .record_run_graph_continuation_binding(&binding)
+            .await
+            .expect("record explicit binding");
+
+        let binding = store
+            .latest_explicit_run_graph_continuation_binding_for_current_session()
+            .await
+            .expect("read current scoped binding")
+            .expect("binding should be in current session scope");
+
+        assert_eq!(binding.run_id, "run-scope-from-task");
+        assert_eq!(binding.task_id, "next-bound-task");
 
         let _ = fs::remove_dir_all(&root);
         restore_vida_session_id(saved_session_id);
