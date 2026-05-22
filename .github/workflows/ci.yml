@@ -36,7 +36,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: vida-ci-${{ runner.os }}
-          cache-on-failure: false
+          add-job-id-key: "false"
+          workspaces: . -> target
+          cache-targets: "true"
+          cache-workspace-crates: "true"
+          cache-on-failure: "true"
 
       - name: Build workspace
         shell: bash
@@ -81,7 +85,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: vida-ci-${{ runner.os }}
-          cache-on-failure: false
+          add-job-id-key: "false"
+          workspaces: . -> target
+          cache-targets: "true"
+          cache-workspace-crates: "true"
+          cache-on-failure: "true"
 
       - name: Run cargo test
         shell: bash
