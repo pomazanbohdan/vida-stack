@@ -574,41 +574,23 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
-            let task_snapshot_path =
-                crate::StateStore::canonical_task_snapshot_path_for_state_root(store.root());
-            let dependency_graph =
-                match crate::StateStore::read_tasks_from_jsonl_snapshot(&task_snapshot_path)
-                    .map(|rows| crate::StateStore::validate_task_graph_rows(&rows))
-                {
-                    Ok(issues) if issues.is_empty() => issues,
-                    Ok(issues) => {
-                        let first = issues.first().expect("issues is not empty");
-                        eprintln!(
-                            "dependency graph: failed ({} issue(s), first={} on {})",
-                            issues.len(),
-                            first.issue_type,
-                            first.issue_id
-                        );
-                        return ExitCode::from(1);
-                    }
-                    Err(_) => match store.validate_task_graph().await {
-                        Ok(issues) if issues.is_empty() => issues,
-                        Ok(issues) => {
-                            let first = issues.first().expect("issues is not empty");
-                            eprintln!(
-                                "dependency graph: failed ({} issue(s), first={} on {})",
-                                issues.len(),
-                                first.issue_type,
-                                first.issue_id
-                            );
-                            return ExitCode::from(1);
-                        }
-                        Err(error) => {
-                            eprintln!("dependency graph: failed ({error})");
-                            return ExitCode::from(1);
-                        }
-                    },
-                };
+            let dependency_graph = match doctor_dependency_graph_issues(&store).await {
+                Ok(issues) if issues.is_empty() => issues,
+                Ok(issues) => {
+                    let first = issues.first().expect("issues is not empty");
+                    eprintln!(
+                        "dependency graph: failed ({} issue(s), first={} on {})",
+                        issues.len(),
+                        first.issue_type,
+                        first.issue_id
+                    );
+                    return ExitCode::from(1);
+                }
+                Err(error) => {
+                    eprintln!("dependency graph: failed ({error})");
+                    return ExitCode::from(1);
+                }
+            };
             let boot_compatibility = match store.latest_boot_compatibility_summary().await {
                 Ok(Some(summary)) => summary,
                 Ok(None) => match store.evaluate_boot_compatibility().await {
@@ -1311,6 +1293,12 @@ fn doctor_cached_json_projection_with_dependency_marker(
     )
 }
 
+async fn doctor_dependency_graph_issues(
+    store: &crate::StateStore,
+) -> Result<Vec<crate::state_store::TaskGraphIssue>, crate::state_store::StateStoreError> {
+    store.validate_task_graph().await
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1390,6 +1378,63 @@ mod tests {
             Some(dependency_modified),
         )
         .is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn doctor_dependency_graph_uses_authoritative_store_over_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-doctor-dependency-graph-authoritative-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        let store = crate::StateStore::open(root.clone())
+            .await
+            .expect("state store should open");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "authoritative-root",
+                title: "Authoritative root",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("authoritative task should be created");
+        store
+            .refresh_task_snapshot()
+            .await
+            .expect("snapshot should be refreshed");
+        let snapshot_path =
+            crate::StateStore::canonical_task_snapshot_path_for_state_root(store.root());
+        fs::create_dir_all(
+            snapshot_path
+                .parent()
+                .expect("canonical snapshot path should have a parent"),
+        )
+        .expect("snapshot parent should be writable");
+        fs::write(
+            &snapshot_path,
+            r#"{"id":"snapshot-only","title":"Snapshot only","description":"","status":"open","priority":1,"issue_type":"task","created_at":"2026-03-08T00:00:00Z","created_by":"test","updated_at":"2026-03-08T00:00:00Z","source_repo":".","compaction_level":0,"original_size":0,"labels":[],"dependencies":[{"issue_id":"snapshot-only","depends_on_id":"missing-target","type":"blocks","created_at":"2026-03-08T00:00:00Z","created_by":"test","metadata":"{}","thread_id":""}]}"#,
+        )
+        .expect("stale snapshot should be writable");
+
+        let issues = super::doctor_dependency_graph_issues(&store)
+            .await
+            .expect("authoritative graph validation should run");
+
+        assert!(issues.is_empty());
         let _ = fs::remove_dir_all(root);
     }
 
