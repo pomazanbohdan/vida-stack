@@ -11,6 +11,15 @@ vida/config/docflow-proof.current.jsonl
 target
 **/target/
 _temp
+tmp/
+temp/
+logs/
+*.tmp
+*.temp
+*.log
+*.bak
+*.swp
+*.pid
 .venv
 dist
 projects/vida-mobile/
