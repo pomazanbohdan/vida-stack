@@ -592,13 +592,6 @@ fn orchestrator_init_projection_name(full: bool) -> &'static str {
     }
 }
 
-fn read_orchestrator_init_cached_projection(state_dir: &Path, full: bool) -> Option<String> {
-    crate::operator_projection_cache::read_fresh_json_projection(
-        state_dir,
-        orchestrator_init_projection_name(full),
-    )
-}
-
 fn compact_project_activation_summary(init_view: &serde_json::Value) -> serde_json::Value {
     let project_activation = &init_view["project_activation"];
     serde_json::json!({
@@ -1157,12 +1150,12 @@ mod tests {
             &payload,
         );
 
-        assert!(read_orchestrator_init_cached_projection(harness.path(), false).is_some());
+        assert!(crate::operator_projection_cache::read_fresh_json_projection(harness.path(), orchestrator_init_projection_name(false)).is_some());
 
         std::thread::sleep(Duration::from_millis(10));
         crate::operator_projection_cache::touch_state_mutation_marker(harness.path());
 
-        assert!(read_orchestrator_init_cached_projection(harness.path(), false).is_none());
+        assert!(crate::operator_projection_cache::read_fresh_json_projection(harness.path(), orchestrator_init_projection_name(false)).is_none());
     }
 
     fn run_on_cli_runtime_stack(name: &str, test: impl FnOnce() + Send + 'static) {
@@ -3102,12 +3095,8 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
     let framework_memory_source_root =
         PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
 
-    if args.json {
-        if let Some(cached) = read_orchestrator_init_cached_projection(&state_dir, args.full) {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
-        }
-    }
+    // Security: orchestrator-init JSON must come from authoritative state computation,
+    // not project-controlled projection cache files.
 
     match tokio::time::timeout(
         std::time::Duration::from_secs(COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS),
