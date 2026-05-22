@@ -252,6 +252,7 @@ host_environment:
       dispatch:
         command: codex
         receipt_backed_completion_supported: true
+        windows_sandbox_spawn_supported: true
         static_args:
           - exec
           - --json

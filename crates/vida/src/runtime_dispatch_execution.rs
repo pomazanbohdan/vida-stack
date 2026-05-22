@@ -1089,34 +1089,46 @@ fn parse_internal_codex_exec_output(stdout: &str) -> ParsedInternalCodexOutput {
         let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if row.get("type").and_then(serde_json::Value::as_str) == Some("item.completed") {
-            if let Some(item) = row.get("item") {
-                match item.get("type").and_then(serde_json::Value::as_str) {
-                    Some("agent_message") => {
-                        if let Some(text) = item
-                            .get("text")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                        {
-                            result_text = Some(text.to_string());
-                        }
-                    }
-                    Some("error") => {
-                        if let Some(message) = item
-                            .get("message")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                        {
-                            if !internal_codex_message_is_benign_warning(message) {
-                                error_messages.push(message.to_string());
+        match row.get("type").and_then(serde_json::Value::as_str) {
+            Some("item.completed") => {
+                if let Some(item) = row.get("item") {
+                    match item.get("type").and_then(serde_json::Value::as_str) {
+                        Some("agent_message") => {
+                            if let Some(text) = item
+                                .get("text")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                            {
+                                result_text = Some(text.to_string());
                             }
                         }
+                        Some("error") => {
+                            if let Some(message) =
+                                item.get("message").and_then(serde_json::Value::as_str)
+                            {
+                                push_internal_codex_error_message(&mut error_messages, message);
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
+            Some("error") => {
+                if let Some(message) = row.get("message").and_then(serde_json::Value::as_str) {
+                    push_internal_codex_error_message(&mut error_messages, message);
+                }
+            }
+            Some("turn.failed") => {
+                if let Some(message) = row
+                    .get("error")
+                    .and_then(|value| value.get("message"))
+                    .and_then(serde_json::Value::as_str)
+                {
+                    push_internal_codex_error_message(&mut error_messages, message);
+                }
+            }
+            _ => {}
         }
         rows.push(row);
     }
@@ -1128,10 +1140,31 @@ fn parse_internal_codex_exec_output(stdout: &str) -> ParsedInternalCodexOutput {
     }
 }
 
+fn push_internal_codex_error_message(error_messages: &mut Vec<String>, message: &str) {
+    let message = message.trim();
+    if message.is_empty() || internal_codex_message_is_benign_warning(message) {
+        return;
+    }
+    if !error_messages.iter().any(|existing| existing == message) {
+        error_messages.push(message.to_string());
+    }
+}
+
 fn internal_codex_message_is_benign_warning(message: &str) -> bool {
     let normalized = message.trim().to_ascii_lowercase();
     normalized.starts_with("under-development features enabled:")
         || normalized.contains("to suppress this warning")
+}
+
+fn internal_codex_stderr_line_is_benign_warning(line: &str) -> bool {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with("WARN ") || line.contains(" WARN ") {
+        return true;
+    }
+    let normalized = line.to_ascii_lowercase();
+    (line.starts_with("ERROR ") || line.contains(" ERROR "))
+        && (normalized.contains("failed to stat skills path")
+            || normalized.contains("failed to read skills dir"))
 }
 
 fn internal_codex_stderr_is_benign_warning(stderr: &str) -> bool {
@@ -1139,7 +1172,7 @@ fn internal_codex_stderr_is_benign_warning(stderr: &str) -> bool {
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .all(|line| line.starts_with("WARN ") || line.contains(" WARN "))
+        .all(internal_codex_stderr_line_is_benign_warning)
 }
 
 fn internal_codex_output_confirms_execution(
@@ -1169,7 +1202,18 @@ fn internal_codex_provider_failure_blocker_code(
         || error_messages
             .iter()
             .any(|message| message.contains("windows sandbox: spawn setup refresh"));
-    windows_sandbox_spawn_failed.then_some("internal_codex_windows_sandbox_unavailable")
+    if windows_sandbox_spawn_failed {
+        return Some("internal_codex_windows_sandbox_unavailable");
+    }
+    let usage_limit_reached = error_messages.iter().any(|message| {
+        let normalized = message.to_ascii_lowercase();
+        normalized.contains("usage limit")
+            || normalized.contains("quota exceeded")
+            || normalized.contains("daily quota has been reached")
+            || normalized.contains("rate limit exceeded")
+            || normalized.contains("too many requests")
+    });
+    usage_limit_reached.then_some("provider_usage_limit_exceeded")
 }
 
 fn internal_codex_provider_failure_blocker_reason(
@@ -2467,8 +2511,11 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         );
         refresh_execution_truth(body, role_selection, receipt, Some(carrier_id), "missing");
     } else {
-        let blocker_reason = if !stderr.is_empty() {
-            stderr.clone()
+        let effective_stderr = (!internal_codex_stderr_is_benign_warning(&stderr))
+            .then_some(stderr.as_str())
+            .unwrap_or("");
+        let blocker_reason = if !effective_stderr.is_empty() {
+            effective_stderr.to_string()
         } else if !parsed_output.error_messages.is_empty() {
             parsed_output.error_messages.join("\n")
         } else if output.status.success() {
@@ -3346,6 +3393,22 @@ dispatch:
     }
 
     #[test]
+    fn parse_internal_codex_exec_output_extracts_top_level_errors() {
+        let parsed = parse_internal_codex_exec_output(
+            r#"{"type":"thread.started","thread_id":"abc"}
+{"type":"error","message":"You've hit your usage limit. Try again later."}
+{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again later."}}"#,
+        );
+
+        assert_eq!(
+            parsed.error_messages,
+            vec!["You've hit your usage limit. Try again later.".to_string()]
+        );
+        assert_eq!(parsed.raw_json.as_array().map(Vec::len), Some(3));
+        assert_eq!(parsed.result_text, None);
+    }
+
+    #[test]
     fn internal_codex_output_requires_clean_error_streams() {
         let parsed_with_error = parse_internal_codex_exec_output(
             r#"{"type":"item.completed","item":{"id":"1","type":"error","message":"warning"}}
@@ -3383,6 +3446,11 @@ dispatch:
             "2026-05-12T20:35:57Z WARN codex_core::features: unknown feature key in config: hooks",
             true
         ));
+        assert!(internal_codex_output_confirms_execution(
+            &parsed_clean,
+            "2026-05-22T22:05:56Z ERROR codex_core_skills::loader: failed to stat skills path C:\\Users\\pomaz\\.codex\\.tmp\\plugins\\plugins\\google-drive\\skills\\google-slides\\assets\\google-slides-small.svg: The system cannot find the path specified. (os error 3)\n2026-05-22T22:05:56Z ERROR codex_core_skills::loader: failed to read skills dir C:\\Users\\pomaz\\.codex\\.tmp\\plugins\\plugins\\google-drive\\skills\\google-slides\\references: The system cannot find the path specified. (os error 3)",
+            true
+        ));
         assert!(!internal_codex_output_confirms_execution(
             &parsed_clean,
             "sandbox denied write to /workspace/secret",
@@ -3414,6 +3482,18 @@ dispatch:
             stderr.to_string()
         )
         .contains("configured backend/runtime profile whose sandbox is supported"));
+    }
+
+    #[test]
+    fn internal_codex_usage_limit_failure_gets_specific_blocker() {
+        let errors = vec![
+            "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at May 26th, 2026 9:37 PM.".to_string(),
+        ];
+
+        assert_eq!(
+            super::internal_codex_provider_failure_blocker_code("codex", "", &errors),
+            Some("provider_usage_limit_exceeded")
+        );
     }
 
     #[test]
