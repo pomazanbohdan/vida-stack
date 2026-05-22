@@ -44,6 +44,24 @@ jobs:
           set -euo pipefail
           cargo build --workspace --locked
 
+      - name: Build Windows release assets
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export VIDA_RELEASE_SUFFIX=windows-x86_64
+          bash scripts/build-release.sh
+
+      - name: Upload Windows release assets
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-release-assets
+          path: |
+            dist/vida-stack-v*-windows-x86_64.zip
+            dist/vida-install.ps1
+          if-no-files-found: error
+
   validate:
     runs-on: ubuntu-latest
 
@@ -203,27 +221,15 @@ jobs:
           cargo run -p vida -- protocol view bootstrap/router >/tmp/ci-protocol-router.txt
 
   validate-windows-installer:
+    needs: build-rust
     runs-on: windows-latest
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
+      - name: Download Windows release assets
+        uses: actions/download-artifact@v6
         with:
-          shared-key: vida-ci-windows-installer
-          cache-on-failure: false
-
-      - name: Build Windows release assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          export VIDA_RELEASE_SUFFIX=windows-x86_64
-          bash scripts/build-release.sh
+          name: windows-release-assets
+          path: dist
 
       - name: Run Windows installer smoke
         shell: pwsh
