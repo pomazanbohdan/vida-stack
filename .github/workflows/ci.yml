@@ -47,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-            cargo build --workspace --locked --release
+            cargo build --locked --release -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
           else
             cargo build --workspace --locked
           fi
