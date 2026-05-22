@@ -39,6 +39,7 @@ Project development runs as:
 11. session-scoped: one blocked orchestrator session must not block another session's disjoint task in the same project root.
 12. test-first for runtime/operator defect remediation, with a middle-tier test author before the implementation lane.
 13. TaskFlow-actualized at every layer: new evidence must update task status, parent/child placement, priority, dependencies, proof targets, execution semantics, and sequential/parallel posture before the next lane is dispatched.
+14. source-neutral: pull requests, defects, external downstream reports, CI failures, release tasks, optimization tasks, documentation/process tasks, operator-surface gaps, diagnostics, and newly discovered work all follow the same spec-first intake, TaskFlow actualization, configured-role chain, proof, and closure discipline.
 
 ## Team Topology
 
@@ -120,6 +121,15 @@ TaskFlow actualization rule:
 4. after each update, the orchestrator must re-evaluate priority, dependencies, parent/child layer, conflict domain, and sequential/parallel admissibility,
 5. diagnostic findings, including global-goal happy-path progress failures, must become task updates or child tasks before the next write-producing lane starts,
 6. stale task ordering, stale dependencies, missing proof targets, or unrecorded lane handoffs are process defects.
+
+Source-neutral intake rule:
+
+1. PR processing is only one concrete work-source workflow; it does not weaken the same requirements for non-PR work.
+2. Every bounded source must be classified before write-producing work: `pull_request`, `external_downstream_report`, `runtime_defect`, `ci_failure`, `release_task`, `optimization`, `documentation_process`, `operator_surface_gap`, or a more specific project-approved source type.
+3. The orchestrator must consult the mapped canonical spec or process surface for that source class before implementation, then record the consulted surface, expected behavior, acceptance target, proof target, priority reason, role chain, and sequential/parallel posture on the TaskFlow item or linked artifact.
+4. If the mapped spec is missing, contradictory, or too weak to define acceptance, create or update a specification-clarification task before changing implementation code.
+5. When VIDA cannot execute the configured agent chain because the runtime itself is defective, record or update that runtime defect separately and enter bounded Defective Runtime Emulation Mode while preserving the same analyst -> test_author -> coach_test_gate -> developer -> coach_implementation_gate -> duplication_reviewer -> tester/prover -> release_closure -> orchestrator synthesis evidence chain manually.
+6. No defect, downstream report, PR finding, CI/release signal, optimization idea, command-surface gap, or process correction may remain only as chat/session memory when TaskFlow mutation is available.
 
 Readiness rule:
 
@@ -444,5 +454,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/team-development-and-orchestration-protocol.md
 created_at: '2026-03-13T17:00:00+02:00'
-updated_at: 2026-05-15T09:13:17.1482677Z
+updated_at: 2026-05-22T02:44:40Z
 changelog_ref: team-development-and-orchestration-protocol.changelog.jsonl

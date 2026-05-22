@@ -24,7 +24,8 @@ Project development stays:
 3. `delivery_task` as the default leaf,
 4. `execution_block` only when one-owner bounded closure still fails,
 5. coach-separated and verifier-backed before closure,
-6. session-scoped when multiple orchestrators share one project root.
+6. session-scoped when multiple orchestrators share one project root,
+7. source-neutral across PRs, defects, external downstream reports, CI/release work, optimization, documentation/process work, diagnostics, and operator-surface gaps.
 
 Session-scoped shorthand:
 
@@ -51,10 +52,15 @@ If the active packet template is missing any mandatory field, dispatch must fail
 For normal write-producing work:
 
 1. orchestrator shapes
-2. runtime activates the cheapest capable carrier tier for `runtime_role=worker`
-3. runtime activates the cheapest capable carrier tier for `runtime_role=coach`
-4. runtime activates the cheapest capable carrier tier for `runtime_role=verifier`
-5. orchestrator synthesizes
+2. analyst validates source intent, current code/spec behavior, owned paths, acceptance, and duplication risks
+3. test_author/autotester writes or specifies regression proof when test-first proof is required
+4. coach_test_gate validates test quality when a new failing test gates the packet
+5. developer/implementer writes through the cheapest eligible configured write carrier
+6. coach_implementation_gate reviews implementation conformance
+7. duplication_reviewer checks reuse and duplicate active paths
+8. tester/prover verifies the proof target
+9. release_closure runs when the packet or task pool has release impact
+10. orchestrator synthesizes and updates TaskFlow
 
 Read-only findings feed the next packet; they do not transfer root-session write ownership.
 The canonical delegated execution surface is the runtime lane flow through `vida agent-init`; host subagent APIs may exist under the selected carrier system, but they do not replace the project runtime contract.
@@ -62,6 +68,12 @@ Host-local shell or patch capability is not a receipt and does not transfer writ
 An activation/view-only internal-host handoff without execution evidence is a blocker/reroute condition, not an executing delegated lane.
 If that blocker still leaves a bounded read-only diagnostic path, continue diagnosis to a code-level blocker or next bounded fix before asking the user to choose a route.
 That bounded fix does not itself unlock local mutation; root-session write remains forbidden until an explicit exception-path receipt or receipt-backed delegated execution evidence is present for the active packet.
+
+Source-neutral intake shorthand:
+
+1. Before any bounded item enters implementation, classify the source type and consult the mapped spec/process surface for that source class.
+2. Record the active TaskFlow item, source evidence, priority reason, owned/read-only paths, role chain, proof target, and sequential/parallel posture.
+3. If VIDA cannot execute the configured role chain, record the runtime defect separately and use bounded Defective Runtime Emulation Mode without dropping the same evidence chain.
 
 ## Local-Work Boundary
 
@@ -101,5 +113,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-packet-and-lane-runtime-capsule.md
 created_at: '2026-03-13T18:05:15+02:00'
-updated_at: 2026-05-15T09:13:17.2218573Z
+updated_at: 2026-05-22T02:44:40Z
 changelog_ref: project-packet-and-lane-runtime-capsule.changelog.jsonl
