@@ -21,6 +21,11 @@ logs/
 *.bak
 *.swp
 *.pid
+/false
+/true
+/null
+/undefined
+/nul
 .venv
 dist
 projects/vida-mobile/
