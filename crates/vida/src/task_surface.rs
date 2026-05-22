@@ -3308,10 +3308,12 @@ fn runtime_binding_open_delegated_cycle_next_action(
 }
 
 fn runtime_dispatch_receipt_has_ready_downstream_handoff(
+    expected_run_id: Option<&str>,
     dispatch: Option<&state_store::RunGraphDispatchReceiptSummary>,
 ) -> bool {
     dispatch.is_some_and(|dispatch| {
-        dispatch.dispatch_status == "executed"
+        expected_run_id.is_some_and(|run_id| dispatch.run_id == run_id)
+            && dispatch.dispatch_status == "executed"
             && dispatch.blocker_code.is_none()
             && dispatch.downstream_dispatch_ready
             && dispatch.downstream_dispatch_blockers.is_empty()
@@ -3337,7 +3339,10 @@ fn runtime_recovery_blocks_task_next_lawful(
             || recovery.delegation_gate.local_exception_takeover_gate
                 == "blocked_open_delegated_cycle"
             || recovery.resume_status == "running")
-            && !runtime_dispatch_receipt_has_ready_downstream_handoff(dispatch)
+            && !runtime_dispatch_receipt_has_ready_downstream_handoff(
+                Some(recovery.run_id.as_str()),
+                dispatch,
+            )
     })
 }
 
@@ -4208,9 +4213,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         Some(binding)
                             if latest_dispatch_receipt.as_ref().is_some_and(|dispatch| {
                                 dispatch.run_id == binding.run_id
-                                    && runtime_dispatch_receipt_has_ready_downstream_handoff(Some(
-                                        dispatch,
-                                    ))
+                                    && runtime_dispatch_receipt_has_ready_downstream_handoff(
+                                        Some(binding.run_id.as_str()),
+                                        Some(dispatch),
+                                    )
                             }) =>
                         {
                             pass_ready_downstream_handoff_task_next_lawful_receipt(
@@ -6318,6 +6324,71 @@ mod tests {
         assert!(receipt.next_action.as_deref().is_some_and(|action| {
             action.contains("vida taskflow consume continue --run-id running-run --json")
         }));
+    }
+
+    #[test]
+    fn task_next_lawful_does_not_allow_unrelated_ready_downstream_handoff() {
+        let recovery = state_store::RunGraphRecoverySummary {
+            run_id: "running-run".to_string(),
+            task_id: "running-runtime-task".to_string(),
+            active_node: "analysis".to_string(),
+            lifecycle_stage: "analysis_active".to_string(),
+            resume_node: Some("writer".to_string()),
+            resume_status: "running".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.writer_lane".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "awaiting_writer".to_string(),
+            recovery_ready: true,
+            delegation_gate: state_store::RunGraphDelegationGateSummary {
+                active_node: "analysis".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "open".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "delegated_cycle_open".to_string(),
+                continuation_signal: "continue_delegated_cycle".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                lifecycle_stage: "analysis_active".to_string(),
+            },
+        };
+        let unrelated_dispatch = state_store::RunGraphDispatchReceiptSummary {
+            run_id: "newer-unrelated-run".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec".to_string()),
+            dispatch_packet_path: Some("packet.json".to_string()),
+            dispatch_result_path: Some("result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("writer".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: Some("downstream-packet.json".to_string()),
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("downstream-result.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("senior".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "2026-05-22T01:00:00Z".to_string(),
+        };
+
+        assert!(runtime_recovery_blocks_task_next_lawful(
+            Some(&recovery),
+            Some(&unrelated_dispatch)
+        ));
     }
 
     #[test]
