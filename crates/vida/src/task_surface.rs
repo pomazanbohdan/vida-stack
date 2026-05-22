@@ -3326,6 +3326,12 @@ fn runtime_dispatch_receipt_has_ready_downstream_handoff(
     })
 }
 
+fn downstream_dispatch_command_for_task_next_lawful(
+    dispatch: &state_store::RunGraphDispatchReceiptSummary,
+) -> Option<String> {
+    crate::continuation_binding_summary::downstream_dispatch_command_for_summary(dispatch)
+}
+
 fn runtime_recovery_blocks_task_next_lawful(
     recovery: Option<&state_store::RunGraphRecoverySummary>,
     dispatch: Option<&state_store::RunGraphDispatchReceiptSummary>,
@@ -3388,13 +3394,25 @@ fn pass_ready_downstream_handoff_task_next_lawful_receipt(
     binding: &state_store::RunGraphContinuationBinding,
     ready_task_candidates: Vec<TaskContinuationCandidate>,
     terminal_consume_continue_run_id: Option<&str>,
+    downstream_dispatch_command: Option<&str>,
 ) -> TaskNextLawfulReceipt {
     let next_action = if terminal_consume_continue_run_id == Some(binding.run_id.as_str()) {
-        format!(
-            "Inspect `{}` with `vida lane show {} --json`.",
-            binding.task_id,
-            crate::shell_quote(&binding.run_id)
-        )
+        downstream_dispatch_command
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|command| {
+                format!(
+                    "Continue `{}` with downstream handoff command `{}`.",
+                    binding.task_id, command
+                )
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "Inspect `{}` with `vida lane show {} --json`.",
+                    binding.task_id,
+                    crate::shell_quote(&binding.run_id)
+                )
+            })
     } else {
         format!(
             "Continue `{}` with `vida taskflow consume continue --run-id {} --json`.",
@@ -4203,6 +4221,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 binding,
                                 ready_task_candidates,
                                 terminal_consume_continue_run_id.as_deref(),
+                                latest_dispatch_receipt
+                                    .as_ref()
+                                    .and_then(downstream_dispatch_command_for_task_next_lawful)
+                                    .as_deref(),
                             )
                         }
                         Some(binding)
@@ -6291,8 +6313,12 @@ mod tests {
             Some(&recovery),
             Some(&dispatch)
         ));
-        let receipt =
-            pass_ready_downstream_handoff_task_next_lawful_receipt(&binding, Vec::new(), None);
+        let receipt = pass_ready_downstream_handoff_task_next_lawful_receipt(
+            &binding,
+            Vec::new(),
+            None,
+            None,
+        );
 
         assert_eq!(receipt.status, "pass");
         assert!(receipt.blocker_codes.is_empty());
@@ -6302,7 +6328,7 @@ mod tests {
     }
 
     #[test]
-    fn task_next_lawful_uses_lane_show_after_terminal_ready_downstream_handoff() {
+    fn task_next_lawful_uses_downstream_command_after_terminal_ready_downstream_handoff() {
         let binding = test_continuation_binding(
             "running-run",
             "running-runtime-task",
@@ -6314,14 +6340,14 @@ mod tests {
             &binding,
             Vec::new(),
             Some("running-run"),
+            Some("vida agent-init --downstream-packet packet.json --json"),
         );
 
         assert_eq!(receipt.status, "pass");
         assert!(receipt.blocker_codes.is_empty());
-        assert!(receipt
-            .next_action
-            .as_deref()
-            .is_some_and(|action| action.contains("vida lane show running-run --json")));
+        assert!(receipt.next_action.as_deref().is_some_and(
+            |action| action.contains("vida agent-init --downstream-packet packet.json --json")
+        ));
     }
 
     #[test]

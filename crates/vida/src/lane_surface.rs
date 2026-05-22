@@ -18,6 +18,9 @@ struct LaneEnvelope {
     workflow_class: Option<String>,
     risk_tier: Option<String>,
     artifact_refs: serde_json::Value,
+    next_action: Option<LaneNextAction>,
+    recommended_command: Option<String>,
+    recommended_surface: Option<String>,
     next_actions: Vec<String>,
     blocker_codes: Vec<String>,
     run_id: String,
@@ -32,6 +35,13 @@ struct LaneEnvelope {
     exception_path_metadata_path: Option<String>,
     exception_path_metadata: Option<ExceptionTakeoverMetadata>,
     root_local_write_allowed_for_only_these_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+struct LaneNextAction {
+    command: String,
+    surface: String,
+    reason: String,
 }
 
 #[derive(Serialize)]
@@ -579,6 +589,9 @@ fn build_lane_envelope(
     let dispatch_status = summary.dispatch_status.clone();
     let root_local_write_allowed_for_only_these_paths =
         active_exception_write_scope(&summary, exception_path_metadata.as_ref());
+    let next_action = lane_ready_downstream_next_action(&summary, blocked);
+    let recommended_command = next_action.as_ref().map(|action| action.command.clone());
+    let recommended_surface = next_action.as_ref().map(|action| action.surface.clone());
     let selected_backend = status
         .as_ref()
         .map(|status| status.selected_backend.clone())
@@ -620,6 +633,9 @@ fn build_lane_envelope(
             .as_str()
             .map(ToOwned::to_owned),
         artifact_refs: operator_contracts["artifact_refs"].clone(),
+        next_action,
+        recommended_command,
+        recommended_surface,
         next_actions,
         blocker_codes,
         run_id,
@@ -657,6 +673,39 @@ fn active_exception_write_scope(
         .filter(|metadata| metadata.matches_summary(summary))
         .map(|metadata| metadata.owned_write_scope.clone())
         .unwrap_or_default()
+}
+
+fn lane_recommended_surface_for_command(command: &str) -> String {
+    if command.starts_with("vida agent-init") {
+        return "vida agent-init".to_string();
+    }
+    command
+        .split_whitespace()
+        .take(3)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn lane_ready_downstream_next_action(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    blocked: bool,
+) -> Option<LaneNextAction> {
+    if blocked || !lane_summary_has_ready_downstream_handoff(summary) {
+        return None;
+    }
+    let command =
+        crate::continuation_binding_summary::downstream_dispatch_command_for_summary(summary)?;
+    Some(LaneNextAction {
+        command: command.clone(),
+        surface: lane_recommended_surface_for_command(&command),
+        reason: format!(
+            "continue the ready downstream `{}` handoff with the persisted dispatch packet",
+            summary
+                .downstream_dispatch_target
+                .as_deref()
+                .unwrap_or("next")
+        ),
+    })
 }
 
 struct LaneShowTruth {
@@ -1012,6 +1061,15 @@ fn emit_lane_envelope(envelope: &LaneEnvelope, as_json: bool) -> ExitCode {
             "selected_backend",
             selected_backend,
         );
+    }
+    if let Some(command) = envelope.recommended_command.as_deref() {
+        crate::print_surface_line(crate::RenderMode::Plain, "recommended_command", command);
+    }
+    if let Some(surface) = envelope.recommended_surface.as_deref() {
+        crate::print_surface_line(crate::RenderMode::Plain, "recommended_surface", surface);
+    }
+    if let Some(next_action) = envelope.next_action.as_ref() {
+        crate::print_surface_line(crate::RenderMode::Plain, "next_action", &next_action.reason);
     }
     if let Some(receipt_id) = envelope.exception_path_receipt_id.as_deref() {
         crate::print_surface_line(
@@ -2745,6 +2803,49 @@ mod tests {
             .next_actions
             .iter()
             .any(|action| action.contains("vida taskflow recovery status run-lane-test --json")));
+    }
+
+    #[test]
+    fn lane_envelope_surfaces_ready_downstream_agent_init_command() {
+        let mut receipt = sample_receipt("executed");
+        receipt.blocker_code = None;
+        receipt.lane_status = crate::LaneStatus::LaneRunning.as_str().to_string();
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+        receipt.downstream_dispatch_target = Some("writer".to_string());
+        receipt.downstream_dispatch_command =
+            Some("vida agent-init --downstream-packet packet.json --json".to_string());
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+        let truth = derive_lane_show_truth(&summary, None);
+
+        let envelope = build_lane_envelope(
+            summary,
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+            truth.blocked,
+            truth.blocker_codes,
+            truth.next_actions,
+        );
+
+        assert_eq!(envelope.status, "pass");
+        assert!(envelope.next_actions.is_empty());
+        assert_eq!(
+            envelope.recommended_command.as_deref(),
+            Some("vida agent-init --downstream-packet packet.json --json")
+        );
+        assert_eq!(
+            envelope.recommended_surface.as_deref(),
+            Some("vida agent-init")
+        );
+        assert_eq!(
+            envelope
+                .next_action
+                .as_ref()
+                .map(|action| action.command.as_str()),
+            Some("vida agent-init --downstream-packet packet.json --json")
+        );
     }
 
     #[test]

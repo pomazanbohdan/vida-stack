@@ -343,9 +343,15 @@ fn continuation_next_actions_for_run(
         run_id,
     ) && terminal_consume_continue_run_id == Some(run_id)
     {
-        next_actions.push(format!(
-            "Inspect the active delegated lane with `vida lane show {run_id} --json`."
-        ));
+        if let Some(command) =
+            latest_run_graph_dispatch_receipt.and_then(downstream_dispatch_command_for_summary)
+        {
+            next_actions.push(format!("Continue the downstream handoff with `{command}`."));
+        } else {
+            next_actions.push(format!(
+                "Inspect the active delegated lane with `vida lane show {run_id} --json`."
+            ));
+        }
         next_actions.push(format!(
             "Inspect the live delegated-cycle recovery state with `vida taskflow recovery status {run_id} --json` if routing context is needed before the next step."
         ));
@@ -358,6 +364,30 @@ fn continuation_next_actions_for_run(
         "Inspect the live delegated-cycle recovery state with `vida taskflow recovery status {run_id} --json` if routing context is needed before the next step."
     ));
     next_actions
+}
+
+pub(crate) fn downstream_dispatch_command_for_summary(
+    receipt: &crate::state_store::RunGraphDispatchReceiptSummary,
+) -> Option<String> {
+    let command = receipt
+        .downstream_dispatch_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if command == "vida agent-init" {
+        return receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|path| {
+                format!(
+                    "vida agent-init --downstream-packet {} --json",
+                    crate::shell_quote(path)
+                )
+            });
+    }
+    Some(command.to_string())
 }
 
 pub(crate) fn build_continuation_binding_summary_with_task_authority(

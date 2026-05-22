@@ -75,15 +75,19 @@ fn recovery_projection_has_complete_action_fields(cached: &str) -> bool {
     let Ok(payload) = serde_json::from_str::<serde_json::Value>(cached) else {
         return false;
     };
-    let expected_command = payload
-        .get("projection_truth")
-        .and_then(|truth| truth.get("next_lawful_operator_action"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let expected_command = recovery_projection_expected_action_command(&payload).or_else(|| {
+        payload
+            .get("projection_truth")
+            .and_then(|truth| truth.get("next_lawful_operator_action"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    });
     let Some(expected_command) = expected_command else {
         return true;
     };
+    let expected_command = expected_command.trim();
     let next_action_command = payload
         .get("next_action")
         .and_then(|next_action| next_action.get("command"))
@@ -94,6 +98,59 @@ fn recovery_projection_has_complete_action_fields(cached: &str) -> bool {
         .and_then(serde_json::Value::as_str)
         .map(str::trim);
     next_action_command == Some(expected_command) && recommended_command == Some(expected_command)
+}
+
+fn recovery_projection_expected_action_command(payload: &serde_json::Value) -> Option<String> {
+    let receipt = payload
+        .get("projection_truth")
+        .and_then(|truth| truth.get("dispatch_receipt"))?;
+    let dispatch_status = receipt
+        .get("dispatch_status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        == Some("executed");
+    let blocker_clear = receipt
+        .get("blocker_code")
+        .is_none_or(serde_json::Value::is_null);
+    let downstream_ready = receipt
+        .get("downstream_dispatch_ready")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let downstream_packet_ready = receipt
+        .get("downstream_dispatch_status")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"));
+    let downstream_blockers_empty = receipt
+        .get("downstream_dispatch_blockers")
+        .and_then(serde_json::Value::as_array)
+        .is_none_or(|values| values.is_empty());
+    if !(dispatch_status
+        && blocker_clear
+        && downstream_ready
+        && downstream_packet_ready
+        && downstream_blockers_empty)
+    {
+        return None;
+    }
+    let command = receipt
+        .get("downstream_dispatch_command")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if command == "vida agent-init" {
+        return receipt
+            .get("downstream_dispatch_packet_path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|path| {
+                format!(
+                    "vida agent-init --downstream-packet {} --json",
+                    crate::shell_quote(path)
+                )
+            });
+    }
+    Some(command.to_string())
 }
 
 fn stale_recovery_projection_matches_lane_truth(
@@ -611,7 +668,8 @@ fn next_lawful_operator_action_for_dispatch_resolution(
     if dispatch_receipt_has_clean_ready_downstream_handoff(receipt)
         && terminal_consume_continue_run_id == Some(status.run_id.as_str())
     {
-        return Some(format!("vida lane show {} --json", status.run_id));
+        return downstream_dispatch_command_for_receipt(receipt)
+            .or_else(|| Some(format!("vida lane show {} --json", status.run_id)));
     }
     let _reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
     if let Some(receipt_id) = receipt
@@ -653,6 +711,28 @@ fn dispatch_receipt_has_clean_ready_downstream_handoff(receipt: &RunGraphDispatc
             .downstream_dispatch_status
             .as_deref()
             .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"))
+}
+
+fn downstream_dispatch_command_for_receipt(receipt: &RunGraphDispatchReceipt) -> Option<String> {
+    let command = receipt
+        .downstream_dispatch_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if command == "vida agent-init" {
+        return receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|path| {
+                format!(
+                    "vida agent-init --downstream-packet {} --json",
+                    crate::shell_quote(path)
+                )
+            });
+    }
+    Some(command.to_string())
 }
 
 pub(crate) fn dispatch_receipt_can_use_terminal_continue_evidence(
@@ -754,6 +834,9 @@ fn next_lawful_operator_action_for_projection(
 fn recommended_surface_for_command(command: &str) -> String {
     if command.starts_with("vida status") {
         return "vida status".to_string();
+    }
+    if command.starts_with("vida agent-init") {
+        return "vida agent-init".to_string();
     }
     if command.starts_with("vida taskflow consume continue") {
         return "vida taskflow consume continue".to_string();
@@ -6310,6 +6393,35 @@ mod tests {
     }
 
     #[test]
+    fn recovery_projection_rejects_lane_show_when_downstream_agent_init_packet_is_ready() {
+        let stale_lane_show = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "next_action": {
+                "command": "vida lane show run-action-cache --json"
+            },
+            "recommended_command": "vida lane show run-action-cache --json",
+            "projection_truth": {
+                "next_lawful_operator_action": "vida lane show run-action-cache --json",
+                "dispatch_receipt": {
+                    "dispatch_status": "executed",
+                    "blocker_code": null,
+                    "downstream_dispatch_ready": true,
+                    "downstream_dispatch_status": "packet_ready",
+                    "downstream_dispatch_blockers": [],
+                    "downstream_dispatch_command": "vida agent-init",
+                    "downstream_dispatch_packet_path": "packet.json"
+                }
+            }
+        })
+        .to_string();
+
+        assert!(!recovery_projection_has_complete_action_fields(
+            &stale_lane_show
+        ));
+    }
+
+    #[test]
     fn recovery_status_rejects_stale_blocked_projection_after_stale_blocked_lane() {
         let root = std::env::temp_dir().join(format!(
             "vida-recovery-stale-blocked-projection-{}-{}",
@@ -10948,7 +11060,8 @@ mod tests {
     }
 
     #[test]
-    fn next_lawful_operator_action_uses_lane_show_after_terminal_ready_downstream_handoff() {
+    fn next_lawful_operator_action_uses_downstream_command_after_terminal_ready_downstream_handoff()
+    {
         let status = RunGraphStatus {
             run_id: "run-terminal-ready-handoff".to_string(),
             task_id: "task-terminal-ready-handoff".to_string(),
@@ -10977,7 +11090,7 @@ mod tests {
                 false,
             )
             .as_deref(),
-            Some("vida lane show run-terminal-ready-handoff --json")
+            Some("vida agent-init --downstream-packet downstream-packet.json --json")
         );
     }
 
@@ -11016,7 +11129,7 @@ mod tests {
             projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
             stale_state_suspected: false,
             next_lawful_operator_action: Some(
-                "vida lane show run-recovery-pass-action --json".to_string(),
+                "vida agent-init --downstream-packet packet.json --json".to_string(),
             ),
             dispatch_receipt: Some(clean_ready_downstream_dispatch_receipt(
                 "run-recovery-pass-action",
@@ -11031,13 +11144,13 @@ mod tests {
         assert!(why_not_now.is_none());
         assert_eq!(
             next_action.as_ref().map(|value| value.command.as_str()),
-            Some("vida lane show run-recovery-pass-action --json")
+            Some("vida agent-init --downstream-packet packet.json --json")
         );
         assert_eq!(
             recommended_command.as_deref(),
-            Some("vida lane show run-recovery-pass-action --json")
+            Some("vida agent-init --downstream-packet packet.json --json")
         );
-        assert_eq!(recommended_surface.as_deref(), Some("vida lane show"));
+        assert_eq!(recommended_surface.as_deref(), Some("vida agent-init"));
     }
 
     #[test]
