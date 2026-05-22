@@ -1686,6 +1686,80 @@ fn internal_codex_windows_sandbox_preflight_blocker(
     ))
 }
 
+fn configured_external_cli_backend_ids(
+    overlay: &serde_yaml::Value,
+    enabled: Option<bool>,
+) -> Vec<String> {
+    let mut ids = yaml_lookup(overlay, &["agent_system", "subagents"])
+        .and_then(serde_yaml::Value::as_mapping)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|(key, value)| {
+                    let backend_id = key.as_str()?.trim();
+                    if backend_id.is_empty() {
+                        return None;
+                    }
+                    if crate::yaml_string(yaml_lookup(value, &["subagent_backend_class"]))
+                        .as_deref()
+                        != Some("external_cli")
+                    {
+                        return None;
+                    }
+                    if let Some(expected_enabled) = enabled {
+                        let actual_enabled =
+                            yaml_lookup(value, &["enabled"]).and_then(serde_yaml::Value::as_bool);
+                        if actual_enabled != Some(expected_enabled) {
+                            return None;
+                        }
+                    }
+                    Some(backend_id.to_string())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    ids.sort();
+    ids
+}
+
+fn internal_codex_windows_sandbox_recovery_actions(
+    overlay: &serde_yaml::Value,
+    selected_cli_system: &str,
+    dispatch_target: &str,
+    sandbox_mode: Option<&str>,
+) -> Vec<String> {
+    let disabled_external = configured_external_cli_backend_ids(overlay, Some(false));
+    let enabled_external = configured_external_cli_backend_ids(overlay, Some(true));
+    let sandbox_mode = sandbox_mode
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown");
+    let mut actions = vec![
+        format!(
+            "Preferred: enable a configured external CLI backend that is admissible for dispatch target `{dispatch_target}` (`agent_system.subagents.<backend>.enabled=true`, `subagent_backend_class=external_cli`, readiness satisfied), then route this lane to that backend through the configured runtime assignment/fallback fields."
+        ),
+        format!(
+            "Alternative only after proof: if `{selected_cli_system}` has verified receipt-backed `codex exec` support for sandbox `{sandbox_mode}` on this Windows host, set `host_environment.systems.{selected_cli_system}.dispatch.windows_sandbox_spawn_supported=true` in `vida.config.yaml`."
+        ),
+        "Do not continue root-local implementation from this blocker; restore a receipt-backed backend route or record a separate configuration/readiness defect for the missing backend.".to_string(),
+    ];
+    if !disabled_external.is_empty() {
+        actions.insert(
+            1,
+            format!(
+                "Configured external CLI backends currently disabled in `agent_system.subagents`: {}.",
+                disabled_external.join(", ")
+            ),
+        );
+    } else if enabled_external.is_empty() {
+        actions.insert(
+            1,
+            "No enabled external CLI backend is configured under `agent_system.subagents`; add or enable one before expecting external fallback dispatch.".to_string(),
+        );
+    }
+    actions
+}
+
 pub(crate) fn agent_lane_dispatch_result(
     mut activation_view: serde_json::Value,
     dispatch_packet_path: &str,
@@ -2031,6 +2105,17 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         )
     });
     if let Some((blocker_code, blocker_reason)) = preflight_blocker {
+        let preflight_recovery_actions =
+            if blocker_code == "internal_codex_windows_sandbox_unavailable" {
+                internal_codex_windows_sandbox_recovery_actions(
+                    &overlay,
+                    &selected_cli_system,
+                    &receipt.dispatch_target,
+                    carrier["sandbox_mode"].as_str(),
+                )
+            } else {
+                vec![blocker_reason.clone()]
+            };
         if allow_internal_codex_external_fallback {
             if let Some(fallback_backend) = internal_codex_external_fallback_backend(
                 role_selection,
@@ -2099,6 +2184,10 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             "blocker_reason".to_string(),
             serde_json::json!(blocker_reason.clone()),
         );
+        body.insert(
+            "next_actions".to_string(),
+            serde_json::json!(preflight_recovery_actions.clone()),
+        );
         if let Some(dispatch) = body
             .get_mut("backend_dispatch")
             .and_then(serde_json::Value::as_object_mut)
@@ -2120,6 +2209,17 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             dispatch.insert(
                 "preflight_blocker_reason".to_string(),
                 serde_json::json!(blocker_reason),
+            );
+            dispatch.insert(
+                "preflight_recovery_actions".to_string(),
+                serde_json::json!(preflight_recovery_actions),
+            );
+            dispatch.insert(
+                "configured_external_cli_candidates".to_string(),
+                serde_json::json!({
+                    "enabled": configured_external_cli_backend_ids(&overlay, Some(true)),
+                    "disabled": configured_external_cli_backend_ids(&overlay, Some(false)),
+                }),
             );
             dispatch.insert(
                 "executor_backend".to_string(),
@@ -3016,6 +3116,7 @@ mod tests {
         execute_external_agent_lane_dispatch, external_provider_output_confirms_execution,
         internal_codex_app_bridge_requires_fail_closed, internal_codex_output_confirms_execution,
         internal_codex_windows_sandbox_preflight_blocker,
+        internal_codex_windows_sandbox_recovery_actions,
         internal_host_activation_only_blocker_code, mark_dispatch_result_execution_evidence,
         parse_external_provider_output, parse_internal_codex_exec_output,
         ready_external_readiness_fallback_backend,
@@ -3649,6 +3750,55 @@ dispatch:
                 Some("workspace-write"),
             ),
             None
+        );
+    }
+
+    #[test]
+    fn internal_codex_windows_sandbox_recovery_actions_are_actionable() {
+        let overlay = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    disabled_external_fixture:
+      enabled: false
+      subagent_backend_class: external_cli
+    internal_fixture:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("overlay should parse");
+
+        let actions = internal_codex_windows_sandbox_recovery_actions(
+            &overlay,
+            "codex",
+            "implementation",
+            Some("workspace-write"),
+        );
+
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.contains("agent_system.subagents.<backend>.enabled=true")),
+            "actions should name the external backend enablement path"
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.contains("disabled_external_fixture")),
+            "actions should list configured disabled external candidates"
+        );
+        assert!(
+            actions.iter().any(|action| action.contains(
+                "host_environment.systems.codex.dispatch.windows_sandbox_spawn_supported=true"
+            )),
+            "actions should name the exact Windows support flag path"
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.contains("receipt-backed")),
+            "actions should keep receipt-backed execution as the recovery target"
         );
     }
 
