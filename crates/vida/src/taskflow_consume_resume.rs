@@ -1253,14 +1253,7 @@ fn closure_packet_ready_resume_from_root_receipt(
         receipt.selected_backend.as_deref(),
     )
     .or_else(|| receipt.selected_backend.clone());
-    let closure_execution_recorded = receipt.downstream_dispatch_target.as_deref()
-        == Some("closure")
-        && receipt.downstream_dispatch_status.as_deref() == Some("executed")
-        && receipt
-            .downstream_dispatch_result_path
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|path| !path.is_empty());
+    let closure_execution_recorded = closure_execution_evidence_is_valid(receipt);
     let dispatch_status = if closure_execution_recorded {
         "executed"
     } else {
@@ -1313,6 +1306,39 @@ fn closure_packet_ready_resume_from_root_receipt(
             .expect("rfc3339 timestamp should render"),
     };
     build_resume_inputs(closure_receipt, packet_path, packet, role_selection)
+}
+
+fn closure_execution_evidence_is_valid(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    if receipt.downstream_dispatch_target.as_deref() != Some("closure")
+        || receipt.downstream_dispatch_status.as_deref() != Some("executed")
+    {
+        return false;
+    }
+    let Some(result_path) = receipt
+        .downstream_dispatch_result_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return false;
+    };
+    let Ok(result) = read_downstream_dispatch_result(result_path) else {
+        return false;
+    };
+    if result.get("run_id").and_then(serde_json::Value::as_str) != Some(receipt.run_id.as_str()) {
+        return false;
+    }
+    if result
+        .get("dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        != Some("closure")
+    {
+        return false;
+    }
+    canonical_resume_dispatch_status(result.get("execution_state").and_then(serde_json::Value::as_str))
+        == "executed"
 }
 
 fn terminal_closure_complete_resume_from_root_receipt(
