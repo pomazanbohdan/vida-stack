@@ -948,7 +948,8 @@ mod tests {
             rows.push(task);
         }
 
-        let result = StateStore::task_dependency_tree_from_rows(&rows, &format!("task-{}", chain_len - 1));
+        let result =
+            StateStore::task_dependency_tree_from_rows(&rows, &format!("task-{}", chain_len - 1));
         match result {
             Err(StateStoreError::InvalidTaskRecord { reason }) => {
                 assert!(reason.contains("exceeds max depth"));

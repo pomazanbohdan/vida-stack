@@ -3096,7 +3096,7 @@ pub(crate) async fn run_boot(args: BootArgs) -> ExitCode {
                 }
             }
             .await;
-            drop(store);
+            store.close().await;
             if exit_code == ExitCode::SUCCESS {
                 if let Err(error) =
                     verify_authoritative_state_store_released_after_boot(state_root).await

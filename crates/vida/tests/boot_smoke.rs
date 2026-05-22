@@ -1070,6 +1070,109 @@ fn taskflow_run_graph_status_with_timeout(
     taskflow_run_graph_with_timeout(state_dir, "status", Some(run_id), json)
 }
 
+fn taskflow_run_graph_seed_with_timeout(
+    state_dir: &str,
+    run_id: &str,
+    request_text: &str,
+    json: bool,
+) -> std::process::Output {
+    let nonce = UNIQUE_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let stdout_path = format!(
+        "{}/vida-run-graph-seed-{}-{nonce}.stdout",
+        std::env::temp_dir().display(),
+        std::process::id()
+    );
+    let stderr_path = format!(
+        "{}/vida-run-graph-seed-{}-{nonce}.stderr",
+        std::env::temp_dir().display(),
+        std::process::id()
+    );
+    let mut command = vida();
+    command.args(["taskflow", "run-graph", "seed", run_id, request_text]);
+    if json {
+        command.arg("--json");
+    }
+    command
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", state_dir);
+    let stdout = fs::File::create(&stdout_path).expect("seed stdout file should create");
+    let stderr = fs::File::create(&stderr_path).expect("seed stderr file should create");
+    let mut child = command
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .expect("run-graph seed should start");
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("seed child status should poll") {
+            break status;
+        }
+        if started.elapsed() >= Duration::from_secs(240) {
+            let _ = child.kill();
+            let _ = child.wait();
+            break timeout_exit_status();
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    Output {
+        status,
+        stdout: fs::read(&stdout_path).expect("seed stdout file should read"),
+        stderr: fs::read(&stderr_path).expect("seed stderr file should read"),
+    }
+}
+
+fn taskflow_run_graph_advance_with_timeout(
+    state_dir: &str,
+    run_id: &str,
+    json: bool,
+) -> std::process::Output {
+    let nonce = UNIQUE_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let stdout_path = format!(
+        "{}/vida-run-graph-advance-{}-{nonce}.stdout",
+        std::env::temp_dir().display(),
+        std::process::id()
+    );
+    let stderr_path = format!(
+        "{}/vida-run-graph-advance-{}-{nonce}.stderr",
+        std::env::temp_dir().display(),
+        std::process::id()
+    );
+    let mut command = vida();
+    command.args(["taskflow", "run-graph", "advance", run_id]);
+    if json {
+        command.arg("--json");
+    }
+    command
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", state_dir);
+    let stdout = fs::File::create(&stdout_path).expect("advance stdout file should create");
+    let stderr = fs::File::create(&stderr_path).expect("advance stderr file should create");
+    let mut child = command
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .expect("run-graph advance should start");
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("advance child status should poll") {
+            break status;
+        }
+        if started.elapsed() >= Duration::from_secs(240) {
+            let _ = child.kill();
+            let _ = child.wait();
+            break timeout_exit_status();
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    Output {
+        status,
+        stdout: fs::read(&stdout_path).expect("advance stdout file should read"),
+        stderr: fs::read(&stderr_path).expect("advance stderr file should read"),
+    }
+}
+
 fn taskflow_run_graph_with_timeout(
     state_dir: &str,
     subcommand: &str,
@@ -8953,22 +9056,8 @@ fn taskflow_run_graph_seed_builds_scope_discussion_state_from_configured_agent_s
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-scope",
-                "clarify spec scope",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-scope", "clarify spec scope", true);
     assert!(seed.status.success());
     let seed_stdout = String::from_utf8_lossy(&seed.stdout);
     let seed_parsed: serde_json::Value =
@@ -9042,22 +9131,12 @@ fn taskflow_run_graph_seed_builds_pbi_discussion_state_from_configured_agent_sys
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-pbi",
-                "prioritize backlog work pool",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-pbi",
+        "prioritize backlog work pool",
+        true,
+    );
     assert!(seed.status.success());
     let seed_stdout = String::from_utf8_lossy(&seed.stdout);
     let seed_parsed: serde_json::Value =
@@ -9122,22 +9201,8 @@ fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_rout
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
     let seed_stdout = String::from_utf8_lossy(&seed.stdout);
     let seed_parsed: serde_json::Value =
@@ -9221,33 +9286,11 @@ fn taskflow_run_graph_advance_builds_coach_handoff_for_seeded_implementation() {
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
-    let advance = run_with_retry(|| {
-        vida()
-            .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph advance should run")
-    });
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(advance.status.success());
     let advance_stdout = String::from_utf8_lossy(&advance.stdout);
     let advance_parsed: serde_json::Value =
@@ -9294,22 +9337,8 @@ fn taskflow_run_graph_advance_fails_closed_when_compiled_snapshot_lacks_implemen
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
     overwrite_launcher_activation_snapshot(
@@ -9326,13 +9355,7 @@ fn taskflow_run_graph_advance_fails_closed_when_compiled_snapshot_lacks_implemen
         }),
     );
 
-    let advance = vida()
-        .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("run-graph advance should run");
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(!advance.status.success());
 
     assert!(
@@ -9354,22 +9377,8 @@ fn taskflow_run_graph_advance_builds_spec_pack_handoff_for_seeded_scope_discussi
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-scope",
-                "clarify spec scope",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-scope", "clarify spec scope", true);
     assert!(seed.status.success());
 
     let advance = run_with_retry(|| {
@@ -9442,22 +9451,12 @@ fn taskflow_run_graph_advance_builds_work_pool_pack_handoff_for_seeded_pbi_discu
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-pbi",
-                "prioritize backlog work pool",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-pbi",
+        "prioritize backlog work pool",
+        true,
+    );
     assert!(seed.status.success());
 
     let advance = run_with_retry(|| {
@@ -9524,33 +9523,11 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_scope_discu
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-scope",
-                "clarify spec scope",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-scope", "clarify spec scope", true);
     assert!(seed.status.success());
 
-    let advance = run_with_retry(|| {
-        vida()
-            .args(["taskflow", "run-graph", "advance", "vida-scope"])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph advance should run")
-    });
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-scope", false);
     assert!(advance.status.success());
 
     let run_graph = run_with_retry(|| {
@@ -9617,33 +9594,15 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_pbi_discuss
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-pbi",
-                "prioritize backlog work pool",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-pbi",
+        "prioritize backlog work pool",
+        true,
+    );
     assert!(seed.status.success());
 
-    let advance = run_with_retry(|| {
-        vida()
-            .args(["taskflow", "run-graph", "advance", "vida-pbi"])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph advance should run")
-    });
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-pbi", false);
     assert!(advance.status.success());
 
     let run_graph = run_with_retry(|| {
@@ -9701,33 +9660,11 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_implementat
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
-    let advance = run_with_retry(|| {
-        vida()
-            .args(["taskflow", "run-graph", "advance", "vida-dev"])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph advance should run")
-    });
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
     assert!(advance.status.success());
 
     let run_graph = run_with_retry(|| {
@@ -9787,44 +9724,14 @@ fn taskflow_run_graph_advance_builds_review_ensemble_handoff_after_coach_for_imp
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
-    let first_advance = run_with_retry(|| {
-        vida()
-            .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("first run-graph advance should run")
-    });
+    let first_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(first_advance.status.success());
 
-    let second_advance = run_with_retry(|| {
-        vida()
-            .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("second run-graph advance should run")
-    });
+    let second_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(second_advance.status.success());
     let second_advance_stdout = String::from_utf8_lossy(&second_advance.stdout);
     let second_advance_parsed: serde_json::Value = serde_json::from_str(&second_advance_stdout)
@@ -9884,44 +9791,14 @@ fn taskflow_run_graph_second_advance_updates_status_and_recovery_for_implementat
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
-    let first_advance = run_with_retry(|| {
-        vida()
-            .args(["taskflow", "run-graph", "advance", "vida-dev"])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("first run-graph advance should run")
-    });
+    let first_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
     assert!(first_advance.status.success());
 
-    let second_advance = run_with_retry(|| {
-        vida()
-            .args(["taskflow", "run-graph", "advance", "vida-dev"])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("second run-graph advance should run")
-    });
+    let second_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
     assert!(second_advance.status.success());
 
     let run_graph = run_with_retry(|| {
@@ -9993,49 +9870,19 @@ fn taskflow_run_graph_third_advance_enters_review_ensemble_for_implementation() 
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
     for step in 0..2 {
-        let advance = run_with_retry(|| {
-            vida()
-                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-                .env_remove("VIDA_ROOT")
-                .env_remove("VIDA_HOME")
-                .env("VIDA_STATE_DIR", &state_dir)
-                .output()
-                .expect("pre-review run-graph advance should run")
-        });
+        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
         );
     }
 
-    let third_advance = run_with_retry(|| {
-        vida()
-            .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("third run-graph advance should run")
-    });
+    let third_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(third_advance.status.success());
     let third_advance_stdout = String::from_utf8_lossy(&third_advance.stdout);
     let third_advance_parsed: serde_json::Value = serde_json::from_str(&third_advance_stdout)
@@ -10103,34 +9950,12 @@ fn taskflow_run_graph_third_advance_updates_status_and_recovery_for_review_ensem
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
     for step in 0..4 {
-        let advance = run_with_retry(|| {
-            vida()
-                .args(["taskflow", "run-graph", "advance", "vida-dev"])
-                .env_remove("VIDA_ROOT")
-                .env_remove("VIDA_HOME")
-                .env("VIDA_STATE_DIR", &state_dir)
-                .output()
-                .expect("run-graph advance should run")
-        });
+        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
@@ -10210,34 +10035,12 @@ fn taskflow_run_graph_third_advance_fails_closed_for_wrong_review_handoff() {
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
     for step in 0..2 {
-        let advance = run_with_retry(|| {
-            vida()
-                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-                .env_remove("VIDA_ROOT")
-                .env_remove("VIDA_HOME")
-                .env("VIDA_STATE_DIR", &state_dir)
-                .output()
-                .expect("pre-review run-graph advance should run")
-        });
+        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
@@ -10263,13 +10066,7 @@ fn taskflow_run_graph_third_advance_fails_closed_for_wrong_review_handoff() {
         .expect("run-graph update should run");
     assert!(corrupt.status.success());
 
-    let output = vida()
-        .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("wrong third advance should run");
+    let output = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("implementation coach handoff"));
@@ -10290,34 +10087,12 @@ fn taskflow_run_graph_fourth_advance_enters_explicit_approval_wait_after_clean_r
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
     for step in 0..4 {
-        let advance = run_with_retry(|| {
-            vida()
-                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-                .env_remove("VIDA_ROOT")
-                .env_remove("VIDA_HOME")
-                .env("VIDA_STATE_DIR", &state_dir)
-                .output()
-                .expect("pre-approval advance should run")
-        });
+        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
@@ -10342,13 +10117,7 @@ fn taskflow_run_graph_fourth_advance_enters_explicit_approval_wait_after_clean_r
         .expect("run-graph update should run");
     assert!(mark_clean.status.success());
 
-    let fourth_advance = vida()
-        .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("fourth run-graph advance should run");
+    let fourth_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(fourth_advance.status.success());
     let stdout = String::from_utf8_lossy(&fourth_advance.stdout);
     let parsed: serde_json::Value =
@@ -10387,34 +10156,12 @@ fn taskflow_run_graph_fifth_advance_updates_status_and_recovery_after_explicit_a
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
     for step in 0..4 {
-        let advance = run_with_retry(|| {
-            vida()
-                .args(["taskflow", "run-graph", "advance", "vida-dev"])
-                .env_remove("VIDA_ROOT")
-                .env_remove("VIDA_HOME")
-                .env("VIDA_STATE_DIR", &state_dir)
-                .output()
-                .expect("pre-approval advance should run")
-        });
+        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
@@ -10439,13 +10186,7 @@ fn taskflow_run_graph_fifth_advance_updates_status_and_recovery_after_explicit_a
         .expect("run-graph update should run");
     assert!(mark_clean.status.success());
 
-    let fourth_advance = vida()
-        .args(["taskflow", "run-graph", "advance", "vida-dev"])
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("approval-wait advance should run");
+    let fourth_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
     assert!(fourth_advance.status.success());
 
     let mark_approved = vida()
@@ -10466,13 +10207,7 @@ fn taskflow_run_graph_fifth_advance_updates_status_and_recovery_after_explicit_a
         .expect("approval update should run");
     assert!(mark_approved.status.success());
 
-    let fifth_advance = vida()
-        .args(["taskflow", "run-graph", "advance", "vida-dev"])
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("fifth run-graph advance should run");
+    let fifth_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
     assert!(fifth_advance.status.success());
 
     let run_graph = taskflow_run_graph_status_with_timeout(&state_dir, "vida-dev", true);
@@ -10567,34 +10302,12 @@ fn taskflow_run_graph_fourth_advance_fails_closed_for_review_findings() {
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
     for step in 0..4 {
-        let advance = run_with_retry(|| {
-            vida()
-                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-                .env_remove("VIDA_ROOT")
-                .env_remove("VIDA_HOME")
-                .env("VIDA_STATE_DIR", &state_dir)
-                .output()
-                .expect("pre-findings advance should run")
-        });
+        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
@@ -10619,13 +10332,7 @@ fn taskflow_run_graph_fourth_advance_fails_closed_for_review_findings() {
         .expect("run-graph update should run");
     assert!(mark_findings.status.success());
 
-    let output = vida()
-        .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("fourth findings advance should run");
+    let output = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
@@ -10654,34 +10361,12 @@ fn taskflow_run_graph_fourth_advance_fails_closed_for_changed_scope() {
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
     for step in 0..4 {
-        let advance = run_with_retry(|| {
-            vida()
-                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-                .env_remove("VIDA_ROOT")
-                .env_remove("VIDA_HOME")
-                .env("VIDA_STATE_DIR", &state_dir)
-                .output()
-                .expect("pre-scope advance should run")
-        });
+        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
@@ -10706,13 +10391,7 @@ fn taskflow_run_graph_fourth_advance_fails_closed_for_changed_scope() {
         .expect("run-graph update should run");
     assert!(mark_changed_scope.status.success());
 
-    let output = vida()
-        .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("fourth changed-scope advance should run");
+    let output = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("review findings require explicit scope/rework resolution"));
@@ -10732,34 +10411,12 @@ fn taskflow_run_graph_fourth_advance_reenters_analysis_for_explicit_rework() {
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
     for step in 0..3 {
-        let advance = run_with_retry(|| {
-            vida()
-                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-                .env_remove("VIDA_ROOT")
-                .env_remove("VIDA_HOME")
-                .env("VIDA_STATE_DIR", &state_dir)
-                .output()
-                .expect("pre-rework advance should run")
-        });
+        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
@@ -10785,13 +10442,7 @@ fn taskflow_run_graph_fourth_advance_reenters_analysis_for_explicit_rework() {
         .expect("run-graph update should run");
     assert!(mark_rework.status.success());
 
-    let fourth_advance = vida()
-        .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("fourth rework advance should run");
+    let fourth_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(fourth_advance.status.success());
     let stdout = String::from_utf8_lossy(&fourth_advance.stdout);
     let parsed: serde_json::Value =
@@ -10832,34 +10483,12 @@ fn taskflow_run_graph_fourth_rework_advance_updates_status_and_recovery() {
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
     for step in 0..4 {
-        let advance = run_with_retry(|| {
-            vida()
-                .args(["taskflow", "run-graph", "advance", "vida-dev"])
-                .env_remove("VIDA_ROOT")
-                .env_remove("VIDA_HOME")
-                .env("VIDA_STATE_DIR", &state_dir)
-                .output()
-                .expect("pre-rework advance should run")
-        });
+        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
@@ -10885,13 +10514,7 @@ fn taskflow_run_graph_fourth_rework_advance_updates_status_and_recovery() {
         .expect("run-graph update should run");
     assert!(mark_rework.status.success());
 
-    let fourth_advance = vida()
-        .args(["taskflow", "run-graph", "advance", "vida-dev"])
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("fourth rework advance should run");
+    let fourth_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
     assert!(fourth_advance.status.success());
 
     let run_graph = taskflow_run_graph_status_with_timeout(&state_dir, "vida-dev", true);
@@ -10954,34 +10577,12 @@ fn taskflow_run_graph_fourth_rework_advance_fails_closed_for_wrong_target() {
         .expect("boot should run");
     assert!(boot.status.success());
 
-    let seed = run_with_retry(|| {
-        vida()
-            .args([
-                "taskflow",
-                "run-graph",
-                "seed",
-                "vida-dev",
-                "continue development",
-                "--json",
-            ])
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_STATE_DIR", &state_dir)
-            .output()
-            .expect("run-graph seed should run")
-    });
+    let seed =
+        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
     assert!(seed.status.success());
 
     for step in 0..4 {
-        let advance = run_with_retry(|| {
-            vida()
-                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-                .env_remove("VIDA_ROOT")
-                .env_remove("VIDA_HOME")
-                .env("VIDA_STATE_DIR", &state_dir)
-                .output()
-                .expect("pre-rework advance should run")
-        });
+        let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
@@ -11007,13 +10608,7 @@ fn taskflow_run_graph_fourth_rework_advance_fails_closed_for_wrong_target() {
         .expect("run-graph update should run");
     assert!(mark_rework.status.success());
 
-    let output = vida()
-        .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("fourth wrong-target advance should run");
+    let output = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("explicit review rework loop"));

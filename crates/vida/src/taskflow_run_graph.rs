@@ -860,7 +860,8 @@ fn recovery_surface_contract(
 ) {
     let projection_resolves_open_cycle =
         recovery_projection_resolves_persisted_open_cycle(summary, projection_truth);
-    let mut blocker_codes = if projection_resolves_open_cycle {
+    let ready_handoff_resolves_open_cycle = recovery_ready_handoff_resolves_open_cycle(summary);
+    let mut blocker_codes = if projection_resolves_open_cycle || ready_handoff_resolves_open_cycle {
         Vec::new()
     } else {
         summary
@@ -967,6 +968,16 @@ fn recovery_projection_resolves_persisted_open_cycle(
                     .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"));
             clean_resolved_receipt && downstream_has_no_blocking_state
         })
+}
+
+fn recovery_ready_handoff_resolves_open_cycle(
+    summary: &crate::state_store::RunGraphRecoverySummary,
+) -> bool {
+    summary.delegation_gate.delegated_cycle_open
+        && summary.delegation_gate.delegated_cycle_state == "handoff_pending"
+        && summary.recovery_ready
+        && summary.resume_status == "ready"
+        && summary.resume_target.starts_with("dispatch.")
 }
 
 async fn build_run_graph_diagnosis(
@@ -1328,14 +1339,16 @@ fn dispatch_blocker_codes_from_status_surface(
     let mut blocker_codes = Vec::new();
     let mut blocked_evidence_present = false;
     if let Some(summary) = recovery {
-        if let Some(blocker_code) = summary
-            .delegation_gate
-            .blocker_code
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            blocker_codes.push(blocker_code.to_string());
+        if !recovery_ready_handoff_resolves_open_cycle(summary) {
+            if let Some(blocker_code) = summary
+                .delegation_gate
+                .blocker_code
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                blocker_codes.push(blocker_code.to_string());
+            }
         }
         blocked_evidence_present |= blocked_status_signal(&summary.lifecycle_stage)
             || blocked_status_signal(&summary.resume_status);
@@ -1681,8 +1694,8 @@ pub(crate) async fn run_graph_projection_truth(
     } else {
         None
     };
-    let stale_state_suspected =
-        task_missing || projection_stale_state_suspected(store.root(), dispatch_receipt.as_ref());
+    let stale_state_suspected = (task_missing && status.status == "blocked")
+        || projection_stale_state_suspected(store.root(), dispatch_receipt.as_ref());
     Ok(RunGraphProjectionTruth {
         projection_source: if dispatch_receipt.is_some() {
             "reconciled_run_graph_status".to_string()
@@ -4303,6 +4316,15 @@ pub(crate) fn run_graph_dispatch_context_from_seed_payload(
     }
 }
 
+fn seed_payload_operator_surface_json(payload: &TaskflowRunGraphSeedPayload) -> serde_json::Value {
+    let mut payload_json = serde_json::to_value(payload)
+        .expect("run-graph seed payload should render as operator-surface json");
+    if let Some(object) = payload_json["role_selection"].as_object_mut() {
+        object.insert("compiled_bundle".to_string(), serde_json::Value::Null);
+    }
+    payload_json
+}
+
 fn dispatch_init_route_targets(execution_plan: &serde_json::Value) -> Vec<String> {
     let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
     let mut targets =
@@ -4404,10 +4426,11 @@ pub(crate) async fn persist_seed_artifacts(
         .record_run_graph_status(&payload.status)
         .await
         .map_err(|error| format!("Failed to record seeded run-graph state: {error}"))?;
-    crate::taskflow_continuation::sync_run_graph_continuation_binding(
+    crate::taskflow_continuation::sync_run_graph_continuation_binding_with_request_text(
         store,
         &payload.status,
         "run_graph_seed",
+        Some(&payload.request_text),
     )
     .await?;
     Ok(())
@@ -5884,6 +5907,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                         "delegation gate",
                         &payload.status.delegation_gate().as_display(),
                     );
+                    store.close().await;
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
@@ -5984,6 +6008,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                         }))
                         .expect("run-graph advance should render as json")
                     );
+                    store.close().await;
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
@@ -6033,7 +6058,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                             serde_json::to_string_pretty(&serde_json::json!({
                                 "surface": "vida taskflow run-graph seed",
                                 "run_id": task_id,
-                                "payload": payload,
+                                "payload": seed_payload_operator_surface_json(&payload),
                                 "delegation_gate": delegation_gate,
                             }))
                             .expect("run-graph seed should render as json")
@@ -6063,6 +6088,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                             &payload.status.delegation_gate().as_display(),
                         );
                     }
+                    store.close().await;
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
@@ -8379,7 +8405,7 @@ mod tests {
         );
         assert_eq!(
             summary.blocker_codes,
-            vec!["open_delegated_cycle".to_string()]
+            vec!["tool_execution_failed".to_string()]
         );
         assert_eq!(
             summary.recommended_surface.as_deref(),

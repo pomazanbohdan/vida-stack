@@ -311,6 +311,15 @@ pub(crate) async fn sync_run_graph_continuation_binding(
     status: &RunGraphStatus,
     binding_source: &str,
 ) -> Result<Option<RunGraphContinuationBinding>, String> {
+    sync_run_graph_continuation_binding_with_request_text(store, status, binding_source, None).await
+}
+
+pub(crate) async fn sync_run_graph_continuation_binding_with_request_text(
+    store: &StateStore,
+    status: &RunGraphStatus,
+    binding_source: &str,
+    request_text_override: Option<&str>,
+) -> Result<Option<RunGraphContinuationBinding>, String> {
     if let Some(existing) = store
         .run_graph_continuation_binding(&status.run_id)
         .await
@@ -324,11 +333,20 @@ pub(crate) async fn sync_run_graph_continuation_binding(
             }
         }
     }
-    let request_text = store
-        .run_graph_dispatch_context(&status.run_id)
-        .await
-        .map_err(|error| format!("Failed to read persisted run-graph dispatch context: {error}"))?
-        .map(|context| context.request_text);
+    let request_text = if let Some(request_text) = request_text_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(request_text.to_string())
+    } else {
+        store
+            .run_graph_dispatch_context(&status.run_id)
+            .await
+            .map_err(|error| {
+                format!("Failed to read persisted run-graph dispatch context: {error}")
+            })?
+            .map(|context| context.request_text)
+    };
     let Some(binding) =
         build_run_graph_continuation_binding(status, request_text.as_deref(), binding_source, None)
     else {
