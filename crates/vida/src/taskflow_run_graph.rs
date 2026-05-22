@@ -3012,6 +3012,16 @@ fn print_run_graph_json_error(
         "error": error,
     });
     if let Some(evidence) = evidence {
+        if evidence.get("surface").is_some() {
+            let mut evidence = evidence;
+            evidence["error"] = serde_json::Value::String(error.to_string());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&evidence)
+                    .expect("run-graph error should render as json")
+            );
+            return;
+        }
         payload["incident"] = evidence["incident"].clone();
         payload["blockers"] = evidence["blockers"].clone();
     }
@@ -3028,16 +3038,60 @@ fn run_graph_dispatch_init_timeout_message(run_id: &str) -> String {
 }
 
 fn run_graph_dispatch_init_error_evidence(error: &str) -> Option<serde_json::Value> {
-    if !error.starts_with("Timed out preparing run-graph dispatch-init") {
-        return None;
+    if error.starts_with("Timed out preparing run-graph dispatch-init") {
+        return Some(serde_json::json!({
+            "incident": {
+                "status": "blocked",
+                "summary": "run-graph dispatch-init timed out before returning a bounded dispatch receipt"
+            },
+            "blockers": [RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER]
+        }));
     }
-    Some(serde_json::json!({
-        "incident": {
-            "status": "blocked",
-            "summary": "run-graph dispatch-init timed out before returning a bounded dispatch receipt"
-        },
-        "blockers": [RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER]
-    }))
+    if error.contains("recovery_ready is false") {
+        let run_id = run_graph_resume_gate_error_run_id(error)?;
+        let command = format!("vida lane show {} --json", shell_quote(&run_id));
+        let next_action = RecoveryNextAction {
+            command: command.clone(),
+            surface: recommended_surface_for_command(&command),
+            reason: "inspect the lane envelope for the dispatch blocker and follow its recommended recovery command".to_string(),
+        };
+        let next_actions = vec![
+            next_action.reason.clone(),
+            format!(
+                "Inspect recovery details with `vida taskflow recovery status {} --json`.",
+                shell_quote(&run_id)
+            ),
+        ];
+        return build_run_graph_operator_surface_payload(
+            "vida taskflow run-graph dispatch-init",
+            &run_id,
+            vec![fallback_dispatch_blocker_code()],
+            next_actions,
+            serde_json::json!({
+                "error": error,
+                "blocker_code": "run_graph_recovery_not_ready",
+                "next_action": next_action,
+                "recommended_command": command,
+                "recommended_surface": recommended_surface_for_command(&command),
+                "incident": {
+                    "status": "blocked",
+                    "summary": "run-graph dispatch-init resume gate denied because recovery_ready is false",
+                    "run_id": run_id,
+                },
+            }),
+        )
+        .ok();
+    }
+    None
+}
+
+fn run_graph_resume_gate_error_run_id(error: &str) -> Option<String> {
+    let marker = "Run-graph resume gate denied for `";
+    let start = error.find(marker)? + marker.len();
+    let rest = &error[start..];
+    let end = rest.find('`')?;
+    let run_id = rest[..end].trim();
+    (!run_id.is_empty()).then(|| run_id.to_string())
 }
 
 async fn record_dispatch_init_timeout_blocker(
@@ -6261,6 +6315,39 @@ mod tests {
             serde_json::json!([RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER])
         );
         assert!(run_graph_dispatch_init_error_evidence("unrelated dispatch-init error").is_none());
+    }
+
+    #[test]
+    fn dispatch_init_recovery_not_ready_error_surfaces_lane_recovery_action() {
+        let evidence = run_graph_dispatch_init_error_evidence(
+            "Run-graph resume gate denied for `run-recovery-false`: recovery_ready is false",
+        )
+        .expect("recovery_ready=false should expose operator action evidence");
+
+        assert_eq!(evidence["surface"], "vida taskflow run-graph dispatch-init");
+        assert_eq!(evidence["status"], "blocked");
+        assert_eq!(
+            evidence["blocker_codes"],
+            serde_json::json!(["tool_execution_failed"])
+        );
+        assert_eq!(
+            evidence["recommended_command"],
+            "vida lane show run-recovery-false --json"
+        );
+        assert_eq!(evidence["recommended_surface"], "vida lane show");
+        assert_eq!(
+            evidence["next_action"]["command"],
+            "vida lane show run-recovery-false --json"
+        );
+        assert!(evidence["next_actions"]
+            .as_array()
+            .is_some_and(|actions| actions.iter().any(|action| action
+                .as_str()
+                .is_some_and(|text| text.contains("recommended recovery command")))));
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&evidence),
+            None
+        );
     }
 
     #[test]

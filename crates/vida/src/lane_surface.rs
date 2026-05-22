@@ -589,7 +589,8 @@ fn build_lane_envelope(
     let dispatch_status = summary.dispatch_status.clone();
     let root_local_write_allowed_for_only_these_paths =
         active_exception_write_scope(&summary, exception_path_metadata.as_ref());
-    let next_action = lane_ready_downstream_next_action(&summary, blocked);
+    let next_action = lane_ready_downstream_next_action(&summary, blocked)
+        .or_else(|| lane_blocked_next_action(&summary, status.as_ref(), blocked, &next_actions));
     let recommended_command = next_action.as_ref().map(|action| action.command.clone());
     let recommended_surface = next_action.as_ref().map(|action| action.surface.clone());
     let selected_backend = status
@@ -705,6 +706,109 @@ fn lane_ready_downstream_next_action(
                 .as_deref()
                 .unwrap_or("next")
         ),
+    })
+}
+
+fn lane_blocked_next_action(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    status: Option<&crate::state_store::RunGraphStatus>,
+    blocked: bool,
+    next_actions: &[String],
+) -> Option<LaneNextAction> {
+    if !blocked {
+        return None;
+    }
+    if let Some(receipt_id) = summary
+        .exception_path_receipt_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|_| summary.supersedes_receipt_id.is_none())
+    {
+        let command = format!(
+            "vida lane supersede {} --receipt-id {} --json",
+            crate::shell_quote(summary.run_id.trim()),
+            crate::shell_quote(receipt_id)
+        );
+        return Some(LaneNextAction {
+            surface: lane_recommended_surface_for_command(&command),
+            command,
+            reason: "activate the recorded exception-path receipt before treating local recovery as lawful".to_string(),
+        });
+    }
+    let open_cycle_recovery = next_actions.iter().any(|action| {
+        action.contains("record structured exception takeover")
+            || action.contains("delegated cycle is still open")
+            || action.contains("root-local write remains blocked")
+    });
+    if !open_cycle_recovery {
+        return None;
+    }
+    let receipt_id = format!("{}-exception-takeover", summary.run_id.trim());
+    let reason_class = summary
+        .blocker_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            summary
+                .downstream_dispatch_blockers
+                .iter()
+                .map(String::as_str)
+                .map(str::trim)
+                .find(|value| !value.is_empty())
+        })
+        .unwrap_or("blocked_open_delegated_cycle");
+    let active_node = status
+        .map(|status| status.active_node.as_str())
+        .unwrap_or_else(|| summary.dispatch_target.as_str())
+        .trim();
+    let active_node = if active_node.is_empty() {
+        "delegated-lane"
+    } else {
+        active_node
+    };
+    let task_id = status
+        .map(|status| status.task_id.as_str())
+        .unwrap_or_else(|| summary.run_id.as_str())
+        .trim();
+    let task_id = if task_id.is_empty() {
+        summary.run_id.trim()
+    } else {
+        task_id
+    };
+    let active_bounded_unit = format!("{task_id}:{active_node}:exception-takeover");
+    let why_delegated_not_lawful = format!(
+        "delegated lane is blocked for run {} by {}",
+        summary.run_id.trim(),
+        reason_class
+    );
+    let why_local_safe = format!(
+        "bounded exception recovery is limited to the active {} unit and declared owned write scope",
+        active_node
+    );
+    let return_to_normal =
+        "after focused proof, release install, task closure, and lane completion";
+    let verification_step = format!(
+        "run focused proof for {} before local write closure",
+        active_bounded_unit
+    );
+    let command = format!(
+        "vida lane exception-takeover {} --receipt-id {} --reason-class {} --active-bounded-unit {} --owned-write-scope {} --why-delegated-path-not-lawful {} --why-local-write-safe {} --return-to-normal-when {} --verification-step {} --json",
+        crate::shell_quote(summary.run_id.trim()),
+        crate::shell_quote(&receipt_id),
+        crate::shell_quote(reason_class),
+        crate::shell_quote(&active_bounded_unit),
+        crate::shell_quote("<owned-write-scope>"),
+        crate::shell_quote(&why_delegated_not_lawful),
+        crate::shell_quote(&why_local_safe),
+        crate::shell_quote(return_to_normal),
+        crate::shell_quote(&verification_step),
+    );
+    Some(LaneNextAction {
+        surface: lane_recommended_surface_for_command(&command),
+        command,
+        reason: "record bounded exception-path evidence for the dispatch blocker before local recovery work".to_string(),
     })
 }
 
@@ -2846,6 +2950,111 @@ mod tests {
                 .as_ref()
                 .map(|action| action.command.as_str()),
             Some("vida agent-init --downstream-packet packet.json --execute-dispatch --json")
+        );
+    }
+
+    #[test]
+    fn lane_blocked_open_cycle_envelope_exposes_exception_takeover_command() {
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = "run-lane-test".to_string();
+        receipt.blocker_code = Some("internal_codex_windows_sandbox_unavailable".to_string());
+        receipt.lane_status = crate::LaneStatus::LaneBlocked.as_str().to_string();
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-lane-test",
+            "implementation",
+            "writer",
+        );
+        status.active_node = "writer".to_string();
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-lane-test".to_string(),
+            task_id: "task-lane-test".to_string(),
+            active_node: "writer".to_string(),
+            lifecycle_stage: "writer_blocked".to_string(),
+            resume_node: None,
+            resume_status: "running".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "handoff_pending".to_string(),
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "writer".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "handoff_pending".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "delegated_cycle_open".to_string(),
+                continuation_signal: "continue_delegated_cycle".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                lifecycle_stage: "writer_blocked".to_string(),
+            },
+        };
+        let truth = derive_lane_show_truth(&summary, Some(&recovery));
+
+        let envelope = build_lane_envelope(
+            summary,
+            Some(status),
+            None,
+            None,
+            serde_json::json!({}),
+            truth.blocked,
+            truth.blocker_codes,
+            truth.next_actions,
+        );
+
+        let command = envelope
+            .recommended_command
+            .as_deref()
+            .expect("blocked lane should recommend a recovery command");
+        assert!(command.starts_with(
+            "vida lane exception-takeover run-lane-test --receipt-id run-lane-test-exception-takeover"
+        ));
+        assert!(command.contains("--reason-class internal_codex_windows_sandbox_unavailable"));
+        assert!(command.contains("--active-bounded-unit run-lane-test:writer:exception-takeover"));
+        assert!(command.contains("--owned-write-scope '<owned-write-scope>'"));
+        assert!(command.contains("--verification-step"));
+        assert_eq!(
+            envelope.recommended_surface.as_deref(),
+            Some("vida lane exception-takeover")
+        );
+        assert_eq!(
+            envelope
+                .next_action
+                .as_ref()
+                .map(|action| action.command.as_str()),
+            envelope.recommended_command.as_deref()
+        );
+    }
+
+    #[test]
+    fn lane_recorded_exception_envelope_exposes_supersede_command() {
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = "run-recorded-exception".to_string();
+        receipt.exception_path_receipt_id = Some("receipt-1".to_string());
+        receipt.lane_status = crate::LaneStatus::LaneExceptionRecorded
+            .as_str()
+            .to_string();
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+        let truth = derive_lane_show_truth(&summary, None);
+
+        let envelope = build_lane_envelope(
+            summary,
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+            truth.blocked,
+            truth.blocker_codes,
+            truth.next_actions,
+        );
+
+        assert_eq!(
+            envelope.recommended_command.as_deref(),
+            Some("vida lane supersede run-recorded-exception --receipt-id receipt-1 --json")
+        );
+        assert_eq!(
+            envelope.recommended_surface.as_deref(),
+            Some("vida lane supersede")
         );
     }
 
