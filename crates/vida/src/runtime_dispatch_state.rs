@@ -434,6 +434,13 @@ fn internal_codex_app_bridge_requires_prelaunch_blocker(
     {
         return false;
     }
+    if selected_cli_entry.as_ref().and_then(|entry| {
+        yaml_lookup(entry, &["dispatch", "receipt_backed_completion_supported"])
+            .and_then(serde_yaml::Value::as_bool)
+    }) == Some(true)
+    {
+        return false;
+    }
     // `codex exec` is an external CLI process, not the Codex Desktop internal
     // subagent carrier. When the runtime selected an internal Codex backend,
     // launching it cannot produce the required host-app receipt evidence.
@@ -16573,6 +16580,132 @@ agent_system:
                 &receipt
             ),
             "ready external fallback should be executed instead of terminal prelaunch blocker"
+        );
+    }
+
+    #[test]
+    fn internal_codex_exec_prelaunch_allows_configured_receipt_backed_completion() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        std::fs::create_dir_all(harness.path().join(".vida/config")).expect("config dir");
+        std::fs::create_dir_all(harness.path().join(".vida/db")).expect("db dir");
+        std::fs::create_dir_all(harness.path().join(".vida/project")).expect("project dir");
+        std::fs::write(harness.path().join("AGENTS.md"), "test").expect("agents marker");
+        std::fs::write(
+            harness.path().join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      dispatch:
+        command: codex
+        static_args: ["exec", "--json"]
+        receipt_backed_completion_supported: true
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("config should write");
+        let dispatch_packet_path = harness.path().join("codex-internal-receipt-packet.json");
+        std::fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "dispatch_target": "analysis",
+                "delivery_task_packet": {
+                    "goal": "Execute bounded implementation analysis"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Implement bounded task.".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "analysis": true,
+                            "implementation": true
+                        }
+                    }
+                ],
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "analysis": {
+                                "backend_id": "internal_subagents",
+                                "backend_class": "internal"
+                            },
+                            "implementation": {
+                                "backend_id": "internal_subagents",
+                                "backend_class": "internal"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-internal-codex-receipt-backed".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-05-22T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            !internal_host_dispatch_requires_prelaunch_blocker(
+                harness.path(),
+                &role_selection,
+                &receipt
+            ),
+            "receipt-backed codex exec support should allow configured internal carrier execution"
         );
     }
 

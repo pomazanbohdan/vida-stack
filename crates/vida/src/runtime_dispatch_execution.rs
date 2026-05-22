@@ -1555,6 +1555,15 @@ fn internal_host_receipt_backed_completion_supported(
         .map_or(serde_json::Value::Null, serde_json::Value::Bool)
 }
 
+fn internal_host_receipt_backed_completion_is_enabled(
+    selected_cli_entry: Option<&serde_yaml::Value>,
+) -> bool {
+    selected_cli_entry.and_then(|entry| {
+        yaml_lookup(entry, &["dispatch", "receipt_backed_completion_supported"])
+            .and_then(serde_yaml::Value::as_bool)
+    }) == Some(true)
+}
+
 fn annotate_internal_host_completion_capability(
     dispatch: &mut serde_json::Map<String, serde_json::Value>,
     selected_cli_system: &str,
@@ -1587,6 +1596,7 @@ fn annotate_internal_host_completion_capability(
 
 fn internal_codex_app_bridge_requires_fail_closed(
     selected_cli_system: &str,
+    selected_cli_entry: Option<&serde_yaml::Value>,
     overlay: &serde_yaml::Value,
     command: &str,
     args: &[String],
@@ -1598,6 +1608,9 @@ fn internal_codex_app_bridge_requires_fail_closed(
         return None;
     }
     if !args.iter().any(|arg| arg.trim() == "exec") {
+        return None;
+    }
+    if internal_host_receipt_backed_completion_is_enabled(selected_cli_entry) {
         return None;
     }
     if configured_codex_cli_fallback_enabled(overlay) {
@@ -1934,6 +1947,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
     )?;
     if let Some(blocker_reason) = internal_codex_app_bridge_requires_fail_closed(
         &selected_cli_system,
+        selected_cli_entry.as_ref(),
         &overlay,
         &command,
         &args,
@@ -3389,15 +3403,56 @@ agent_system:
         ];
 
         assert_eq!(
-            internal_codex_app_bridge_requires_fail_closed("codex", &overlay, "codex", &args),
+            internal_codex_app_bridge_requires_fail_closed("codex", None, &overlay, "codex", &args),
             Some("internal Codex carrier unavailable; external codex_cli fallback disabled")
         );
         assert_eq!(
-            internal_codex_app_bridge_requires_fail_closed("qwen", &overlay, "codex", &args),
+            internal_codex_app_bridge_requires_fail_closed("qwen", None, &overlay, "codex", &args),
             None
         );
         assert_eq!(
-            internal_codex_app_bridge_requires_fail_closed("codex", &overlay, "fake-codex", &args),
+            internal_codex_app_bridge_requires_fail_closed(
+                "codex",
+                None,
+                &overlay,
+                "fake-codex",
+                &args
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn internal_codex_app_bridge_allows_codex_exec_when_receipt_backed_completion_is_configured() {
+        let overlay = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("overlay should parse");
+        let selected_cli_entry = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: codex
+  static_args: ["exec", "--json"]
+  receipt_backed_completion_supported: true
+"#,
+        )
+        .expect("selected cli entry should parse");
+        let args = vec!["exec".to_string(), "--json".to_string()];
+
+        assert_eq!(
+            internal_codex_app_bridge_requires_fail_closed(
+                "codex",
+                Some(&selected_cli_entry),
+                &overlay,
+                "codex",
+                &args
+            ),
             None
         );
     }
