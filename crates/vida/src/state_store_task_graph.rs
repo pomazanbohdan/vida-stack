@@ -1,5 +1,8 @@
 use super::*;
 
+const TASK_TREE_MAX_DEPTH: usize = 128;
+const TASK_TREE_MAX_NODE_VISITS: usize = 10_000;
+
 impl StateStore {
     fn parent_child_reverse_index(rows: &[TaskRecord]) -> BTreeMap<String, Vec<String>> {
         let mut children = BTreeMap::<String, Vec<String>>::new();
@@ -373,7 +376,15 @@ impl StateStore {
         let tree_rows = by_id.values().cloned().collect::<Vec<_>>();
         let children_by_parent = Self::parent_child_reverse_index(&tree_rows);
         let mut active = BTreeSet::new();
-        Self::build_task_dependency_tree(&by_id, &children_by_parent, task_id, &mut active)
+        let mut node_visits = 0usize;
+        Self::build_task_dependency_tree(
+            &by_id,
+            &children_by_parent,
+            task_id,
+            &mut active,
+            0,
+            &mut node_visits,
+        )
     }
 
     fn build_task_dependency_tree(
@@ -381,7 +392,25 @@ impl StateStore {
         children_by_parent: &BTreeMap<String, Vec<String>>,
         task_id: &str,
         active: &mut BTreeSet<String>,
+        depth: usize,
+        node_visits: &mut usize,
     ) -> Result<TaskDependencyTreeNode, StateStoreError> {
+        if depth >= TASK_TREE_MAX_DEPTH {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "task dependency tree exceeds max depth ({TASK_TREE_MAX_DEPTH}) at task {task_id}"
+                ),
+            });
+        }
+        if *node_visits >= TASK_TREE_MAX_NODE_VISITS {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "task dependency tree exceeds max node visits ({TASK_TREE_MAX_NODE_VISITS})"
+                ),
+            });
+        }
+        *node_visits += 1;
+
         let task = by_id
             .get(task_id)
             .cloned()
@@ -413,6 +442,8 @@ impl StateStore {
                     children_by_parent,
                     &dependency.depends_on_id,
                     active,
+                    depth + 1,
+                    node_visits,
                 )?));
             } else {
                 edge.missing = true;
@@ -441,6 +472,8 @@ impl StateStore {
                         children_by_parent,
                         child_id,
                         active,
+                        depth + 1,
+                        node_visits,
                     )?));
                 } else {
                     child.missing = true;
@@ -892,6 +925,36 @@ mod tests {
             issue.issue_type != "closed_parent_has_open_child"
                 && issue.issue_type != "open_parent_has_no_open_child"
         }));
+    }
+
+    #[test]
+    fn task_dependency_tree_rejects_excessive_depth() {
+        let chain_len = TASK_TREE_MAX_DEPTH + 2;
+        let mut rows = Vec::with_capacity(chain_len);
+        for index in 0..chain_len {
+            let task_id = format!("task-{index}");
+            let mut task = task_record(&task_id, "open");
+            if index > 0 {
+                task.dependencies.push(TaskDependencyRecord {
+                    issue_id: task_id.clone(),
+                    depends_on_id: format!("task-{}", index - 1),
+                    edge_type: "blocks".to_string(),
+                    created_at: "1".to_string(),
+                    created_by: "test".to_string(),
+                    metadata: "{}".to_string(),
+                    thread_id: String::new(),
+                });
+            }
+            rows.push(task);
+        }
+
+        let result = StateStore::task_dependency_tree_from_rows(&rows, &format!("task-{}", chain_len - 1));
+        match result {
+            Err(StateStoreError::InvalidTaskRecord { reason }) => {
+                assert!(reason.contains("exceeds max depth"));
+            }
+            other => panic!("expected InvalidTaskRecord depth error, got {other:?}"),
+        }
     }
 
     #[tokio::test]
