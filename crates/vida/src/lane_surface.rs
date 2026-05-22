@@ -2806,7 +2806,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_envelope_surfaces_ready_downstream_agent_init_command() {
+    fn lane_envelope_surfaces_ready_downstream_agent_init_execute_command() {
         let mut receipt = sample_receipt("executed");
         receipt.blocker_code = None;
         receipt.lane_status = crate::LaneStatus::LaneRunning.as_str().to_string();
@@ -2815,6 +2815,7 @@ mod tests {
         receipt.downstream_dispatch_target = Some("writer".to_string());
         receipt.downstream_dispatch_command =
             Some("vida agent-init --downstream-packet packet.json --json".to_string());
+        receipt.downstream_dispatch_packet_path = Some("packet.json".to_string());
         let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
         let truth = derive_lane_show_truth(&summary, None);
 
@@ -2833,7 +2834,7 @@ mod tests {
         assert!(envelope.next_actions.is_empty());
         assert_eq!(
             envelope.recommended_command.as_deref(),
-            Some("vida agent-init --downstream-packet packet.json --json")
+            Some("vida agent-init --downstream-packet packet.json --execute-dispatch --json")
         );
         assert_eq!(
             envelope.recommended_surface.as_deref(),
@@ -2844,7 +2845,7 @@ mod tests {
                 .next_action
                 .as_ref()
                 .map(|action| action.command.as_str()),
-            Some("vida agent-init --downstream-packet packet.json --json")
+            Some("vida agent-init --downstream-packet packet.json --execute-dispatch --json")
         );
     }
 

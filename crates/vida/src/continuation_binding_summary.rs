@@ -366,28 +366,44 @@ fn continuation_next_actions_for_run(
     next_actions
 }
 
+pub(crate) fn downstream_dispatch_command_from_parts(
+    command: Option<&str>,
+    packet_path: Option<&str>,
+) -> Option<String> {
+    let command = command.map(str::trim).filter(|value| !value.is_empty());
+    let packet_path = packet_path.map(str::trim).filter(|value| !value.is_empty());
+
+    if let Some(command) = command {
+        if command.starts_with("vida agent-init")
+            && !command
+                .split_whitespace()
+                .any(|part| part == "--execute-dispatch")
+        {
+            if let Some(path) = packet_path {
+                return Some(format!(
+                    "vida agent-init --downstream-packet {} --execute-dispatch --json",
+                    crate::shell_quote(path)
+                ));
+            }
+        }
+        return Some(command.to_string());
+    }
+
+    packet_path.map(|path| {
+        format!(
+            "vida agent-init --downstream-packet {} --execute-dispatch --json",
+            crate::shell_quote(path)
+        )
+    })
+}
+
 pub(crate) fn downstream_dispatch_command_for_summary(
     receipt: &crate::state_store::RunGraphDispatchReceiptSummary,
 ) -> Option<String> {
-    let command = receipt
-        .downstream_dispatch_command
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    if command == "vida agent-init" {
-        return receipt
-            .downstream_dispatch_packet_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|path| {
-                format!(
-                    "vida agent-init --downstream-packet {} --json",
-                    crate::shell_quote(path)
-                )
-            });
-    }
-    Some(command.to_string())
+    downstream_dispatch_command_from_parts(
+        receipt.downstream_dispatch_command.as_deref(),
+        receipt.downstream_dispatch_packet_path.as_deref(),
+    )
 }
 
 pub(crate) fn build_continuation_binding_summary_with_task_authority(

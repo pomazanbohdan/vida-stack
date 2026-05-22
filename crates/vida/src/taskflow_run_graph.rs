@@ -136,21 +136,14 @@ fn recovery_projection_expected_action_command(payload: &serde_json::Value) -> O
         .get("downstream_dispatch_command")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    if command == "vida agent-init" {
-        return receipt
-            .get("downstream_dispatch_packet_path")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|path| {
-                format!(
-                    "vida agent-init --downstream-packet {} --json",
-                    crate::shell_quote(path)
-                )
-            });
-    }
-    Some(command.to_string())
+        .filter(|value| !value.is_empty());
+    let packet_path = receipt
+        .get("downstream_dispatch_packet_path")
+        .and_then(serde_json::Value::as_str);
+    crate::continuation_binding_summary::downstream_dispatch_command_from_parts(
+        command,
+        packet_path,
+    )
 }
 
 fn stale_recovery_projection_matches_lane_truth(
@@ -714,25 +707,10 @@ fn dispatch_receipt_has_clean_ready_downstream_handoff(receipt: &RunGraphDispatc
 }
 
 fn downstream_dispatch_command_for_receipt(receipt: &RunGraphDispatchReceipt) -> Option<String> {
-    let command = receipt
-        .downstream_dispatch_command
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    if command == "vida agent-init" {
-        return receipt
-            .downstream_dispatch_packet_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|path| {
-                format!(
-                    "vida agent-init --downstream-packet {} --json",
-                    crate::shell_quote(path)
-                )
-            });
-    }
-    Some(command.to_string())
+    crate::continuation_binding_summary::downstream_dispatch_command_from_parts(
+        receipt.downstream_dispatch_command.as_deref(),
+        receipt.downstream_dispatch_packet_path.as_deref(),
+    )
 }
 
 pub(crate) fn dispatch_receipt_can_use_terminal_continue_evidence(
@@ -11060,8 +11038,8 @@ mod tests {
     }
 
     #[test]
-    fn next_lawful_operator_action_uses_downstream_command_after_terminal_ready_downstream_handoff()
-    {
+    fn next_lawful_operator_action_uses_downstream_execute_command_after_terminal_ready_downstream_handoff(
+    ) {
         let status = RunGraphStatus {
             run_id: "run-terminal-ready-handoff".to_string(),
             task_id: "task-terminal-ready-handoff".to_string(),
@@ -11090,7 +11068,9 @@ mod tests {
                 false,
             )
             .as_deref(),
-            Some("vida agent-init --downstream-packet downstream-packet.json --json")
+            Some(
+                "vida agent-init --downstream-packet downstream-packet.json --execute-dispatch --json"
+            )
         );
     }
 
@@ -11129,7 +11109,8 @@ mod tests {
             projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
             stale_state_suspected: false,
             next_lawful_operator_action: Some(
-                "vida agent-init --downstream-packet packet.json --json".to_string(),
+                "vida agent-init --downstream-packet packet.json --execute-dispatch --json"
+                    .to_string(),
             ),
             dispatch_receipt: Some(clean_ready_downstream_dispatch_receipt(
                 "run-recovery-pass-action",
@@ -11144,11 +11125,11 @@ mod tests {
         assert!(why_not_now.is_none());
         assert_eq!(
             next_action.as_ref().map(|value| value.command.as_str()),
-            Some("vida agent-init --downstream-packet packet.json --json")
+            Some("vida agent-init --downstream-packet packet.json --execute-dispatch --json")
         );
         assert_eq!(
             recommended_command.as_deref(),
-            Some("vida agent-init --downstream-packet packet.json --json")
+            Some("vida agent-init --downstream-packet packet.json --execute-dispatch --json")
         );
         assert_eq!(recommended_surface.as_deref(), Some("vida agent-init"));
     }

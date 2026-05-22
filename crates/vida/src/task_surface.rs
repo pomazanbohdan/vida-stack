@@ -6328,7 +6328,7 @@ mod tests {
     }
 
     #[test]
-    fn task_next_lawful_uses_downstream_command_after_terminal_ready_downstream_handoff() {
+    fn task_next_lawful_uses_downstream_execute_command_after_terminal_ready_downstream_handoff() {
         let binding = test_continuation_binding(
             "running-run",
             "running-runtime-task",
@@ -6340,14 +6340,17 @@ mod tests {
             &binding,
             Vec::new(),
             Some("running-run"),
-            Some("vida agent-init --downstream-packet packet.json --json"),
+            Some("vida agent-init --downstream-packet packet.json --execute-dispatch --json"),
         );
 
         assert_eq!(receipt.status, "pass");
         assert!(receipt.blocker_codes.is_empty());
-        assert!(receipt.next_action.as_deref().is_some_and(
-            |action| action.contains("vida agent-init --downstream-packet packet.json --json")
-        ));
+        assert!(receipt
+            .next_action
+            .as_deref()
+            .is_some_and(|action| action.contains(
+                "vida agent-init --downstream-packet packet.json --execute-dispatch --json"
+            )));
     }
 
     #[test]
