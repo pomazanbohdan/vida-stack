@@ -1486,6 +1486,10 @@ fn configured_internal_host_activation_parts(
         .unwrap_or("medium");
     let prompt = dispatch_packet_prompt(dispatch_packet_path);
     let mut args = crate::yaml_string_list(yaml_lookup(dispatch, &["static_args"]));
+    args.extend(crate::yaml_string_list(yaml_lookup(
+        dispatch,
+        &["feature_args"],
+    )));
     let mut stdin_payload = None;
     if let Some(workdir_flag) = crate::yaml_string(yaml_lookup(dispatch, &["workdir_flag"])) {
         args.push(workdir_flag);
@@ -3281,6 +3285,7 @@ dispatch:
 dispatch:
   command: codex
   static_args: ["exec", "--json"]
+  feature_args: ["--enable", "multi_agent"]
   workdir_flag: -C
   sandbox_flag: -s
   model_flag: -m
@@ -3310,6 +3315,8 @@ dispatch:
             vec![
                 "exec".to_string(),
                 "--json".to_string(),
+                "--enable".to_string(),
+                "multi_agent".to_string(),
                 "-C".to_string(),
                 "/tmp/project".to_string(),
                 "-s".to_string(),
