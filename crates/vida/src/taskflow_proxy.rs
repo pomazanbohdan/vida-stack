@@ -2839,14 +2839,8 @@ fn active_exception_takeover_evidence_matches_status(
     if terminal_continue_run_id == Some(status.run_id.as_str()) && !supersedes_distinct_exception {
         return false;
     }
-    let exception_takeover_state = crate::release1_contracts::exception_takeover_state(
-        dispatch.exception_path_receipt_id.as_deref(),
-        dispatch.supersedes_receipt_id.as_deref(),
-        None,
-    );
     dispatch.run_id == status.run_id
-        && (dispatch.lane_status == "lane_exception_takeover"
-            || exception_takeover_state.is_active())
+        && dispatch.lane_status == "lane_exception_takeover"
         && dispatch
             .exception_path_receipt_id
             .as_deref()
@@ -9721,7 +9715,7 @@ agent_system:
     }
 
     #[test]
-    fn taskflow_next_decision_continues_recorded_exception_with_active_supersession_evidence() {
+    fn taskflow_next_decision_blocks_recorded_exception_without_takeover_lane() {
         let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
             "universal-surfaces-epic-2-wizard-settings-container",
             "universal-surfaces-epic-2-wizard-settings-container",
@@ -9754,7 +9748,7 @@ agent_system:
         assert!(decision.primary_ready_task.is_none());
         assert_eq!(
             decision.candidate_task_context.admissibility_gate,
-            "active_exception_takeover_continuation"
+            "latest_run_graph_status_blocked"
         );
         assert_eq!(
             decision
@@ -9762,10 +9756,10 @@ agent_system:
                 .as_ref()
                 .map(|value| value.command.as_str()),
             Some(
-                "vida taskflow consume continue --run-id universal-surfaces-epic-2-wizard-settings-container --json"
+                "vida taskflow recovery status universal-surfaces-epic-2-wizard-settings-container --json"
             )
         );
-        assert!(!decision
+        assert!(decision
             .blocker_codes
             .iter()
             .any(|code| code == "latest_run_graph_status_blocked"));
