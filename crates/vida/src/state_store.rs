@@ -2193,7 +2193,7 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn latest_run_graph_recovery_checkpoint_and_gate_summaries_fail_closed_when_latest_checkpoint_row_is_reordered_by_timestamp_drift(
+    async fn latest_run_graph_recovery_checkpoint_and_gate_summaries_use_status_run_checkpoint_when_other_run_checkpoint_is_newer(
     ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2230,31 +2230,26 @@ hierarchy: framework,contracts
             .await
             .expect("seed reordered checkpoint row");
 
-        let recovery_error = store
+        let recovery = store
             .latest_run_graph_recovery_summary()
             .await
-            .expect_err("timestamp drifted checkpoint row should fail closed for recovery summary");
-        assert!(recovery_error
-            .to_string()
-            .contains("latest checkpoint evidence must share the same run_id"));
+            .expect("other-run checkpoint drift should not poison current recovery summary")
+            .expect("latest recovery summary should exist");
+        assert_eq!(recovery.run_id, "run-current");
 
-        let checkpoint_error = store
+        let checkpoint = store
             .latest_run_graph_checkpoint_summary()
             .await
-            .expect_err(
-                "timestamp drifted checkpoint row should fail closed for checkpoint summary",
-            );
-        assert!(checkpoint_error
-            .to_string()
-            .contains("latest checkpoint evidence must share the same run_id"));
+            .expect("other-run checkpoint drift should not poison current checkpoint summary")
+            .expect("latest checkpoint summary should exist");
+        assert_eq!(checkpoint.run_id, "run-current");
 
-        let gate_error = store
+        let gate = store
             .latest_run_graph_gate_summary()
             .await
-            .expect_err("timestamp drifted checkpoint row should fail closed for gate summary");
-        assert!(gate_error
-            .to_string()
-            .contains("latest checkpoint evidence must share the same run_id"));
+            .expect("other-run checkpoint drift should not poison current gate summary")
+            .expect("latest gate summary should exist");
+        assert_eq!(gate.run_id, "run-current");
 
         let _ = fs::remove_dir_all(&root);
     }

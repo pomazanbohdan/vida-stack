@@ -3158,6 +3158,17 @@ fn continuation_binding_is_unrelated_prelaunch_blocked_projection(
         && explicit.task_id != current.task_id
 }
 
+fn continuation_binding_is_newer_explicit_task_override(
+    explicit: &state_store::RunGraphContinuationBinding,
+    current: &state_store::RunGraphContinuationBinding,
+) -> bool {
+    explicit.binding_source == "explicit_continuation_bind_task"
+        && current.binding_source == "explicit_continuation_bind"
+        && explicit.run_id != current.run_id
+        && explicit.task_id != current.task_id
+        && explicit.recorded_at > current.recorded_at
+}
+
 fn select_task_next_lawful_binding<'a>(
     tasks: &[state_store::TaskRecord],
     explicit_binding: Option<&'a state_store::RunGraphContinuationBinding>,
@@ -3183,6 +3194,11 @@ fn select_task_next_lawful_binding<'a>(
                 return Ok(Some(explicit));
             }
             if continuation_binding_is_unrelated_prelaunch_blocked_projection(explicit, current)
+                && explicit_live
+            {
+                return Ok(Some(explicit));
+            }
+            if continuation_binding_is_newer_explicit_task_override(explicit, current)
                 && explicit_live
             {
                 return Ok(Some(explicit));
@@ -6062,6 +6078,37 @@ mod tests {
         assert!(receipt.next_action.as_deref().is_some_and(
             |action| action.contains("vida taskflow recovery status current-run --json")
         ));
+    }
+
+    #[test]
+    fn task_next_lawful_prefers_newer_explicit_task_override_over_current_run_binding() {
+        let explicit_task = owned_task_record("explicit-task", vec![]);
+        let current_task = owned_task_record("current-task", vec![]);
+        let mut explicit = test_continuation_binding(
+            "parent-run",
+            "explicit-task",
+            "explicit_continuation_bind_task",
+            "task_graph_task",
+        );
+        explicit.recorded_at = "2026-05-22T21:48:46Z".to_string();
+        let mut current = test_continuation_binding(
+            "current-run",
+            "current-task",
+            "explicit_continuation_bind",
+            "task_graph_task",
+        );
+        current.recorded_at = "2026-05-22T21:47:08Z".to_string();
+
+        let selected = select_task_next_lawful_binding(
+            &[explicit_task, current_task],
+            Some(&explicit),
+            Some(&current),
+        )
+        .expect("newer explicit task binding should override prior current-run binding")
+        .expect("explicit binding should select");
+
+        assert_eq!(selected.task_id, "explicit-task");
+        assert_eq!(selected.binding_source, "explicit_continuation_bind_task");
     }
 
     #[test]

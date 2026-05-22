@@ -2394,23 +2394,6 @@ impl StateStore {
         if status.checkpoint_kind.trim().eq_ignore_ascii_case("none") {
             return Ok(());
         }
-        let mut latest_checkpoint_query = self
-            .db
-            .query(
-                "SELECT run_id, updated_at FROM resumability_capsule ORDER BY updated_at DESC, run_id DESC LIMIT 1;",
-            )
-            .await?;
-        let latest_checkpoint_rows: Vec<RunGraphLatestRow> = latest_checkpoint_query.take(0)?;
-        if let Some(latest_checkpoint) = latest_checkpoint_rows.into_iter().next() {
-            if latest_checkpoint.run_id != status.run_id {
-                return Err(StateStoreError::InvalidTaskRecord {
-                    reason: format!(
-                        "run-graph recovery/checkpoint summary is inconsistent for `{}`: latest checkpoint evidence must share the same run_id (checkpoint_run_id={})",
-                        status.run_id, latest_checkpoint.run_id
-                    ),
-                });
-            }
-        }
         match self
             .run_graph_projection_checkpoint_record(&status.run_id)
             .await?
