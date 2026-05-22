@@ -496,6 +496,41 @@ fn taskflow_model_profile_readiness_cli_smoke_matches_config_census_embedding() 
 }
 
 #[test]
+fn root_route_explain_alias_matches_taskflow_route_explain() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    run_model_profile_readiness_seed_helper(&state_dir);
+
+    let taskflow = run_command_json(
+        &[
+            "taskflow",
+            "route",
+            "explain",
+            "--run-id",
+            "run-model-profile-readiness-smoke",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let root = run_command_json(
+        &[
+            "route",
+            "explain",
+            "--run-id",
+            "run-model-profile-readiness-smoke",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(root["surface"], "vida taskflow route explain");
+    assert_eq!(root["status"], "pass");
+    assert_eq!(root["route"], taskflow["route"]);
+}
+
+#[test]
 fn taskflow_model_profile_readiness_seed_helper() {
     let Some(state_dir) = std::env::var_os("VIDA_MODEL_PROFILE_READINESS_SEED_STATE_DIR") else {
         return;

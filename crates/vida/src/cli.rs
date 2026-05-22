@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\n  vida task --help\n  vida taskflow help parallelism\n  vida docflow help\n  vida docs update --json";
+const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\n  vida task --help\n  vida taskflow help parallelism\n  vida route explain --json\n  vida docflow help\n  vida docs update --json";
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
 
@@ -119,6 +119,8 @@ pub(crate) enum Command {
     Approval(ProxyArgs),
     #[command(about = "thin root alias to the TaskFlow recovery family")]
     Recovery(ProxyArgs),
+    #[command(about = "thin root alias to the TaskFlow route diagnostics family")]
+    Route(ProxyArgs),
     #[command(about = "build and install the VIDA release binary")]
     Release(ReleaseArgs),
     #[command(

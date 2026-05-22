@@ -55,6 +55,11 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
             prefixed.extend(args.args);
             run_taskflow_proxy(super::ProxyArgs { args: prefixed }).await
         }
+        Some(Command::Route(args)) => {
+            let mut prefixed = vec!["route".to_string()];
+            prefixed.extend(args.args);
+            run_taskflow_proxy(super::ProxyArgs { args: prefixed }).await
+        }
         Some(Command::Release(args)) => match args.command {
             ReleaseCommand::Install(args) => release_surface::run_release_install(args),
         },
@@ -125,9 +130,12 @@ pub(crate) fn command_needs_project_root_state_dir(command: &Option<Command>) ->
     match command {
         Some(Command::Task(args)) => task_command_needs_project_root(args),
         Some(Command::Agent(args)) => agent_command_needs_project_root(args),
-        Some(Command::Taskflow(args) | Command::Consume(args) | Command::Recovery(args)) => {
-            proxy_command_needs_project_root(&args.args)
-        }
+        Some(
+            Command::Taskflow(args)
+            | Command::Consume(args)
+            | Command::Recovery(args)
+            | Command::Route(args),
+        ) => proxy_command_needs_project_root(&args.args),
         Some(Command::Lane(args) | Command::Approval(args)) => {
             proxy_command_needs_project_root(&args.args)
         }
