@@ -43,7 +43,7 @@ fn recovery_status_projection_name(run_id: &str) -> String {
 fn read_recovery_status_projection(
     state_dir: &std::path::Path,
     projection_name: &str,
-    run_id: &str,
+    _run_id: &str,
 ) -> Option<String> {
     crate::operator_projection_cache::read_fresh_json_projection(state_dir, projection_name)
         .filter(|cached| recovery_projection_has_complete_action_fields(cached))
@@ -54,20 +54,6 @@ fn read_recovery_status_projection(
                 TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE,
             )
             .filter(|cached| recovery_projection_has_complete_action_fields(cached))
-        })
-        .or_else(|| {
-            let cached = crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                state_dir,
-                projection_name,
-                TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE,
-            )?;
-            if recovery_projection_has_complete_action_fields(&cached)
-                && stale_recovery_projection_matches_lane_truth(state_dir, run_id, &cached)
-            {
-                Some(cached)
-            } else {
-                None
-            }
         })
 }
 
@@ -144,30 +130,6 @@ fn recovery_projection_expected_action_command(payload: &serde_json::Value) -> O
         command,
         packet_path,
     )
-}
-
-fn stale_recovery_projection_matches_lane_truth(
-    state_dir: &std::path::Path,
-    run_id: &str,
-    cached: &str,
-) -> bool {
-    let Ok(recovery_payload) = serde_json::from_str::<serde_json::Value>(cached) else {
-        return false;
-    };
-    let recovery_blocked_open_cycle = recovery_payload
-        .get("blocker_codes")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|codes| {
-            codes
-                .iter()
-                .any(|code| code.as_str() == Some("open_delegated_cycle"))
-        });
-    if !recovery_blocked_open_cycle {
-        return true;
-    }
-    let _ = state_dir;
-    let _ = run_id;
-    false
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -6397,6 +6359,45 @@ mod tests {
         assert!(!recovery_projection_has_complete_action_fields(
             &stale_lane_show
         ));
+    }
+
+    #[test]
+    fn recovery_status_rejects_state_marker_stale_pass_projection_with_next_action() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-recovery-stale-pass-projection-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let run_id = "run-stale-pass";
+        crate::operator_projection_cache::write_json_projection(
+            &root,
+            &recovery_status_projection_name(run_id),
+            &serde_json::json!({
+                "surface": "vida taskflow recovery status",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_action": {
+                    "command": "vida agent-init --downstream-packet packet.json --execute-dispatch --json"
+                },
+                "recommended_command": "vida agent-init --downstream-packet packet.json --execute-dispatch --json",
+                "projection_truth": {
+                    "next_lawful_operator_action": "vida agent-init --downstream-packet packet.json --execute-dispatch --json"
+                }
+            }),
+        );
+        crate::operator_projection_cache::touch_state_mutation_marker(&root);
+
+        assert!(read_recovery_status_projection(
+            &root,
+            &recovery_status_projection_name(run_id),
+            run_id
+        )
+        .is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
