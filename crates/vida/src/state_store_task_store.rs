@@ -80,6 +80,18 @@ impl StateStore {
             {
                 break;
             }
+            let has_unresolved_non_parent_blockers = tasks[parent_index]
+                .dependencies
+                .iter()
+                .filter(|dependency| dependency.edge_type != "parent-child")
+                .any(|dependency| match tasks.iter().find(|task| task.id == dependency.depends_on_id)
+                {
+                    Some(blocker_task) => blocker_task.status != "closed",
+                    None => true,
+                });
+            if has_unresolved_non_parent_blockers {
+                break;
+            }
 
             let next_parent_id = Self::parent_id_for_task(&tasks[parent_index]);
             if matches!(tasks[parent_index].status.as_str(), "open" | "in_progress") {
@@ -1983,6 +1995,74 @@ mod tests {
             .await
             .expect("validate")
             .is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn update_task_status_closed_keeps_parent_open_when_blocked_by_non_parent_dependency() {
+        let root = unique_task_store_temp_root("vida-update-child-parent-blocked");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, title, issue_type, parent_id) in [
+            ("blocked-parent", "Blocked parent", "epic", None),
+            ("blocking-task", "Blocking task", "task", None),
+            (
+                "blocked-child",
+                "Blocked child",
+                "task",
+                Some("blocked-parent"),
+            ),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id: None,
+                    description: "",
+                    issue_type,
+                    status: "open",
+                    priority: 1,
+                    parent_id,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create task");
+        }
+
+        store
+            .add_task_dependency("blocked-parent", "blocking-task", "blocks", "test")
+            .await
+            .expect("add non-parent blocker dependency");
+
+        store
+            .update_task(UpdateTaskRequest {
+                task_id: "blocked-child",
+                title: None,
+                status: Some("closed"),
+                priority: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: None,
+            })
+            .await
+            .expect("close child through update");
+
+        let parent = store.show_task("blocked-parent").await.expect("load parent");
+        assert_eq!(parent.status, "open");
+        assert!(parent.closed_at.is_none());
+        assert!(parent.close_reason.is_none());
         let _ = fs::remove_dir_all(&root);
     }
 
