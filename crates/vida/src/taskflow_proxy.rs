@@ -3829,6 +3829,23 @@ async fn graph_summary_task_rows(
     }
 }
 
+async fn taskflow_next_task_rows(
+    state_dir: &Path,
+    store: Option<&crate::state_store::StateStore>,
+) -> Result<Vec<crate::state_store::TaskRecord>, String> {
+    match store {
+        Some(store) => store
+            .list_tasks(None, true)
+            .await
+            .map_err(|error| format!("Failed to list tasks for taskflow next: {error}")),
+        None => crate::task_surface::load_task_snapshot_rows_with_retry(state_dir)
+            .await
+            .map_err(|snapshot_error| {
+                format!("Failed to read task snapshot for taskflow next: {snapshot_error}")
+            }),
+    }
+}
+
 pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     let (as_json, scope_task_id, state_dir) = match parse_taskflow_next_args(args) {
         Ok(TaskflowNextArgs::Help) => {
@@ -3902,24 +3919,12 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             }
         }
     };
-    let all_tasks = match crate::task_surface::load_task_snapshot_rows_with_retry(&state_dir).await
-    {
+    let all_tasks = match taskflow_next_task_rows(&state_dir, store.as_ref()).await {
         Ok(tasks) => tasks,
-        Err(snapshot_error) => match store.as_ref() {
-            Some(store) => match store.list_tasks(None, true).await {
-                Ok(tasks) => tasks,
-                Err(error) => {
-                    eprintln!(
-                        "Failed to list tasks for taskflow next: {error} (snapshot fallback also failed: {snapshot_error})"
-                    );
-                    return ExitCode::from(1);
-                }
-            },
-            None => {
-                eprintln!("Failed to read task snapshot for taskflow next: {snapshot_error}");
-                return ExitCode::from(1);
-            }
-        },
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
     };
     let ready_tasks = match crate::state_store::StateStore::ready_tasks_scoped_from_rows(
         &all_tasks,
@@ -6615,6 +6620,55 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "snapshot-ready");
+    }
+
+    #[tokio::test]
+    async fn taskflow_next_task_rows_prefer_authoritative_store() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-next-snapshot-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "authoritative-ready",
+                title: "Authoritative ready",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("create task");
+        store
+            .refresh_task_snapshot()
+            .await
+            .expect("refresh snapshot");
+        let snapshot_path =
+            crate::state_store::StateStore::canonical_task_snapshot_path_for_state_root(&root);
+        fs::write(&snapshot_path, "").expect("snapshot should be writable");
+
+        let rows = super::taskflow_next_task_rows(&root, Some(&store))
+            .await
+            .expect("authoritative rows should load");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "authoritative-ready");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
