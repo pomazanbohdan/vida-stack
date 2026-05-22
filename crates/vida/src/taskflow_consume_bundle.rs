@@ -986,9 +986,6 @@ fn dev_team_roles(
             blockers.push(format!("missing_default_carrier:{role_id}"));
         }
         let default_model = crate::yaml_string(crate::yaml_lookup(role_entry, &["default_model"]));
-        if default_model.as_deref().unwrap_or_default().is_empty() {
-            blockers.push(format!("missing_default_model:{role_id}"));
-        }
         let handoff_next_role =
             crate::yaml_string(crate::yaml_lookup(role_entry, &["handoff", "next_role"]));
         let required_outputs = crate::yaml_string_list(crate::yaml_lookup(
@@ -1835,6 +1832,80 @@ dev_team:
         assert_eq!(
             readiness["roles"][0]["selected_model"]["pricing_freshness_status"],
             "ready"
+        );
+    }
+
+    #[test]
+    fn build_dev_team_readiness_uses_carrier_profile_without_role_default_model() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+dev_team:
+  enabled: true
+  roles:
+    test_author:
+      runtime_role: worker
+      task_classes: [test_authoring, regression_test]
+      default_carrier: middle
+      cost_policy:
+        budget_units: 4
+      handoff:
+        next_role: coach
+        required_outputs: [failing_regression_test]
+  flows:
+    default_delivery:
+      enabled: true
+      sequential: true
+      allow_parallel_handoffs: false
+      steps: [test_author]
+        "#,
+        )
+        .expect("config should write");
+
+        let readiness = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &serde_json::json!({
+                "carrier_runtime": {
+                    "roles": [
+                        {
+                            "role_id": "middle",
+                            "model": "gpt-5.4",
+                            "model_provider": "openai",
+                            "model_reasoning_effort": "medium",
+                            "normalized_cost_units": 4,
+                            "rate": 4,
+                            "runtime_roles": ["worker", "coach"],
+                            "task_classes": ["test_authoring", "regression_test", "coach"],
+                            "default_model_profile": "codex_gpt55_medium_write",
+                            "model_profiles": {
+                                "codex_gpt55_medium_write": {
+                                    "provider": "openai",
+                                    "model_ref": "gpt-5.4",
+                                    "reasoning_effort": "medium",
+                                    "normalized_cost_units": 4
+                                }
+                            }
+                        }
+                    ]
+                }
+            }),
+        );
+
+        assert_eq!(readiness["status"], "ready");
+        assert_eq!(readiness["blockers"], serde_json::json!([]));
+        assert_eq!(
+            readiness["roles"][0]["default_model"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            readiness["roles"][0]["selected_model"]["model_profile_id"],
+            "codex_gpt55_medium_write"
+        );
+        assert_eq!(
+            readiness["roles"][0]["selected_model"]["model_ref"],
+            "gpt-5.4"
         );
     }
 
