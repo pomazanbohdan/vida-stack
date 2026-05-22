@@ -1419,7 +1419,7 @@ agent_system:
           path: ~/.vibe/logs/vibe.log
           substring: Invalid API key
     pi_cli:
-      enabled: false
+      enabled: true
       subagent_backend_class: external_cli
       detect_command: vida-pi-agent
       provider_command: pi
@@ -2073,9 +2073,9 @@ agent_system:
       max_verification_passes: 1
       max_fallback_hops: 2
       max_total_runtime_seconds: 540
-      fallback_executor_backend: internal_subagents
+      fallback_executor_backend: pi_cli
       bridge_fallback_subagent: internal_subagents
-      preferred_external_backend: internal_subagents
+      preferred_external_backend: pi_cli
       write_readiness: guard_required_fail_closed_until_adapter_guard
       internal_escalation_trigger: pi_guard_unavailable_or_cross_module_or_architecture_shift
       verification_route_task_class: review_ensemble
