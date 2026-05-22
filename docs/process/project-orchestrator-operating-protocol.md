@@ -173,10 +173,10 @@ Default route:
 1. orchestrator shapes,
 2. analyst prepares the bounded handoff when analysis/spec context is required,
 3. test_author/autotester writes or specifies the failing regression proof for test-first defects,
-4. coach reviews test quality before implementation when a new regression test gates the packet,
-5. implementer writes through the cheapest eligible configured write carrier,
-6. coach reviews implementation conformance, then duplication reviewer and independent verifier/prover review closure evidence,
-7. verifier/prover proves closure,
+4. coach_test_gate reviews test quality before implementation when a new regression test gates the packet,
+5. developer/implementer writes through the cheapest eligible configured write carrier,
+6. coach_implementation_gate reviews implementation conformance, then duplication_reviewer and tester review closure evidence,
+7. prover and release_closure prove closure readiness,
 8. orchestrator synthesizes and updates TaskFlow.
 
 Full-orchestration rule:
@@ -309,7 +309,7 @@ Use this table by default:
 | Work shape | Default depth | Default lane sequence | Notes |
 |---|---|---|---|
 | bounded read-only analysis | `delivery_task` | orchestrator or verifier-only | keep local when no writer is needed |
-| one coherent write packet | `delivery_task` | orchestrator -> analyst -> test_author when required -> coach_test_gate when required -> implementer -> coach_implementation_gate -> reviewer/verifier/prover | normal path |
+| one coherent write packet | `delivery_task` | orchestrator -> analyst -> test_author when required -> coach_test_gate when required -> developer/implementer -> coach_implementation_gate -> duplication_reviewer -> tester -> prover -> release_closure | normal path |
 | broad backlog item with one clear owner but unclear done | split to `delivery_task` first | shaping only until lawful | do not dispatch yet |
 | one delivery task still crossing multiple mutable contracts | `execution_block` | orchestrator -> analyst -> bounded lane chain after split | split before dispatch |
 | seam or closure bottleneck | `delivery_task` or `execution_block` | orchestrator -> implementer/verifier -> synthesis | choose by contract tightness |

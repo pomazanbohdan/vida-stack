@@ -713,7 +713,7 @@ dev_team:
   flows:
     default_delivery:
       enabled: true
-      description: System analyst produces the detailed task brief, test_author writes the test-first regression when required, coach gates test quality, developer implements on the cheapest eligible write lane, coach gates implementation conformance, then independent reviewer/verifier/prover gates release closure.
+      description: System analyst produces the detailed task brief, test_author writes the test-first regression when required, coach_test_gate gates test quality, developer implements on the cheapest eligible write lane, coach_implementation_gate gates implementation conformance, then duplication_reviewer, tester, prover, and release_closure complete the independent closure path.
       sequential: true
       allow_parallel_handoffs: false
       fail_closed_on_missing_step_contract: true

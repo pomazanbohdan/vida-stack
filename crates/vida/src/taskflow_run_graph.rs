@@ -86,31 +86,9 @@ fn stale_recovery_projection_matches_lane_truth(
     if !recovery_blocked_open_cycle {
         return true;
     }
-    let lane_projection_name = format!("lane-show-{}", projection_component(run_id));
-    let Some(lane_cached) =
-        crate::operator_projection_cache::read_state_stale_recent_json_projection(
-            state_dir,
-            &lane_projection_name,
-            TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE,
-        )
-    else {
-        return true;
-    };
-    let Ok(lane_payload) = serde_json::from_str::<serde_json::Value>(&lane_cached) else {
-        return true;
-    };
-    let lane_clean = lane_payload
-        .get("blocker_codes")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(Vec::is_empty)
-        && lane_payload
-            .get("exception_path_receipt_id")
-            .is_some_and(serde_json::Value::is_null)
-        && lane_payload
-            .get("lane_status")
-            .and_then(serde_json::Value::as_str)
-            == Some("lane_completed");
-    !lane_clean
+    let _ = state_dir;
+    let _ = run_id;
+    false
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -910,8 +888,14 @@ fn recovery_projection_resolves_persisted_open_cycle(
         .dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
-            let clean_completed_receipt = receipt.dispatch_status == "executed"
-                && receipt.lane_status == "lane_completed"
+            let ready_downstream_handoff = receipt.downstream_dispatch_ready
+                && receipt
+                    .downstream_dispatch_status
+                    .as_deref()
+                    .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"));
+            let clean_resolved_receipt = receipt.dispatch_status == "executed"
+                && (receipt.lane_status == "lane_completed"
+                    || (receipt.lane_status == "lane_running" && ready_downstream_handoff))
                 && receipt.blocker_code.is_none()
                 && receipt.downstream_dispatch_blockers.is_empty();
             let downstream_has_no_blocking_state = !receipt.downstream_dispatch_ready
@@ -919,7 +903,7 @@ fn recovery_projection_resolves_persisted_open_cycle(
                     .downstream_dispatch_status
                     .as_deref()
                     .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"));
-            clean_completed_receipt && downstream_has_no_blocking_state
+            clean_resolved_receipt && downstream_has_no_blocking_state
         })
 }
 
@@ -3239,6 +3223,33 @@ async fn reconcile_dispatch_init_status_for_active_exception(
         .unwrap_or(status))
 }
 
+fn reconcile_dispatch_init_status_for_missing_receipt(
+    mut status: RunGraphStatus,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    dispatch_receipt_present: bool,
+) -> RunGraphStatus {
+    if dispatch_receipt_present
+        || !status.recovery_ready
+        || status.resume_target.starts_with("dispatch.")
+        || status.next_node.is_some()
+        || status.active_node == "planning"
+        || !status.delegation_gate().delegated_cycle_open
+    {
+        return status;
+    }
+    let target_format = if role_selection.conversational_mode.is_some() {
+        DispatchTargetFormat::Direct
+    } else {
+        DispatchTargetFormat::Lane
+    };
+    let node = status.active_node.clone();
+    let (handoff_state, resume_target) = governance_handoff(Some(&node), target_format);
+    status.next_node = Some(node);
+    status.handoff_state = handoff_state;
+    status.resume_target = resume_target;
+    status
+}
+
 fn meta_string_field(meta: &serde_json::Value, key: &str) -> Option<Option<String>> {
     meta.get(key)?;
     Some(
@@ -4844,14 +4855,25 @@ async fn preview_run_graph_dispatch_init_artifacts(
         role_selection = payload.role_selection.clone();
         seed_payload = Some(payload);
     }
-    let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
-    let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
-    if route_assignment_drift.is_none() {
-        if let Some(existing_receipt) = store
+    let existing_dispatch_receipt = if route_assignment_drift.is_none() {
+        store
             .run_graph_dispatch_receipt(&effective_run_id)
             .await
             .map_err(|error| format!("Failed to read existing dispatch receipt: {error}"))?
-        {
+    } else {
+        None
+    };
+    if route_assignment_drift.is_none() {
+        status = reconcile_dispatch_init_status_for_missing_receipt(
+            status,
+            &role_selection,
+            existing_dispatch_receipt.is_some(),
+        );
+    }
+    let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
+    let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
+    if route_assignment_drift.is_none() {
+        if let Some(existing_receipt) = existing_dispatch_receipt.as_ref() {
             if let Some(dispatch_packet_path) = reusable_routed_dispatch_receipt(&existing_receipt)
             {
                 return Ok(RunGraphDispatchInitPreview::Existing(
@@ -4861,7 +4883,7 @@ async fn preview_run_graph_dispatch_init_artifacts(
                         role_selection,
                         run_graph_bootstrap,
                         taskflow_handoff_plan,
-                        dispatch_receipt: existing_receipt,
+                        dispatch_receipt: existing_receipt.clone(),
                         dispatch_packet_path,
                     },
                 ));
@@ -6184,6 +6206,49 @@ mod tests {
     }
 
     #[test]
+    fn recovery_status_rejects_stale_blocked_projection_after_stale_blocked_lane() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-recovery-stale-blocked-projection-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let run_id = "run-1";
+        crate::operator_projection_cache::write_json_projection(
+            &root,
+            &recovery_status_projection_name(run_id),
+            &serde_json::json!({
+                "surface": "vida taskflow recovery status",
+                "status": "blocked",
+                "blocker_codes": ["open_delegated_cycle", "tool_execution_failed"]
+            }),
+        );
+        crate::operator_projection_cache::write_json_projection(
+            &root,
+            "lane-show-run-1",
+            &serde_json::json!({
+                "surface": "vida lane",
+                "status": "blocked",
+                "blocker_codes": ["open_delegated_cycle"],
+                "exception_path_receipt_id": null,
+                "lane_status": "lane_blocked"
+            }),
+        );
+        crate::operator_projection_cache::touch_state_mutation_marker(&root);
+
+        assert!(read_recovery_status_projection(
+            &root,
+            &recovery_status_projection_name(run_id),
+            run_id
+        )
+        .is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn dispatch_init_timeout_window_covers_live_activation_snapshot_seed() {
         assert!(
             RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS >= 60,
@@ -6516,6 +6581,54 @@ mod tests {
             governance_handoff(Some("spec-pack"), DispatchTargetFormat::Direct);
         assert_eq!(handoff_state, "awaiting_spec-pack");
         assert_eq!(resume_target, "dispatch.spec-pack");
+    }
+
+    #[test]
+    fn dispatch_init_replays_active_seeded_lane_when_receipt_is_missing() {
+        let status = RunGraphStatus {
+            run_id: "run-missing-receipt-active-lane".to_string(),
+            task_id: "run-missing-receipt-active-lane".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "analysis".to_string(),
+            next_node: None,
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "analysis_lane".to_string(),
+            lifecycle_stage: "analysis_active".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: true,
+        };
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Continue implementation".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+
+        let reconciled =
+            reconcile_dispatch_init_status_for_missing_receipt(status, &role_selection, false);
+
+        assert_eq!(reconciled.next_node.as_deref(), Some("analysis"));
+        assert_eq!(reconciled.handoff_state, "awaiting_analysis");
+        assert_eq!(reconciled.resume_target, "dispatch.analysis_lane");
+        validate_run_graph_resume_gate(&reconciled)
+            .expect("replayed active lane should be dispatch-init ready");
     }
 
     #[test]

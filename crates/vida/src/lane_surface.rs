@@ -9,7 +9,6 @@ use crate::taskflow_task_bridge::proxy_state_dir;
 use crate::{state_store::StateStore, ProxyArgs};
 
 const LANE_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
-const LANE_SURFACE_STALE_PROJECTION_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Serialize)]
 struct LaneEnvelope {
@@ -691,6 +690,19 @@ fn lane_summary_dispatch_is_blocked(
         || has_downstream_blockers
 }
 
+fn lane_summary_has_ready_downstream_handoff(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+) -> bool {
+    summary.dispatch_status == "executed"
+        && summary.blocker_code.is_none()
+        && summary.downstream_dispatch_ready
+        && summary.downstream_dispatch_blockers.is_empty()
+        && summary
+            .downstream_dispatch_status
+            .as_deref()
+            .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"))
+}
+
 fn recovery_delegated_cycle_open(
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
 ) -> bool {
@@ -848,10 +860,12 @@ fn derive_lane_show_truth(
     }
 
     let recovery_open = recovery_delegated_cycle_open(recovery);
-    let mut blocked = lane_summary_dispatch_is_blocked(summary) || recovery_open;
+    let recovery_open_blocks_lane =
+        recovery_open && !lane_summary_has_ready_downstream_handoff(summary);
+    let mut blocked = lane_summary_dispatch_is_blocked(summary) || recovery_open_blocks_lane;
     let mut blocker_codes = lane_summary_raw_blocker_codes(summary, blocked);
     let mut next_actions = Vec::new();
-    if recovery_open {
+    if recovery_open_blocks_lane {
         blocker_codes.push("open_delegated_cycle".to_string());
     }
 
@@ -1152,13 +1166,6 @@ fn emit_cached_lane_show_projection(cached: String) -> ExitCode {
 
 fn read_cached_lane_show_projection(state_dir: &Path, projection_name: &str) -> Option<String> {
     crate::operator_projection_cache::read_fresh_json_projection(state_dir, projection_name)
-        .or_else(|| {
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                state_dir,
-                projection_name,
-                LANE_SURFACE_STALE_PROJECTION_MAX_AGE,
-            )
-        })
 }
 
 fn emit_lane_envelope_with_projection_cache(
@@ -2738,6 +2745,36 @@ mod tests {
             .next_actions
             .iter()
             .any(|action| action.contains("vida taskflow recovery status run-lane-test --json")));
+    }
+
+    #[test]
+    fn lane_show_rejects_state_stale_blocker_projection() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-stale-projection-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let run_id = "run-lane-stale";
+        crate::operator_projection_cache::write_json_projection(
+            &root,
+            &lane_show_projection_name(run_id),
+            &serde_json::json!({
+                "surface": "vida lane",
+                "status": "blocked",
+                "blocker_codes": ["open_delegated_cycle"],
+                "lane_status": "lane_blocked"
+            }),
+        );
+        crate::operator_projection_cache::touch_state_mutation_marker(&root);
+
+        assert!(
+            read_cached_lane_show_projection(&root, &lane_show_projection_name(run_id)).is_none()
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

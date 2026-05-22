@@ -77,9 +77,8 @@ struct VidaSessionIdentity {
 fn generated_local_session_id(state_dir: &Path) -> String {
     let worktree = canonicalized_current_dir();
     let state_dir = canonicalized_path_string(state_dir);
-    let process_id = std::process::id();
     let context_hash = stable_hash_hex(&format!("{worktree}\n{state_dir}"));
-    format!("local-session-{context_hash}-{process_id}")
+    format!("local-session-{context_hash}")
 }
 
 fn resolve_vida_session_identity(state_dir: &Path) -> VidaSessionIdentity {
@@ -716,9 +715,10 @@ mod tests {
     use super::{
         build_runtime_owner_evidence, classify_sessions_with_liveness,
         compact_runtime_owner_evidence_for_operator, context_summary_map, current_session_id,
-        current_session_identity_source, current_session_record, merge_current_session,
-        now_epoch_seconds, read_sessions, stable_local_session_id, OrchestratorSessionLiveness,
-        ProcessLiveness, MAX_SESSION_STORE_BYTES, STALE_SESSION_PURGE_AFTER_SECONDS,
+        current_session_identity_source, current_session_record, generated_local_session_id,
+        merge_current_session, now_epoch_seconds, read_sessions, stable_local_session_id,
+        OrchestratorSessionLiveness, ProcessLiveness, MAX_SESSION_STORE_BYTES,
+        STALE_SESSION_PURGE_AFTER_SECONDS,
     };
     use crate::temp_state::TempStateHarness;
     use std::sync::{Mutex, OnceLock};
@@ -847,6 +847,25 @@ mod tests {
             .unwrap()
             .iter()
             .any(|code| code == "live_other_orchestrator_owner"));
+
+        restore_session_env(saved);
+    }
+
+    #[test]
+    fn fallback_orchestrator_session_identity_is_stable_for_cli_reentry() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved = saved_session_env();
+        clear_session_env();
+
+        let harness = TempStateHarness::new().expect("temp state should initialize");
+        let expected = stable_local_session_id(harness.path()).replacen(
+            "local-worktree-",
+            "local-session-",
+            1,
+        );
+
+        assert_eq!(generated_local_session_id(harness.path()), expected);
+        assert_eq!(current_session_id(harness.path()), expected);
 
         restore_session_env(saved);
     }

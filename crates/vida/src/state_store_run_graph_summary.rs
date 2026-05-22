@@ -1226,6 +1226,12 @@ impl StateStore {
         else {
             return Ok(None);
         };
+        let current_stable_fallback = evidence["current_session"]
+            ["fallback_replaces_legacy_stable_worktree_state_hash"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
         let mut scope = CurrentSessionRunGraphClaimScope {
             run_ids: Vec::new(),
             task_ids: Vec::new(),
@@ -1248,19 +1254,22 @@ impl StateStore {
                 .query(
                     "SELECT * FROM run_graph_owner_evidence \
                      WHERE runtime_owner_evidence.current_session.session_id = $session_id \
+                        OR runtime_owner_evidence.current_session.fallback_replaces_legacy_stable_worktree_state_hash = $stable_fallback \
                      ORDER BY recorded_at DESC, run_id DESC;",
                 )
                 .bind(("session_id", current_session_id.clone()))
+                .bind((
+                    "stable_fallback",
+                    current_stable_fallback.clone().unwrap_or_default(),
+                ))
                 .await?;
             let owner_records: Vec<RunGraphOwnerEvidenceRecord> = owner_query.take(0)?;
             for record in owner_records {
-                if record
-                    .runtime_owner_evidence
-                    .get("current_session")
-                    .and_then(|session| session.get("session_id"))
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|session_id| session_id.trim() == current_session_id)
-                {
+                if Self::owner_evidence_matches_current_session(
+                    &record.runtime_owner_evidence,
+                    current_session_id.as_str(),
+                    current_stable_fallback.as_deref(),
+                ) {
                     scope.push_run_id(record.run_id);
                 }
             }
@@ -1284,6 +1293,24 @@ impl StateStore {
         Ok(())
     }
 
+    fn owner_evidence_matches_current_session(
+        runtime_owner_evidence: &serde_json::Value,
+        current_session_id: &str,
+        current_stable_fallback: Option<&str>,
+    ) -> bool {
+        let current_session = &runtime_owner_evidence["current_session"];
+        current_session["session_id"]
+            .as_str()
+            .is_some_and(|session_id| session_id.trim() == current_session_id)
+            || current_stable_fallback.is_some_and(|fallback| {
+                current_session["fallback_replaces_legacy_stable_worktree_state_hash"]
+                    .as_str()
+                    .is_some_and(|record_fallback| {
+                        !fallback.is_empty() && record_fallback.trim() == fallback
+                    })
+            })
+    }
+
     async fn ensure_current_session_mutation_claim_for_run(
         &self,
         run_id: &str,
@@ -1296,6 +1323,11 @@ impl StateStore {
             .ok_or_else(|| StateStoreError::InvalidTaskRecord {
                 reason: "run-graph mutation requires an active current session id".to_string(),
             })?;
+        let current_stable_fallback = evidence["current_session"]
+            ["fallback_replaces_legacy_stable_worktree_state_hash"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
 
         for claim in self.active_orchestrator_claims().await? {
             if claim.orchestrator_session_id == current_session_id
@@ -1324,12 +1356,11 @@ impl StateStore {
             .await?;
         let owner_records: Vec<RunGraphOwnerEvidenceRecord> = owner_query.take(0)?;
         if owner_records.iter().any(|record| {
-            record
-                .runtime_owner_evidence
-                .get("current_session")
-                .and_then(|session| session.get("session_id"))
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|session_id| session_id.trim() == current_session_id)
+            Self::owner_evidence_matches_current_session(
+                &record.runtime_owner_evidence,
+                current_session_id,
+                current_stable_fallback,
+            )
         }) {
             return Ok(());
         }
@@ -3433,6 +3464,27 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
         restore_vida_session_id(saved_session_id);
+    }
+
+    #[test]
+    fn owner_evidence_matches_prior_generated_local_session_by_stable_fallback() {
+        let prior_owner_evidence = serde_json::json!({
+            "current_session": {
+                "session_id": "local-session-worktreehash-12345",
+                "fallback_replaces_legacy_stable_worktree_state_hash": "local-worktree-worktreehash"
+            }
+        });
+
+        assert!(StateStore::owner_evidence_matches_current_session(
+            &prior_owner_evidence,
+            "local-session-worktreehash",
+            Some("local-worktree-worktreehash"),
+        ));
+        assert!(!StateStore::owner_evidence_matches_current_session(
+            &prior_owner_evidence,
+            "local-session-other",
+            Some("local-worktree-other"),
+        ));
     }
 
     #[tokio::test]
