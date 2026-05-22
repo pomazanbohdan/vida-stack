@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub Actions"
+  short_description: "Secure, current workflow guidance"
+  default_prompt: "Use $github-actions to design, audit, or repair a GitHub Actions workflow."
