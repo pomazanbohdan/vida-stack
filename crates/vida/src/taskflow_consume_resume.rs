@@ -6606,7 +6606,7 @@ mod tests {
             nanos
         ));
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
-        runtime.block_on(Box::pin(async {
+        runtime.block_on(async {
             let store = StateStore::open(root.clone()).await.expect("open store");
             let error = tokio::time::timeout(
                 Duration::from_secs(1),
@@ -6625,7 +6625,7 @@ mod tests {
             );
             drop(store);
             let _ = fs::remove_dir_all(&root);
-        }));
+        });
     }
 
     #[tokio::test]
@@ -9756,8 +9756,16 @@ agent_system:
 
     #[test]
     fn consume_continue_bridges_closed_specification_gate_into_work_pool_progress() {
-        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
-        runtime.block_on(async {
+        std::thread::Builder::new()
+            .name("consume-continue-spec-bridge".to_string())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .thread_stack_size(8 * 1024 * 1024)
+                    .build()
+                    .expect("create runtime");
+                runtime.block_on(Box::pin(async {
             let nanos = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|duration| duration.as_nanos())
@@ -9962,7 +9970,11 @@ agent_system:
             );
 
             let _ = fs::remove_dir_all(&root);
-        });
+                }));
+            })
+            .expect("spawn stack-heavy consume continue regression")
+            .join()
+            .expect("stack-heavy consume continue regression should complete");
     }
 
     #[test]
