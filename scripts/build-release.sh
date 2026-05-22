@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-}"
 RELEASE_SUFFIX="${VIDA_RELEASE_SUFFIX:-}"
 WINDOWS_RELEASE="no"
+SKIP_BUILD="${VIDA_RELEASE_SKIP_BUILD:-0}"
 
 fail() {
   printf '[release-build] ERROR: %s\n' "$*" >&2
@@ -13,6 +14,13 @@ fail() {
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
+}
+
+skip_build_enabled() {
+  case "$SKIP_BUILD" in
+    1|true|TRUE|yes|YES) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 normalize_path_for_python() {
@@ -58,7 +66,9 @@ select_python() {
   fail "Missing working Python command: tried python3, python"
 }
 
-require_cmd cargo
+if ! skip_build_enabled || [[ -z "$RELEASE_SUFFIX" ]]; then
+  require_cmd cargo
+fi
 PYTHON_BIN="$(select_python)"
 
 if [[ -z "$VERSION" ]]; then
@@ -119,7 +129,11 @@ cp -R "$ROOT_DIR/vida" "$STAGE_DIR/vida"
 find "$STAGE_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$STAGE_DIR" -type f -name '*.pyc' -delete
 
-cargo build --release -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
+if skip_build_enabled; then
+    printf '[release-build] Using existing target/release binaries\n'
+else
+    cargo build --release -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent
+fi
 copy_runtime_binary() {
   local binary_name="$1"
   local destination="$2"

@@ -42,7 +42,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --workspace --locked
+          if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+            cargo build --workspace --locked --release
+          else
+            cargo build --workspace --locked
+          fi
 
       - name: Build Windows release assets
         if: matrix.os == 'windows-latest'
@@ -50,6 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           export VIDA_RELEASE_SUFFIX=windows-x86_64
+          export VIDA_RELEASE_SKIP_BUILD=1
           bash scripts/build-release.sh
 
       - name: Upload Windows release assets
