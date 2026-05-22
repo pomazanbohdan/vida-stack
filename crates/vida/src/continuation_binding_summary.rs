@@ -373,20 +373,8 @@ pub(crate) fn downstream_dispatch_command_from_parts(
     let command = command.map(str::trim).filter(|value| !value.is_empty());
     let packet_path = packet_path.map(str::trim).filter(|value| !value.is_empty());
 
-    if let Some(command) = command {
-        if command.starts_with("vida agent-init")
-            && !command
-                .split_whitespace()
-                .any(|part| part == "--execute-dispatch")
-        {
-            if let Some(path) = packet_path {
-                return Some(format!(
-                    "vida agent-init --downstream-packet {} --execute-dispatch --json",
-                    crate::shell_quote(path)
-                ));
-            }
-        }
-        return Some(command.to_string());
+    if command.is_some_and(|value| !value.starts_with("vida agent-init")) {
+        return None;
     }
 
     packet_path.map(|path| {
@@ -1029,6 +1017,31 @@ mod tests {
             request_text: Some("audit-p1-state-store-init-lock-timeout-proof-blocker".to_string()),
             recorded_at: "2026-04-26T07:52:53Z".to_string(),
         }
+    }
+
+    #[test]
+    fn downstream_dispatch_command_rejects_non_vida_persisted_command() {
+        assert_eq!(
+            super::downstream_dispatch_command_from_parts(
+                Some("pwsh -NoProfile -Command Invoke-Expression attacker"),
+                Some("packets/downstream.json"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn downstream_dispatch_command_synthesizes_safe_agent_init_from_packet_path() {
+        assert_eq!(
+            super::downstream_dispatch_command_from_parts(
+                Some("vida agent-init --downstream-packet stale.json"),
+                Some("packets/downstream packet.json"),
+            )
+            .as_deref(),
+            Some(
+                "vida agent-init --downstream-packet 'packets/downstream packet.json' --execute-dispatch --json"
+            )
+        );
     }
 
     #[test]
