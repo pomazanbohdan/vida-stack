@@ -6124,7 +6124,7 @@ hierarchy: framework,contracts
                 CanonicalTaskRecord {
                     id: CanonicalTaskId::new("vida-root"),
                     title: "Root".to_string(),
-                    status: CanonicalTaskStatus::Open,
+                    status: CanonicalTaskStatus::Closed,
                     issue_type: CanonicalIssueType::Epic,
                     updated_at: CanonicalTimestamp(
                         OffsetDateTime::parse("2026-03-08T00:00:00Z", &Rfc3339)
@@ -6272,7 +6272,7 @@ hierarchy: framework,contracts
                 CanonicalTaskRecord {
                     id: CanonicalTaskId::new("vida-root"),
                     title: "Root".to_string(),
-                    status: CanonicalTaskStatus::Open,
+                    status: CanonicalTaskStatus::Closed,
                     issue_type: CanonicalIssueType::Epic,
                     updated_at: CanonicalTimestamp(
                         OffsetDateTime::parse("2026-03-08T00:00:00Z", &Rfc3339)

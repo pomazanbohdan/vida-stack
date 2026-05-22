@@ -1320,10 +1320,11 @@ mod tests {
                 .is_some_and(|value| value.contains("vida taskflow recovery status")))
                 && actions.iter().any(|action| action
                     .as_str()
-                    .is_some_and(|value| value.contains("vida taskflow continuation bind")))
+                    .is_some_and(|value| value.contains("closure_complete")))
                 && actions.iter().all(|action| action
                     .as_str()
-                    .is_some_and(|value| !value.starts_with("Continue the active exception-backed bounded unit with `vida taskflow consume continue")))
+                    .is_some_and(|value| !value.contains("vida taskflow continuation bind")
+                        && !value.starts_with("Continue the active exception-backed bounded unit with `vida taskflow consume continue")))
         }));
     }
 

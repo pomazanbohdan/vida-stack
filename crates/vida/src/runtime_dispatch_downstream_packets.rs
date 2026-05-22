@@ -127,10 +127,14 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
         } else {
             implementation_owned_paths_override.to_vec()
         };
-        crate::runtime_dispatch_state::apply_owned_paths_if_missing(
+        if !crate::runtime_dispatch_state::apply_owned_paths_if_missing(
             &mut delivery_task_packet,
             &owned_paths,
-        );
+        ) {
+            crate::runtime_dispatch_state::clear_runtime_consumption_fallback_owned_paths(
+                &mut delivery_task_packet,
+            );
+        }
     }
     let execution_block_packet = runtime_execution_block_packet(
         &receipt.run_id,

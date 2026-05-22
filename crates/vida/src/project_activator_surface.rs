@@ -245,6 +245,11 @@ pub(crate) fn host_cli_system_enabled(entry: &serde_yaml::Value) -> bool {
     yaml_bool(yaml_lookup(entry, &["enabled"]), true)
 }
 
+fn host_cli_system_explicit_selection_allowed(entry: &serde_yaml::Value, system: &str) -> bool {
+    host_cli_system_enabled(entry)
+        || host_cli_system_materialization_mode(entry, system) == "pi_agent_projection_render"
+}
+
 fn host_cli_system_template_root(entry: &serde_yaml::Value) -> Option<String> {
     yaml_string(yaml_lookup(entry, &["template_root"]))
 }
@@ -1243,7 +1248,14 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
             }
         };
         let host_cli_entry = match registry.get(&normalized_host_cli_system) {
-            Some(entry) if host_cli_system_enabled(entry) => entry,
+            Some(entry)
+                if host_cli_system_explicit_selection_allowed(
+                    entry,
+                    &normalized_host_cli_system,
+                ) =>
+            {
+                entry
+            }
             Some(_) => {
                 eprintln!("Host CLI system `{normalized_host_cli_system}` is currently disabled.");
                 return ExitCode::from(2);
@@ -2394,6 +2406,27 @@ mod tests {
         let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        let config_path = harness.path().join("vida.config.yaml");
+        let config = fs::read_to_string(&config_path).expect("config should exist");
+        let mut config_yaml: serde_yaml::Value =
+            serde_yaml::from_str(&config).expect("config should parse as yaml");
+        let pi_system = config_yaml
+            .get_mut("host_environment")
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|host_environment| host_environment.get_mut("systems"))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|systems| systems.get_mut("pi"))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("pi host system should exist in test config");
+        pi_system.insert(
+            serde_yaml::Value::String("enabled".to_string()),
+            serde_yaml::Value::Bool(true),
+        );
+        fs::write(
+            &config_path,
+            serde_yaml::to_string(&config_yaml).expect("config should serialize"),
+        )
+        .expect("test config should enable Pi host system");
         assert_eq!(
             runtime.block_on(run(cli(&[
                 "project-activator",

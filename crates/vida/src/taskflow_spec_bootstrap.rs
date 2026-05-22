@@ -155,11 +155,14 @@ fn work_packet_planner_metadata(
     tracked: &serde_json::Value,
 ) -> TaskPlannerMetadata {
     let design_doc_path = tracked["design_doc_path"].as_str();
-    let owned_paths = crate::runtime_dispatch_packets::delivery_packet_owned_paths(
+    let mut owned_paths = crate::runtime_dispatch_packets::delivery_packet_owned_paths(
         TASK_CLASS_IMPLEMENTATION,
         request_text,
         design_doc_path,
     );
+    owned_paths.retain(|path| {
+        !crate::runtime_dispatch_packets::is_runtime_consumption_fallback_owned_path(path)
+    });
     if owned_paths.is_empty() {
         return TaskPlannerMetadata::default();
     }

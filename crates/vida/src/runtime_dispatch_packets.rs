@@ -4,6 +4,13 @@ use crate::runtime_contract_vocab::{
     TASK_CLASS_VERIFICATION,
 };
 
+pub(crate) const RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH: &str =
+    ".vida/data/state/runtime-consumption";
+
+pub(crate) fn is_runtime_consumption_fallback_owned_path(path: &str) -> bool {
+    path == RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH
+}
+
 fn runtime_delivery_packet_id(run_id: &str, dispatch_target: &str) -> String {
     format!("{run_id}::{dispatch_target}::delivery")
 }
@@ -227,7 +234,7 @@ pub(crate) fn delivery_packet_owned_paths(
                 let design_paths =
                     tracked_design_doc_bounded_file_set_paths(tracked_design_doc_path);
                 if design_paths.is_empty() {
-                    vec![".vida/data/state/runtime-consumption".to_string()]
+                    vec![RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH.to_string()]
                 } else {
                     design_paths
                 }

@@ -121,7 +121,11 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.next_node = None;
             status.lifecycle_stage = format!("{blocked_target}_blocked");
             status.handoff_state = "none".to_string();
-            status.resume_target = "none".to_string();
+            status.resume_target = if blocked_agent_lane_receipt_keeps_resume_target(&receipt) {
+                format!("dispatch.{blocked_target}")
+            } else {
+                "none".to_string()
+            };
             status.context_state = "sealed".to_string();
         }
         status.checkpoint_kind = "none".to_string();
@@ -180,6 +184,24 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         }
     }
     Ok(status)
+}
+
+fn blocked_agent_lane_receipt_keeps_resume_target(receipt: &RunGraphDispatchReceiptStored) -> bool {
+    if receipt.dispatch_kind != "agent_lane"
+        || !receipt
+            .dispatch_result_path
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+    {
+        return false;
+    }
+    let blocker_code = receipt.blocker_code.as_deref().unwrap_or_default();
+    !matches!(
+        blocker_code,
+        "internal_activation_view_only"
+            | crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
+    )
 }
 
 fn ready_dispatch_handoff_matches_downstream_receipt(

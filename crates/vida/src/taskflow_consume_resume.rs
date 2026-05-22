@@ -744,9 +744,6 @@ async fn validate_run_graph_resume_state(
     if receipt_backed_terminal_closure_resume(store, &status, run_id).await {
         return Ok(());
     }
-    if run_graph_resume_task_missing(store, &status).await? {
-        return Err(stale_missing_task_run_graph_resume_error(&status));
-    }
     let active_receipt = store
         .run_graph_dispatch_receipt(run_id)
         .await
@@ -762,6 +759,13 @@ async fn validate_run_graph_resume_state(
         .is_some_and(|replay_status| validate_run_graph_resume_gate(replay_status).is_ok())
     {
         return Ok(());
+    }
+    if run_graph_resume_task_missing(store, &status).await?
+        && !active_receipt
+            .as_ref()
+            .is_some_and(dispatch_receipt_has_exception_takeover_evidence)
+    {
+        return Err(stale_missing_task_run_graph_resume_error(&status));
     }
     match validate_run_graph_resume_gate(&status) {
         Ok(()) => Ok(()),
@@ -790,9 +794,6 @@ async fn validate_run_graph_resume_state_strict(
     if receipt_backed_terminal_closure_resume(store, &status, run_id).await {
         return Ok(());
     }
-    if run_graph_resume_task_missing(store, &status).await? {
-        return Err(stale_missing_task_run_graph_resume_error(&status));
-    }
     let active_receipt = store
         .run_graph_dispatch_receipt(run_id)
         .await
@@ -808,6 +809,13 @@ async fn validate_run_graph_resume_state_strict(
         .is_some_and(|replay_status| validate_run_graph_resume_gate(replay_status).is_ok())
     {
         return Ok(());
+    }
+    if run_graph_resume_task_missing(store, &status).await?
+        && !active_receipt
+            .as_ref()
+            .is_some_and(dispatch_receipt_has_exception_takeover_evidence)
+    {
+        return Err(stale_missing_task_run_graph_resume_error(&status));
     }
     validate_run_graph_resume_gate(&status).map_err(|error| {
         active_exception_takeover_resume_blocker_error(&status, active_receipt.as_ref())
@@ -873,6 +881,16 @@ fn receipt_has_active_exception_takeover(
             .is_some_and(|value| !value.trim().is_empty())
         && receipt
             .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn dispatch_receipt_has_exception_takeover_evidence(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    receipt.lane_status == "lane_exception_takeover"
+        || receipt
+            .exception_path_receipt_id
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
 }
@@ -1334,15 +1352,18 @@ fn closure_execution_evidence_is_valid(
     if result.get("run_id").and_then(serde_json::Value::as_str) != Some(receipt.run_id.as_str()) {
         return false;
     }
-    if result
+    let result_target = result
         .get("dispatch_target")
-        .and_then(serde_json::Value::as_str)
-        != Some("closure")
-    {
+        .or_else(|| result.get("completed_target"))
+        .and_then(serde_json::Value::as_str);
+    if result_target != Some("closure") {
         return false;
     }
-    canonical_resume_dispatch_status(result.get("execution_state").and_then(serde_json::Value::as_str))
-        == "executed"
+    canonical_resume_dispatch_status(
+        result
+            .get("execution_state")
+            .and_then(serde_json::Value::as_str),
+    ) == "executed"
 }
 
 fn terminal_closure_complete_resume_from_root_receipt(
@@ -2250,10 +2271,10 @@ fn downstream_packet_candidate_has_receipt_backed_ready_evidence(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return false;
+        return !packet_path.trim().is_empty();
     };
     let Ok(result) = read_downstream_dispatch_result(result_path) else {
-        return false;
+        return !packet_path.trim().is_empty();
     };
     if result
         .get("run_id")
@@ -2898,6 +2919,7 @@ fn dispatch_receipt_retry_eligible(
             dispatch_receipt.blocker_code.as_deref(),
             Some(
                 "configured_backend_dispatch_failed"
+                    | "internal_activation_view_only"
                     | "timeout_without_takeover_authority"
                     | "tool_execution_failed"
             )
@@ -4304,6 +4326,16 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
         return Ok(status.run_id);
     }
     if resume_from_persisted_final_snapshot(store, &status.run_id)? {
+        return Ok(status.run_id);
+    }
+    if store
+        .run_graph_dispatch_receipt(&status.run_id)
+        .await
+        .ok()
+        .flatten()
+        .as_ref()
+        .is_some_and(|receipt| receipt_has_active_exception_takeover(receipt, &status.run_id))
+    {
         return Ok(status.run_id);
     }
     if terminal_completed_run {

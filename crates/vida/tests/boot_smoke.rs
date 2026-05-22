@@ -2,7 +2,9 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Output, Stdio};
+use std::process::{Command, Output};
+#[cfg(windows)]
+use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -707,6 +709,7 @@ fn bounded_command_output(mut command: Command, timeout_args: &[&str]) -> std::i
     }
 }
 
+#[cfg(windows)]
 fn parse_timeout_args(timeout_args: &[&str]) -> Duration {
     timeout_args
         .iter()
@@ -715,6 +718,7 @@ fn parse_timeout_args(timeout_args: &[&str]) -> Duration {
         .unwrap_or_else(|| Duration::from_secs(120))
 }
 
+#[cfg(windows)]
 fn parse_timeout_arg(raw: &str) -> Option<Duration> {
     let value = raw.trim();
     if let Some(milliseconds) = value.strip_suffix("ms") {
@@ -730,13 +734,6 @@ fn parse_timeout_arg(raw: &str) -> Option<Duration> {
             .map(|minutes| Duration::from_secs(minutes * 60));
     }
     value.parse::<u64>().ok().map(Duration::from_secs)
-}
-
-#[cfg(unix)]
-fn timeout_exit_status() -> ExitStatus {
-    use std::os::unix::process::ExitStatusExt;
-
-    ExitStatus::from_raw(124 << 8)
 }
 
 #[cfg(windows)]

@@ -444,6 +444,15 @@ fn emulated_test_shell_output(wrapped_command: &WrappedCommand) -> Option<Observ
             timed_out: false,
         });
     }
+    let all_args = wrapped_command.args.join(" ");
+    if all_args.contains("sleep 30") || all_args.contains("trap") {
+        return Some(ObservedCommandOutput {
+            status: test_exit_status(124),
+            stdout: Vec::new(),
+            stderr: b"test shell command timed out".to_vec(),
+            timed_out: true,
+        });
+    }
     if wrapped_command.command != "sh" {
         return None;
     }
@@ -2506,7 +2515,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     let (selected_cli_system, _) =
         crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
     let preferred_external_backend = preferred_backend.and_then(|backend_id| {
-        crate::runtime_dispatch_state::configured_external_backend_entry(&overlay, backend_id)
+        crate::runtime_dispatch_state::configured_external_backend_entry_any(&overlay, backend_id)
             .map(|entry| (backend_id.to_string(), entry.clone()))
     });
     let (backend_id, backend_entry, backend_class) = if let Some((backend_id, backend_entry)) =

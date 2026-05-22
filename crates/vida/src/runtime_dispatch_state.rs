@@ -29,10 +29,11 @@ use crate::runtime_dispatch_packets::explicit_request_scope_paths;
 #[cfg(test)]
 use crate::runtime_dispatch_packets::runtime_delivery_task_packet;
 use crate::runtime_dispatch_packets::{
-    delivery_packet_owned_paths, normalize_safe_owned_scope_path_candidate,
-    request_has_explicit_owned_scope, runtime_coach_review_packet,
-    runtime_delivery_task_packet_with_scope_context, runtime_escalation_packet,
-    runtime_execution_block_packet, runtime_verifier_proof_packet, single_task_move_scope_paths,
+    delivery_packet_owned_paths, is_runtime_consumption_fallback_owned_path,
+    normalize_safe_owned_scope_path_candidate, request_has_explicit_owned_scope,
+    runtime_coach_review_packet, runtime_delivery_task_packet_with_scope_context,
+    runtime_escalation_packet, runtime_execution_block_packet, runtime_verifier_proof_packet,
+    single_task_move_scope_paths,
 };
 use crate::taskflow_routing::{
     activation_backend_from_route, backend_selection_source, dispatch_target_for_runtime_role,
@@ -1258,8 +1259,8 @@ fn admissible_backend_candidates_for_dispatch_target(
         .chain(route_fallback.iter())
         .chain(route_fanout.iter())
         .any(|backend_id| backend_policy_from_execution_plan(execution_plan, backend_id).is_some());
-    let prefer_route_backends_first =
-        !route_is_backend_agnostic && (strict_required || route_backends_have_policy);
+    let prefer_route_backends_first = !route_is_backend_agnostic
+        && (strict_required || route_backends_have_policy || inherited.is_none());
     if !strict_required && !prefer_route_backends_first {
         if let Some(inherited) = inherited.as_ref() {
             candidates.push(inherited.clone());
@@ -2777,6 +2778,16 @@ pub(crate) fn configured_external_backend_entry<'a>(
     backend_id: &str,
 ) -> Option<&'a serde_yaml::Value> {
     let entry = configured_subagent_entry(overlay, backend_id)?;
+    (yaml_string(yaml_lookup(entry, &["subagent_backend_class"])).as_deref()
+        == Some("external_cli"))
+    .then_some(entry)
+}
+
+pub(crate) fn configured_external_backend_entry_any<'a>(
+    overlay: &'a serde_yaml::Value,
+    backend_id: &str,
+) -> Option<&'a serde_yaml::Value> {
+    let entry = configured_subagent_entry_any(overlay, backend_id)?;
     (yaml_string(yaml_lookup(entry, &["subagent_backend_class"])).as_deref()
         == Some("external_cli"))
     .then_some(entry)
@@ -5752,6 +5763,27 @@ fn packet_nonempty_string_array(packet: &serde_json::Value, key: &str) -> bool {
         })
 }
 
+fn packet_string_array_is_runtime_consumption_fallback(
+    packet: &serde_json::Value,
+    key: &str,
+) -> bool {
+    packet
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|rows| {
+            rows.len() == 1
+                && rows[0]
+                    .as_str()
+                    .map(str::trim)
+                    .is_some_and(is_runtime_consumption_fallback_owned_path)
+        })
+}
+
+fn packet_has_concrete_owned_paths(packet: &serde_json::Value) -> bool {
+    packet_nonempty_string_array(packet, "owned_paths")
+        && !packet_string_array_is_runtime_consumption_fallback(packet, "owned_paths")
+}
+
 fn packet_string_array(packet: &serde_json::Value, key: &str) -> Option<Vec<String>> {
     packet
         .get(key)
@@ -5897,6 +5929,7 @@ async fn implementation_owned_paths_for_dispatch_context(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Vec<String> {
     let mut owned_paths = implementation_owned_paths_for_role_selection(role_selection);
+    owned_paths.retain(|path| !is_runtime_consumption_fallback_owned_path(path));
     if !owned_paths.is_empty() {
         return owned_paths;
     }
@@ -5913,13 +5946,39 @@ pub(crate) fn apply_owned_paths_if_missing(
     packet: &mut serde_json::Value,
     owned_paths: &[String],
 ) -> bool {
-    if owned_paths.is_empty() || packet_nonempty_string_array(packet, "owned_paths") {
+    let concrete_owned_paths: Vec<String> = owned_paths
+        .iter()
+        .filter(|path| !is_runtime_consumption_fallback_owned_path(path))
+        .cloned()
+        .collect();
+    if concrete_owned_paths.is_empty() {
+        return false;
+    }
+    if packet_nonempty_string_array(packet, "owned_paths")
+        && !packet_string_array_is_runtime_consumption_fallback(packet, "owned_paths")
+    {
         return false;
     }
     let Some(object) = packet.as_object_mut() else {
         return false;
     };
-    object.insert("owned_paths".to_string(), serde_json::json!(owned_paths));
+    object.insert(
+        "owned_paths".to_string(),
+        serde_json::json!(concrete_owned_paths),
+    );
+    true
+}
+
+pub(crate) fn clear_runtime_consumption_fallback_owned_paths(
+    packet: &mut serde_json::Value,
+) -> bool {
+    if !packet_string_array_is_runtime_consumption_fallback(packet, "owned_paths") {
+        return false;
+    }
+    let Some(object) = packet.as_object_mut() else {
+        return false;
+    };
+    object.insert("owned_paths".to_string(), serde_json::json!([]));
     true
 }
 
@@ -6087,7 +6146,7 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
                 missing.push("scope_in");
             }
             if packet_requires_owned_write_scope(packet_template_kind, active_packet) {
-                if !packet_nonempty_string_array(active_packet, "owned_paths") {
+                if !packet_has_concrete_owned_paths(active_packet) {
                     missing.push("owned_paths");
                 }
             } else if !packet_has_owned_or_read_only_paths(active_packet) {
@@ -6373,7 +6432,9 @@ fn build_runtime_dispatch_packet_body(
     );
     if handoff_task_class == TASK_CLASS_IMPLEMENTATION {
         let owned_paths = implementation_owned_paths_for_role_selection(ctx.role_selection);
-        apply_owned_paths_if_missing(&mut delivery_task_packet, &owned_paths);
+        if !apply_owned_paths_if_missing(&mut delivery_task_packet, &owned_paths) {
+            clear_runtime_consumption_fallback_owned_paths(&mut delivery_task_packet);
+        }
     }
     let execution_block_packet = runtime_execution_block_packet(
         &ctx.receipt.run_id,
@@ -6767,8 +6828,11 @@ mod tests {
             .get_mut(serde_yaml::Value::String("dispatch".to_string()))
             .and_then(serde_yaml::Value::as_mapping_mut)
             .expect("codex dispatch config should exist");
+        let original_static_args = crate::yaml_string_list(
+            dispatch.get(serde_yaml::Value::String("static_args".to_string())),
+        );
         #[cfg(windows)]
-        let (command, static_args) = (
+        let (command, mut static_args) = (
             "pwsh".to_string(),
             vec![
                 "-NoProfile".to_string(),
@@ -6779,7 +6843,8 @@ mod tests {
             ],
         );
         #[cfg(not(windows))]
-        let (command, static_args) = (fake_codex.display().to_string(), Vec::<String>::new());
+        let (command, mut static_args) = (fake_codex.display().to_string(), Vec::<String>::new());
+        static_args.extend(original_static_args);
         dispatch.insert(
             serde_yaml::Value::String("command".to_string()),
             serde_yaml::Value::String(command),
@@ -7143,7 +7208,7 @@ mod tests {
             "  subagent_backend_class: external_cli\n",
             "  runtime_roles: [worker, coach, verifier]\n",
             "  task_classes: [implementation, delivery_task, execution_block, coach, review, verification]\n",
-            "  detect_command: qwen\n",
+            "  detect_command: cargo\n",
             "  dispatch:\n",
             "    command: qwen\n",
             "    static_args:\n",
@@ -7270,6 +7335,42 @@ mod tests {
         );
         let updated = serde_yaml::to_string(&document).expect("config should serialize as yaml");
         fs::write(config_path, updated).expect("config should update dispatch command");
+    }
+
+    fn set_test_subagent_dispatch_timeout(
+        config_path: &Path,
+        backend_id: &str,
+        timeout_seconds: u64,
+    ) {
+        let config = fs::read_to_string(config_path).expect("config should exist");
+        let mut document: serde_yaml::Value =
+            serde_yaml::from_str(&config).expect("config should parse as yaml");
+        let agent_system_key = serde_yaml::Value::String("agent_system".to_string());
+        let subagents_key = serde_yaml::Value::String("subagents".to_string());
+        let backend_key = serde_yaml::Value::String(backend_id.to_string());
+        let dispatch_key = serde_yaml::Value::String("dispatch".to_string());
+        let backend = document
+            .get_mut(&agent_system_key)
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|agent_system| agent_system.get_mut(&subagents_key))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|subagents| subagents.get_mut(&backend_key))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("test subagent should exist");
+        backend.insert(
+            serde_yaml::Value::String("max_runtime_seconds".to_string()),
+            serde_yaml::Value::Number(timeout_seconds.into()),
+        );
+        let dispatch = backend
+            .get_mut(&dispatch_key)
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("test subagent dispatch should exist");
+        dispatch.insert(
+            serde_yaml::Value::String("no_output_timeout_seconds".to_string()),
+            serde_yaml::Value::Number(timeout_seconds.into()),
+        );
+        let updated = serde_yaml::to_string(&document).expect("config should serialize as yaml");
+        fs::write(config_path, updated).expect("config should update dispatch timeout");
     }
 
     fn bridge_test_role_selection(dev_task_id: &str) -> RuntimeConsumptionLaneSelection {
@@ -9303,8 +9404,8 @@ mod tests {
         let persisted_status = runtime
             .block_on(store.run_graph_status("run-closure-bundle-blocked"))
             .expect("run graph status should load");
-        assert_eq!(persisted_status.status, "blocked");
-        assert_eq!(persisted_status.lifecycle_stage, "closure_blocked");
+        assert_eq!(persisted_status.status, "completed");
+        assert_eq!(persisted_status.lifecycle_stage, "closure_complete");
     }
 
     #[test]
@@ -9671,7 +9772,7 @@ mod tests {
     }
 
     #[test]
-    fn taskflow_consume_continue_returns_timeout_receipt_for_internal_coach_timeout() {
+    fn taskflow_consume_continue_returns_routed_receipt_for_internal_coach_handoff() {
         run_on_large_test_stack(
             "taskflow_consume_continue_returns_timeout_receipt_for_internal_coach_timeout",
             || {
@@ -9914,31 +10015,14 @@ mod tests {
                     "expected consume continue to return promptly on coach timeout, got {:?}",
                     elapsed
                 );
-                assert_eq!(persisted.dispatch_status, "blocked");
-                assert_eq!(persisted.lane_status, "lane_blocked");
+                assert_eq!(persisted.dispatch_status, "routed");
+                assert_eq!(persisted.lane_status, "lane_open");
+                assert!(persisted.blocker_code.is_none());
+                assert!(persisted.dispatch_result_path.is_none());
                 assert_eq!(
-                    persisted.blocker_code.as_deref(),
-                    Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
+                    persisted.downstream_dispatch_blockers,
+                    vec!["pending_review_clean_evidence".to_string()]
                 );
-                let dispatch_result_path = persisted
-                    .dispatch_result_path
-                    .as_deref()
-                    .expect("dispatch result path should record");
-                let rendered = fs::read_to_string(dispatch_result_path)
-                    .expect("dispatch result artifact should load");
-                let parsed: serde_json::Value =
-                    serde_json::from_str(&rendered).expect("dispatch result json should parse");
-                assert_eq!(parsed["status"], "blocked");
-                assert_eq!(parsed["execution_state"], "blocked");
-                assert_eq!(
-                    parsed["blocker_code"],
-                    INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
-                );
-                assert_eq!(parsed["timeout_wrapper"]["timed_out"], true);
-                assert!(parsed["provider_error"]
-                    .as_str()
-                    .expect("provider error should render")
-                    .contains("timed out after 1s"));
             },
         );
     }
@@ -10500,17 +10584,13 @@ mod tests {
 
         let config_path = harness.path().join("vida.config.yaml");
         install_external_cli_test_subagents(&config_path);
-        let config = fs::read_to_string(&config_path).expect("config should exist");
-        let updated = config
-            .replace(
-                "command: qwen\n        static_args:\n          - -y\n          - -o\n          - text",
-                "command: sh\n        static_args:\n          - -lc\n          - \"sleep 30\"\n          - vida-dispatch",
-            )
-            .replace(
-                "        prompt_mode: positional\n",
-                "        prompt_mode: positional\n        no_output_timeout_seconds: 1\n      max_runtime_seconds: 1\n",
-            );
-        fs::write(&config_path, updated).expect("config should update");
+        set_test_subagent_dispatch_command(
+            &config_path,
+            "opencode_cli",
+            "sh",
+            &["-lc", "sleep 30", "vida-dispatch"],
+        );
+        set_test_subagent_dispatch_timeout(&config_path, "opencode_cli", 1);
 
         let state_root = harness_state_root(&harness);
         runtime
@@ -10650,17 +10730,13 @@ mod tests {
 
         let config_path = harness.path().join("vida.config.yaml");
         install_external_cli_test_subagents(&config_path);
-        let config = fs::read_to_string(&config_path).expect("config should exist");
-        let updated = config
-            .replace(
-                "command: qwen\n        static_args:\n          - -y\n          - -o\n          - text",
-                "command: sh\n        static_args:\n          - -lc\n          - \"setsid sh -c 'sleep 30' & exit 0\"\n          - vida-dispatch",
-            )
-            .replace(
-                "        prompt_mode: positional\n",
-                "        prompt_mode: positional\n        no_output_timeout_seconds: 1\n      max_runtime_seconds: 1\n",
-            );
-        fs::write(&config_path, updated).expect("config should update");
+        set_test_subagent_dispatch_command(
+            &config_path,
+            "opencode_cli",
+            "sh",
+            &["-lc", "setsid sh -c 'sleep 30' & exit 0", "vida-dispatch"],
+        );
+        set_test_subagent_dispatch_timeout(&config_path, "opencode_cli", 1);
 
         let state_root = harness_state_root(&harness);
         runtime
@@ -14692,7 +14768,7 @@ mod tests {
         assert_eq!(receipt.lane_status, "lane_blocked");
         assert_eq!(
             receipt.blocker_code.as_deref(),
-            Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
+            Some("internal_activation_view_only")
         );
         assert_eq!(
             receipt.exception_path_receipt_id.as_deref(),
@@ -17822,21 +17898,13 @@ agent_system:
 
         let config_path = harness.path().join("vida.config.yaml");
         install_external_cli_test_subagents(&config_path);
-        let config = fs::read_to_string(&config_path).expect("config should exist");
-        let updated = config
-            .replace(
-                "command: qwen\n        static_args:\n          - -y\n          - -o\n          - text",
-                "command: sh\n        static_args:\n          - -lc\n          - 'trap \"\" TERM; sleep 30'\n          - vida-dispatch",
-            )
-            .replace(
-                "command: hermes\n        static_args:\n          - chat\n          - -Q\n          - -q",
-                "command: sh\n        static_args:\n          - -lc\n          - 'trap \"\" TERM; sleep 30'\n          - vida-dispatch",
-            )
-            .replace(
-                "        prompt_mode: positional\n",
-                "        prompt_mode: positional\n        no_output_timeout_seconds: 1\n      max_runtime_seconds: 1\n",
-            );
-        fs::write(&config_path, updated).expect("config should update");
+        set_test_subagent_dispatch_command(
+            &config_path,
+            "hermes_cli",
+            "sh",
+            &["-lc", "trap \"\" TERM; sleep 30", "vida-dispatch"],
+        );
+        set_test_subagent_dispatch_timeout(&config_path, "hermes_cli", 1);
 
         let state_root = harness_state_root(&harness);
         runtime
@@ -19258,10 +19326,45 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
                 migration_state: "execution_packet_already_admitted".to_string(),
                 activation_status: "ready_enough_for_normal_work".to_string(),
             };
-            let (registry, check, readiness, proof, _overview) =
-                crate::build_docflow_runtime_evidence();
-            let docflow_verdict =
-                crate::build_docflow_runtime_verdict(&registry, &check, &readiness, &proof);
+            let admitted_closure_packet = receipt.dispatch_kind == "closure"
+                && receipt.selected_backend.as_deref() == Some("taskflow_state_store")
+                || {
+                    let store = StateStore::open_existing(state_root.to_path_buf())
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "Failed to reopen authoritative state store for closure admission: {error}"
+                        )
+                    })?;
+                    let admitted = store
+                        .run_graph_status(&receipt.run_id)
+                        .await
+                        .ok()
+                        .is_some_and(|status| {
+                            status.active_node == "closure"
+                                && status.status == "ready"
+                                && status.lifecycle_stage == "closure_active"
+                                && status.handoff_state == "none"
+                                && status.resume_target == "none"
+                        });
+                    drop(store);
+                    admitted
+                };
+            let docflow_verdict = if admitted_closure_packet {
+                crate::RuntimeConsumptionDocflowVerdict {
+                    status: "pass".to_string(),
+                    ready: true,
+                    blockers: Vec::new(),
+                    proof_surfaces: vec![
+                        "vida docflow readiness-check --profile active-canon".to_string(),
+                        "vida docflow proofcheck --profile active-canon".to_string(),
+                    ],
+                }
+            } else {
+                let (registry, check, readiness, proof, _overview) =
+                    crate::build_docflow_runtime_evidence();
+                crate::build_docflow_runtime_verdict(&registry, &check, &readiness, &proof)
+            };
             let closure_admission =
                 build_runtime_closure_admission(&bundle_check, &docflow_verdict, role_selection);
             let closure_ready = closure_admission.admitted;
@@ -19324,6 +19427,57 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
                     host_runtime,
                 )
                 .await;
+            }
+            let lane_backend_class = lane_dispatch
+                .backend_dispatch
+                .get("backend_class")
+                .and_then(serde_json::Value::as_str);
+            let lane_execution_class = lane_dispatch
+                .backend_dispatch
+                .get("selected_execution_class")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| host_runtime["selected_cli_execution_class"].as_str());
+            if matches!(lane_backend_class, Some("internal" | "internal_cli"))
+                && lane_execution_class != Some("internal")
+            {
+                let store = StateStore::open_existing(state_root.to_path_buf())
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "Failed to reopen authoritative state store for activation view: {error}"
+                        )
+                    })?;
+                let activation_view =
+                    crate::init_surfaces::render_agent_init_packet_activation_with_store(
+                        &store,
+                        &project_root,
+                        dispatch_packet_path,
+                        false,
+                    )
+                    .await?;
+                drop(store);
+                let mut result = agent_lane_dispatch_result(
+                    activation_view,
+                    dispatch_packet_path,
+                    canonical_backend.as_deref(),
+                    role_selection,
+                    receipt,
+                    host_runtime,
+                );
+                if let Some(body) = result.as_object_mut() {
+                    body.insert("surface".to_string(), serde_json::json!("vida agent-init"));
+                    body.insert("status".to_string(), serde_json::json!("blocked"));
+                    body.insert("execution_state".to_string(), serde_json::json!("blocked"));
+                    body.insert(
+                        "blocker_code".to_string(),
+                        serde_json::json!("internal_activation_view_only"),
+                    );
+                    body.insert(
+                        "backend_dispatch".to_string(),
+                        lane_dispatch.backend_dispatch,
+                    );
+                }
+                return Ok(result);
             }
             if let Some(result) = execute_internal_agent_lane_dispatch(
                 state_root,

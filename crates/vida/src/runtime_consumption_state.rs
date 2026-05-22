@@ -1255,6 +1255,14 @@ mod tests {
         let snapshot = serde_json::json!({
             "surface": "vida taskflow consume final",
             "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "shared_fields": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {}
+            },
             "operator_contracts": {
                 "status": "pass",
                 "blocker_codes": [],
@@ -1451,6 +1459,8 @@ mod tests {
             serde_json::json!({
                 "surface": "vida taskflow consume final",
                 "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
                 "source_run_id": "run-allowed",
                 "operator_contracts": {
                     "status": "pass",

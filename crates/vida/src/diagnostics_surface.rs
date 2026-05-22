@@ -512,8 +512,8 @@ mod tests {
         assert!(payload["next_actions"][0].as_str().is_some_and(|action| {
             action.contains("missing-task")
                 && action.contains("vida taskflow recovery status run-1 --json")
-                && action
-                    .contains("vida taskflow continuation bind run-1 --task-id <task-id> --json")
+                && action.contains("closure_complete")
+                && !action.contains("vida taskflow continuation bind")
         }));
     }
 

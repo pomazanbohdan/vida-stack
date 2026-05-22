@@ -3292,9 +3292,18 @@ fn runtime_binding_task_paused_next_action(
 fn runtime_binding_task_missing_next_action(
     binding: &state_store::RunGraphContinuationBinding,
 ) -> String {
-    crate::status_surface_signals::runtime_binding_task_missing_next_action(
+    let base = crate::status_surface_signals::runtime_binding_task_missing_next_action(
         Some(binding.run_id.as_str()),
         &binding.task_id,
+    );
+    let run_id = binding.run_id.trim();
+    if run_id.is_empty() {
+        return base;
+    }
+    let run_id = crate::shell_quote(run_id);
+    format!(
+        "{base} After recovery proves the run is safe to rebind, record the explicit replacement with `vida taskflow continuation bind {run_id} --task-id <task-id> --json` for missing task `{}`.",
+        binding.task_id
     )
 }
 

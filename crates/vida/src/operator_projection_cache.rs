@@ -33,10 +33,10 @@ pub(crate) fn read_fresh_json_projection_with_dependency_marker(
     }
     let cache_modified = std::fs::metadata(&path).ok()?.modified().ok()?;
     let state_modified = latest_state_mutation_marker(state_dir).ok()?;
-    if cache_modified < state_modified {
+    if cache_modified <= state_modified {
         return None;
     }
-    if dependency_modified.is_some_and(|modified| cache_modified < modified) {
+    if dependency_modified.is_some_and(|modified| cache_modified <= modified) {
         return None;
     }
     read_json_without_following_symlinks(&path).ok()
@@ -86,10 +86,10 @@ pub(crate) fn read_recent_json_projection_with_dependency_marker(
     // authoritative TaskFlow/state data mutates. Age-bounded cache reuse is allowed
     // only for projections that are newer than the latest state mutation marker.
     let state_modified = latest_state_mutation_marker(state_dir).ok()?;
-    if cache_modified < state_modified {
+    if cache_modified <= state_modified {
         return None;
     }
-    if dependency_modified.is_some_and(|modified| cache_modified < modified) {
+    if dependency_modified.is_some_and(|modified| cache_modified <= modified) {
         return None;
     }
     let cache_age = SystemTime::now().duration_since(cache_modified).ok()?;
@@ -312,11 +312,11 @@ fn write_bytes_without_following_symlinks(path: &Path, body: &[u8]) -> std::io::
 #[cfg(test)]
 mod tests {
     use super::{
-        read_fresh_json_projection, read_fresh_json_projection_with_dependency_marker,
-        read_recent_json_projection, read_recent_json_projection_with_dependency_marker,
-        read_state_fresh_json_projection, read_state_recent_json_projection,
-        read_state_stale_recent_json_projection, touch_state_mutation_marker,
-        write_json_projection,
+        projection_path, read_fresh_json_projection,
+        read_fresh_json_projection_with_dependency_marker, read_recent_json_projection,
+        read_recent_json_projection_with_dependency_marker, read_state_fresh_json_projection,
+        read_state_recent_json_projection, read_state_stale_recent_json_projection,
+        touch_state_mutation_marker, write_json_projection,
     };
     use std::{fs, time::Duration};
 
@@ -333,6 +333,7 @@ mod tests {
         fs::create_dir_all(&root).expect("state root should be writable");
         let marker = root.join("manifest");
         fs::write(&marker, "old").expect("marker should be writable");
+        std::thread::sleep(Duration::from_millis(10));
         let payload = serde_json::json!({"status": "pass", "cached": true});
         write_json_projection(&root, "status-summary-latest", &payload);
         assert!(read_fresh_json_projection(&root, "status-summary-latest").is_some());
@@ -355,6 +356,7 @@ mod tests {
         ));
         fs::create_dir_all(&root).expect("state root should be writable");
         fs::write(root.join("manifest"), "stable").expect("marker should be writable");
+        std::thread::sleep(Duration::from_millis(10));
         let payload = serde_json::json!({"status": "pass", "cached": true});
         write_json_projection(&root, "doctor-latest", &payload);
         assert!(read_fresh_json_projection_with_dependency_marker(
@@ -387,6 +389,7 @@ mod tests {
         ));
         fs::create_dir_all(&root).expect("state root should be writable");
         fs::write(root.join("manifest"), "stable").expect("marker should be writable");
+        std::thread::sleep(Duration::from_millis(10));
         let payload = serde_json::json!({"surface": "vida doctor", "status": "pass"});
         write_json_projection(&root, "doctor-summary-latest", &payload);
 
@@ -426,6 +429,39 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         touch_state_mutation_marker(&root);
         assert!(read_fresh_json_projection(&root, "taskflow-graph-summary-latest").is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn json_projection_cache_invalidates_when_state_marker_mtime_ties_cache() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-marker-tie-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let marker = root.join("manifest");
+        let projection = projection_path(&root, "taskflow-graph-summary-latest");
+        fs::write(&marker, "state").expect("marker should be writable");
+        let payload = serde_json::json!({"status": "blocked", "cached": true});
+        write_json_projection(&root, "taskflow-graph-summary-latest", &payload);
+        let marker_modified = fs::metadata(&marker)
+            .and_then(|metadata| metadata.modified())
+            .expect("marker mtime should load");
+        let projection_modified = fs::metadata(&projection)
+            .and_then(|metadata| metadata.modified())
+            .expect("projection mtime should load");
+        if projection_modified != marker_modified {
+            fs::write(&marker, "state-touched").expect("marker should be updateable");
+        }
+
+        assert!(
+            read_fresh_json_projection(&root, "taskflow-graph-summary-latest").is_none(),
+            "equal or newer state marker must invalidate cached projections"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

@@ -386,6 +386,7 @@ impl StateStore {
     async fn open_existing_once(root: PathBuf) -> Result<Self, StateStoreError> {
         let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
         db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
+        db.query(state_schema_document()).await?;
         Ok(Self { db, root })
     }
 

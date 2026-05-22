@@ -1355,6 +1355,7 @@ mod tests {
         ));
         fs::create_dir_all(&root).expect("state root should be writable");
         fs::write(root.join("manifest"), "stable").expect("state marker should be writable");
+        std::thread::sleep(Duration::from_millis(10));
         let payload = serde_json::json!({"surface": "vida doctor", "status": "pass"});
         crate::operator_projection_cache::write_json_projection(
             &root,
