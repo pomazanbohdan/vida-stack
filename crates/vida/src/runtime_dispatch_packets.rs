@@ -225,24 +225,35 @@ pub(crate) fn delivery_packet_owned_paths(
     request_text: &str,
     tracked_design_doc_path: Option<&str>,
 ) -> Vec<String> {
-    match handoff_task_class {
-        TASK_CLASS_IMPLEMENTATION => {
-            let explicit_paths = explicit_request_scope_paths(request_text);
-            if !explicit_paths.is_empty() {
-                explicit_paths
+    if delivery_packet_task_class_requires_owned_paths(handoff_task_class) {
+        let explicit_paths = explicit_request_scope_paths(request_text);
+        if !explicit_paths.is_empty() {
+            explicit_paths
+        } else {
+            let design_paths = tracked_design_doc_bounded_file_set_paths(tracked_design_doc_path);
+            if design_paths.is_empty() {
+                vec![RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH.to_string()]
             } else {
-                let design_paths =
-                    tracked_design_doc_bounded_file_set_paths(tracked_design_doc_path);
-                if design_paths.is_empty() {
-                    vec![RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH.to_string()]
-                } else {
-                    design_paths
-                }
+                design_paths
             }
         }
-        TASK_CLASS_SPECIFICATION => tracked_design_doc_owned_paths(tracked_design_doc_path),
-        _ => Vec::new(),
+    } else {
+        match handoff_task_class {
+            TASK_CLASS_SPECIFICATION => tracked_design_doc_owned_paths(tracked_design_doc_path),
+            _ => Vec::new(),
+        }
     }
+}
+
+pub(crate) fn delivery_packet_task_class_requires_owned_paths(handoff_task_class: &str) -> bool {
+    matches!(
+        handoff_task_class,
+        TASK_CLASS_IMPLEMENTATION
+            | "implementation_medium"
+            | "test_authoring"
+            | "regression_test"
+            | "delivery_task"
+    )
 }
 
 #[cfg(test)]
@@ -460,7 +471,10 @@ pub(crate) fn runtime_escalation_packet(run_id: &str, dispatch_target: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::tracked_design_doc_owned_paths;
+    use super::{
+        delivery_packet_owned_paths, tracked_design_doc_owned_paths,
+        RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH,
+    };
 
     #[test]
     fn tracked_design_doc_owned_paths_rejects_absolute_and_traversal_paths() {
@@ -474,6 +488,22 @@ mod tests {
         assert_eq!(
             tracked_design_doc_owned_paths(Some(" docs/product/spec/example.md ")),
             vec!["docs/product/spec/example.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_authoring_delivery_packet_receives_owned_paths() {
+        assert_eq!(
+            delivery_packet_owned_paths("test_authoring", "write the regression test", None),
+            vec![RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH.to_string()]
+        );
+        assert_eq!(
+            delivery_packet_owned_paths(
+                "test_authoring",
+                "write regression in crates/vida/src/runtime_dispatch_packets.rs",
+                None,
+            ),
+            vec!["crates/vida/src/runtime_dispatch_packets.rs".to_string()]
         );
     }
 }

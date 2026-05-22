@@ -4,8 +4,9 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::runtime_dispatch_packet_text::{runtime_packet_prompt, runtime_tracked_flow_packet};
 use crate::runtime_dispatch_packets::{
-    runtime_coach_review_packet, runtime_delivery_task_packet_with_scope_context,
-    runtime_escalation_packet, runtime_execution_block_packet, runtime_verifier_proof_packet,
+    delivery_packet_task_class_requires_owned_paths, runtime_coach_review_packet,
+    runtime_delivery_task_packet_with_scope_context, runtime_escalation_packet,
+    runtime_execution_block_packet, runtime_verifier_proof_packet,
 };
 use crate::{
     derive_lane_status, dispatch_contract_lane, downstream_activation_fields, json_string,
@@ -119,7 +120,7 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
         &role_selection.request,
         crate::runtime_dispatch_state::tracked_design_doc_path(role_selection),
     );
-    if handoff_task_class == crate::runtime_contract_vocab::TASK_CLASS_IMPLEMENTATION {
+    if delivery_packet_task_class_requires_owned_paths(handoff_task_class) {
         let owned_paths = if implementation_owned_paths_override.is_empty() {
             crate::runtime_dispatch_state::implementation_owned_paths_for_role_selection(
                 role_selection,
