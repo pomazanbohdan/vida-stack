@@ -518,7 +518,7 @@ fn build_resolved_development_dispatch_contract(
                     "reason": "dispatch_alias_missing_from_lane_template",
                 })
             } else {
-                crate::build_runtime_assignment_from_dispatch_alias(
+                crate::build_runtime_assignment_preview_from_dispatch_alias(
                     compiled_bundle,
                     &dispatch_alias,
                     task_class,

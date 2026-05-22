@@ -1172,6 +1172,16 @@ impl CurrentSessionRunGraphClaimScope {
         }
     }
 
+    fn contains_run_id(&self, run_id: &str) -> bool {
+        let run_id = run_id.trim();
+        !run_id.is_empty() && self.run_ids.iter().any(|value| value == run_id)
+    }
+
+    fn contains_task_id(&self, task_id: &str) -> bool {
+        let task_id = task_id.trim();
+        !task_id.is_empty() && self.task_ids.iter().any(|value| value == task_id)
+    }
+
     fn matches_binding(&self, binding: &RunGraphContinuationBinding) -> bool {
         self.run_ids.contains(&binding.run_id)
             || self.task_ids.contains(&binding.task_id)
@@ -1292,6 +1302,38 @@ impl StateStore {
                 }
             }
         }
+        let mut binding_query = self
+            .db
+            .query(
+                "SELECT * FROM run_graph_continuation_binding \
+                 WHERE binding_source = 'explicit_continuation_bind' \
+                    OR binding_source = 'explicit_continuation_bind_task' \
+                    OR binding_source = 'task_close_reconcile' \
+                 ORDER BY recorded_at DESC, run_id DESC;",
+            )
+            .await?;
+        let rows: Vec<RunGraphContinuationBinding> = binding_query.take(0)?;
+        for binding in rows {
+            if !scope.matches_binding(&binding) {
+                continue;
+            }
+            scope.push_run_id(binding.run_id.clone());
+            scope.push_task_id(binding.task_id.clone());
+            if let Some(run_id) = binding
+                .active_bounded_unit
+                .get("run_id")
+                .and_then(serde_json::Value::as_str)
+            {
+                scope.push_run_id(run_id.to_string());
+            }
+            if let Some(task_id) = binding
+                .active_bounded_unit
+                .get("task_id")
+                .and_then(serde_json::Value::as_str)
+            {
+                scope.push_task_id(task_id.to_string());
+            }
+        }
 
         if scope.is_empty() {
             let mut owner_query = self
@@ -1396,6 +1438,16 @@ impl StateStore {
                         .as_deref()
                         .is_some_and(|claim_task_id| claim_task_id.trim() == task_id)
                 })
+            {
+                return Ok(());
+            }
+        }
+        if let Some(scope) = self.current_session_run_graph_claim_scope().await? {
+            if scope.contains_run_id(run_id)
+                || scope.contains_task_id(run_id)
+                || run_task_id
+                    .as_deref()
+                    .is_some_and(|task_id| scope.contains_task_id(task_id))
             {
                 return Ok(());
             }
@@ -3619,6 +3671,74 @@ mod tests {
             ))
             .await
             .expect("task claim should authorize run continuation mutation");
+
+        let _ = fs::remove_dir_all(&root);
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test]
+    async fn run_graph_mutation_allows_claimed_parent_explicit_task_binding_child_run() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-owner");
+        }
+        let root = temp_run_graph_root("vida-run-graph-mutation-explicit-task-child");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let mut parent_status = sample_run_graph_status();
+        parent_status.run_id = "parent-run".to_string();
+        parent_status.task_id = "parent-run".to_string();
+        store
+            .record_run_graph_status(&parent_status)
+            .await
+            .expect("persist parent status");
+        store
+            .persist_task_record(test_task_record("child-task-run", "open"))
+            .await
+            .expect("persist child task");
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-current");
+        }
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "current-parent-run-claim".to_string(),
+                state_root_id: root.display().to_string(),
+                worktree_environment_id: root.display().to_string(),
+                orchestrator_session_id: "session-current".to_string(),
+                task_id: Some("parent-run".to_string()),
+                run_id: Some("parent-run".to_string()),
+                lane_id: None,
+                claim_kind: "active_task_session_claim".to_string(),
+                conflict_domain: Some("task:parent-run".to_string()),
+                owned_paths: Vec::new(),
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Observe,
+                lease_seconds: 3600,
+            })
+            .await
+            .expect("current parent claim");
+        let mut binding =
+            sample_explicit_binding("parent-run", "child-task-run", "2026-05-21T01:00:00Z");
+        binding.binding_source = "explicit_continuation_bind_task".to_string();
+        binding.active_bounded_unit = serde_json::json!({
+            "kind": "task_graph_task",
+            "run_id": "parent-run",
+            "task_id": "child-task-run",
+        });
+        store
+            .record_run_graph_continuation_binding(&binding)
+            .await
+            .expect("record explicit parent-child binding");
+
+        let mut child_status = sample_run_graph_status();
+        child_status.run_id = "child-task-run".to_string();
+        child_status.task_id = "child-task-run".to_string();
+        store
+            .record_run_graph_status(&child_status)
+            .await
+            .expect("parent claim should authorize bound child task-as-run mutation");
 
         let _ = fs::remove_dir_all(&root);
         restore_vida_session_id(saved_session_id);

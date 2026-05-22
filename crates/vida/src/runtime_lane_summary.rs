@@ -622,7 +622,7 @@ pub(crate) fn summarize_agent_route_from_snapshot(
     let runtime_assignment = if runtime_role.is_empty() || task_class.is_empty() {
         serde_json::Value::Null
     } else {
-        crate::runtime_assignment_builder::build_runtime_assignment_from_resolved_constraints(
+        crate::runtime_assignment_builder::build_runtime_assignment_preview_from_resolved_constraints(
             compiled_bundle,
             route_id,
             task_class,
@@ -712,7 +712,7 @@ fn runtime_assignment_for_standard_dispatch_alias(
             "task_class": task_class,
         });
     }
-    crate::build_runtime_assignment_from_dispatch_alias(
+    crate::build_runtime_assignment_preview_from_dispatch_alias(
         compiled_bundle,
         &dispatch_alias,
         task_class,

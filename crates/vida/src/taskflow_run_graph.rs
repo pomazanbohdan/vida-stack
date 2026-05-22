@@ -3075,10 +3075,33 @@ fn print_run_graph_json_error(
     );
 }
 
-fn run_graph_dispatch_init_timeout_message(run_id: &str) -> String {
+fn run_graph_dispatch_init_timeout_message(run_id: &str, stage: &str) -> String {
     format!(
-        "Timed out preparing run-graph dispatch-init for `{run_id}` after {RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS}s; dispatch-init may have written a packet before timeout, but the surface failed closed instead of holding the state-store lock."
+        "Timed out preparing run-graph dispatch-init for `{run_id}` after {RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS}s during `{stage}`; dispatch-init may have written a packet before timeout, but the surface failed closed instead of holding the state-store lock."
     )
+}
+
+fn set_dispatch_init_timeout_stage(
+    stage_slot: Option<&std::sync::Arc<std::sync::Mutex<&'static str>>>,
+    stage: &'static str,
+) {
+    if let Ok(trace_path) = std::env::var("VIDA_DISPATCH_INIT_STAGE_TRACE") {
+        if !trace_path.trim().is_empty() {
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(trace_path)
+            {
+                use std::io::Write;
+                let _ = writeln!(file, "{stage}");
+            }
+        }
+    }
+    if let Some(stage_slot) = stage_slot {
+        *stage_slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = stage;
+    }
 }
 
 fn run_graph_dispatch_init_error_evidence(error: &str) -> Option<serde_json::Value> {
@@ -3169,6 +3192,42 @@ async fn record_dispatch_init_timeout_blocker(
     )
     .await?;
     Ok(true)
+}
+
+async fn record_dispatch_init_timeout_blocker_bounded(
+    store: &StateStore,
+    run_id: &str,
+) -> Result<bool, String> {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        record_dispatch_init_timeout_blocker(store, run_id),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Ok(false),
+    }
+}
+
+async fn record_dispatch_init_timeout_blocker_from_state_dir_bounded(
+    state_dir: &std::path::Path,
+    run_id: &str,
+) -> Result<bool, String> {
+    match tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let store = StateStore::open_existing(state_dir.to_path_buf())
+            .await
+            .map_err(|error| {
+                format!("Failed to open state store for dispatch-init timeout blocker: {error}")
+            })?;
+        let recorded = record_dispatch_init_timeout_blocker(&store, run_id).await?;
+        store.close().await;
+        Ok::<bool, String>(recorded)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Ok(false),
+    }
 }
 
 fn run_graph_blocker_code(status: &str) -> Option<&'static str> {
@@ -3843,6 +3902,52 @@ async fn try_existing_design_backed_implementation_override(
     request_text: &str,
     selection: &mut RuntimeConsumptionLaneSelection,
 ) -> Result<(), String> {
+    let normalized_request = request_text.to_lowercase();
+    let implementation_terms =
+        crate::runtime_lane_summary::explicit_implementation_request_terms(&normalized_request);
+    let bounded_repair_terms =
+        crate::runtime_lane_summary::explicit_bounded_code_repair_terms(&normalized_request);
+    if !implementation_terms.is_empty() || !bounded_repair_terms.is_empty() {
+        let matched_terms = if !implementation_terms.is_empty() {
+            implementation_terms
+        } else {
+            bounded_repair_terms
+        };
+        selection.selected_role = "worker".to_string();
+        selection.conversational_mode = None;
+        selection.tracked_flow_entry = Some("dev-pack".to_string());
+        selection.allow_freeform_chat = false;
+        selection.matched_terms = matched_terms.clone();
+        selection.confidence = if matched_terms.len() >= 3 {
+            "high".to_string()
+        } else {
+            "medium".to_string()
+        };
+        selection.reason = "auto_explicit_implementation_request".to_string();
+        selection.execution_plan =
+            build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, selection);
+        return Ok(());
+    }
+    if let Ok(task) = store.show_task(task_id).await {
+        if task.issue_type == "defect" || !task.planner_metadata.owned_paths.is_empty() {
+            let matched_terms = if task.issue_type == "defect" {
+                vec!["task_issue_type_defect".to_string()]
+            } else {
+                vec!["task_planner_owned_paths".to_string()]
+            };
+            selection.selected_role = "worker".to_string();
+            selection.conversational_mode = None;
+            selection.tracked_flow_entry = Some("dev-pack".to_string());
+            selection.allow_freeform_chat = false;
+            selection.matched_terms = matched_terms;
+            selection.confidence = "medium".to_string();
+            selection.reason = "auto_task_metadata_bounded_implementation_request".to_string();
+            selection.execution_plan =
+                build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, selection);
+            return Ok(());
+        }
+    }
+
     let Some(design_doc_path) = existing_design_backed_task_design_doc_path(store, task_id).await
     else {
         return Ok(());
@@ -3861,16 +3966,7 @@ async fn try_existing_design_backed_implementation_override(
             .reason
             .starts_with("auto_explicit_implementation_request");
 
-    let normalized_request = request_text.to_lowercase();
-    let implementation_terms =
-        crate::runtime_lane_summary::explicit_implementation_request_terms(&normalized_request);
-    let bounded_repair_terms =
-        crate::runtime_lane_summary::explicit_bounded_code_repair_terms(&normalized_request);
-    let matched_terms = if !implementation_terms.is_empty() {
-        implementation_terms
-    } else if !bounded_repair_terms.is_empty() {
-        bounded_repair_terms
-    } else if design_doc_has_bounded_scope
+    let matched_terms = if design_doc_has_bounded_scope
         && (existing_design_scope_discussion || already_explicit_implementation)
     {
         vec!["existing_design_backed_spec_override".to_string()]
@@ -4243,15 +4339,50 @@ pub(crate) async fn derive_seeded_run_graph_status(
     requested_run_id: &str,
     request_text: &str,
 ) -> Result<TaskflowRunGraphSeedPayload, String> {
+    derive_seeded_run_graph_status_with_stage(store, requested_run_id, request_text, None, false)
+        .await
+}
+
+async fn derive_seeded_run_graph_status_with_stage(
+    store: &StateStore,
+    requested_run_id: &str,
+    request_text: &str,
+    timeout_stage: Option<&std::sync::Arc<std::sync::Mutex<&'static str>>>,
+    skip_design_override: bool,
+) -> Result<TaskflowRunGraphSeedPayload, String> {
+    set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_resolve_task_id");
     let bounded_task_id =
         resolve_seed_task_id_for_runtime_run(store, requested_run_id, request_text).await?;
+    set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_read_launcher_snapshot");
     let snapshot = read_seed_launcher_activation_snapshot(store).await?;
+    if skip_design_override {
+        set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_task_metadata_selection");
+        let mut selection =
+            bounded_implementation_lane_selection_from_snapshot(&snapshot, request_text);
+        set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_task_metadata_execution_plan");
+        selection.execution_plan =
+            build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, &selection);
+        set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_task_metadata_status");
+        let status = seeded_run_graph_status_from_role_selection(
+            requested_run_id,
+            &bounded_task_id,
+            &selection,
+            &snapshot,
+        )?;
+        return Ok(TaskflowRunGraphSeedPayload {
+            request_text: request_text.to_string(),
+            role_selection: selection,
+            status,
+        });
+    }
+    set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_build_from_snapshot");
     let mut payload = build_seeded_run_graph_status_from_activation_snapshot(
         requested_run_id,
         &bounded_task_id,
         request_text,
         &snapshot,
     )?;
+    set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_existing_design_override");
     try_existing_design_backed_implementation_override(
         store,
         &bounded_task_id,
@@ -4259,6 +4390,7 @@ pub(crate) async fn derive_seeded_run_graph_status(
         &mut payload.role_selection,
     )
     .await?;
+    set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_status_from_role_selection");
     payload.status = seeded_run_graph_status_from_role_selection(
         requested_run_id,
         &bounded_task_id,
@@ -4286,10 +4418,10 @@ async fn read_seed_launcher_activation_snapshot(
                     Err(_) => {}
                 }
             }
-            read_or_sync_launcher_activation_snapshot(store).await
+            crate::launcher_activation_snapshot::capture_launcher_activation_snapshot()
         }
         Err(StateStoreError::MissingLauncherActivationSnapshot) => {
-            read_or_sync_launcher_activation_snapshot(store).await
+            crate::launcher_activation_snapshot::capture_launcher_activation_snapshot()
         }
         Err(error) => Err(format!(
             "Failed to read launcher activation snapshot: {error}"
@@ -4842,6 +4974,43 @@ fn taskflow_task_status_is_terminal_for_dispatch_init(status: &str) -> bool {
     matches!(status.trim(), "closed" | "completed")
 }
 
+fn bounded_implementation_lane_selection_from_snapshot(
+    snapshot: &crate::state_store::LauncherActivationSnapshot,
+    request_text: &str,
+) -> RuntimeConsumptionLaneSelection {
+    let fallback_role = snapshot
+        .compiled_bundle
+        .get("role_selection")
+        .and_then(|value| value.get("fallback_role"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("orchestrator")
+        .to_string();
+    let selection_mode = snapshot
+        .compiled_bundle
+        .get("role_selection")
+        .and_then(|value| value.get("mode"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("auto")
+        .to_string();
+    RuntimeConsumptionLaneSelection {
+        ok: true,
+        activation_source: snapshot.source.clone(),
+        selection_mode,
+        fallback_role,
+        request: request_text.to_string(),
+        selected_role: "worker".to_string(),
+        conversational_mode: None,
+        single_task_only: false,
+        tracked_flow_entry: Some("dev-pack".to_string()),
+        allow_freeform_chat: false,
+        confidence: "medium".to_string(),
+        matched_terms: vec!["task_metadata_bounded_implementation".to_string()],
+        compiled_bundle: snapshot.compiled_bundle.clone(),
+        execution_plan: serde_json::Value::Null,
+        reason: "auto_task_metadata_bounded_implementation_request".to_string(),
+    }
+}
+
 fn build_seeded_run_graph_status_from_activation_snapshot(
     requested_run_id: &str,
     bounded_task_id: &str,
@@ -4994,7 +5163,9 @@ fn seeded_run_graph_status_from_role_selection(
 async fn seed_existing_task_payload_for_dispatch_init(
     store: &StateStore,
     task_id: &str,
+    timeout_stage: Option<&std::sync::Arc<std::sync::Mutex<&'static str>>>,
 ) -> Result<Option<TaskflowRunGraphSeedPayload>, String> {
+    set_dispatch_init_timeout_stage(timeout_stage, "seed_existing_task_show_task");
     let task = match store.show_task(task_id).await {
         Ok(task) => task,
         Err(_) => return Ok(None),
@@ -5005,22 +5176,37 @@ async fn seed_existing_task_payload_for_dispatch_init(
             task.status
         ));
     }
+    set_dispatch_init_timeout_stage(timeout_stage, "seed_existing_task_request_text");
     let request_text = task_record_dispatch_seed_request_text(&task);
-    let payload = derive_seeded_run_graph_status(store, task_id, &request_text).await?;
+    let skip_design_override =
+        task.issue_type == "defect" || !task.planner_metadata.owned_paths.is_empty();
+    set_dispatch_init_timeout_stage(timeout_stage, "seed_existing_task_derive_seeded_status");
+    let payload = derive_seeded_run_graph_status_with_stage(
+        store,
+        task_id,
+        &request_text,
+        timeout_stage,
+        skip_design_override,
+    )
+    .await?;
     Ok(Some(payload))
 }
 
 async fn preview_run_graph_dispatch_init_artifacts(
     store: &StateStore,
     run_id: &str,
+    timeout_stage: Option<&std::sync::Arc<std::sync::Mutex<&'static str>>>,
 ) -> Result<RunGraphDispatchInitPreview, String> {
+    set_dispatch_init_timeout_stage(timeout_stage, "read_existing_routed_dispatch_artifacts");
     if let Some(artifacts) = existing_routed_dispatch_init_artifacts(store, run_id, run_id).await? {
         return Ok(RunGraphDispatchInitPreview::Existing(artifacts));
     }
 
+    set_dispatch_init_timeout_stage(timeout_stage, "reseed_explicit_task_graph_binding");
     let effective_run_id = if let Some(bound_run_id) =
         reseed_explicit_task_graph_binding_for_dispatch_init(store, run_id).await?
     {
+        set_dispatch_init_timeout_stage(timeout_stage, "read_bound_routed_dispatch_artifacts");
         if let Some(artifacts) =
             existing_routed_dispatch_init_artifacts(store, run_id, &bound_run_id).await?
         {
@@ -5031,6 +5217,7 @@ async fn preview_run_graph_dispatch_init_artifacts(
         run_id.to_string()
     };
     let mut seed_payload = None;
+    set_dispatch_init_timeout_stage(timeout_stage, "read_or_seed_run_graph_status");
     let status = match store.run_graph_status(&effective_run_id).await {
         Ok(status) => status,
         Err(error) => {
@@ -5038,7 +5225,13 @@ async fn preview_run_graph_dispatch_init_artifacts(
                 "Failed to read run-graph state for `{}`: {error}",
                 effective_run_id
             );
-            match seed_existing_task_payload_for_dispatch_init(store, &effective_run_id).await? {
+            match seed_existing_task_payload_for_dispatch_init(
+                store,
+                &effective_run_id,
+                timeout_stage,
+            )
+            .await?
+            {
                 Some(payload) => {
                     let status = payload.status.clone();
                     seed_payload = Some(payload);
@@ -5048,11 +5241,13 @@ async fn preview_run_graph_dispatch_init_artifacts(
             }
         }
     };
+    set_dispatch_init_timeout_stage(timeout_stage, "reconcile_active_exception_status");
     let mut status = reconcile_dispatch_init_status_for_active_exception(store, status).await?;
 
     let context = if let Some(payload) = seed_payload.as_ref() {
         run_graph_dispatch_context_from_seed_payload(payload)
     } else {
+        set_dispatch_init_timeout_stage(timeout_stage, "read_persisted_dispatch_context");
         let mut persisted = store
             .run_graph_dispatch_context(&effective_run_id)
             .await
@@ -5065,8 +5260,12 @@ async fn preview_run_graph_dispatch_init_artifacts(
             && status.active_node == "planning"
             && status.resume_target.starts_with("dispatch.")
         {
-            if let Some(payload) =
-                seed_existing_task_payload_for_dispatch_init(store, &effective_run_id).await?
+            if let Some(payload) = seed_existing_task_payload_for_dispatch_init(
+                store,
+                &effective_run_id,
+                timeout_stage,
+            )
+            .await?
             {
                 status = reconcile_dispatch_init_status_for_active_exception(
                     store,
@@ -5085,12 +5284,15 @@ async fn preview_run_graph_dispatch_init_artifacts(
         })?
     };
 
+    set_dispatch_init_timeout_stage(timeout_stage, "decode_role_selection");
     let mut role_selection = context
         .role_selection()
         .map_err(|error| format!("Failed to decode persisted seeded dispatch context: {error}"))?;
+    set_dispatch_init_timeout_stage(timeout_stage, "check_route_assignment_catalog_drift");
     let route_assignment_drift =
         dispatch_context_route_assignment_catalog_drift(store.root(), &role_selection);
     if route_assignment_drift.is_some() {
+        set_dispatch_init_timeout_stage(timeout_stage, "reseed_route_assignment_drift");
         let payload =
             reseed_dispatch_context_after_route_assignment_drift(store, &status, &context).await?;
         status = reconcile_dispatch_init_status_for_active_exception(store, payload.status.clone())
@@ -5099,6 +5301,7 @@ async fn preview_run_graph_dispatch_init_artifacts(
         seed_payload = Some(payload);
     }
     let existing_dispatch_receipt = if route_assignment_drift.is_none() {
+        set_dispatch_init_timeout_stage(timeout_stage, "read_existing_dispatch_receipt");
         store
             .run_graph_dispatch_receipt(&effective_run_id)
             .await
@@ -5113,7 +5316,9 @@ async fn preview_run_graph_dispatch_init_artifacts(
             existing_dispatch_receipt.is_some(),
         );
     }
+    set_dispatch_init_timeout_stage(timeout_stage, "build_run_graph_dispatch_bootstrap");
     let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
+    set_dispatch_init_timeout_stage(timeout_stage, "build_taskflow_handoff_plan");
     let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
     if route_assignment_drift.is_none() {
         if let Some(existing_receipt) = existing_dispatch_receipt.as_ref() {
@@ -5144,10 +5349,12 @@ async fn preview_run_graph_dispatch_init_artifacts(
         &role_selection,
         &mut dispatch_receipt,
     );
+    set_dispatch_init_timeout_stage(timeout_stage, "build_dispatch_command");
     dispatch_receipt.dispatch_command = crate::runtime_dispatch_command_for_target(
         &role_selection,
         &dispatch_receipt.dispatch_target,
     );
+    set_dispatch_init_timeout_stage(timeout_stage, "refresh_downstream_dispatch_preview");
     crate::refresh_downstream_dispatch_preview(
         store,
         &role_selection,
@@ -5162,8 +5369,10 @@ async fn preview_run_graph_dispatch_init_artifacts(
         &taskflow_handoff_plan,
         &run_graph_bootstrap,
     );
+    set_dispatch_init_timeout_stage(timeout_stage, "write_runtime_dispatch_packet");
     let dispatch_packet_path = crate::write_runtime_dispatch_packet(&ctx)?;
     dispatch_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
+    set_dispatch_init_timeout_stage(timeout_stage, "read_dispatch_command_from_packet");
     dispatch_receipt.dispatch_command = dispatch_command_from_packet_path(&dispatch_packet_path)?;
     Ok(RunGraphDispatchInitPreview::Prepared(
         PreparedRunGraphDispatchInit {
@@ -5271,7 +5480,7 @@ pub(crate) async fn prepare_run_graph_dispatch_init_artifacts(
     store: &StateStore,
     run_id: &str,
 ) -> Result<RunGraphDispatchInitArtifacts, String> {
-    match preview_run_graph_dispatch_init_artifacts(store, run_id).await? {
+    match preview_run_graph_dispatch_init_artifacts(store, run_id, None).await? {
         RunGraphDispatchInitPreview::Existing(artifacts) => Ok(artifacts),
         RunGraphDispatchInitPreview::Prepared(prepared) => {
             if let Some(seed_payload) = prepared.seed_payload.as_ref() {
@@ -5310,9 +5519,14 @@ async fn run_graph_dispatch_init_from_state_dir(
     state_dir: &std::path::Path,
     run_id: &str,
 ) -> Result<serde_json::Value, String> {
+    let timeout_stage = std::sync::Arc::new(std::sync::Mutex::new("open_read_only_state_store"));
+    let timeout_stage_for_task = timeout_stage.clone();
     match tokio::time::timeout(
         std::time::Duration::from_secs(RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS),
         async {
+            *timeout_stage_for_task
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = "open_read_only_state_store";
             let store = StateStore::open_existing_read_only(state_dir.to_path_buf())
                 .await
                 .map_err(|error| {
@@ -5320,8 +5534,23 @@ async fn run_graph_dispatch_init_from_state_dir(
                         "Failed to open read-only state store for dispatch-init preparation: {error}"
                     )
                 })?;
-            let preview = preview_run_graph_dispatch_init_artifacts(&store, run_id).await?;
+            *timeout_stage_for_task
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = "preview_dispatch_init_artifacts";
+            let preview = preview_run_graph_dispatch_init_artifacts(
+                &store,
+                run_id,
+                Some(&timeout_stage_for_task),
+            )
+            .await?;
+            *timeout_stage_for_task
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = "close_read_only_state_store";
             store.close().await;
+            *timeout_stage_for_task
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                "commit_previewed_dispatch_init_artifacts";
             commit_previewed_run_graph_dispatch_init_artifacts(state_dir, preview).await
         },
     )
@@ -5329,10 +5558,12 @@ async fn run_graph_dispatch_init_from_state_dir(
     {
         Ok(result) => result,
         Err(_) => {
-            if let Ok(store) = StateStore::open_existing(state_dir.to_path_buf()).await {
-                let _ = record_dispatch_init_timeout_blocker(&store, run_id).await;
-            }
-            Err(run_graph_dispatch_init_timeout_message(run_id))
+            let _ = record_dispatch_init_timeout_blocker_from_state_dir_bounded(state_dir, run_id)
+                .await;
+            let stage = *timeout_stage
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            Err(run_graph_dispatch_init_timeout_message(run_id, stage))
         }
     }
 }
@@ -5360,8 +5591,11 @@ async fn run_graph_dispatch_init(
             Ok(payload)
         }),
         Err(_) => {
-            let _ = record_dispatch_init_timeout_blocker(store, run_id).await;
-            Err(run_graph_dispatch_init_timeout_message(run_id))
+            let _ = record_dispatch_init_timeout_blocker_bounded(store, run_id).await;
+            Err(run_graph_dispatch_init_timeout_message(
+                run_id,
+                "prepare_dispatch_init_artifacts",
+            ))
         }
     }
 }
@@ -5761,27 +5995,7 @@ async fn run_taskflow_run_graph_dispatch_init_mutation(
     run_id: &str,
     as_json: bool,
 ) -> ExitCode {
-    let store = match StateStore::open_existing(state_dir.to_path_buf()).await {
-        Ok(store) => store,
-        Err(error) => {
-            let message = format!(
-                "Failed to open authoritative state store for dispatch-init mutation: {error}"
-            );
-            if as_json {
-                print_run_graph_json_error(
-                    "vida taskflow run-graph dispatch-init",
-                    run_id,
-                    &message,
-                    run_graph_dispatch_init_error_evidence(&message),
-                );
-            } else {
-                eprintln!("{message}");
-            }
-            return ExitCode::from(1);
-        }
-    };
-
-    match run_graph_dispatch_init(&store, run_id).await {
+    match run_graph_dispatch_init_from_state_dir(state_dir, run_id).await {
         Ok(payload) => {
             if as_json {
                 crate::print_json_pretty(&payload);
@@ -6429,7 +6643,7 @@ mod tests {
 
     #[test]
     fn dispatch_init_timeout_error_surfaces_blocker_evidence() {
-        let message = run_graph_dispatch_init_timeout_message("run-timeout");
+        let message = run_graph_dispatch_init_timeout_message("run-timeout", "test_stage");
         let evidence = run_graph_dispatch_init_error_evidence(&message)
             .expect("dispatch-init timeout should expose blocker evidence");
 
@@ -9992,6 +10206,130 @@ mod tests {
         assert!(context
             .request_text
             .contains("crates/vida/src/taskflow_proxy.rs"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_mutation_seeds_existing_task_via_read_mostly_path() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "task-dispatch-init-read-mostly",
+                title: "Dispatch init should not hold writable store during preparation",
+                display_id: None,
+                description: "The CLI mutation path should preview from a read-only store and commit only the prepared artifacts.",
+                issue_type: "defect",
+                status: "open",
+                priority: 0,
+                parent_id: None,
+                labels: &[String::from("runtime-recovery")],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "vida taskflow run-graph dispatch-init <task-id> --json returns a bounded dispatch receipt without timing out on normal existing TaskFlow tasks."
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create dispatch-init task");
+        store.close().await;
+
+        let exit = run_taskflow_run_graph_dispatch_init_mutation(
+            harness.path(),
+            "task-dispatch-init-read-mostly",
+            true,
+        )
+        .await;
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("reopen store");
+        let status = store
+            .run_graph_status("task-dispatch-init-read-mostly")
+            .await
+            .expect("status lookup should succeed");
+        assert_eq!(status.run_id, "task-dispatch-init-read-mostly");
+        assert!(store
+            .run_graph_dispatch_receipt("task-dispatch-init-read-mostly")
+            .await
+            .expect("receipt lookup should succeed")
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_mutation_captures_stale_launcher_snapshot_without_preview_write() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let mut snapshot = store
+            .read_launcher_activation_snapshot()
+            .await
+            .expect("snapshot should load");
+        snapshot.source_config_digest = "stale-test-digest".to_string();
+        store
+            .write_launcher_activation_snapshot(&snapshot)
+            .await
+            .expect("stale snapshot should persist");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "task-dispatch-init-stale-snapshot",
+                title: "Dispatch init should capture stale launcher snapshot read-only",
+                display_id: None,
+                description: "A stale launcher snapshot must not force a write during dispatch-init preview.",
+                issue_type: "defect",
+                status: "open",
+                priority: 0,
+                parent_id: None,
+                labels: &[String::from("runtime-recovery")],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "dispatch-init succeeds after release install refreshes activation assets and makes the persisted launcher snapshot stale."
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create dispatch-init task");
+        store.close().await;
+
+        let exit = run_taskflow_run_graph_dispatch_init_mutation(
+            harness.path(),
+            "task-dispatch-init-stale-snapshot",
+            true,
+        )
+        .await;
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("reopen store");
+        assert!(store
+            .run_graph_dispatch_receipt("task-dispatch-init-stale-snapshot")
+            .await
+            .expect("receipt lookup should succeed")
+            .is_some());
     }
 
     #[tokio::test]

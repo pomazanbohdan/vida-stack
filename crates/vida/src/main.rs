@@ -180,6 +180,7 @@ use root_command_router::run_root_command;
 use runtime_assignment_builder::{
     build_runtime_assignment, build_runtime_assignment_from_dispatch_alias,
     build_runtime_assignment_from_resolved_constraints,
+    build_runtime_assignment_preview_from_dispatch_alias,
     build_runtime_assignment_preview_from_resolved_constraints, resolve_dispatch_alias_id,
 };
 use runtime_assignment_policy::{

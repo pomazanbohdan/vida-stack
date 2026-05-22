@@ -824,6 +824,33 @@ pub(crate) fn build_runtime_assignment_from_dispatch_alias(
     alias_id: &str,
     fallback_task_class: &str,
 ) -> serde_json::Value {
+    build_runtime_assignment_from_dispatch_alias_with_readiness(
+        compiled_bundle,
+        alias_id,
+        fallback_task_class,
+        true,
+    )
+}
+
+pub(crate) fn build_runtime_assignment_preview_from_dispatch_alias(
+    compiled_bundle: &serde_json::Value,
+    alias_id: &str,
+    fallback_task_class: &str,
+) -> serde_json::Value {
+    build_runtime_assignment_from_dispatch_alias_with_readiness(
+        compiled_bundle,
+        alias_id,
+        fallback_task_class,
+        false,
+    )
+}
+
+fn build_runtime_assignment_from_dispatch_alias_with_readiness(
+    compiled_bundle: &serde_json::Value,
+    alias_id: &str,
+    fallback_task_class: &str,
+    probe_external_readiness: bool,
+) -> serde_json::Value {
     let Some(alias) = dispatch_alias_row(compiled_bundle, alias_id) else {
         return serde_json::json!({
             "enabled": false,
@@ -849,12 +876,21 @@ pub(crate) fn build_runtime_assignment_from_dispatch_alias(
         .find(|value| !value.is_empty())
         .unwrap_or(fallback_task_class)
         .to_string();
-    let mut assignment = build_runtime_assignment_from_resolved_constraints(
-        compiled_bundle,
-        alias_id,
-        &task_class,
-        &runtime_role,
-    );
+    let mut assignment = if probe_external_readiness {
+        build_runtime_assignment_from_resolved_constraints(
+            compiled_bundle,
+            alias_id,
+            &task_class,
+            &runtime_role,
+        )
+    } else {
+        build_runtime_assignment_preview_from_resolved_constraints(
+            compiled_bundle,
+            alias_id,
+            &task_class,
+            &runtime_role,
+        )
+    };
     let alias_carrier_tier = alias
         .get("carrier_tier")
         .and_then(serde_json::Value::as_str)

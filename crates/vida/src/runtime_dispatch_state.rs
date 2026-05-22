@@ -4685,6 +4685,16 @@ async fn receipt_backed_execution_evidence_path(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<Option<String>, String> {
+    if matches!(receipt.dispatch_status.as_str(), "routed" | "packet_ready")
+        && receipt
+            .dispatch_result_path
+            .as_deref()
+            .is_none_or(str::is_empty)
+        && !dispatch_receipt_has_execution_evidence(receipt)
+        && !dispatch_receipt_allows_synthetic_lane_completion(receipt)
+    {
+        return Ok(None);
+    }
     if let Some(path) =
         tracked_specification_gate_completion_evidence_path(store, role_selection, receipt).await?
     {
