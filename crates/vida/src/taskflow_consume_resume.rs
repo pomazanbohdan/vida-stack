@@ -6475,6 +6475,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn validate_receipt_packet_pair_accepts_mixed_windows_separator_dispatch_path() {
         let nanos = SystemTime::now()

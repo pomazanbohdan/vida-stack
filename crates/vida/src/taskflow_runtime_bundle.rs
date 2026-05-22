@@ -2898,14 +2898,30 @@ mod tests {
 
     #[test]
     fn bundle_project_root_prefers_authoritative_state_root_over_config_parent() {
-        let state_root = std::env::current_dir()
-            .expect("current dir should resolve")
-            .join(".vida/data/state");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock should support unique ids")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-runtime-bundle-project-root-{}-{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        std::fs::write(project_root.join("AGENTS.md"), "test").expect("write agents");
+        std::fs::write(project_root.join("vida.config.yaml"), "project: test\n")
+            .expect("write config");
+        std::fs::create_dir_all(project_root.join(".vida/config")).expect("create config dir");
+        std::fs::create_dir_all(project_root.join(".vida/db")).expect("create db dir");
+        std::fs::create_dir_all(project_root.join(".vida/project")).expect("create project dir");
+        let state_root = project_root.join(".vida/data/state");
+        std::fs::create_dir_all(&state_root).expect("create state root");
         let selected = bundle_project_root(&state_root, "")
             .expect("project root should resolve from authoritative state root");
         let expected = crate::taskflow_task_bridge::infer_project_root_from_state_root(&state_root)
             .expect("authoritative state root should map back to the project root");
         assert_eq!(selected, expected);
+        let _ = std::fs::remove_dir_all(project_root);
     }
 
     #[test]
