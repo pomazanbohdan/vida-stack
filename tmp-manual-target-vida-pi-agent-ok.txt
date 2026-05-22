@@ -1,6 +1,0 @@
-CMD=['target\\debug\\vida-pi-agent.exe', '--mode', 'rpc', '--no-session', '--model', 'openai-codex/gpt-5.5', '--thinking-level', 'high', '--workdir', 'C:\\project\\vida-stack']
-RC=0
-STDOUT:
-{"is_error":false,"raw_provider":{"mode":"rpc","provider":"pi","terminal_event":"agent_end"},"result":"OK","scope_guard":{"enforcement":"validation_only_post_execution","mode":"auto","owned_path_sources":[],"owned_paths":[],"pre_write_enforcement":false,"pre_write_guard":{"active":false,"blocks_bash":false,"blocks_unknown_mutating_tools":false,"mechanism":"none"},"project_root":"\\\\?\\C:\\project\\vida-stack","status":"no_touched_paths_reported","touched_paths":[],"valid":true,"violations":[],"write_profiles_runtime_admission":"fail_closed_until_pre_write_guard"},"subtype":"success","type":"result"}
-
-STDERR:

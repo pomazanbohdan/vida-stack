@@ -12,6 +12,7 @@ target
 **/target/
 _temp
 tmp/
+tmp*
 temp/
 logs/
 *.tmp

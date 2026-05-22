@@ -1,6 +1,0 @@
-CMD=['vida-pi-agent', '--mode', 'rpc', '--no-session', '--model', 'openai-codex/gpt-5.5', '--thinking-level', 'high', '--workdir', 'C:\\project\\vida-stack']
-RC=1
-STDOUT:
-{"error":{"message":"Pi RPC stdout closed before agent_end"},"is_error":true,"raw_provider":{"mode":"rpc","provider":"pi"},"subtype":"error_during_execution","type":"result"}
-
-STDERR:

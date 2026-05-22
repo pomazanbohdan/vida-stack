@@ -1,3 +1,0 @@
-
----STDERR---
-Agent init execute-dispatch requires either `--dispatch-packet` or `--downstream-packet`.
