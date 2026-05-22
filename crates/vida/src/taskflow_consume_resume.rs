@@ -6606,7 +6606,7 @@ mod tests {
             nanos
         ));
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
-        runtime.block_on(async {
+        runtime.block_on(Box::pin(async {
             let store = StateStore::open(root.clone()).await.expect("open store");
             let error = tokio::time::timeout(
                 Duration::from_secs(1),
@@ -6625,7 +6625,7 @@ mod tests {
             );
             drop(store);
             let _ = fs::remove_dir_all(&root);
-        });
+        }));
     }
 
     #[tokio::test]
