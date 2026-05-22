@@ -201,7 +201,7 @@ async fn ensure_current_session_claims_for_active_tasks(
                 conflict_domain: Some(conflict_domain),
                 owned_paths: task.planner_metadata.owned_paths.clone(),
                 read_only_paths: Vec::new(),
-                lease_mode: crate::state_store::LeaseMode::Exclusive,
+                lease_mode: crate::state_store::LeaseMode::Observe,
                 lease_seconds: 3600,
             })
             .await
@@ -441,6 +441,49 @@ mod tests {
                 blocker["task_id"] == "active-foreign"
                     && blocker["blocker_code"] == "active_task_claimed_by_foreign_session"
             }));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn projection_auto_claims_same_session_active_tasks_with_overlapping_paths() {
+        let root = temp_state_dir("auto-claim-overlapping-active-tasks");
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let mut first = task_record("active-first", "in_progress");
+        first.planner_metadata.owned_paths = vec!["crates/vida/src/runtime.rs".to_string()];
+        let mut second = task_record("active-second", "in_progress");
+        second.planner_metadata.owned_paths = vec!["crates/vida/src".to_string()];
+        store
+            .persist_task_record(first)
+            .await
+            .expect("persist first active task");
+        store
+            .persist_task_record(second)
+            .await
+            .expect("persist second active task");
+
+        let projection = build_operator_session_projection(&store)
+            .await
+            .expect("projection");
+
+        let current_claims = projection["current_session_task_claims"]
+            .as_array()
+            .expect("current claims");
+        assert!(current_claims
+            .iter()
+            .any(|claim| claim["task_id"] == "active-first"));
+        assert!(current_claims
+            .iter()
+            .any(|claim| claim["task_id"] == "active-second"));
+        assert!(current_claims
+            .iter()
+            .all(|claim| claim["lease_mode"] == "observe"));
+        assert!(projection["active_task_claim_blockers"]
+            .as_array()
+            .expect("claim blockers")
+            .is_empty());
 
         let _ = std::fs::remove_dir_all(root);
     }
