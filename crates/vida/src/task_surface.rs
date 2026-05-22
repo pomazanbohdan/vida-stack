@@ -2091,12 +2091,8 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                     } else {
                         task
                     };
-                    if let Err(code) = refresh_task_snapshot_for_task_after_mutation(
-                        &store,
-                        &task,
-                        "vida task create",
-                    )
-                    .await
+                    if let Err(code) =
+                        refresh_task_snapshot_after_mutation(&store, "vida task create").await
                     {
                         return code;
                     }
@@ -4558,12 +4554,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     }
                     match store.close_task(&command.task_id, &command.reason).await {
                         Ok(task) => {
-                            if let Err(code) = refresh_task_snapshot_for_task_after_mutation(
-                                &store,
-                                &task,
-                                "vida task close",
-                            )
-                            .await
+                            if let Err(code) =
+                                refresh_task_snapshot_after_mutation(&store, "vida task close")
+                                    .await
                             {
                                 return code;
                             }
