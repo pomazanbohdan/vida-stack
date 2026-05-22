@@ -41,20 +41,13 @@ fn recovery_status_projection_name(run_id: &str) -> String {
 }
 
 fn read_recovery_status_projection(
-    state_dir: &std::path::Path,
-    projection_name: &str,
+    _state_dir: &std::path::Path,
+    _projection_name: &str,
     _run_id: &str,
 ) -> Option<String> {
-    crate::operator_projection_cache::read_fresh_json_projection(state_dir, projection_name)
-        .filter(|cached| recovery_projection_has_complete_action_fields(cached))
-        .or_else(|| {
-            crate::operator_projection_cache::read_recent_json_projection(
-                state_dir,
-                projection_name,
-                TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE,
-            )
-            .filter(|cached| recovery_projection_has_complete_action_fields(cached))
-        })
+    // Security hardening: recovery status JSON must be rendered from authoritative
+    // state instead of repository-provided projection cache payloads.
+    None
 }
 
 fn recovery_projection_has_complete_action_fields(cached: &str) -> bool {

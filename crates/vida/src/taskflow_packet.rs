@@ -264,21 +264,8 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
     let projection_name =
         packet_projection_name(&requested_run_id, requested_task_id.as_deref(), latest_mode);
     if as_json {
-        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
-            &proxy_state_dir(),
-            &projection_name,
-        ) {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
-        }
-        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
-            &proxy_state_dir(),
-            &projection_name,
-            TASKFLOW_PACKET_RECENT_PROJECTION_MAX_AGE,
-        ) {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
-        }
+        // Security hardening: packet JSON must come from authoritative state validation
+        // (state store + dispatch receipt + canonical packet path checks), not raw cache.
     }
 
     let store = match StateStore::open_existing(proxy_state_dir()).await {
