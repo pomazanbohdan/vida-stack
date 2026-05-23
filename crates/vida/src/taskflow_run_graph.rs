@@ -3800,10 +3800,18 @@ fn registered_design_doc_path_for_task(task_id: &str) -> Option<String> {
 }
 
 async fn existing_design_backed_task_design_doc_path(
-    _store: &StateStore,
+    store: &StateStore,
     task_id: &str,
 ) -> Option<String> {
-    let inferred = inferred_design_doc_path_for_task(task_id);
+    let inferred = inferred_design_doc_path_for_task(task_id)?;
+    let is_design_backed_task = store
+        .show_task(task_id)
+        .await
+        .map(|task| task.issue_type == "design")
+        .unwrap_or(false);
+    if !is_design_backed_task {
+        return None;
+    }
     let design_doc_path = inferred
         .as_deref()
         .and_then(|path| {
@@ -3978,7 +3986,7 @@ async fn try_existing_design_backed_implementation_override(
         inject_tracked_design_doc_path(&mut selection.execution_plan, &design_doc_path);
         return Ok(());
     } else {
-        vec!["existing_design_backed_generic_override".to_string()]
+        return Ok(());
     };
 
     selection.selected_role = "worker".to_string();
