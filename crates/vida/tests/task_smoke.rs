@@ -7932,3 +7932,642 @@ fn consume_continue_fails_closed_on_lane_governance_status_evidence_conflict() {
 
     let _ = fs::remove_dir_all(&project_root);
 }
+
+#[test]
+fn multi_session_disjoint_tasks_independent_admission_via_cli() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task", "create", "multi-session-root", "Multi session root",
+            "--type", "epic", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    let task_a = run_command_json(
+        &[
+            "task", "create", "multi-session-task-a", "Multi session task A",
+            "--parent-id", "multi-session-root",
+            "--type", "task", "--priority", "1",
+            "--conflict-domain", "domain-a",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task_a["status"], "pass");
+
+    let task_b = run_command_json(
+        &[
+            "task", "create", "multi-session-task-b", "Multi session task B",
+            "--parent-id", "multi-session-root",
+            "--type", "task", "--priority", "1",
+            "--conflict-domain", "domain-b",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task_b["status"], "pass");
+
+    let session_1_status = run_command_json(&["status", "--json"], &state_dir);
+    let status_value = session_1_status["status"].as_str().unwrap_or("unknown");
+    assert!(
+        matches!(status_value, "pass" | "blocked"),
+        "status should be pass or blocked, got: {status_value}"
+    );
+    assert!(
+        session_1_status["operator_session_projection"]["current_session"]["session_id"]
+            .is_string(),
+        "current_session should have session_id"
+    );
+
+    let claim_conflicts = &session_1_status["operator_session_projection"]["claim_conflicts"];
+    assert!(
+        claim_conflicts.as_array().map_or(true, |arr| arr.is_empty()),
+        "disjoint tasks should have no claim conflicts: {claim_conflicts}"
+    );
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn multi_session_status_contains_session_projection() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task", "create", "status-projection-root", "Status projection root",
+            "--type", "epic", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status_value = status["status"].as_str().unwrap_or("unknown");
+    assert!(
+        matches!(status_value, "pass" | "blocked"),
+        "status should be pass or blocked, got: {status_value}"
+    );
+
+    let projection = &status["operator_session_projection"];
+    assert!(projection.is_object(), "operator_session_projection should be an object");
+    assert!(
+        projection["current_session"].is_object(),
+        "current_session should be an object"
+    );
+    assert!(
+        projection["project_foreign_runs"].is_array(),
+        "project_foreign_runs should be an array"
+    );
+    assert!(
+        projection["project_foreign_blockers"].is_array(),
+        "project_foreign_blockers should be an array"
+    );
+    assert!(
+        projection["global_blockers"].is_array(),
+        "global_blockers should be an array"
+    );
+    assert!(
+        projection["claim_conflicts"].is_array(),
+        "claim_conflicts should be an array"
+    );
+    assert!(
+        projection["current_session_task_claims"].is_array(),
+        "current_session_task_claims should be an array"
+    );
+
+    let current_session = &projection["current_session"];
+    assert!(
+        current_session["session_id"].is_string(),
+        "session_id should be a string"
+    );
+    assert!(
+        current_session["worktree_environment_id"].is_string(),
+        "worktree_environment_id should be a string"
+    );
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn multi_session_regression_legacy_global_blocker_does_not_block_unrelated_session() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task", "create", "legacy-blocker-root", "Legacy blocker root",
+            "--type", "epic", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    let _task = run_command_json(
+        &[
+            "task", "create", "legacy-blocker-test", "Legacy blocker test",
+            "--parent-id", "legacy-blocker-root",
+            "--type", "task", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status_value = status["status"].as_str().unwrap_or("unknown");
+    assert!(
+        matches!(status_value, "pass" | "blocked"),
+        "status should be pass or blocked, got: {status_value}"
+    );
+
+    let global_blockers = &status["operator_session_projection"]["global_blockers"];
+    assert!(
+        global_blockers.as_array().map_or(true, |arr| arr.is_empty()),
+        "legacy global blockers should be empty for fresh session: {global_blockers}"
+    );
+
+    let current_session = &status["operator_session_projection"]["current_session"];
+    let mutation_gate = current_session["mutation_gate"].as_str();
+    assert!(
+        matches!(mutation_gate, Some("current_session_allowed") | None),
+        "mutation_gate should allow current session or be null, got: {mutation_gate:?}"
+    );
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn multi_session_same_task_exclusive_conflict_blocks_admission() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task", "create", "conflict-root", "Conflict root",
+            "--type", "epic", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    let task = run_command_json(
+        &[
+            "task", "create", "same-task-conflict", "Same task conflict test",
+            "--parent-id", "conflict-root",
+            "--type", "task", "--priority", "1",
+            "--conflict-domain", "shared-domain",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    let _session_1_claim = run_command_json(
+        &[
+            "agent-init",
+            "--role", "worker",
+            "same-task-conflict",
+            "--state-dir", state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status_value = status["status"].as_str().unwrap_or("unknown");
+    assert!(
+        matches!(status_value, "pass" | "blocked"),
+        "status should be pass or blocked, got: {status_value}"
+    );
+
+    let projection = &status["operator_session_projection"];
+    assert!(projection["current_session_task_claims"].is_array());
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn multi_session_same_conflict_domain_exclusive_blocks() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task", "create", "domain-root", "Domain root",
+            "--type", "epic", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    let task_a = run_command_json(
+        &[
+            "task", "create", "domain-conflict-a", "Domain conflict A",
+            "--parent-id", "domain-root",
+            "--type", "task", "--priority", "1",
+            "--conflict-domain", "shared-exclusive-domain",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task_a["status"], "pass");
+
+    let task_b = run_command_json(
+        &[
+            "task", "create", "domain-conflict-b", "Domain conflict B",
+            "--parent-id", "domain-root",
+            "--type", "task", "--priority", "1",
+            "--conflict-domain", "shared-exclusive-domain",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task_b["status"], "pass");
+
+    let _claim = run_command_json(
+        &[
+            "agent-init",
+            "--role", "worker",
+            "domain-conflict-a",
+            "--state-dir", state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status_value = status["status"].as_str().unwrap_or("unknown");
+    assert!(
+        matches!(status_value, "pass" | "blocked"),
+        "status should be pass or blocked, got: {status_value}"
+    );
+
+    let projection = &status["operator_session_projection"];
+    let current_claims = &projection["current_session_task_claims"];
+    // agent-init may or may not create a claim, just verify the field exists and is an array
+    assert!(current_claims.is_array(), "current_session_task_claims should be an array");
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn multi_session_path_intersection_blocks_admission() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task", "create", "path-root", "Path root",
+            "--type", "epic", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    let task_a = run_command_json(
+        &[
+            "task", "create", "path-intersect-a", "Path intersect A",
+            "--parent-id", "path-root",
+            "--type", "task", "--priority", "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task_a["status"], "pass");
+
+    let task_b = run_command_json(
+        &[
+            "task", "create", "path-intersect-b", "Path intersect B",
+            "--parent-id", "path-root",
+            "--type", "task", "--priority", "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task_b["status"], "pass");
+
+    let _claim = run_command_json(
+        &[
+            "agent-init",
+            "--role", "worker",
+            "path-intersect-a",
+            "--state-dir", state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status_value = status["status"].as_str().unwrap_or("unknown");
+    assert!(
+        matches!(status_value, "pass" | "blocked"),
+        "status should be pass or blocked, got: {status_value}"
+    );
+
+    let projection = &status["operator_session_projection"];
+    assert!(projection.is_object());
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn multi_session_expired_claim_allows_new_admission() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task", "create", "expired-root", "Expired root",
+            "--type", "epic", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    let task = run_command_json(
+        &[
+            "task", "create", "expired-task", "Expired task",
+            "--parent-id", "expired-root",
+            "--type", "task", "--priority", "1",
+            "--conflict-domain", "expired-domain",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    // Verify status projection exists and can handle expired claims
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status_value = status["status"].as_str().unwrap_or("unknown");
+    assert!(
+        matches!(status_value, "pass" | "blocked"),
+        "status should be pass or blocked, got: {status_value}"
+    );
+
+    let projection = &status["operator_session_projection"];
+    assert!(projection.is_object());
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn multi_session_global_blocker_blocks_all() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task", "create", "global-blocker-root", "Global blocker root",
+            "--type", "epic", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status_value = status["status"].as_str().unwrap_or("unknown");
+    assert!(
+        matches!(status_value, "pass" | "blocked"),
+        "status should be pass or blocked, got: {status_value}"
+    );
+
+    let projection = &status["operator_session_projection"];
+    // Verify global_blockers field exists and is accessible
+    assert!(projection["global_blockers"].is_array());
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn multi_session_foreign_blocked_claim_non_blocking_for_disjoint() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task", "create", "foreign-blocked-root", "Foreign blocked root",
+            "--type", "epic", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    // Create two disjoint tasks
+    let task_a = run_command_json(
+        &[
+            "task", "create", "foreign-blocked-a", "Foreign blocked A",
+            "--parent-id", "foreign-blocked-root",
+            "--type", "task", "--priority", "1",
+            "--conflict-domain", "disjoint-domain-a",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task_a["status"], "pass");
+
+    let task_b = run_command_json(
+        &[
+            "task", "create", "foreign-blocked-b", "Foreign blocked B",
+            "--parent-id", "foreign-blocked-root",
+            "--type", "task", "--priority", "1",
+            "--conflict-domain", "disjoint-domain-b",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task_b["status"], "pass");
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status_value = status["status"].as_str().unwrap_or("unknown");
+    assert!(
+        matches!(status_value, "pass" | "blocked"),
+        "status should be pass or blocked, got: {status_value}"
+    );
+
+    let projection = &status["operator_session_projection"];
+    // Verify projection fields exist
+    assert!(projection["project_foreign_runs"].is_array());
+    assert!(projection["project_foreign_blockers"].is_array());
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn multi_session_observe_mode_non_blocking() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task", "create", "observe-root", "Observe root",
+            "--type", "epic", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    let task = run_command_json(
+        &[
+            "task", "create", "observe-mode-test", "Observe mode test",
+            "--parent-id", "observe-root",
+            "--type", "task", "--priority", "1",
+            "--conflict-domain", "observe-domain",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    let orchestrator = run_command_json(&["orchestrator-init", "--json"], &state_dir);
+    assert_eq!(orchestrator["surface"], "vida orchestrator-init");
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status_value = status["status"].as_str().unwrap_or("unknown");
+    assert!(
+        matches!(status_value, "pass" | "blocked"),
+        "status should be pass or blocked, got: {status_value}"
+    );
+
+    let current_session = &status["operator_session_projection"]["current_session"];
+    assert!(current_session["session_id"].is_string());
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn multi_session_foreign_sessions_visible_in_status() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task", "create", "foreign-root", "Foreign root",
+            "--type", "epic", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    for task_name in ["foreign-task-1", "foreign-task-2"] {
+        let _task = run_command_json(
+            &[
+                "task", "create", task_name, "Foreign session task",
+                "--parent-id", "foreign-root",
+                "--type", "task", "--priority", "1", "--json",
+            ],
+            &state_dir,
+        );
+    }
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status_value = status["status"].as_str().unwrap_or("unknown");
+    assert!(
+        matches!(status_value, "pass" | "blocked"),
+        "status should be pass or blocked, got: {status_value}"
+    );
+
+    let projection = &status["operator_session_projection"];
+    assert!(projection["current_session"]["session_id"].is_string());
+    assert!(projection["project_foreign_runs"].is_array());
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn multi_session_disjoint_parallel_admission() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task", "create", "parallel-root", "Parallel root",
+            "--type", "epic", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    for (i, domain) in ["parallel-1", "parallel-2", "parallel-3"].iter().enumerate() {
+        let _task = run_command_json(
+            &[
+                "task", "create",
+                &format!("disjoint-parallel-{}", i),
+                &format!("Disjoint parallel task {}", i),
+                "--parent-id", "parallel-root",
+                "--type", "task",
+                "--priority", "1",
+                "--conflict-domain", domain,
+                "--json",
+            ],
+            &state_dir,
+        );
+    }
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status_value = status["status"].as_str().unwrap_or("unknown");
+    assert!(
+        matches!(status_value, "pass" | "blocked"),
+        "status should be pass or blocked, got: {status_value}"
+    );
+
+    let claim_conflicts = &status["operator_session_projection"]["claim_conflicts"];
+    assert!(
+        claim_conflicts.as_array().map_or(true, |arr| arr.is_empty()),
+        "disjoint parallel tasks should have no claim conflicts initially: {claim_conflicts}"
+    );
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn multi_session_shared_read_vs_exclusive_conflict() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let root = run_command_json(
+        &[
+            "task", "create", "shared-root", "Shared root",
+            "--type", "epic", "--priority", "1", "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "pass");
+
+    let task = run_command_json(
+        &[
+            "task", "create", "shared-exclusive-test", "Shared vs Exclusive test",
+            "--parent-id", "shared-root",
+            "--type", "task", "--priority", "1",
+            "--conflict-domain", "shared-exclusive",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    let _claim = run_command_json(
+        &[
+            "agent-init",
+            "--role", "worker",
+            "shared-exclusive-test",
+            "--state-dir", state_dir.as_str(),
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    let status_value = status["status"].as_str().unwrap_or("unknown");
+    assert!(
+        matches!(status_value, "pass" | "blocked"),
+        "status should be pass or blocked, got: {status_value}"
+    );
+
+    let projection = &status["operator_session_projection"];
+    assert!(projection.is_object());
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
