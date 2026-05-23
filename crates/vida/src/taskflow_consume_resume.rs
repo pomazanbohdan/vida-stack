@@ -1028,39 +1028,71 @@ async fn validate_explicit_task_graph_binding_lineage_for_resume(
     let Some(binding) = binding else {
         return Ok(());
     };
-    if binding.status != "bound"
-        || binding.active_bounded_unit["kind"].as_str() != Some("task_graph_task")
-    {
+    if binding.status != "bound" {
         return Ok(());
     }
 
-    let bound_task_id = binding.active_bounded_unit["task_id"]
-        .as_str()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(binding.task_id.as_str());
-    if status.task_id.trim() != bound_task_id {
-        return Err(format!(
-            "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but persisted run-graph status still points to task `{}` with lifecycle `{}` and status `{}`. Resume must fail closed until fresh run-graph truth is recorded for the bound task.",
-            status.task_id, status.lifecycle_stage, status.status
-        ));
+    match binding.active_bounded_unit["kind"].as_str() {
+        Some("task_graph_task") => {
+            let bound_task_id = binding.active_bounded_unit["task_id"]
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(binding.task_id.as_str());
+            if status.task_id.trim() != bound_task_id {
+                return Err(format!(
+                    "Run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but persisted run-graph status still points to task `{}` with lifecycle `{}` and status `{}`. Resume must fail closed until fresh run-graph truth is recorded for the bound task.",
+                    status.task_id, status.lifecycle_stage, status.status
+                ));
+            }
+            if status.status != "completed" {
+                return Ok(());
+            }
+            let Some(packet_path) = receipt.dispatch_packet_path.as_deref() else {
+                return Ok(());
+            };
+            let packet = read_dispatch_packet(packet_path)?;
+            let Some(lineage_task_id) = persisted_dispatch_packet_lineage_task_id(&packet) else {
+                return Ok(());
+            };
+            if lineage_task_id == bound_task_id {
+                return Ok(());
+            }
+            Err(format!(
+                "Completed run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but persisted dispatch packet lineage at `{packet_path}` still points to task `{lineage_task_id}`. Resume must fail closed until a fresh dispatch packet is recorded for the bound task."
+            ))
+        }
+        Some("downstream_dispatch_target") => {
+            let Some(bound_target) = binding.active_bounded_unit["dispatch_target"]
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+            else {
+                return Ok(());
+            };
+            if let Some(target) = receipt.downstream_dispatch_target.as_deref() {
+                if target.trim() != bound_target {
+                    return Err(format!(
+                        "Run `{run_id}` is explicitly bound to downstream target `{bound_target}`, but persisted downstream_dispatch_target still points to stale downstream target `{}`. Resume must fail closed until lawful downstream evidence is refreshed.",
+                        target.trim()
+                    ));
+                }
+            }
+            if let Some(active_target) = receipt.downstream_dispatch_active_target.as_deref() {
+                if active_target.trim() != bound_target
+                    && matches!(
+                        receipt.downstream_dispatch_status.as_deref().map(str::trim),
+                        Some("blocked" | "failed")
+                    )
+                {
+                    return Err(format!(
+                        "Run `{run_id}` is explicitly bound to downstream target `{bound_target}`, but persisted downstream_dispatch_active_target still points to stale downstream target `{}`. Resume must fail closed until lawful downstream evidence is refreshed.",
+                        active_target.trim()
+                    ));
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
     }
-    if status.status != "completed" {
-        return Ok(());
-    }
-    let Some(packet_path) = receipt.dispatch_packet_path.as_deref() else {
-        return Ok(());
-    };
-    let packet = read_dispatch_packet(packet_path)?;
-    let Some(lineage_task_id) = persisted_dispatch_packet_lineage_task_id(&packet) else {
-        return Ok(());
-    };
-    if lineage_task_id == bound_task_id {
-        return Ok(());
-    }
-
-    Err(format!(
-        "Completed run `{run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but persisted dispatch packet lineage at `{packet_path}` still points to task `{lineage_task_id}`. Resume must fail closed until a fresh dispatch packet is recorded for the bound task."
-    ))
 }
 
 async fn validate_completed_run_downstream_resume_candidate(
