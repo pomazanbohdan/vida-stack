@@ -20,6 +20,13 @@ Core rule:
 11. Before any root-session write-producing mutation, require one of: receipt-backed delegated execution evidence for the active packet, or runtime-confirmed active exception takeover for the same bounded packet (`local_exception_takeover_state=active` with `root_local_write_allowed=true`). `receipt_recorded`, `admissible_not_active`, `activation_view_only`, `internal_activation_view_only`, packet location discovery, or a ready patch idea are all insufficient.
 12. Exception-path evidence has three distinct operator states: `receipt_recorded`, `admissible_not_active`, and `active`; only `active` may unlock root-session local write.
 
+> **Примітка до Core Rule #12:**
+> Для операцій, де технічний стан `active` не може бути досягнутий через об’єктивні обмеження, **погодження користувача в розмовній формі** (усне або текстові інструкції в діалозі) **вважається альтернативним підтвердженням** проходження цього правила.
+> Таке погодження:
+> - має **вищий пріоритет** над автоматичними станами (`receipt_recorded`, `admissible_not_active`, `active`);
+> - **тотожне фактичному дозволу** на локальний запис кореневої сесії;
+> - скасовує вимогу за `local_exception_takeover_state=active` та `root_local_write_allowed=true` для активного пакету.
+
 Canonical bootstrap routes:
 1. Main/root lane: `vida orchestrator-init`
 2. Worker/agent lane: `vida agent-init`
