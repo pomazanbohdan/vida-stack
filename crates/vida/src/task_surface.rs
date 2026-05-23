@@ -5625,7 +5625,7 @@ mod tests {
                 &store,
                 "task-handoff",
                 "Task handoff",
-                "task",
+                "epic",
                 "open",
                 2,
                 None,
@@ -6653,7 +6653,17 @@ mod tests {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
-            create_task_for_test(&store, "task-ready", "Ready task", "task", "open", 2, None).await;
+            create_task_for_test(&store, "parent-epic", "Parent", "epic", "open", 1, None).await;
+            create_task_for_test(
+                &store,
+                "task-ready",
+                "Ready task",
+                "task",
+                "open",
+                2,
+                Some("parent-epic"),
+            )
+            .await;
             store
                 .refresh_task_snapshot()
                 .await
@@ -6679,7 +6689,17 @@ mod tests {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
-            create_task_for_test(&store, "task-ready", "Ready task", "task", "open", 2, None).await;
+            create_task_for_test(&store, "parent-epic", "Parent", "epic", "open", 1, None).await;
+            create_task_for_test(
+                &store,
+                "task-ready",
+                "Ready task",
+                "task",
+                "open",
+                2,
+                Some("parent-epic"),
+            )
+            .await;
             store
                 .refresh_task_snapshot()
                 .await
@@ -6710,6 +6730,7 @@ mod tests {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
+            create_task_for_test(&store, "parent-epic", "Parent", "epic", "open", 1, None).await;
             create_task_for_test(
                 &store,
                 "critical-ready",
@@ -6717,7 +6738,7 @@ mod tests {
                 "task",
                 "open",
                 1,
-                None,
+                Some("parent-epic"),
             )
             .await;
             store
@@ -6747,16 +6768,7 @@ mod tests {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
-            create_task_for_test(
-                &store,
-                "taskflow-defect-case-11-closed-downstream-binding-blocks-ready",
-                "Closed downstream marker",
-                "defect",
-                "closed",
-                1,
-                None,
-            )
-            .await;
+            create_task_for_test(&store, "parent-epic", "Parent", "epic", "open", 1, None).await;
             create_task_for_test(
                 &store,
                 "taskflow-case-11-actual-agent-autonomy",
@@ -6764,7 +6776,17 @@ mod tests {
                 "task",
                 "open",
                 2,
-                None,
+                Some("parent-epic"),
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "taskflow-defect-case-11-closed-downstream-binding-blocks-ready",
+                "Closed downstream marker",
+                "task",
+                "closed",
+                1,
+                Some("parent-epic"),
             )
             .await;
             store
@@ -7460,7 +7482,17 @@ mod tests {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
-            create_task_for_test(&store, "dep-task", "Dependency", "task", "open", 1, None).await;
+            create_task_for_test(&store, "parent-epic", "Parent", "epic", "open", 1, None).await;
+            create_task_for_test(
+                &store,
+                "dep-task",
+                "Dependency",
+                "task",
+                "open",
+                1,
+                Some("parent-epic"),
+            )
+            .await;
             create_task_for_test(
                 &store,
                 "source-task",
@@ -7468,7 +7500,7 @@ mod tests {
                 "task",
                 "open",
                 2,
-                None,
+                Some("parent-epic"),
             )
             .await;
             store
@@ -7544,6 +7576,7 @@ mod tests {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
+            create_task_for_test(&store, "parent-epic", "Parent", "epic", "open", 1, None).await;
             create_task_for_test(
                 &store,
                 "source-task",
@@ -7551,7 +7584,17 @@ mod tests {
                 "task",
                 "open",
                 2,
-                None,
+                Some("parent-epic"),
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                "sibling-task",
+                "Sibling",
+                "task",
+                "open",
+                2,
+                Some("parent-epic"),
             )
             .await;
             store
@@ -7686,7 +7729,17 @@ mod tests {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
-            create_task_for_test(&store, "dep-task", "Dependency", "task", "open", 1, None).await;
+            create_task_for_test(&store, "parent-epic", "Parent", "epic", "open", 1, None).await;
+            create_task_for_test(
+                &store,
+                "dep-task",
+                "Dependency",
+                "task",
+                "open",
+                1,
+                Some("parent-epic"),
+            )
+            .await;
             create_task_for_test(
                 &store,
                 "source-task",
@@ -7694,7 +7747,7 @@ mod tests {
                 "task",
                 "open",
                 2,
-                None,
+                Some("parent-epic"),
             )
             .await;
             store
@@ -7758,6 +7811,7 @@ mod tests {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
+            create_task_for_test(&store, "parent-epic", "Parent", "epic", "open", 1, None).await;
             create_task_for_test(
                 &store,
                 "source-task",
@@ -7765,7 +7819,7 @@ mod tests {
                 "task",
                 "open",
                 2,
-                None,
+                Some("parent-epic"),
             )
             .await;
             let source = store
@@ -7824,6 +7878,7 @@ mod tests {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
+            create_task_for_test(&store, "parent-epic", "Parent", "epic", "open", 1, None).await;
             create_task_for_test(
                 &store,
                 "source-task",
@@ -7831,7 +7886,7 @@ mod tests {
                 "task",
                 "open",
                 2,
-                None,
+                Some("parent-epic"),
             )
             .await;
         });

@@ -952,7 +952,7 @@ hierarchy: framework,contracts
         for (task_id, title, issue_type, parent_id) in [
             ("root-a", "Root A", "epic", None),
             ("root-b", "Root B", "epic", None),
-            ("dep-task", "Dependency", "task", None),
+            ("dep-task", "Dependency", "epic", None),
             ("child-task", "Child", "task", Some("root-a")),
         ] {
             store

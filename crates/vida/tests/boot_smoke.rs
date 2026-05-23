@@ -4368,6 +4368,8 @@ fn parallel_read_only_task_surfaces_do_not_fail_on_state_lock_contention() {
             "root for parallel read-only task surfaces",
             "--status",
             "open",
+            "--type",
+            "epic",
             "--json",
         ])
         .env("VIDA_STATE_DIR", &state_dir)

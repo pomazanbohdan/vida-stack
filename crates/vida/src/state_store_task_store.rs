@@ -1125,6 +1125,15 @@ impl StateStore {
                 reason: format!("task `{task_id}` title is empty"),
             });
         }
+        // Non-epic tasks must have a parent_id
+        if issue_type != "epic" && parent_id.is_none() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "task `{task_id}` of type `{}` cannot be created without parent_id. Only epic tasks can have no parent.",
+                    issue_type
+                ),
+            });
+        }
         let normalized_parent_id = parent_id.and_then(|value| {
             let trimmed = value.trim();
             if trimmed.is_empty() {
@@ -2009,7 +2018,7 @@ mod tests {
 
         for (task_id, title, issue_type, parent_id) in [
             ("blocked-parent", "Blocked parent", "epic", None),
-            ("blocking-task", "Blocking task", "task", None),
+            ("blocking-task", "Blocking task", "epic", None),
             (
                 "blocked-child",
                 "Blocked child",
@@ -2092,7 +2101,7 @@ mod tests {
                 title: "Implement bounded fix",
                 display_id: None,
                 description: "",
-                issue_type: "task",
+                issue_type: "epic",
                 status: "in_progress",
                 priority: 1,
                 parent_id: None,
@@ -2355,7 +2364,7 @@ mod tests {
                 title: "Current active implementation task",
                 display_id: None,
                 description: "",
-                issue_type: "task",
+                issue_type: "epic",
                 status: "in_progress",
                 priority: 1,
                 parent_id: None,
@@ -2373,7 +2382,7 @@ mod tests {
                 title: "Explicit next task target",
                 display_id: None,
                 description: "",
-                issue_type: "bug",
+                issue_type: "epic",
                 status: "open",
                 priority: 2,
                 parent_id: None,
@@ -2468,7 +2477,7 @@ mod tests {
                 title: "Legacy task",
                 description: "",
                 status: "open",
-                issue_type: "task",
+                issue_type: "epic",
                 priority: 1,
                 parent_id: None,
                 labels: &[],
@@ -2519,7 +2528,7 @@ mod tests {
                 title: "Legacy planner task",
                 description: "",
                 status: "open",
-                issue_type: "task",
+                issue_type: "epic",
                 priority: 1,
                 parent_id: None,
                 labels: &[],
@@ -2580,7 +2589,7 @@ mod tests {
                 title: "Legacy planner nested none task",
                 description: "",
                 status: "open",
-                issue_type: "task",
+                issue_type: "epic",
                 priority: 1,
                 parent_id: None,
                 labels: &[],
@@ -2660,7 +2669,7 @@ mod tests {
                 title: "Planner metadata task",
                 display_id: None,
                 description: "structured planner metadata should persist",
-                issue_type: "task",
+                issue_type: "epic",
                 status: "open",
                 priority: 1,
                 parent_id: None,
