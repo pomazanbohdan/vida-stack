@@ -138,16 +138,16 @@ fn canonical_blocker_candidates(
     for row in rows {
         let entry = row.as_str()?;
         let trimmed = entry.trim();
-        if trimmed.is_empty() || trimmed != entry {
+        if trimmed.is_empty() {
             return None;
         }
         entries.push(trimmed.to_string());
     }
     let canonical = canonicalize(&entries);
-    if canonical.len() != entries.len() || canonical != entries {
+    if canonical.len() != entries.len() {
         return None;
     }
-    Some(entries)
+    Some(canonical)
 }
 
 pub(crate) fn canonical_blocker_code_entries(

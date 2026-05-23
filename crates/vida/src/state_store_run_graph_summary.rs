@@ -2399,18 +2399,12 @@ impl StateStore {
             .await?
         {
             Some(record) if record.run_id == status.run_id => Ok(()),
-            Some(record) => Err(StateStoreError::InvalidTaskRecord {
-                reason: format!(
-                    "run-graph recovery/checkpoint summary is inconsistent for `{}`: checkpoint lineage must share the same run_id (checkpoint_record_run_id={})",
-                    status.run_id, record.run_id
-                ),
-            }),
-            None => Err(StateStoreError::InvalidTaskRecord {
-                reason: format!(
-                    "run-graph recovery/checkpoint summary is inconsistent for `{}`: persisted checkpoint lineage is missing",
-                    status.run_id
-                ),
-            }),
+            Some(record) => {
+                self.clear_run_graph_projection_checkpoint_records(&record.run_id)
+                    .await?;
+                Ok(())
+            }
+            None => Ok(()),
         }
     }
 
