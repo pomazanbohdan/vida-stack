@@ -1668,9 +1668,6 @@ fn runtime_consumption_snapshot_has_execution_preparation_blocker(
 fn enforce_consume_continue_execution_preparation_gate(
     state_root: &std::path::Path,
 ) -> Result<(), String> {
-    if latest_runtime_consumption_snapshot_after_recorded_final_is_bundle_check(state_root)? {
-        return Ok(());
-    }
     let snapshot = latest_runtime_consumption_snapshot_for_resume_gate(state_root)?;
     let contract = &snapshot["operator_contracts"];
     let contract_ready = contract["contract_id"].as_str() == Some("release-1-operator-contracts")
