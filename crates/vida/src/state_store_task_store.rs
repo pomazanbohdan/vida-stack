@@ -132,6 +132,69 @@ impl StateStore {
         closed
     }
 
+    fn close_emptied_parent_chain_after_reparent(
+        tasks: &mut [TaskRecord],
+        parent_id: Option<&str>,
+        now: &str,
+        reason: &str,
+    ) -> Vec<TaskRecord> {
+        let mut closed = Vec::new();
+        let mut current_parent_id = parent_id.map(ToOwned::to_owned);
+        let mut visited = BTreeSet::new();
+
+        while let Some(parent_id) = current_parent_id {
+            if !visited.insert(parent_id.clone()) {
+                break;
+            }
+
+            let Some(parent_index) = tasks.iter().position(|task| task.id == parent_id) else {
+                break;
+            };
+
+            let has_non_closed_child = tasks.iter().any(|task| {
+                !Self::task_status_is_closed_like(&task.status)
+                    && task.dependencies.iter().any(|dependency| {
+                        dependency.edge_type == "parent-child"
+                            && dependency.depends_on_id == parent_id
+                    })
+            });
+            if has_non_closed_child {
+                break;
+            }
+
+            let has_unresolved_non_parent_blockers = tasks[parent_index]
+                .dependencies
+                .iter()
+                .filter(|dependency| dependency.edge_type != "parent-child")
+                .any(|dependency| {
+                    match tasks
+                        .iter()
+                        .find(|task| task.id == dependency.depends_on_id)
+                    {
+                        Some(blocker_task) => {
+                            !Self::task_status_is_closed_like(&blocker_task.status)
+                        }
+                        None => true,
+                    }
+                });
+            if has_unresolved_non_parent_blockers {
+                break;
+            }
+
+            let next_parent_id = Self::parent_id_for_task(&tasks[parent_index]);
+            if matches!(tasks[parent_index].status.as_str(), "open" | "in_progress") {
+                tasks[parent_index].status = "closed".to_string();
+                tasks[parent_index].updated_at = now.to_string();
+                tasks[parent_index].closed_at = Some(now.to_string());
+                tasks[parent_index].close_reason = Some(reason.to_string());
+                closed.push(tasks[parent_index].clone());
+            }
+            current_parent_id = next_parent_id;
+        }
+
+        closed
+    }
+
     async fn validate_task_display_id_alias(
         &self,
         task_id: &str,
@@ -1571,6 +1634,12 @@ impl StateStore {
             task.updated_at = now.clone();
             moved_tasks.push(task.clone());
         }
+        let closed_parents = Self::close_emptied_parent_chain_after_reparent(
+            &mut tasks,
+            Some(from_parent_id),
+            &now,
+            &format!("all direct child tasks moved from `{from_parent_id}` to `{to_parent_id}`"),
+        );
 
         let issues = Self::validate_task_graph_rows(&tasks);
         if let Some(first) = issues.first() {
@@ -1585,6 +1654,9 @@ impl StateStore {
         if !dry_run {
             for task in &moved_tasks {
                 self.persist_task_record(task.clone()).await?;
+            }
+            for parent in &closed_parents {
+                self.persist_task_record(parent.clone()).await?;
             }
         }
 
@@ -2067,6 +2139,101 @@ mod tests {
             .await
             .expect("validate")
             .is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn reparent_last_non_closed_child_atomically_closes_emptied_parent() {
+        let root = unique_task_store_temp_root("vida-reparent-last-child-closes-parent");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "source-parent",
+                title: "Source parent",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create source parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "target-parent",
+                title: "Target parent",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create target parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "moving-child",
+                title: "Moving child",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "blocked",
+                priority: 1,
+                parent_id: Some("source-parent"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create moving child");
+
+        store
+            .reparent_children(
+                "source-parent",
+                "target-parent",
+                &["moving-child".to_string()],
+                false,
+            )
+            .await
+            .expect("reparent should close emptied source parent atomically");
+
+        let source_parent = store
+            .show_task("source-parent")
+            .await
+            .expect("source parent should load");
+        assert_eq!(source_parent.status, "closed");
+        assert_eq!(
+            source_parent.close_reason.as_deref(),
+            Some("all direct child tasks moved from `source-parent` to `target-parent`")
+        );
+        let moving_child = store
+            .show_task("moving-child")
+            .await
+            .expect("moving child should load");
+        assert!(moving_child.dependencies.iter().any(|dependency| {
+            dependency.edge_type == "parent-child" && dependency.depends_on_id == "target-parent"
+        }));
+        assert!(store
+            .validate_task_graph()
+            .await
+            .expect("validate")
+            .is_empty());
+
         let _ = fs::remove_dir_all(&root);
     }
 

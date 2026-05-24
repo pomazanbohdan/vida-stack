@@ -54,7 +54,7 @@ fn task_update_graph_issue_from_invalid_record_reason(
         issue_id: issue_id.to_string(),
         depends_on_id: None,
         edge_type: Some("parent-child".to_string()),
-        detail: "open or in-progress parent has no direct open or in-progress child".to_string(),
+        detail: "open or in-progress parent has no direct non-closed child".to_string(),
     })
 }
 
