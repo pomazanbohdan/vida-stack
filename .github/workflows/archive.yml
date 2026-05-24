@@ -85,12 +85,13 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           manifests = sorted(Path("dist").glob("vida-stack-*.manifest.json"))
           assert manifests, "release manifest was not generated"
           data = json.loads(manifests[0].read_text(encoding="utf-8"))
-          assert data["version"] == "${{ env.RELEASE_TAG }}", data["version"]
+          assert data["version"] == os.environ["RELEASE_TAG"], data["version"]
           vida = data["binary_versions"]["vida"]
           assert vida["matches_expected_version"] is True, vida
           assert vida["build_timestamp"], vida
