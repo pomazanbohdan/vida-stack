@@ -85,16 +85,12 @@ impl StateStore {
                 })
                 .collect::<Vec<_>>();
 
-            // Only stop if there's an open child that is NOT being closed in this operation
-            let has_open_child_not_in_chain = child_indices.iter().any(|index| {
+            let has_non_closed_child_not_in_chain = child_indices.iter().any(|index| {
                 let child = &tasks[*index];
-                let child_status = child.status.as_str();
-                // Child is open and NOT in our closure chain
-                (child_status == "open" || child_status == "in_progress")
-                    && !tasks_being_closed.contains(&child.id)
+                child.status != "closed" && !tasks_being_closed.contains(&child.id)
             });
 
-            if child_indices.is_empty() || has_open_child_not_in_chain {
+            if child_indices.is_empty() || has_non_closed_child_not_in_chain {
                 break;
             }
 
@@ -1288,7 +1284,7 @@ impl StateStore {
         if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
             if status == "closed" {
                 let tasks = self.all_tasks().await?;
-                let open_children = tasks
+                let non_closed_children = tasks
                     .iter()
                     .filter(|candidate| {
                         candidate.id != task_id
@@ -1300,11 +1296,11 @@ impl StateStore {
                     })
                     .map(|candidate| candidate.id.clone())
                     .collect::<Vec<_>>();
-                if !open_children.is_empty() {
+                if !non_closed_children.is_empty() {
                     return Err(StateStoreError::InvalidTaskRecord {
                         reason: format!(
-                            "cannot close task `{task_id}` while open child tasks exist: {}",
-                            open_children.join(", ")
+                            "cannot close task `{task_id}` while non-closed child tasks exist: {}",
+                            non_closed_children.join(", ")
                         ),
                     });
                 }
@@ -1787,11 +1783,11 @@ impl StateStore {
         reason: &str,
     ) -> Result<TaskRecord, StateStoreError> {
         let tasks = self.all_tasks().await?;
-        let open_children = tasks
+        let non_closed_children = tasks
             .iter()
             .filter(|task| {
                 task.id != task_id
-                    && matches!(task.status.as_str(), "open" | "in_progress")
+                    && task.status != "closed"
                     && task.dependencies.iter().any(|dependency| {
                         dependency.edge_type == "parent-child"
                             && dependency.depends_on_id == task_id
@@ -1799,11 +1795,11 @@ impl StateStore {
             })
             .map(|task| task.id.clone())
             .collect::<Vec<_>>();
-        if !open_children.is_empty() {
+        if !non_closed_children.is_empty() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
-                    "cannot close task `{task_id}` while open child tasks exist: {}",
-                    open_children.join(", ")
+                    "cannot close task `{task_id}` while non-closed child tasks exist: {}",
+                    non_closed_children.join(", ")
                 ),
             });
         }
@@ -2301,6 +2297,85 @@ mod tests {
             .await
             .expect("validate")
             .is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn update_task_status_closed_keeps_parent_open_with_paused_sibling() {
+        let root = unique_task_store_temp_root("vida-update-child-paused-sibling");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, title, issue_type, status, parent_id) in [
+            (
+                "update-close-parent",
+                "Update close parent",
+                "epic",
+                "open",
+                None,
+            ),
+            (
+                "update-close-child",
+                "Update close child",
+                "task",
+                "open",
+                Some("update-close-parent"),
+            ),
+            (
+                "paused-sibling",
+                "Paused sibling",
+                "task",
+                "paused",
+                Some("update-close-parent"),
+            ),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id: None,
+                    description: "",
+                    issue_type,
+                    status,
+                    priority: 1,
+                    parent_id,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create task tree");
+        }
+
+        store
+            .update_task(UpdateTaskRequest {
+                task_id: "update-close-child",
+                title: None,
+                status: Some("closed"),
+                priority: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: None,
+            })
+            .await
+            .expect("close child through update");
+
+        let parent = store
+            .show_task("update-close-parent")
+            .await
+            .expect("load parent");
+        assert_eq!(parent.status, "open");
+        assert!(parent.closed_at.is_none());
+        assert!(parent.close_reason.is_none());
         let _ = fs::remove_dir_all(&root);
     }
 

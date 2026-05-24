@@ -681,7 +681,7 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn close_task_fails_closed_when_open_child_tasks_exist() {
+    async fn close_task_fails_closed_when_blocked_child_tasks_exist() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -701,7 +701,7 @@ hierarchy: framework,contracts
                 display_id: None,
                 description: "root",
                 issue_type: "epic",
-                status: "open",
+                status: "blocked",
                 priority: 1,
                 parent_id: None,
                 labels: &labels,
@@ -734,10 +734,11 @@ hierarchy: framework,contracts
         let error = store
             .close_task("vida-root", "done")
             .await
-            .expect_err("closing parent with open child should fail");
+            .expect_err("closing parent with blocked child should fail");
         match error {
             StateStoreError::InvalidTaskRecord { reason } => {
                 assert!(reason.contains("cannot close task `vida-root`"));
+                assert!(reason.contains("non-closed child tasks"));
                 assert!(reason.contains("vida-child"));
             }
             other => panic!("expected InvalidTaskRecord, got {other}"),
@@ -851,13 +852,13 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn update_task_rejects_closed_status_when_open_child_exists() {
+    async fn update_task_rejects_closed_status_when_blocked_child_exists() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         let root = std::env::temp_dir().join(format!(
-            "vida-update-task-close-open-child-{}-{}",
+            "vida-update-task-close-blocked-child-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -889,7 +890,7 @@ hierarchy: framework,contracts
                 display_id: None,
                 description: "child",
                 issue_type: "task",
-                status: "open",
+                status: "blocked",
                 priority: 2,
                 parent_id: Some("vida-root"),
                 labels: &labels,
@@ -920,10 +921,11 @@ hierarchy: framework,contracts
                 planner_metadata: None,
             })
             .await
-            .expect_err("updating parent to closed with open child should fail");
+            .expect_err("updating parent to closed with blocked child should fail");
         match error {
             StateStoreError::InvalidTaskRecord { reason } => {
                 assert!(reason.contains("cannot close task `vida-root`"));
+                assert!(reason.contains("non-closed child tasks"));
                 assert!(reason.contains("vida-child"));
             }
             other => panic!("expected InvalidTaskRecord, got {other}"),

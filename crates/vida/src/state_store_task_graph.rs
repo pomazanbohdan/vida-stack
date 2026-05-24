@@ -660,10 +660,9 @@ impl StateStore {
                     let Some(child) = by_id.get(child_id) else {
                         continue;
                     };
-                    // Only consider truly open states as violations, not completed or other intermediate states
-                    if matches!(child.status.as_str(), "open" | "in_progress") {
+                    if child.status != "closed" {
                         issues.push(TaskGraphIssue {
-                            issue_type: "closed_parent_has_open_child".to_string(),
+                            issue_type: "closed_parent_has_non_closed_child".to_string(),
                             issue_id: task.id.clone(),
                             depends_on_id: Some(child.id.clone()),
                             edge_type: Some("parent-child".to_string()),
@@ -675,10 +674,10 @@ impl StateStore {
                     }
                 }
             } else if task.status == "open" || task.status == "in_progress" {
-                let has_open_child = children.iter().any(|child_id| {
+                let has_non_closed_child = children.iter().any(|child_id| {
                     by_id
                         .get(child_id)
-                        .map(|child| child.status == "open" || child.status == "in_progress")
+                        .map(|child| child.status != "closed")
                         .unwrap_or(false)
                 });
                 let has_unresolved_non_parent_dependency = task
@@ -691,15 +690,14 @@ impl StateStore {
                             .map(|dependency_task| dependency_task.status != "closed")
                             .unwrap_or(true)
                     });
-                if !has_open_child && !has_unresolved_non_parent_dependency {
+                if !has_non_closed_child && !has_unresolved_non_parent_dependency {
                     issues.push(TaskGraphIssue {
                         issue_type: "open_parent_has_no_open_child".to_string(),
                         issue_id: task.id.clone(),
                         depends_on_id: None,
                         edge_type: Some("parent-child".to_string()),
-                        detail:
-                            "open or in-progress parent has no direct open or in-progress child"
-                                .to_string(),
+                        detail: "open or in-progress parent has no direct non-closed child"
+                            .to_string(),
                     });
                 }
             }
@@ -907,9 +905,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_task_graph_flags_closed_parent_with_open_child() {
+    fn validate_task_graph_flags_closed_parent_with_blocked_child() {
         let parent = task_record("parent", "closed");
-        let mut child = task_record("child", "open");
+        let mut child = task_record("child", "blocked");
         child
             .dependencies
             .push(parent_child_dependency("child", "parent"));
@@ -917,7 +915,25 @@ mod tests {
         let issues = StateStore::validate_task_graph_rows(&[parent, child]);
 
         assert!(issues.iter().any(|issue| {
-            issue.issue_type == "closed_parent_has_open_child"
+            issue.issue_type == "closed_parent_has_non_closed_child"
+                && issue.issue_id == "parent"
+                && issue.depends_on_id.as_deref() == Some("child")
+                && issue.edge_type.as_deref() == Some("parent-child")
+        }));
+    }
+
+    #[test]
+    fn validate_task_graph_flags_closed_parent_with_paused_child() {
+        let parent = task_record("parent", "closed");
+        let mut child = task_record("child", "paused");
+        child
+            .dependencies
+            .push(parent_child_dependency("child", "parent"));
+
+        let issues = StateStore::validate_task_graph_rows(&[parent, child]);
+
+        assert!(issues.iter().any(|issue| {
+            issue.issue_type == "closed_parent_has_non_closed_child"
                 && issue.issue_id == "parent"
                 && issue.depends_on_id.as_deref() == Some("child")
                 && issue.edge_type.as_deref() == Some("parent-child")
@@ -963,7 +979,7 @@ mod tests {
         ]);
 
         assert!(issues.iter().all(|issue| {
-            issue.issue_type != "closed_parent_has_open_child"
+            issue.issue_type != "closed_parent_has_non_closed_child"
                 && issue.issue_type != "open_parent_has_no_open_child"
         }));
     }
