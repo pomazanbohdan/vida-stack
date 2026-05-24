@@ -99,6 +99,17 @@ fn run_command_json(args: &[&str], state_dir: &str) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("json output should parse")
 }
 
+fn create_epic_parent(state_dir: &str, parent_id: &str, title: &str, status: &str) {
+    let parent = run_command_json(
+        &[
+            "task", "create", parent_id, title, "--type", "epic", "--status", status, "--priority",
+            "1", "--json",
+        ],
+        state_dir,
+    );
+    assert_eq!(parent["status"], "pass");
+}
+
 fn write_operator_projection(state_dir: &str, projection_name: &str, payload: &serde_json::Value) {
     let projection_dir = format!("{state_dir}/operator-projections");
     fs::create_dir_all(&projection_dir).expect("operator projection dir should exist");
@@ -3087,6 +3098,8 @@ fn task_next_lawful_cache_refreshes_after_task_mutation() {
         .any(|code| code == "no_ready_task_candidates"));
 
     thread::sleep(Duration::from_millis(10));
+    let parent_id = "cache-refresh-parent";
+    create_epic_parent(&state_dir, parent_id, "Cache refresh parent", "open");
     let active_task_id = "cache-refresh-active-task";
     let active = run_command_json(
         &[
@@ -3100,6 +3113,8 @@ fn task_next_lawful_cache_refreshes_after_task_mutation() {
             "in_progress",
             "--priority",
             "1",
+            "--parent-id",
+            parent_id,
             "--json",
         ],
         &state_dir,
@@ -3140,6 +3155,8 @@ fn task_next_lawful_cache_refreshes_after_task_mutation() {
             "open",
             "--priority",
             "2",
+            "--parent-id",
+            parent_id,
             "--json",
         ],
         &state_dir,
@@ -4162,6 +4179,8 @@ fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_
     fs::create_dir_all(&state_dir).expect("create state dir");
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "autonomy-active-parent";
+    create_epic_parent(&state_dir, parent_id, "Autonomy active parent", "open");
     let active_task_id = "autonomy-active-task";
     let active = run_command_json(
         &[
@@ -4175,6 +4194,8 @@ fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_
             "in_progress",
             "--priority",
             "1",
+            "--parent-id",
+            parent_id,
             "--json",
         ],
         &state_dir,
@@ -4301,6 +4322,13 @@ fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding()
     fs::create_dir_all(&state_dir).expect("create state dir");
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "closed-downstream-reconciled-parent";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Closed downstream reconciled parent",
+        "closed",
+    );
     let closed_task_id = "closed-downstream-reconciled-task";
     let closed_task = run_command_json(
         &[
@@ -4314,6 +4342,8 @@ fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding()
             "closed",
             "--priority",
             "1",
+            "--parent-id",
+            parent_id,
             "--json",
         ],
         &state_dir,
@@ -4321,6 +4351,13 @@ fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding()
     assert_eq!(closed_task["status"], "pass");
     assert_eq!(closed_task["task"]["status"], "closed");
 
+    let active_parent_id = "active-task-after-closed-downstream-parent";
+    create_epic_parent(
+        &state_dir,
+        active_parent_id,
+        "Active task after closed downstream parent",
+        "open",
+    );
     let active_task_id = "active-task-after-closed-downstream";
     let active_task = run_command_json(
         &[
@@ -4334,6 +4371,8 @@ fn task_next_lawful_prefers_active_task_over_closed_downstream_closure_binding()
             "in_progress",
             "--priority",
             "1",
+            "--parent-id",
+            active_parent_id,
             "--json",
         ],
         &state_dir,
@@ -4415,6 +4454,13 @@ fn task_next_lawful_blocks_closed_downstream_closure_binding_without_active_or_r
     fs::create_dir_all(&state_dir).expect("create state dir");
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "closed-downstream-only-parent";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Closed downstream only parent",
+        "closed",
+    );
     let closed_task_id = "closed-downstream-only-task";
     let closed_task = run_command_json(
         &[
@@ -4428,6 +4474,8 @@ fn task_next_lawful_blocks_closed_downstream_closure_binding_without_active_or_r
             "closed",
             "--priority",
             "1",
+            "--parent-id",
+            parent_id,
             "--json",
         ],
         &state_dir,

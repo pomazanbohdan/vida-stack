@@ -3517,6 +3517,7 @@ fn task_next_lawful_receipt(
                 .iter()
                 .any(|candidate| candidate.task_id != binding.task_id);
             if ready_conflict
+                && binding.binding_source != "explicit_continuation_bind_task"
                 && !ready_task_candidates
                     .iter()
                     .any(|candidate| candidate.task_id == binding.task_id)
