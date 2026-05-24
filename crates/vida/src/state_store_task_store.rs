@@ -1596,6 +1596,191 @@ impl StateStore {
         })
     }
 
+    pub async fn defect_batch_rehome(
+        &self,
+        from_parent_id: &str,
+        to_parent_id: &str,
+        child_ids: &[String],
+        pause_task_ids: &[String],
+        start_task_ids: &[String],
+        dry_run: bool,
+    ) -> Result<TaskDefectBatchRehomeResult, StateStoreError> {
+        self.show_task(from_parent_id).await?;
+        self.show_task(to_parent_id).await?;
+        if from_parent_id == to_parent_id {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "from_parent_id and to_parent_id must differ".to_string(),
+            });
+        }
+
+        let pause_set = pause_task_ids
+            .iter()
+            .map(|task_id| task_id.trim())
+            .filter(|task_id| !task_id.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>();
+        let start_set = start_task_ids
+            .iter()
+            .map(|task_id| task_id.trim())
+            .filter(|task_id| !task_id.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>();
+        let overlapping = pause_set
+            .intersection(&start_set)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !overlapping.is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "tasks cannot be both paused and started in one defect batch rehome: {}",
+                    overlapping.join(", ")
+                ),
+            });
+        }
+
+        let mut tasks = self.all_tasks().await?;
+        let task_ids = tasks
+            .iter()
+            .map(|task| task.id.clone())
+            .collect::<BTreeSet<_>>();
+        let missing_status_targets = pause_set
+            .union(&start_set)
+            .filter(|task_id| !task_ids.contains(*task_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing_status_targets.is_empty() {
+            return Err(StateStoreError::MissingTask {
+                task_id: missing_status_targets.join(", "),
+            });
+        }
+
+        let direct_child_ids = tasks
+            .iter()
+            .filter(|task| {
+                task.dependencies.iter().any(|dependency| {
+                    dependency.edge_type == "parent-child"
+                        && dependency.depends_on_id == from_parent_id
+                })
+            })
+            .map(|task| task.id.clone())
+            .collect::<BTreeSet<_>>();
+
+        let requested_child_ids = if child_ids.is_empty() {
+            direct_child_ids.iter().cloned().collect::<Vec<_>>()
+        } else {
+            let selected = child_ids
+                .iter()
+                .map(|child_id| child_id.trim())
+                .filter(|child_id| !child_id.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<BTreeSet<_>>();
+            let invalid = selected
+                .iter()
+                .filter(|child_id| !direct_child_ids.contains(*child_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !invalid.is_empty() {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "requested child ids are not direct children of `{from_parent_id}`: {}",
+                        invalid.join(", ")
+                    ),
+                });
+            }
+            selected.iter().cloned().collect::<Vec<_>>()
+        };
+
+        let moved_set = requested_child_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let now = unix_timestamp_nanos().to_string();
+        let mut changed_tasks = Vec::new();
+
+        for task in &mut tasks {
+            let mut changed = false;
+            if moved_set.contains(&task.id) {
+                let created_at = task
+                    .dependencies
+                    .iter()
+                    .find(|dependency| {
+                        dependency.edge_type == "parent-child"
+                            && dependency.depends_on_id == from_parent_id
+                    })
+                    .map(|dependency| dependency.created_at.clone())
+                    .unwrap_or_else(|| now.clone());
+                let created_by = task
+                    .dependencies
+                    .iter()
+                    .find(|dependency| {
+                        dependency.edge_type == "parent-child"
+                            && dependency.depends_on_id == from_parent_id
+                    })
+                    .map(|dependency| dependency.created_by.clone())
+                    .unwrap_or_else(|| "vida task defect-batch-rehome".to_string());
+                task.dependencies
+                    .retain(|dependency| dependency.edge_type != "parent-child");
+                task.dependencies.push(TaskDependencyRecord {
+                    issue_id: task.id.clone(),
+                    depends_on_id: to_parent_id.to_string(),
+                    edge_type: "parent-child".to_string(),
+                    created_at,
+                    created_by,
+                    metadata: "{}".to_string(),
+                    thread_id: String::new(),
+                });
+                task.dependencies.sort_by(|left, right| {
+                    left.edge_type
+                        .cmp(&right.edge_type)
+                        .then_with(|| left.depends_on_id.cmp(&right.depends_on_id))
+                });
+                changed = true;
+            }
+            if pause_set.contains(&task.id) {
+                task.status = "paused".to_string();
+                task.closed_at = None;
+                task.close_reason = None;
+                changed = true;
+            } else if start_set.contains(&task.id) {
+                task.status = "in_progress".to_string();
+                task.closed_at = None;
+                task.close_reason = None;
+                changed = true;
+            }
+            if changed {
+                task.updated_at = now.clone();
+                changed_tasks.push(task.clone());
+            }
+        }
+
+        let issues = Self::validate_task_graph_rows(&tasks);
+        if let Some(first) = issues.first() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "defect batch rehome would create invalid graph: {} on {}",
+                    first.issue_type, first.issue_id
+                ),
+            });
+        }
+
+        if !dry_run {
+            for task in &changed_tasks {
+                self.persist_task_record(task.clone()).await?;
+            }
+        }
+
+        Ok(TaskDefectBatchRehomeResult {
+            from_parent_id: from_parent_id.to_string(),
+            to_parent_id: to_parent_id.to_string(),
+            requested_child_ids: requested_child_ids.clone(),
+            moved_child_ids: requested_child_ids,
+            paused_task_ids: pause_set.iter().cloned().collect(),
+            started_task_ids: start_set.iter().cloned().collect(),
+            moved_count: moved_set.len(),
+            paused_count: pause_set.len(),
+            started_count: start_set.len(),
+            dry_run,
+            tasks: changed_tasks,
+        })
+    }
+
     pub async fn close_task(
         &self,
         task_id: &str,

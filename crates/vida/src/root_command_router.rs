@@ -92,6 +92,7 @@ fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
         | TaskCommand::Children(command)
         | TaskCommand::Tree(command) => command.state_dir.is_some(),
         TaskCommand::ReparentChildren(command) => command.state_dir.is_some(),
+        TaskCommand::DefectBatchRehome(command) => command.state_dir.is_some(),
         TaskCommand::Blocked(command)
         | TaskCommand::ValidateGraph(command)
         | TaskCommand::CriticalPath(command) => command.state_dir.is_some(),

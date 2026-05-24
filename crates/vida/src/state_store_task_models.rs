@@ -306,6 +306,21 @@ pub struct TaskBulkReparentResult {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskDefectBatchRehomeResult {
+    pub from_parent_id: String,
+    pub to_parent_id: String,
+    pub requested_child_ids: Vec<String>,
+    pub moved_child_ids: Vec<String>,
+    pub paused_task_ids: Vec<String>,
+    pub started_task_ids: Vec<String>,
+    pub moved_count: usize,
+    pub paused_count: usize,
+    pub started_count: usize,
+    pub dry_run: bool,
+    pub tasks: Vec<TaskRecord>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 pub struct TaskSchedulingCandidate {
     pub task: TaskRecord,
     pub ready_now: bool,

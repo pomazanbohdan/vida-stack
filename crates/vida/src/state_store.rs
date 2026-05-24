@@ -117,10 +117,11 @@ use state_store_source_scan::{
 };
 pub use state_store_task_models::{
     BlockedTaskRecord, CreateTaskRequest, TaskBulkReparentResult, TaskCriticalPath,
-    TaskCriticalPathNode, TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge,
-    TaskDependencyTreeNode, TaskExecutionSemantics, TaskGraphIssue, TaskImportSummary,
-    TaskPlannerMetadata, TaskProgressSummary, TaskRecord, TaskRelease1ContractStep,
-    TaskSchedulingCandidate, TaskSchedulingProjection, TaskStoreSummary, UpdateTaskRequest,
+    TaskCriticalPathNode, TaskDefectBatchRehomeResult, TaskDependencyStatus,
+    TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode,
+    TaskExecutionSemantics, TaskGraphIssue, TaskImportSummary, TaskPlannerMetadata,
+    TaskProgressSummary, TaskRecord, TaskRelease1ContractStep, TaskSchedulingCandidate,
+    TaskSchedulingProjection, TaskStoreSummary, UpdateTaskRequest,
 };
 pub(crate) use state_store_task_models::{
     TaskContent, TaskJsonlRecord, TaskStorageRow, TaskStorageRowStored,
@@ -1117,6 +1118,129 @@ hierarchy: framework,contracts
             .iter()
             .any(|dependency| dependency.edge_type == "parent-child"
                 && dependency.depends_on_id == "root-a"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn defect_batch_rehome_moves_pauses_and_starts_after_graph_validation() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-defect-batch-rehome-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, title, issue_type, status, parent_id) in [
+            ("root-a", "Root A", "epic", "open", None),
+            ("root-b", "Root B", "epic", "open", None),
+            ("child-1", "Child 1", "defect", "open", Some("root-a")),
+            ("child-2", "Child 2", "defect", "open", Some("root-a")),
+            (
+                "old-active",
+                "Old active",
+                "defect",
+                "in_progress",
+                Some("root-a"),
+            ),
+            ("new-active", "New active", "defect", "open", Some("root-b")),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id: None,
+                    description: "",
+                    issue_type,
+                    status,
+                    priority: 1,
+                    parent_id,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
+                    created_by: "tester",
+                    source_repo: ".",
+                })
+                .await
+                .expect("create task");
+        }
+
+        let dry_run = store
+            .defect_batch_rehome(
+                "root-a",
+                "root-b",
+                &["child-1".to_string()],
+                &["old-active".to_string()],
+                &["new-active".to_string()],
+                true,
+            )
+            .await
+            .expect("dry-run defect batch rehome");
+        assert_eq!(dry_run.moved_child_ids, vec!["child-1".to_string()]);
+        assert_eq!(dry_run.paused_task_ids, vec!["old-active".to_string()]);
+        assert_eq!(dry_run.started_task_ids, vec!["new-active".to_string()]);
+        let child_1_after_dry_run = store.show_task("child-1").await.expect("show child-1");
+        assert!(child_1_after_dry_run
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.edge_type == "parent-child"
+                && dependency.depends_on_id == "root-a"));
+        assert_eq!(
+            store
+                .show_task("old-active")
+                .await
+                .expect("show old-active")
+                .status,
+            "in_progress"
+        );
+
+        let persisted = store
+            .defect_batch_rehome(
+                "root-a",
+                "root-b",
+                &["child-1".to_string()],
+                &["old-active".to_string()],
+                &["new-active".to_string()],
+                false,
+            )
+            .await
+            .expect("persisted defect batch rehome");
+        assert_eq!(persisted.moved_count, 1);
+        assert_eq!(persisted.paused_count, 1);
+        assert_eq!(persisted.started_count, 1);
+
+        let child_1 = store.show_task("child-1").await.expect("show child-1");
+        let child_2 = store.show_task("child-2").await.expect("show child-2");
+        assert!(child_1
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.edge_type == "parent-child"
+                && dependency.depends_on_id == "root-b"));
+        assert!(child_2
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.edge_type == "parent-child"
+                && dependency.depends_on_id == "root-a"));
+        assert_eq!(
+            store
+                .show_task("old-active")
+                .await
+                .expect("show old-active")
+                .status,
+            "paused"
+        );
+        assert_eq!(
+            store
+                .show_task("new-active")
+                .await
+                .expect("show new-active")
+                .status,
+            "in_progress"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

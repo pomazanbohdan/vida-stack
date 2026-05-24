@@ -6,7 +6,7 @@ const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
 
-const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task progress <task-id> --json\n  vida task deps <task-id> --json\n  vida task tree <task-id> --json\n  vida task split <task-id> --child child-a:\"First slice\" --reason \"oversized task\" --json\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida task reparent-children <from-parent-id> <to-parent-id> --json\n  vida task critical-path --json\n  vida taskflow help parallelism\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
+const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task progress <task-id> --json\n  vida task deps <task-id> --json\n  vida task tree <task-id> --json\n  vida task split <task-id> --child child-a:\"First slice\" --reason \"oversized task\" --json\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida task reparent-children <from-parent-id> <to-parent-id> --json\n  vida task defect-batch-rehome <from-parent-id> <to-parent-id> --pause-task-id <task-id> --start-task-id <task-id> --json\n  vida task critical-path --json\n  vida taskflow help parallelism\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
 
 const TASKFLOW_LONG_ABOUT: &str = "Delegate to the TaskFlow runtime family.\n\nTaskFlow is the execution/runtime authority. Use it for tracked execution, backlog pressure, run-graph state, packet inspection, continuation binding, and closure handoff.";
 
@@ -337,6 +337,11 @@ pub(crate) enum TaskCommand {
         alias = "move-children"
     )]
     ReparentChildren(TaskBulkReparentArgs),
+    #[command(
+        about = "atomically rehome a defect batch and update pause/start task states",
+        alias = "defect-batch"
+    )]
+    DefectBatchRehome(TaskDefectBatchRehomeArgs),
     #[command(
         about = "inspect one recursive task subtree from the authoritative backlog store",
         alias = "subtree"
@@ -1012,6 +1017,42 @@ pub(crate) struct TaskBulkReparentArgs {
 }
 
 #[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskDefectBatchRehomeArgs {
+    pub(crate) from_parent_id: String,
+    pub(crate) to_parent_id: String,
+
+    #[arg(
+        long = "child-id",
+        help = "Only move the listed direct child ids. Repeat to move a subset."
+    )]
+    pub(crate) child_ids: Vec<String>,
+
+    #[arg(
+        long = "pause-task-id",
+        help = "Task id to mark paused in the same validated mutation. Repeat to pause multiple tasks."
+    )]
+    pub(crate) pause_task_ids: Vec<String>,
+
+    #[arg(
+        long = "start-task-id",
+        help = "Task id to mark in_progress in the same validated mutation. Repeat to start multiple tasks."
+    )]
+    pub(crate) start_task_ids: Vec<String>,
+
+    #[arg(long = "dry-run")]
+    pub(crate) dry_run: bool,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskBlockedArgs {
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
@@ -1359,6 +1400,50 @@ mod tests {
         assert!(help.contains("[TITLE]"));
         assert!(help.contains("--title <TITLE>"));
         assert!(help.contains("Provide exactly one title source"));
+    }
+
+    #[test]
+    fn task_defect_batch_rehome_help_and_options_are_discoverable() {
+        let error = Cli::try_parse_from(["vida", "task", "defect-batch-rehome", "--help"])
+            .expect_err("help should render clap display error");
+        let help = error.to_string();
+        assert!(help.contains("<FROM_PARENT_ID>"));
+        assert!(help.contains("<TO_PARENT_ID>"));
+        assert!(help.contains("--child-id"));
+        assert!(help.contains("--pause-task-id"));
+        assert!(help.contains("--start-task-id"));
+        assert!(help.contains("--dry-run"));
+        assert!(help.contains("--json"));
+
+        let parsed = Cli::try_parse_from([
+            "vida",
+            "task",
+            "defect-batch-rehome",
+            "old-epic",
+            "new-epic",
+            "--child-id",
+            "defect-a",
+            "--pause-task-id",
+            "old-active",
+            "--start-task-id",
+            "new-active",
+            "--dry-run",
+            "--json",
+        ])
+        .expect("defect-batch-rehome should parse");
+        let Some(super::Command::Task(task_args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let TaskCommand::DefectBatchRehome(command) = task_args.command else {
+            panic!("defect-batch-rehome command should parse");
+        };
+        assert_eq!(command.from_parent_id, "old-epic");
+        assert_eq!(command.to_parent_id, "new-epic");
+        assert_eq!(command.child_ids, vec!["defect-a".to_string()]);
+        assert_eq!(command.pause_task_ids, vec!["old-active".to_string()]);
+        assert_eq!(command.start_task_ids, vec!["new-active".to_string()]);
+        assert!(command.dry_run);
+        assert!(command.json);
     }
 
     #[test]

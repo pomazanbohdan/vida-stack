@@ -1,6 +1,7 @@
 use super::*;
 use crate::task_cli_render::{
-    print_task_bulk_reparent_result, print_task_direct_children, print_task_update_graph_blocked,
+    print_task_bulk_reparent_result, print_task_defect_batch_rehome_result,
+    print_task_direct_children, print_task_update_graph_blocked,
 };
 use crate::taskflow_proxy::paths_intersect;
 
@@ -3754,11 +3755,35 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 ExitCode::SUCCESS
             }
             Some(
-                "ready" | "deps" | "reverse-deps" | "blocked" | "children" | "reparent-children"
-                | "move-children" | "tree" | "subtree" | "critical-path" | "next-display-id"
-                | "create" | "ensure" | "update" | "close" | "split" | "spawn-blocker" | "list"
-                | "adaptive-preview" | "show" | "import-jsonl" | "replace-jsonl" | "export-jsonl"
-                | "validate-graph" | "dep" | "handoff" | "next-lawful",
+                "ready"
+                | "deps"
+                | "reverse-deps"
+                | "blocked"
+                | "children"
+                | "reparent-children"
+                | "move-children"
+                | "defect-batch-rehome"
+                | "defect-batch"
+                | "tree"
+                | "subtree"
+                | "critical-path"
+                | "next-display-id"
+                | "create"
+                | "ensure"
+                | "update"
+                | "close"
+                | "split"
+                | "spawn-blocker"
+                | "list"
+                | "adaptive-preview"
+                | "show"
+                | "import-jsonl"
+                | "replace-jsonl"
+                | "export-jsonl"
+                | "validate-graph"
+                | "dep"
+                | "handoff"
+                | "next-lawful",
             ) => {
                 print_taskflow_proxy_help(Some("task"));
                 ExitCode::SUCCESS
@@ -5007,6 +5032,49 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     }
                     Err(error) => {
                         eprintln!("Failed to bulk-reparent children: {error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        TaskCommand::DefectBatchRehome(command) => {
+            let state_dir = command
+                .state_dir
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => match store
+                    .defect_batch_rehome(
+                        &command.from_parent_id,
+                        &command.to_parent_id,
+                        &command.child_ids,
+                        &command.pause_task_ids,
+                        &command.start_task_ids,
+                        command.dry_run,
+                    )
+                    .await
+                {
+                    Ok(result) => {
+                        if let Err(code) = refresh_task_snapshot_after_mutation(
+                            &store,
+                            "vida task defect-batch-rehome",
+                        )
+                        .await
+                        {
+                            return code;
+                        }
+                        print_task_defect_batch_rehome_result(
+                            command.render,
+                            &result,
+                            command.json,
+                        );
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to defect-batch rehome tasks: {error}");
                         ExitCode::from(1)
                     }
                 },

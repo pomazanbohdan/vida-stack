@@ -2,9 +2,9 @@ use crate::operator_contracts::{
     finalize_release1_operator_truth, shared_operator_output_contract_parity_error,
 };
 use crate::state_store::{
-    BlockedTaskRecord, TaskBulkReparentResult, TaskCriticalPath, TaskDependencyRecord,
-    TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode,
-    TaskGraphIssue, TaskProgressSummary, TaskRecord,
+    BlockedTaskRecord, TaskBulkReparentResult, TaskCriticalPath, TaskDefectBatchRehomeResult,
+    TaskDependencyRecord, TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge,
+    TaskDependencyTreeNode, TaskGraphIssue, TaskProgressSummary, TaskRecord,
 };
 use crate::{print_surface_header, print_surface_line, RenderMode};
 
@@ -866,6 +866,47 @@ pub(crate) fn print_task_bulk_reparent_result(
         return;
     }
     print_surface_line(render, "children", &result.moved_child_ids.join(", "));
+}
+
+pub(crate) fn print_task_defect_batch_rehome_result(
+    render: RenderMode,
+    result: &TaskDefectBatchRehomeResult,
+    as_json: bool,
+) {
+    let payload = build_pass_operator_surface_payload(
+        "vida task defect-batch-rehome",
+        serde_json::json!({
+            "result": result,
+        }),
+    );
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task defect-batch rehome result should render as json",
+    ) {
+        return;
+    }
+
+    print_surface_header(render, "vida task defect-batch-rehome");
+    print_surface_line(render, "from_parent", &result.from_parent_id);
+    print_surface_line(render, "to_parent", &result.to_parent_id);
+    print_surface_line(
+        render,
+        "dry_run",
+        if result.dry_run { "true" } else { "false" },
+    );
+    print_surface_line(render, "moved", &result.moved_count.to_string());
+    print_surface_line(render, "paused", &result.paused_count.to_string());
+    print_surface_line(render, "started", &result.started_count.to_string());
+    if !result.moved_child_ids.is_empty() {
+        print_surface_line(render, "children", &result.moved_child_ids.join(", "));
+    }
+    if !result.paused_task_ids.is_empty() {
+        print_surface_line(render, "paused_tasks", &result.paused_task_ids.join(", "));
+    }
+    if !result.started_task_ids.is_empty() {
+        print_surface_line(render, "started_tasks", &result.started_task_ids.join(", "));
+    }
 }
 
 pub(crate) fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPath, as_json: bool) {

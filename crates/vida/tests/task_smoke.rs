@@ -3350,6 +3350,141 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
 }
 
 #[test]
+fn task_defect_batch_rehome_cli_dry_run_and_persist_preserve_graph() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    create_epic_parent(&state_dir, "old-epic", "Old defect epic", "open");
+    create_epic_parent(&state_dir, "new-epic", "New defect epic", "open");
+    for (task_id, title, status, parent_id) in [
+        ("defect-a", "Defect A", "open", "old-epic"),
+        ("defect-b", "Defect B", "open", "old-epic"),
+        ("old-active", "Old active", "in_progress", "old-epic"),
+        ("new-active", "New active", "open", "new-epic"),
+    ] {
+        let created = run_command_json(
+            &[
+                "task",
+                "create",
+                task_id,
+                title,
+                "--type",
+                "defect",
+                "--status",
+                status,
+                "--priority",
+                "1",
+                "--parent-id",
+                parent_id,
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert_eq!(created["status"], "pass");
+    }
+
+    let dry_run = run_command_json(
+        &[
+            "task",
+            "defect-batch-rehome",
+            "old-epic",
+            "new-epic",
+            "--child-id",
+            "defect-a",
+            "--pause-task-id",
+            "old-active",
+            "--start-task-id",
+            "new-active",
+            "--dry-run",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dry_run["status"], "pass");
+    assert_eq!(dry_run["surface"], "vida task defect-batch-rehome");
+    assert_eq!(dry_run["result"]["dry_run"], true);
+    assert_eq!(
+        dry_run["result"]["moved_child_ids"],
+        serde_json::json!(["defect-a"])
+    );
+    assert_eq!(
+        dry_run["result"]["paused_task_ids"],
+        serde_json::json!(["old-active"])
+    );
+    assert_eq!(
+        dry_run["result"]["started_task_ids"],
+        serde_json::json!(["new-active"])
+    );
+
+    let defect_a_after_dry_run =
+        run_command_json(&["task", "show", "defect-a", "--json"], &state_dir);
+    assert!(defect_a_after_dry_run["task"]["dependencies"]
+        .as_array()
+        .expect("dependencies should be array")
+        .iter()
+        .any(|dependency| {
+            dependency["edge_type"] == "parent-child" && dependency["depends_on_id"] == "old-epic"
+        }));
+    assert_eq!(
+        run_command_json(&["task", "show", "old-active", "--json"], &state_dir)["task"]["status"],
+        "in_progress"
+    );
+
+    let persisted = run_command_json(
+        &[
+            "task",
+            "defect-batch-rehome",
+            "old-epic",
+            "new-epic",
+            "--child-id",
+            "defect-a",
+            "--pause-task-id",
+            "old-active",
+            "--start-task-id",
+            "new-active",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(persisted["status"], "pass");
+    assert_eq!(persisted["result"]["dry_run"], false);
+    assert_eq!(persisted["result"]["moved_count"], 1);
+    assert_eq!(persisted["result"]["paused_count"], 1);
+    assert_eq!(persisted["result"]["started_count"], 1);
+
+    let defect_a = run_command_json(&["task", "show", "defect-a", "--json"], &state_dir);
+    let defect_b = run_command_json(&["task", "show", "defect-b", "--json"], &state_dir);
+    assert!(defect_a["task"]["dependencies"]
+        .as_array()
+        .expect("dependencies should be array")
+        .iter()
+        .any(|dependency| {
+            dependency["edge_type"] == "parent-child" && dependency["depends_on_id"] == "new-epic"
+        }));
+    assert!(defect_b["task"]["dependencies"]
+        .as_array()
+        .expect("dependencies should be array")
+        .iter()
+        .any(|dependency| {
+            dependency["edge_type"] == "parent-child" && dependency["depends_on_id"] == "old-epic"
+        }));
+    assert_eq!(
+        run_command_json(&["task", "show", "old-active", "--json"], &state_dir)["task"]["status"],
+        "paused"
+    );
+    assert_eq!(
+        run_command_json(&["task", "show", "new-active", "--json"], &state_dir)["task"]["status"],
+        "in_progress"
+    );
+    let validate = run_command_json(&["task", "validate-graph", "--json"], &state_dir);
+    assert_eq!(validate["status"], "pass");
+    assert_eq!(validate["valid"], true);
+    assert_eq!(validate["issue_count"], 0);
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_update_title_priority() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
