@@ -169,25 +169,32 @@ fn task_list_output_policy(summary_only: bool, explicit_full: bool) -> serde_jso
     })
 }
 
-fn task_parent_edge_value(task: &TaskRecord) -> serde_json::Value {
+fn task_parent_edge_value(task: &TaskRecord, full: bool) -> serde_json::Value {
     task.dependencies
         .iter()
         .find(|dependency| dependency.edge_type == "parent-child")
         .map(|dependency| {
-            serde_json::json!({
-                "parent_id": dependency.depends_on_id,
-                "edge_type": dependency.edge_type,
-                "metadata": dependency.metadata,
-                "thread_id": dependency.thread_id,
-                "created_at": dependency.created_at,
-                "created_by": dependency.created_by,
-            })
+            if full {
+                serde_json::json!({
+                    "parent_id": dependency.depends_on_id,
+                    "edge_type": dependency.edge_type,
+                    "metadata": dependency.metadata,
+                    "thread_id": dependency.thread_id,
+                    "created_at": dependency.created_at,
+                    "created_by": dependency.created_by,
+                })
+            } else {
+                serde_json::json!({
+                    "parent_id": dependency.depends_on_id,
+                    "edge_type": dependency.edge_type,
+                })
+            }
         })
         .unwrap_or(serde_json::Value::Null)
 }
 
 fn task_list_row_value(task: &TaskRecord, full: bool) -> serde_json::Value {
-    let parent_edge = task_parent_edge_value(task);
+    let parent_edge = task_parent_edge_value(task, full);
     let parent_id = parent_edge
         .get("parent_id")
         .cloned()
