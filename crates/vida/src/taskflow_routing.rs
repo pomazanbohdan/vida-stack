@@ -19,6 +19,11 @@ const REJECTED_NON_BEHAVIORAL_ROUTE_FIELDS: &[&str] = &[
     "max_verification_passes",
     "merge_policy",
     "min_output_bytes",
+    "semantic_cache_authoritative",
+    "semantic_cache_bypass_hard_filters",
+    "semantic_cache_closure_authority",
+    "semantic_cache_receipt_authority",
+    "semantic_cache_selected_candidate_authority",
     "web_search_required",
 ];
 
@@ -26,6 +31,7 @@ const DIAGNOSTIC_ONLY_ROUTE_FIELDS: &[&str] = &[
     "dispatch_required",
     "graph_strategy",
     "internal_escalation_trigger",
+    "semantic_route_cache",
     "write_scope",
 ];
 
@@ -1057,6 +1063,18 @@ mod tests {
                     "analysis_fanout_executor_backends": ["hermes_cli", "opencode_cli"],
                     "dispatch_required": "diagnostic_summary_only",
                     "graph_strategy": "diagnostic_summary_only",
+                    "semantic_cache_authoritative": true,
+                    "semantic_route_cache": {
+                        "validity_scope": {
+                            "diagnostic_only": true,
+                            "not_runtime_authority": true
+                        },
+                        "invalidation_tuple": [
+                            "request_fingerprint",
+                            "compiled_bundle_revision",
+                            "carrier_runtime_hash"
+                        ]
+                    },
                     "write_scope": "diagnostic_summary_only",
                     "max_cli_subagent_calls": 3
                 }
@@ -1072,15 +1090,20 @@ mod tests {
         assert_eq!(payload["runtime_assignment_enabled"].as_bool(), Some(false));
         assert_eq!(
             payload["non_behavioral_route_fields"],
-            serde_json::json!(["max_cli_subagent_calls"])
+            serde_json::json!(["max_cli_subagent_calls", "semantic_cache_authoritative"])
         );
         assert_eq!(
             payload["rejected_route_fields"],
-            serde_json::json!(["max_cli_subagent_calls"])
+            serde_json::json!(["max_cli_subagent_calls", "semantic_cache_authoritative"])
         );
         assert_eq!(
             payload["diagnostic_only_route_fields"],
-            serde_json::json!(["dispatch_required", "graph_strategy", "write_scope"])
+            serde_json::json!([
+                "dispatch_required",
+                "graph_strategy",
+                "semantic_route_cache",
+                "write_scope"
+            ])
         );
         assert!(payload["route_field_truth"]
             .as_array()
@@ -1095,7 +1118,23 @@ mod tests {
             .expect("route field truth should render")
             .iter()
             .any(|row| {
+                row["field"].as_str() == Some("semantic_cache_authoritative")
+                    && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
+            }));
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
                 row["field"].as_str() == Some("dispatch_required")
+                    && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
+            }));
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("semantic_route_cache")
                     && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
             }));
         assert_eq!(route_explain_status(&payload, Some(true)), "blocked");

@@ -1053,18 +1053,27 @@ agent_system:
 #     #
 #     # Diagnostic-only fields surfaced by route explain summaries:
 #     #   dispatch_required, graph_strategy, internal_escalation_trigger,
-#     #   write_scope
+#     #   semantic_route_cache, write_scope
 #     #
 #     # Rejected unsupported knobs:
 #     #   coach_executor_backend, deterministic_first, external_first_required,
 #     #   local_execution_allowed, local_execution_preferred,
 #     #   max_cli_subagent_calls, max_coach_passes, max_fallback_hops,
 #     #   max_total_runtime_seconds, max_verification_passes, merge_policy,
-#     #   min_output_bytes, web_search_required
+#     #   min_output_bytes, semantic_cache_authoritative,
+#     #   semantic_cache_bypass_hard_filters, semantic_cache_closure_authority,
+#     #   semantic_cache_receipt_authority,
+#     #   semantic_cache_selected_candidate_authority, web_search_required
 #     #
 #     # Use max_runtime_seconds for route dispatch timeouts. The similarly named
 #     # max_total_runtime_seconds knob is intentionally rejected by
 #     # `vida taskflow validate-routing` until it has a concrete consumer.
+#     #
+#     # semantic_route_cache is explain-only metadata. It must carry
+#     # validity_scope.diagnostic_only=true and
+#     # validity_scope.not_runtime_authority=true when configured; any knob that
+#     # tries to make semantic cache authoritative is intentionally rejected by
+#     # `vida taskflow validate-routing`.
 #     default:
 #       executor_backend: internal_subagents
 #       fallback_executor_backend: internal_subagents
