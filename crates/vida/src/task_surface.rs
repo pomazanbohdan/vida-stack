@@ -3476,18 +3476,16 @@ fn task_next_lawful_receipt(
                 .iter()
                 .find(|task| task.id != binding.task_id)
                 .map(|task| task.id.clone());
-            if binding.binding_source != "explicit_continuation_bind_task" {
-                if let Some(conflicting_task_id) = conflicting_active {
-                    return blocked_task_next_lawful_receipt(
-                        binding.active_bounded_unit.clone(),
-                        ready_task_candidates,
-                        "runtime_taskflow_active_conflict",
-                        &format!(
-                            "Runtime binding points to `{}` but TaskFlow has active `{}`; reconcile or close the stale active task before continuing.",
-                            binding.task_id, conflicting_task_id
-                        ),
-                    );
-                }
+            if let Some(conflicting_task_id) = conflicting_active {
+                return blocked_task_next_lawful_receipt(
+                    binding.active_bounded_unit.clone(),
+                    ready_task_candidates,
+                    "runtime_taskflow_active_conflict",
+                    &format!(
+                        "Runtime binding points to `{}` but TaskFlow has active `{}`; reconcile or close the stale active task before continuing.",
+                        binding.task_id, conflicting_task_id
+                    ),
+                );
             }
             if continuation_binding_requires_open_task(binding) {
                 let Some(task) = binding_task else {
@@ -5781,7 +5779,7 @@ mod tests {
     }
 
     #[test]
-    fn task_next_lawful_honors_explicit_task_binding_with_parallel_active_tasks() {
+    fn task_next_lawful_blocks_explicit_task_binding_with_parallel_active_tasks() {
         let mut runtime_task = owned_task_record("runtime-task", vec![]);
         runtime_task.status = "open".to_string();
         let active_task = owned_task_record("active-task", vec![]);
@@ -5795,13 +5793,12 @@ mod tests {
 
         let receipt = task_next_lawful_receipt(&[runtime_task, active_task], ready, Some(&binding));
 
-        assert_eq!(receipt.status, "pass");
-        assert!(receipt.blocker_codes.is_empty());
-        assert_eq!(receipt.active_bounded_unit["task_id"], "runtime-task");
+        assert_eq!(receipt.status, "blocked");
         assert_eq!(
-            receipt.binding_source.as_deref(),
-            Some("explicit_continuation_bind_task")
+            receipt.blocker_codes,
+            vec!["runtime_taskflow_active_conflict"]
         );
+        assert_eq!(receipt.active_bounded_unit["task_id"], "runtime-task");
     }
 
     fn test_continuation_binding(
