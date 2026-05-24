@@ -342,6 +342,106 @@ fn build_recovery_latest_json_payload(
     )
 }
 
+async fn render_latest_recovery_json_payload(surface: &'static str) -> ExitCode {
+    let state_dir = proxy_state_dir();
+    match StateStore::open_existing_read_only(state_dir).await {
+        Ok(store) => match store.latest_run_graph_recovery_summary().await {
+            Ok(summary) => {
+                let summary = match summary {
+                    Some(summary) => {
+                        let status = match store.run_graph_status(&summary.run_id).await {
+                            Ok(status) => status,
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to read run-graph status for release-admission stale recovery check: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
+                        match store
+                            .run_graph_status_is_stale_after_release_admission_complete(&status)
+                            .await
+                        {
+                            Ok(true) => None,
+                            Ok(false) => Some(summary),
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to classify release-admitted stale recovery: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        }
+                    }
+                    None => None,
+                };
+                let projection_truth = match summary.as_ref() {
+                    Some(summary) => match store.run_graph_status(&summary.run_id).await {
+                        Ok(status) => match run_graph_projection_truth(&store, &status).await {
+                            Ok(truth) => Some(truth),
+                            Err(error) => {
+                                eprintln!("Failed to build recovery projection truth: {error}");
+                                return ExitCode::from(1);
+                            }
+                        },
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to read run-graph status for projection truth: {error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    },
+                    None => None,
+                };
+                let contract = summary.as_ref().zip(projection_truth.as_ref()).map(
+                    |(summary, projection_truth)| {
+                        recovery_surface_contract(summary, projection_truth)
+                    },
+                );
+                let payload = match (summary.as_ref(), projection_truth.as_ref(), contract) {
+                    (Some(summary), Some(projection_truth), Some(contract)) => {
+                        build_recovery_json_payload(
+                            surface,
+                            summary,
+                            projection_truth,
+                            contract.0,
+                            contract.1,
+                            contract.2,
+                            contract.3,
+                            contract.4,
+                        )
+                    }
+                    _ => Ok(serde_json::json!({
+                        "surface": surface,
+                        "status": null,
+                    })),
+                };
+                match payload {
+                    Ok(payload) => {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&payload)
+                                .expect("latest recovery summary should render as json")
+                        );
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to render normalized recovery latest payload: {error}");
+                        ExitCode::from(1)
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("Failed to read latest recovery status: {error}");
+                ExitCode::from(1)
+            }
+        },
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn build_run_graph_diagnosis_json_payload(
     diagnosis: &RunGraphDiagnosis,
 ) -> Result<serde_json::Value, String> {
@@ -2241,111 +2341,12 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         [head, subcommand, flag]
             if head == "recovery" && subcommand == "latest" && flag == "--json" =>
         {
-            let state_dir = proxy_state_dir();
-            match StateStore::open_existing_read_only(state_dir).await {
-                Ok(store) => match store.latest_run_graph_recovery_summary().await {
-                    Ok(summary) => {
-                        let summary = match summary {
-                            Some(summary) => {
-                                let status = match store.run_graph_status(&summary.run_id).await {
-                                    Ok(status) => status,
-                                    Err(error) => {
-                                        eprintln!(
-                                            "Failed to read run-graph status for release-admission stale recovery check: {error}"
-                                        );
-                                        return ExitCode::from(1);
-                                    }
-                                };
-                                match store
-                                    .run_graph_status_is_stale_after_release_admission_complete(
-                                        &status,
-                                    )
-                                    .await
-                                {
-                                    Ok(true) => None,
-                                    Ok(false) => Some(summary),
-                                    Err(error) => {
-                                        eprintln!(
-                                            "Failed to classify release-admitted stale recovery: {error}"
-                                        );
-                                        return ExitCode::from(1);
-                                    }
-                                }
-                            }
-                            None => None,
-                        };
-                        let projection_truth = match summary.as_ref() {
-                            Some(summary) => match store.run_graph_status(&summary.run_id).await {
-                                Ok(status) => {
-                                    match run_graph_projection_truth(&store, &status).await {
-                                        Ok(truth) => Some(truth),
-                                        Err(error) => {
-                                            eprintln!(
-                                                "Failed to build recovery projection truth: {error}"
-                                            );
-                                            return ExitCode::from(1);
-                                        }
-                                    }
-                                }
-                                Err(error) => {
-                                    eprintln!(
-                                        "Failed to read run-graph status for projection truth: {error}"
-                                    );
-                                    return ExitCode::from(1);
-                                }
-                            },
-                            None => None,
-                        };
-                        let contract = summary.as_ref().zip(projection_truth.as_ref()).map(
-                            |(summary, projection_truth)| {
-                                recovery_surface_contract(summary, projection_truth)
-                            },
-                        );
-                        let payload = match (summary.as_ref(), projection_truth.as_ref(), contract)
-                        {
-                            (Some(summary), Some(projection_truth), Some(contract)) => {
-                                build_recovery_latest_json_payload(
-                                    summary,
-                                    projection_truth,
-                                    contract.0,
-                                    contract.1,
-                                    contract.2,
-                                    contract.3,
-                                    contract.4,
-                                )
-                            }
-                            _ => Ok(serde_json::json!({
-                                "surface": "vida taskflow recovery latest",
-                                "status": null,
-                            })),
-                        };
-                        match payload {
-                            Ok(payload) => {
-                                println!(
-                                    "{}",
-                                    serde_json::to_string_pretty(&payload)
-                                        .expect("latest recovery summary should render as json")
-                                );
-                                ExitCode::SUCCESS
-                            }
-                            Err(error) => {
-                                eprintln!(
-                                    "Failed to render normalized recovery latest payload: {error}"
-                                );
-                                ExitCode::from(1)
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        eprintln!("Failed to read latest recovery status: {error}");
-                        ExitCode::from(1)
-                    }
-                },
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
-            }
+            render_latest_recovery_json_payload("vida taskflow recovery latest").await
+        }
+        [head, subcommand, flag]
+            if head == "recovery" && subcommand == "status" && flag == "--json" =>
+        {
+            render_latest_recovery_json_payload("vida taskflow recovery status").await
         }
         [head, subcommand, run_id] if head == "recovery" && subcommand == "status" => {
             let state_dir = proxy_state_dir();
@@ -7271,6 +7272,21 @@ mod tests {
     use serde_json::json;
     use std::path::Path;
 
+    struct ProxyStateDirOverrideGuard;
+
+    impl ProxyStateDirOverrideGuard {
+        fn install(path: std::path::PathBuf) -> Self {
+            crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(path));
+            Self
+        }
+    }
+
+    impl Drop for ProxyStateDirOverrideGuard {
+        fn drop(&mut self) {
+            crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        }
+    }
+
     #[tokio::test]
     async fn projection_truth_recommends_retire_for_missing_task_stale_blocked_run() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -7695,6 +7711,41 @@ mod tests {
             serde_json::json!("vida taskflow recovery status")
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[tokio::test]
+    async fn recovery_status_json_without_run_id_uses_latest_recovery_summary() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _proxy_state = ProxyStateDirOverrideGuard::install(harness.path().to_path_buf());
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        let mut status = default_run_graph_status(
+            "task-recovery-status-json-latest",
+            "implementation",
+            "implementation",
+        );
+        status.run_id = "run-recovery-status-json-latest".to_string();
+        status.active_node = "analysis".to_string();
+        status.lifecycle_stage = "analysis_active".to_string();
+        status.next_node = Some("writer".to_string());
+        status.policy_gate = "targeted_verification".to_string();
+        status.handoff_state = "awaiting_writer".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.writer_lane".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("record latest run status");
+        drop(store);
+
+        let args = vec![
+            "recovery".to_string(),
+            "status".to_string(),
+            "--json".to_string(),
+        ];
+        assert_eq!(run_taskflow_recovery(&args).await, ExitCode::SUCCESS);
     }
 
     #[test]
