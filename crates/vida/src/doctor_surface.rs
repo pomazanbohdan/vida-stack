@@ -517,6 +517,13 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
+    if as_json {
+        if let Some(cached) = doctor_cached_json_projection(&state_dir, summary_only) {
+            println!("{cached}");
+            return doctor_cached_json_projection_exit_code(&cached);
+        }
+    }
+
     match super::StateStore::open_existing_read_only_with_timeout(
         state_dir.clone(),
         DOCTOR_SURFACE_LOCK_TIMEOUT,
@@ -1261,6 +1268,22 @@ fn doctor_cached_json_projection(state_dir: &Path, summary_only: bool) -> Option
         summary_only,
         crate::operator_projection_cache::current_launcher_mutation_marker(),
     )
+}
+
+fn doctor_cached_json_projection_exit_code(cached: &str) -> ExitCode {
+    let status = serde_json::from_str::<serde_json::Value>(cached)
+        .ok()
+        .and_then(|payload| {
+            payload
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
+    if status.as_deref() == Some("pass") {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 fn doctor_cached_json_projection_with_dependency_marker(

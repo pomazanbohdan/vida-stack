@@ -4225,6 +4225,46 @@ fn agent_init_execute_dispatch_missing_packet_json_is_operator_envelope() {
 }
 
 #[test]
+fn doctor_summary_json_uses_cached_projection_before_store_open() {
+    let state_dir = unique_state_dir();
+    let projection_dir = format!("{state_dir}/operator-projections");
+    fs::create_dir_all(&projection_dir).expect("create doctor projection dir");
+    fs::write(
+        format!("{projection_dir}/doctor-summary-latest.json"),
+        serde_json::json!({
+            "surface": "vida doctor",
+            "view": "summary",
+            "status": "pass",
+            "cache_probe": "doctor-summary-fast-path"
+        })
+        .to_string(),
+    )
+    .expect("write cached doctor summary");
+
+    let output = run_command_capture(&["doctor", "--summary", "--json"], &state_dir);
+    assert!(
+        output.status.success(),
+        "cached doctor summary should not require datastore open: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "cached doctor summary should render json: {error}; stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+
+    assert_eq!(payload["surface"], "vida doctor");
+    assert_eq!(payload["view"], "summary");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["cache_probe"], "doctor-summary-fast-path");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_drift() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
