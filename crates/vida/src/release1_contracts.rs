@@ -1621,6 +1621,7 @@ const EXTENDED_BLOCKER_CODE_STRINGS: &[&str] = &[
     "model_selection_disabled",
     "no_dispatch_lanes_selected",
     "no_ready_task_candidates",
+    "optional_task_worktree_assignment_projection_unavailable",
     "pending_analysis_evidence",
     "release_build_failed",
     "requested_current_task_not_ready",
@@ -3106,6 +3107,18 @@ mod tests {
             " missing_packet ",
         ]);
         assert_eq!(codes, vec!["missing_packet".to_string()]);
+    }
+
+    #[test]
+    fn canonical_blocker_code_list_keeps_optional_worktree_projection_blocker() {
+        let codes = canonical_blocker_code_list([
+            "optional_task_worktree_assignment_projection_unavailable",
+            " optional_task_worktree_assignment_projection_unavailable ",
+        ]);
+        assert_eq!(
+            codes,
+            vec!["optional_task_worktree_assignment_projection_unavailable".to_string()]
+        );
     }
 
     #[test]
