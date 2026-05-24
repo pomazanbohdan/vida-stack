@@ -167,6 +167,67 @@ pub(crate) async fn build_operator_session_projection(
     }))
 }
 
+pub(crate) fn is_optional_task_worktree_assignment_missing_error(
+    error: &dyn std::fmt::Display,
+) -> bool {
+    let normalized = error.to_string().to_ascii_lowercase();
+    normalized.contains("task_worktree_assignment")
+        && (normalized.contains("does not exist")
+            || normalized.contains("not found")
+            || normalized.contains("missing"))
+}
+
+pub(crate) fn degraded_operator_session_projection(
+    state_root: &std::path::Path,
+    reason: &str,
+) -> serde_json::Value {
+    let owner_evidence =
+        crate::orchestrator_session_surface::build_runtime_owner_evidence(state_root, false)
+            .unwrap_or_else(|error| {
+                serde_json::json!({
+                    "mutation_gate": "unknown",
+                    "current_session": {
+                        "session_id": "unknown-session",
+                        "worktree_environment_id": "unknown-worktree",
+                        "state": "unknown",
+                        "identity_source": "runtime_owner_evidence_unavailable",
+                    },
+                    "live_other_sessions": [],
+                    "stale_sessions": [],
+                    "legacy_ownerless_rows": [],
+                    "blocker_codes": ["runtime_owner_evidence_unavailable"],
+                    "error": error,
+                })
+            });
+
+    serde_json::json!({
+        "schema_version": "operator-session-projection-v1",
+        "projection_state": "degraded",
+        "degraded": true,
+        "degradation_reason": reason,
+        "degradation_blocker_code": "optional_task_worktree_assignment_projection_unavailable",
+        "current_session": owner_evidence["current_session"].clone(),
+        "project_foreign_runs": [],
+        "project_foreign_blockers": [],
+        "current_session_task_claims": [],
+        "auto_claimed_active_tasks": [],
+        "active_task_claim_blockers": [{
+            "blocker_code": "optional_task_worktree_assignment_projection_unavailable",
+            "error": reason,
+            "next_action": "Run `vida doctor --json` and migration/preflight diagnostics; status remains available with degraded worktree-assignment projection evidence.",
+        }],
+        "inactive_task_claims": [],
+        "global_blockers": ["optional_task_worktree_assignment_projection_unavailable"],
+        "claim_conflicts": [],
+        "runtime_owner_evidence": {
+            "mutation_gate": owner_evidence["mutation_gate"].clone(),
+            "live_other_sessions": owner_evidence["live_other_sessions"].clone(),
+            "stale_sessions": owner_evidence["stale_sessions"].clone(),
+            "legacy_ownerless_rows": owner_evidence["legacy_ownerless_rows"].clone(),
+        }
+    })
+}
+
 async fn ensure_current_session_claims_for_active_tasks(
     store: &crate::state_store::StateStore,
     current_session: &serde_json::Value,
@@ -325,6 +386,33 @@ mod tests {
             planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
             dependencies: Vec::new(),
         }
+    }
+
+    #[test]
+    fn optional_task_worktree_assignment_missing_table_degrades_projection() {
+        let message = "Failed to build operator session projection: The table 'task_worktree_assignment' does not exist";
+        assert!(is_optional_task_worktree_assignment_missing_error(&message));
+
+        let root = temp_state_dir("missing-task-worktree-assignment");
+        let projection = degraded_operator_session_projection(&root, message);
+
+        assert_eq!(
+            projection["schema_version"],
+            "operator-session-projection-v1"
+        );
+        assert_eq!(projection["projection_state"], "degraded");
+        assert_eq!(
+            projection["degradation_blocker_code"],
+            "optional_task_worktree_assignment_projection_unavailable"
+        );
+        assert_eq!(
+            projection["global_blockers"][0],
+            "optional_task_worktree_assignment_projection_unavailable"
+        );
+        assert_eq!(
+            projection["active_task_claim_blockers"][0]["blocker_code"],
+            "optional_task_worktree_assignment_projection_unavailable"
+        );
     }
 
     #[tokio::test]

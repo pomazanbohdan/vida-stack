@@ -460,11 +460,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         .and_then(|value| value.get("activation_vs_execution_evidence"));
                 if as_json {
                     let operator_session_projection =
-                        match crate::operator_session_projection::build_operator_session_projection(
-                            &store,
-                        )
-                        .await
-                        {
+                        match build_operator_session_projection_for_status(&store).await {
                             Ok(value) => value,
                             Err(error) => {
                                 eprintln!("Failed to build operator session projection: {error}");
@@ -621,11 +617,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 }
 
                 let operator_session_projection =
-                    match crate::operator_session_projection::build_operator_session_projection(
-                        &store,
-                    )
-                    .await
-                    {
+                    match build_operator_session_projection_for_status(&store).await {
                         Ok(value) => value,
                         Err(error) => {
                             eprintln!("Failed to build operator session projection: {error}");
@@ -691,6 +683,25 @@ fn status_json_projection_name(summary_only: bool) -> &'static str {
         "status-summary-v2-latest"
     } else {
         "status-full-latest"
+    }
+}
+
+async fn build_operator_session_projection_for_status(
+    store: &StateStore,
+) -> Result<serde_json::Value, state_store::StateStoreError> {
+    match crate::operator_session_projection::build_operator_session_projection(store).await {
+        Ok(value) => Ok(value),
+        Err(error)
+            if crate::operator_session_projection::is_optional_task_worktree_assignment_missing_error(
+                &error,
+            ) =>
+        {
+            Ok(crate::operator_session_projection::degraded_operator_session_projection(
+                store.root(),
+                &error.to_string(),
+            ))
+        }
+        Err(error) => Err(error),
     }
 }
 
