@@ -33,7 +33,9 @@ impl StateStore {
             .iter()
             .filter(|dependency| dependency.edge_type != "parent-child")
             .filter_map(|dependency| match by_id.get(&dependency.depends_on_id) {
-                Some(blocker_task) if blocker_task.status == "closed" => None,
+                Some(blocker_task) if Self::task_status_is_closed_like(&blocker_task.status) => {
+                    None
+                }
                 Some(blocker_task) => Some(TaskDependencyStatus {
                     issue_id: dependency.issue_id.clone(),
                     depends_on_id: dependency.depends_on_id.clone(),
@@ -660,7 +662,7 @@ impl StateStore {
                     let Some(child) = by_id.get(child_id) else {
                         continue;
                     };
-                    if child.status != "closed" {
+                    if !Self::task_status_is_closed_like(&child.status) {
                         issues.push(TaskGraphIssue {
                             issue_type: "closed_parent_has_non_closed_child".to_string(),
                             issue_id: task.id.clone(),
@@ -677,7 +679,7 @@ impl StateStore {
                 let has_non_closed_child = children.iter().any(|child_id| {
                     by_id
                         .get(child_id)
-                        .map(|child| child.status != "closed")
+                        .map(|child| !Self::task_status_is_closed_like(&child.status))
                         .unwrap_or(false)
                 });
                 let has_unresolved_non_parent_dependency = task
@@ -687,7 +689,9 @@ impl StateStore {
                     .any(|dependency| {
                         by_id
                             .get(&dependency.depends_on_id)
-                            .map(|dependency_task| dependency_task.status != "closed")
+                            .map(|dependency_task| {
+                                !Self::task_status_is_closed_like(&dependency_task.status)
+                            })
                             .unwrap_or(true)
                     });
                 if !has_non_closed_child && !has_unresolved_non_parent_dependency {
@@ -753,7 +757,7 @@ impl StateStore {
             let Some(dep_task) = by_id.get(&dependency.depends_on_id) else {
                 continue;
             };
-            if dep_task.status == "closed" || dep_task.issue_type == "epic" {
+            if Self::task_status_is_closed_like(&dep_task.status) || dep_task.issue_type == "epic" {
                 continue;
             }
 

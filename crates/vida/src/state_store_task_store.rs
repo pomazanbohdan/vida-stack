@@ -4,6 +4,10 @@ use serde_json::Deserializer;
 use std::os::unix::fs::OpenOptionsExt;
 
 impl StateStore {
+    pub(crate) fn task_status_is_closed_like(status: &str) -> bool {
+        matches!(status, "closed" | "completed")
+    }
+
     fn parent_id_for_task(task: &TaskRecord) -> Option<String> {
         task.dependencies
             .iter()
@@ -29,7 +33,7 @@ impl StateStore {
                 break;
             };
             let next_parent_id = Self::parent_id_for_task(&tasks[parent_index]);
-            if tasks[parent_index].status == "closed" {
+            if Self::task_status_is_closed_like(&tasks[parent_index].status) {
                 tasks[parent_index].status = "in_progress".to_string();
                 tasks[parent_index].updated_at = now.to_string();
                 tasks[parent_index].closed_at = None;
@@ -87,7 +91,8 @@ impl StateStore {
 
             let has_non_closed_child_not_in_chain = child_indices.iter().any(|index| {
                 let child = &tasks[*index];
-                child.status != "closed" && !tasks_being_closed.contains(&child.id)
+                !Self::task_status_is_closed_like(&child.status)
+                    && !tasks_being_closed.contains(&child.id)
             });
 
             if child_indices.is_empty() || has_non_closed_child_not_in_chain {
@@ -103,7 +108,9 @@ impl StateStore {
                         .iter()
                         .find(|task| task.id == dependency.depends_on_id)
                     {
-                        Some(blocker_task) => blocker_task.status != "closed",
+                        Some(blocker_task) => {
+                            !Self::task_status_is_closed_like(&blocker_task.status)
+                        }
                         None => true,
                     }
                 });
@@ -1288,7 +1295,7 @@ impl StateStore {
                     .iter()
                     .filter(|candidate| {
                         candidate.id != task_id
-                            && candidate.status != "closed"
+                            && !Self::task_status_is_closed_like(&candidate.status)
                             && candidate.dependencies.iter().any(|dependency| {
                                 dependency.edge_type == "parent-child"
                                     && dependency.depends_on_id == task_id
@@ -1787,7 +1794,7 @@ impl StateStore {
             .iter()
             .filter(|task| {
                 task.id != task_id
-                    && task.status != "closed"
+                    && !Self::task_status_is_closed_like(&task.status)
                     && task.dependencies.iter().any(|dependency| {
                         dependency.edge_type == "parent-child"
                             && dependency.depends_on_id == task_id
