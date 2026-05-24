@@ -8,13 +8,21 @@ use crate::{json_string, json_string_list};
 
 const REJECTED_NON_BEHAVIORAL_ROUTE_FIELDS: &[&str] = &[
     "external_costs_authoritative",
+    "embedding_semantic_cache",
+    "embedding_semantic_cache_provider",
     "hot_path_price_fetch",
+    "hot_path_price_catalog_fetch",
     "imported_price_authority_override",
     "coach_executor_backend",
     "deterministic_first",
     "external_first_required",
+    "gateway_audit_logs",
+    "gateway_credentials",
     "gateway_price_override",
+    "gateway_proxy_adapter",
+    "gateway_virtual_keys",
     "imported_price_override",
+    "live_price_catalog_fetch",
     "local_execution_allowed",
     "local_execution_preferred",
     "max_cli_subagent_calls",
@@ -24,16 +32,22 @@ const REJECTED_NON_BEHAVIORAL_ROUTE_FIELDS: &[&str] = &[
     "max_verification_passes",
     "merge_policy",
     "min_output_bytes",
+    "price_catalog_provider_fetch",
     "semantic_cache_authoritative",
     "semantic_cache_bypass_hard_filters",
     "semantic_cache_closure_authority",
+    "semantic_cache_embedding_provider",
     "semantic_cache_receipt_authority",
+    "semantic_cache_remote_provider",
     "semantic_cache_selected_candidate_authority",
     "semantic_score_bypass_hard_filters",
     "semantic_score_disable_hard_filters",
     "semantic_score_override_authority",
     "semantic_score_resurrect_rejected_candidate",
     "web_search_required",
+    "workflow_learning_enabled",
+    "workflow_rework_learning",
+    "workflow_verification_learning",
 ];
 
 const DIAGNOSTIC_ONLY_ROUTE_FIELDS: &[&str] = &[
@@ -232,6 +246,7 @@ fn route_field_truth(route: &serde_json::Value) -> serde_json::Value {
             serde_json::json!({
                 "field": field,
                 "truth": "rejected_no_runtime_consumer",
+                "knob_class": "unsupported_non_behavioral",
                 "effect": "validate-routing blocks the route until the field is removed or wired to a concrete consumer",
             })
         });
@@ -242,6 +257,7 @@ fn route_field_truth(route: &serde_json::Value) -> serde_json::Value {
             serde_json::json!({
                 "field": field,
                 "truth": "diagnostic_only_no_execution_actuation",
+                "knob_class": "diagnostic_only",
                 "effect": "surface/explain metadata only; runtime execution selection does not change from this field",
             })
         });
@@ -1085,6 +1101,7 @@ mod tests {
                         "semantic_score_can_resurrect_rejected_candidate": false
                     },
                     "semantic_cache_authoritative": true,
+                    "semantic_cache_embedding_provider": "remote",
                     "semantic_route_cache": {
                         "validity_scope": {
                             "diagnostic_only": true,
@@ -1096,6 +1113,9 @@ mod tests {
                             "carrier_runtime_hash"
                         ]
                     },
+                    "gateway_proxy_adapter": "future-only",
+                    "workflow_learning_enabled": true,
+                    "price_catalog_provider_fetch": "hot_path",
                     "write_scope": "diagnostic_summary_only",
                     "max_cli_subagent_calls": 3
                 }
@@ -1113,18 +1133,26 @@ mod tests {
             payload["non_behavioral_route_fields"],
             serde_json::json!([
                 "imported_price_authority_override",
+                "gateway_proxy_adapter",
                 "max_cli_subagent_calls",
+                "price_catalog_provider_fetch",
                 "semantic_cache_authoritative",
-                "semantic_score_override_authority"
+                "semantic_cache_embedding_provider",
+                "semantic_score_override_authority",
+                "workflow_learning_enabled"
             ])
         );
         assert_eq!(
             payload["rejected_route_fields"],
             serde_json::json!([
                 "imported_price_authority_override",
+                "gateway_proxy_adapter",
                 "max_cli_subagent_calls",
+                "price_catalog_provider_fetch",
                 "semantic_cache_authoritative",
-                "semantic_score_override_authority"
+                "semantic_cache_embedding_provider",
+                "semantic_score_override_authority",
+                "workflow_learning_enabled"
             ])
         );
         assert_eq!(

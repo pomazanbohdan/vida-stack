@@ -6001,6 +6001,103 @@ fn route_validate_targets(execution_plan: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+fn validate_routing_route_field_truth_rows(
+    routes: &[serde_json::Value],
+    expected_knob_class: &str,
+) -> Vec<serde_json::Value> {
+    routes
+        .iter()
+        .flat_map(|route| {
+            let dispatch_target = route["dispatch_target"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
+            route["route_field_truth"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(move |truth| {
+                    if truth["knob_class"].as_str() != Some(expected_knob_class) {
+                        return None;
+                    }
+                    Some(serde_json::json!({
+                        "dispatch_target": dispatch_target,
+                        "field": truth["field"],
+                        "truth": truth["truth"],
+                        "knob_class": truth["knob_class"],
+                        "effect": truth["effect"],
+                        "operator_surface": "vida taskflow validate-routing",
+                    }))
+                })
+        })
+        .collect()
+}
+
+fn build_validate_routing_payload(
+    context: &crate::state_store::RunGraphDispatchContext,
+    execution_plan: &serde_json::Value,
+) -> serde_json::Value {
+    let routes = route_validate_targets(execution_plan)
+        .into_iter()
+        .map(|target| route_payload_for_dispatch_target(execution_plan, &target))
+        .collect::<Vec<_>>();
+    let blocker_codes = routes
+        .iter()
+        .flat_map(|route| {
+            route["blocker_codes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let next_actions = routes
+        .iter()
+        .flat_map(|route| {
+            route["next_actions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let next_actions = if blocker_codes.iter().any(|code| code == "model_not_pinned") {
+        route_assignment_reseed_next_actions(&context.run_id, &context.task_id)
+    } else {
+        next_actions
+    };
+    let unsupported_non_behavioral_knobs =
+        validate_routing_route_field_truth_rows(&routes, "unsupported_non_behavioral");
+    let diagnostic_only_knobs = validate_routing_route_field_truth_rows(&routes, "diagnostic_only");
+    let status = if blocker_codes.is_empty() {
+        "pass"
+    } else {
+        "blocked"
+    };
+    serde_json::json!({
+        "surface": "vida taskflow validate-routing",
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "run_id": context.run_id,
+        "task_id": context.task_id,
+        "route_count": routes.len(),
+        "unsupported_non_behavioral_knob_count": unsupported_non_behavioral_knobs.len(),
+        "unsupported_non_behavioral_knobs": unsupported_non_behavioral_knobs,
+        "diagnostic_only_knob_count": diagnostic_only_knobs.len(),
+        "diagnostic_only_knobs": diagnostic_only_knobs,
+        "routes": routes,
+        "next_actions": next_actions,
+    })
+}
+
 fn value_configured(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Null => false,
@@ -6418,58 +6515,7 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
             audit
         }
         RouteDiagnosticMode::ValidateRouting => {
-            let routes = route_validate_targets(execution_plan)
-                .into_iter()
-                .map(|target| route_payload_for_dispatch_target(execution_plan, &target))
-                .collect::<Vec<_>>();
-            let blocker_codes = routes
-                .iter()
-                .flat_map(|route| {
-                    route["blocker_codes"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
-                })
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            let next_actions = routes
-                .iter()
-                .flat_map(|route| {
-                    route["next_actions"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
-                })
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            let next_actions = if blocker_codes.iter().any(|code| code == "model_not_pinned") {
-                route_assignment_reseed_next_actions(&context.run_id, &context.task_id)
-            } else {
-                next_actions
-            };
-            let status = if blocker_codes.is_empty() {
-                "pass"
-            } else {
-                "blocked"
-            };
-            serde_json::json!({
-                "surface": "vida taskflow validate-routing",
-                "status": status,
-                "blocker_codes": blocker_codes,
-                "run_id": context.run_id,
-                "task_id": context.task_id,
-                "route_count": routes.len(),
-                "routes": routes,
-                "next_actions": next_actions,
-            })
+            build_validate_routing_payload(&context, execution_plan)
         }
         RouteDiagnosticMode::ConfigActuationCensus => {
             build_config_actuation_census_payload(&context, execution_plan)
@@ -9126,6 +9172,80 @@ agent_system:
 
         let targets = super::route_validate_targets(&execution_plan);
         assert_eq!(targets, vec!["implementation", "coach", "architecture"]);
+    }
+
+    #[test]
+    fn validate_routing_exposes_unsupported_nonbehavioral_knobs() {
+        let context = crate::state_store::RunGraphDispatchContext {
+            run_id: "run-validate-routing-knobs".to_string(),
+            task_id: "task-validate-routing-knobs".to_string(),
+            request_text: "validate route knobs".to_string(),
+            role_selection: serde_json::json!({}),
+            recorded_at: "0".to_string(),
+        };
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "execution_lane_sequence": ["implementation"],
+                    "lane_catalog": {
+                        "implementation": {
+                            "executor_backend": "internal_subagents",
+                            "carrier_runtime_assignment": {
+                                "enabled": true,
+                                "model_selection_enabled": true,
+                                "candidate_scope": "unified_carrier_model_profiles",
+                                "selected_backend_id": "internal_subagents"
+                            },
+                            "semantic_cache_embedding_provider": "remote",
+                            "gateway_proxy_adapter": "future-only",
+                            "workflow_learning_enabled": true,
+                            "semantic_route_cache": {
+                                "validity_scope": {
+                                    "diagnostic_only": true,
+                                    "not_runtime_authority": true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let payload = super::build_validate_routing_payload(&context, &execution_plan);
+        let unsupported = payload["unsupported_non_behavioral_knobs"]
+            .as_array()
+            .expect("validate-routing should expose unsupported knobs");
+        let diagnostic = payload["diagnostic_only_knobs"]
+            .as_array()
+            .expect("validate-routing should expose diagnostic-only knobs");
+
+        assert_eq!(payload["surface"], "vida taskflow validate-routing");
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blockers should render")
+            .iter()
+            .any(|code| code == "route_fields_not_behavioral"));
+        assert!(unsupported.iter().any(|row| {
+            row["dispatch_target"] == "implementation"
+                && row["field"] == "semantic_cache_embedding_provider"
+                && row["knob_class"] == "unsupported_non_behavioral"
+        }));
+        assert!(unsupported.iter().any(|row| {
+            row["dispatch_target"] == "implementation"
+                && row["field"] == "gateway_proxy_adapter"
+                && row["truth"] == "rejected_no_runtime_consumer"
+        }));
+        assert!(unsupported.iter().any(|row| {
+            row["dispatch_target"] == "implementation"
+                && row["field"] == "workflow_learning_enabled"
+                && row["operator_surface"] == "vida taskflow validate-routing"
+        }));
+        assert!(diagnostic.iter().any(|row| {
+            row["dispatch_target"] == "implementation"
+                && row["field"] == "semantic_route_cache"
+                && row["knob_class"] == "diagnostic_only"
+        }));
     }
 
     #[test]
