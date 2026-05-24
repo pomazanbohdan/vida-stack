@@ -7,9 +7,14 @@ use crate::runtime_contract_vocab::{
 use crate::{json_string, json_string_list};
 
 const REJECTED_NON_BEHAVIORAL_ROUTE_FIELDS: &[&str] = &[
+    "a3m_costs_authoritative",
+    "a3m_hot_path_price_fetch",
+    "a3m_price_override",
     "coach_executor_backend",
     "deterministic_first",
     "external_first_required",
+    "gateway_price_override",
+    "imported_price_override",
     "local_execution_allowed",
     "local_execution_preferred",
     "max_cli_subagent_calls",
@@ -28,6 +33,7 @@ const REJECTED_NON_BEHAVIORAL_ROUTE_FIELDS: &[&str] = &[
 ];
 
 const DIAGNOSTIC_ONLY_ROUTE_FIELDS: &[&str] = &[
+    "a3m_price_snapshot",
     "dispatch_required",
     "graph_strategy",
     "internal_escalation_trigger",
@@ -1063,6 +1069,11 @@ mod tests {
                     "analysis_fanout_executor_backends": ["hermes_cli", "opencode_cli"],
                     "dispatch_required": "diagnostic_summary_only",
                     "graph_strategy": "diagnostic_summary_only",
+                    "a3m_price_snapshot": {
+                        "source_kind": "a3m_provider_config_snapshot",
+                        "trust_class": "diagnostic_only_until_validated"
+                    },
+                    "a3m_price_override": true,
                     "semantic_cache_authoritative": true,
                     "semantic_route_cache": {
                         "validity_scope": {
@@ -1090,21 +1101,38 @@ mod tests {
         assert_eq!(payload["runtime_assignment_enabled"].as_bool(), Some(false));
         assert_eq!(
             payload["non_behavioral_route_fields"],
-            serde_json::json!(["max_cli_subagent_calls", "semantic_cache_authoritative"])
+            serde_json::json!([
+                "a3m_price_override",
+                "max_cli_subagent_calls",
+                "semantic_cache_authoritative"
+            ])
         );
         assert_eq!(
             payload["rejected_route_fields"],
-            serde_json::json!(["max_cli_subagent_calls", "semantic_cache_authoritative"])
+            serde_json::json!([
+                "a3m_price_override",
+                "max_cli_subagent_calls",
+                "semantic_cache_authoritative"
+            ])
         );
         assert_eq!(
             payload["diagnostic_only_route_fields"],
             serde_json::json!([
+                "a3m_price_snapshot",
                 "dispatch_required",
                 "graph_strategy",
                 "semantic_route_cache",
                 "write_scope"
             ])
         );
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("a3m_price_override")
+                    && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
+            }));
         assert!(payload["route_field_truth"]
             .as_array()
             .expect("route field truth should render")
@@ -1120,6 +1148,14 @@ mod tests {
             .any(|row| {
                 row["field"].as_str() == Some("semantic_cache_authoritative")
                     && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
+            }));
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("a3m_price_snapshot")
+                    && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
             }));
         assert!(payload["route_field_truth"]
             .as_array()
