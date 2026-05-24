@@ -171,6 +171,8 @@ pub struct CheckArgs {
     pub root: Option<String>,
     #[arg(long, default_value = "")]
     pub profile: String,
+    #[arg(long = "json", default_value_t = false)]
+    pub json: bool,
     #[arg()]
     pub files: Vec<String>,
 }
@@ -551,13 +553,32 @@ pub fn run(cli: Cli) -> String {
             ),
         },
         Command::Check(args) => match check_rows(args.root.as_deref(), &args.profile, &args.files) {
-            Ok(rows) => rows
-                .iter()
-                .map(|row| encode_line(row))
-                .collect::<Result<Vec<_>, _>>()
-                .map(|lines| lines.join("\n"))
-                .unwrap_or_else(|error| format!("{{\"path\":\"\",\"issues\":[\"encode_error:{}\"]}}", error)),
-            Err(error) => format!("{{\"path\":\"\",\"issues\":[\"{}\"]}}", error),
+            Ok(rows) => {
+                if args.json {
+                    render_check_json(args.root.as_deref(), &args.profile, &args.files, rows)
+                } else {
+                    rows.iter()
+                        .map(|row| encode_line(row))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map(|lines| lines.join("\n"))
+                        .unwrap_or_else(|error| format!("{{\"path\":\"\",\"issues\":[\"encode_error:{}\"]}}", error))
+                }
+            }
+            Err(error) => {
+                if args.json {
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "surface": "docflow check",
+                        "status": "blocked",
+                        "blocker_codes": ["docflow_check_failed"],
+                        "error": error,
+                        "rows": [],
+                        "row_count": 0
+                    }))
+                    .unwrap_or_else(|_| "{\"status\":\"blocked\"}".to_string())
+                } else {
+                    format!("{{\"path\":\"\",\"issues\":[\"{}\"]}}", error)
+                }
+            }
         },
         Command::Changelog(args) => match changelog_rows(&args.markdown_file) {
             Ok(mut rows) => {
@@ -2413,6 +2434,38 @@ fn render_layer_status_from_rows(layer: usize, rows: &[Vec<(String, String)>]) -
 struct CheckRow {
     path: String,
     issues: Vec<String>,
+}
+
+fn render_check_json(
+    root: Option<&str>,
+    profile: &str,
+    files: &[String],
+    rows: Vec<CheckRow>,
+) -> String {
+    let status = if rows.is_empty() { "pass" } else { "blocked" };
+    let blocker_codes = if rows.is_empty() {
+        Vec::<String>::new()
+    } else {
+        vec!["docflow_check_blocking".to_string()]
+    };
+    let next_actions = if rows.is_empty() {
+        Vec::<String>::new()
+    } else {
+        vec!["Run docflow check-file --path <file> for each blocking row.".to_string()]
+    };
+
+    serde_json::to_string_pretty(&serde_json::json!({
+        "surface": "docflow check",
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "root": root,
+        "profile": profile,
+        "files": files,
+        "row_count": rows.len(),
+        "rows": rows,
+        "next_actions": next_actions
+    }))
+    .unwrap_or_else(|_| "{\"status\":\"blocked\"}".to_string())
 }
 
 #[derive(Debug, Clone)]

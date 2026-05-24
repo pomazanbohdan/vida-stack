@@ -12933,6 +12933,39 @@ fn docflow_proxy_can_run_rust_fastcheck_surface() {
 }
 
 #[test]
+fn docflow_proxy_can_run_rust_check_json_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+
+    let output = vida()
+        .args([
+            "docflow",
+            "check",
+            "--root",
+            &root,
+            "--json",
+            "docs/process/a.md",
+        ])
+        .output()
+        .expect("docflow rust check json shell should run");
+
+    assert!(output.status.success());
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("docflow check json should parse");
+    assert_eq!(parsed["surface"], "docflow check");
+    assert_eq!(parsed["status"], "blocked");
+    assert_eq!(parsed["row_count"], 1);
+    assert_eq!(parsed["rows"][0]["path"], "docs/process/a.md");
+    let issues = parsed["rows"][0]["issues"]
+        .as_array()
+        .expect("issues should be an array");
+    assert!(issues.contains(&serde_json::Value::String("missing_footer".to_string())));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
 fn docflow_proxy_can_run_rust_doctor_surface() {
     let root = unique_state_dir();
     fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
