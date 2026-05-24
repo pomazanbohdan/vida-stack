@@ -107,6 +107,19 @@ fn check_help_exposes_json_mode() {
 }
 
 #[test]
+fn fastcheck_help_does_not_expose_json_mode() {
+    let context = vida_test_support::CommandContext::empty();
+    let output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args(["fastcheck", "--help"])
+        .output()
+        .expect("docflow fastcheck help should run");
+
+    assert!(output.status.success(), "{}", context.diagnostics(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("--json"));
+}
+
+#[test]
 fn check_json_renders_blocked_and_pass_envelopes() {
     let context = vida_test_support::CommandContext::empty();
     let blocked_root = unique_docflow_root("blocked");
