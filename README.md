@@ -1,10 +1,10 @@
 <div align="center">
   <h1>🌌 Vida Stack</h1>
-  <p><b>The active repository for the <code>VIDA 0.9.0</code> transition slice: self-hosting stabilization and runtime hardening before <code>1.0.0</code>.</b></p>
+  <p><b>The active repository for the <code>VIDA 0.9.x</code> transition line: self-hosting stabilization and runtime hardening before <code>1.0.0</code>.</b></p>
   
   <p>
     <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen" alt="Status"></a>
-    <a href="#"><img src="https://img.shields.io/badge/Release-0.9.0__transition-blue" alt="Release"></a>
+    <a href="#"><img src="https://img.shields.io/badge/Release-v0.9.7-blue" alt="Release"></a>
     <a href="#"><img src="https://img.shields.io/badge/Runtime-TaskFlow-orange" alt="Runtime"></a>
     <a href="#"><img src="https://img.shields.io/badge/Docsys-DocFlow-teal" alt="Docsys"></a>
     <a href="#"><img src="https://img.shields.io/badge/Target-VIDA_1.0-purple" alt="Target"></a>
@@ -13,19 +13,19 @@
 </div>
 
 > [!NOTE]
-> **Current project capability:** the repository is now in the `0.9.0 transition` phase (not final `1.0.0` closure).
+> **Current project capability:** the repository is now in the `0.9.x transition` phase (not final `1.0.0` closure). The current packaged release line is `v0.9.7`.
 > - agent orchestration already works through the chief/root orchestrator and internal delegated lanes;
 > - agent roles, project activation, and bounded team topology can already be configured;
 > - framework and project specifications already govern documentation discipline and runtime routing;
 > - the project backlog can already live in DB-backed runtime state instead of only in flat files;
-> - `vida status` / `vida doctor` are now stable on fresh booted state after schema and lock-handling hardening (`2026-03-15`).
+> - `vida status` / `vida doctor` are stable on fresh booted state after schema and lock-handling hardening, and release artifacts now carry exact binary-version/build-timestamp evidence with a rendered public commit ledger (`2026-05-24`).
 >
 > **Current known gaps to `1.0.0`:**
 > - DB-first authority for roles/skills/profiles/flows is still not fully closed (YAML projection remains active source);
 > - activation/configurator lifecycle still depends on root `vida.config.yaml` bridge surfaces;
 > - some proof-surface commands declared in specs are still fail-closed/unsupported in the launcher.
 >
-> **Internal validation status:** the current framework/spec stack has passed bounded documentation/runtime checks (`check`, `activation-check`, `protocol-coverage-check`, `proofcheck`) and post-fix CLI smoke for the installed `vida` binary.
+> **Internal validation status:** the current framework/spec stack has passed bounded documentation/runtime checks (`check`, `activation-check`, `protocol-coverage-check`, `proofcheck`), exact-version release manifest checks, and post-fix CLI smoke for the installed `vida` binary.
 > - consolidated audit: [docs/process/framework-three-layer-refactoring-audit.md](docs/process/framework-three-layer-refactoring-audit.md)
 > - proven environment/status conditions: [docs/process/vida1-development-conditions.md](docs/process/vida1-development-conditions.md)
 

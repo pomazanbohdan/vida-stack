@@ -93,7 +93,9 @@ Rules:
 1. this helper renders the public body from the canonical `install/release-notes-v*.md` artifact or a directly supplied file path,
 2. it must strip the metadata footer at `-----`,
 3. it must drop the first top-level release-title heading (`# ...`) from the public body render,
-4. GitHub release publication should consume that rendered output rather than the raw canonical file body.
+4. it must append a bottom `## Commit Ledger` section from the previous release tag to the current release tag,
+5. it must fail closed when the current or previous release tag cannot be resolved,
+6. GitHub release publication should consume that rendered output rather than the raw canonical file body.
 
 ## Current Interpretation
 
