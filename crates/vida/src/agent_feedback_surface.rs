@@ -137,11 +137,14 @@ fn infer_feedback_outcome_from_close_reason(reason: &str) -> &'static str {
 
 fn normalized_close_reason_for_feedback(reason: &str) -> String {
     let mut normalized = reason.to_ascii_lowercase();
-    for phrase in ignored_feedback_contract_language(reason)
+    let mut ignored_phrases = ignored_feedback_contract_language(reason)
         .into_iter()
         .chain(ignored_canonical_close_meta_language(reason))
         .chain(ignored_feedback_meta_language(reason))
-    {
+        .collect::<Vec<_>>();
+    ignored_phrases.sort_by_key(|phrase| std::cmp::Reverse(phrase.len()));
+    ignored_phrases.dedup();
+    for phrase in ignored_phrases {
         normalized = normalized.replace(&phrase, " feedback_context_language ");
     }
     normalized
@@ -194,7 +197,10 @@ fn close_feedback_outcome_inference(reason: &str, outcome: &str, score: u64) -> 
 }
 
 fn ignored_feedback_contract_language(reason: &str) -> Vec<String> {
-    ignored_feedback_phrases(reason, &["fail-closed", "fail closed", "fail_closed"])
+    ignored_feedback_phrases(
+        reason,
+        &["fail-closed", "fail closed", "fail_closed", "fail-closes"],
+    )
 }
 
 fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
@@ -351,6 +357,9 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         "fixed",
         "proofs:",
         "proof:",
+        "coverage",
+        "validated",
+        "validating",
         "returns",
         "return",
         "preserves",
@@ -1277,6 +1286,45 @@ mod tests {
         assert!(ignored
             .iter()
             .any(|phrase| phrase == "blocked task projections"));
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_successful_blocked_pass_coverage_wording() {
+        let reason = "Closed after implementing docflow check JSON mode and validating direct CLI plus VIDA proxy integration coverage for help, blocked, pass, and installed runtime smoke.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        let ignored = inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render");
+        assert!(ignored.iter().any(|phrase| {
+            phrase
+                == "closed after implementing docflow check json mode and validating direct cli plus vida proxy integration coverage for help, blocked, pass, and installed runtime smoke"
+        }));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_fail_closes_contract_wording() {
+        let reason = "Successful task-close status/proof context must dominate lexical failure words such as fail-closes if missing; proof commands passed.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert_eq!(
+            inference["ignored_contract_language"],
+            serde_json::json!(["fail-closes"])
+        );
     }
 
     #[test]
