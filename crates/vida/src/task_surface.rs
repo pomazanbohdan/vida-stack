@@ -6401,6 +6401,40 @@ mod tests {
     }
 
     #[test]
+    fn task_next_lawful_blocks_closed_run_graph_binding_before_ready_ambiguity() {
+        let mut closed_task = owned_task_record("closed-feature-task", vec![]);
+        closed_task.status = "closed".to_string();
+        let mut first = owned_task_record("ready-a", vec![]);
+        first.status = "open".to_string();
+        let mut second = owned_task_record("ready-b", vec![]);
+        second.status = "open".to_string();
+        let ready = vec![
+            super::task_continuation_candidate(&first, false),
+            super::task_continuation_candidate(&second, false),
+        ];
+        let binding = test_continuation_binding(
+            "current-run",
+            "closed-feature-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+
+        let receipt =
+            task_next_lawful_receipt(&[closed_task, first, second], ready, Some(&binding));
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["runtime_binding_task_closed"]);
+        assert_eq!(
+            receipt.active_bounded_unit["task_id"],
+            "closed-feature-task"
+        );
+        assert!(receipt.next_actions.iter().any(|action| {
+            action.contains("vida taskflow recovery status current-run --json")
+                && action.contains("closed-feature-task")
+        }));
+    }
+
+    #[test]
     fn task_next_lawful_blocks_missing_run_graph_binding_with_concrete_recovery_action() {
         let binding = test_continuation_binding(
             "current-run",
