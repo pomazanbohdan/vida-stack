@@ -1053,7 +1053,8 @@ agent_system:
 #     #
 #     # Diagnostic-only fields surfaced by route explain summaries:
 #     #   a3m_price_snapshot, dispatch_required, graph_strategy,
-#     #   internal_escalation_trigger, semantic_route_cache, write_scope
+#     #   internal_escalation_trigger, semantic_route_cache,
+#     #   semantic_scoring_order, write_scope
 #     #
 #     # Rejected unsupported knobs:
 #     #   a3m_costs_authoritative, a3m_hot_path_price_fetch,
@@ -1066,7 +1067,11 @@ agent_system:
 #     #   semantic_cache_authoritative,
 #     #   semantic_cache_bypass_hard_filters, semantic_cache_closure_authority,
 #     #   semantic_cache_receipt_authority,
-#     #   semantic_cache_selected_candidate_authority, web_search_required
+#     #   semantic_cache_selected_candidate_authority,
+#     #   semantic_score_bypass_hard_filters,
+#     #   semantic_score_disable_hard_filters,
+#     #   semantic_score_override_authority,
+#     #   semantic_score_resurrect_rejected_candidate, web_search_required
 #     #
 #     # Use max_runtime_seconds for route dispatch timeouts. The similarly named
 #     # max_total_runtime_seconds knob is intentionally rejected by
@@ -1083,6 +1088,11 @@ agent_system:
 #     # Route knobs that try to make imported A3M, gateway, or hot-path fetched
 #     # costs override VIDA profile-local normalized cost units are rejected by
 #     # `vida taskflow validate-routing`.
+#     #
+#     # semantic_scoring_order is explain-only evidence that semantic scoring is
+#     # ranked after hard candidate filters. Knobs that let semantic scoring
+#     # disable hard filters, override them, or resurrect a rejected candidate are
+#     # rejected by `vida taskflow validate-routing`.
 #     default:
 #       executor_backend: internal_subagents
 #       fallback_executor_backend: internal_subagents

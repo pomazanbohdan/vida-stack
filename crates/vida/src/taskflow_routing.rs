@@ -29,6 +29,10 @@ const REJECTED_NON_BEHAVIORAL_ROUTE_FIELDS: &[&str] = &[
     "semantic_cache_closure_authority",
     "semantic_cache_receipt_authority",
     "semantic_cache_selected_candidate_authority",
+    "semantic_score_bypass_hard_filters",
+    "semantic_score_disable_hard_filters",
+    "semantic_score_override_authority",
+    "semantic_score_resurrect_rejected_candidate",
     "web_search_required",
 ];
 
@@ -37,6 +41,7 @@ const DIAGNOSTIC_ONLY_ROUTE_FIELDS: &[&str] = &[
     "dispatch_required",
     "graph_strategy",
     "internal_escalation_trigger",
+    "semantic_scoring_order",
     "semantic_route_cache",
     "write_scope",
 ];
@@ -1074,6 +1079,11 @@ mod tests {
                         "trust_class": "diagnostic_only_until_validated"
                     },
                     "a3m_price_override": true,
+                    "semantic_score_override_authority": true,
+                    "semantic_scoring_order": {
+                        "hard_filters_before_semantic_score": true,
+                        "semantic_score_can_resurrect_rejected_candidate": false
+                    },
                     "semantic_cache_authoritative": true,
                     "semantic_route_cache": {
                         "validity_scope": {
@@ -1104,7 +1114,8 @@ mod tests {
             serde_json::json!([
                 "a3m_price_override",
                 "max_cli_subagent_calls",
-                "semantic_cache_authoritative"
+                "semantic_cache_authoritative",
+                "semantic_score_override_authority"
             ])
         );
         assert_eq!(
@@ -1112,7 +1123,8 @@ mod tests {
             serde_json::json!([
                 "a3m_price_override",
                 "max_cli_subagent_calls",
-                "semantic_cache_authoritative"
+                "semantic_cache_authoritative",
+                "semantic_score_override_authority"
             ])
         );
         assert_eq!(
@@ -1121,6 +1133,7 @@ mod tests {
                 "a3m_price_snapshot",
                 "dispatch_required",
                 "graph_strategy",
+                "semantic_scoring_order",
                 "semantic_route_cache",
                 "write_scope"
             ])
@@ -1154,6 +1167,14 @@ mod tests {
             .expect("route field truth should render")
             .iter()
             .any(|row| {
+                row["field"].as_str() == Some("semantic_score_override_authority")
+                    && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
+            }));
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
                 row["field"].as_str() == Some("a3m_price_snapshot")
                     && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
             }));
@@ -1163,6 +1184,14 @@ mod tests {
             .iter()
             .any(|row| {
                 row["field"].as_str() == Some("dispatch_required")
+                    && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
+            }));
+        assert!(payload["route_field_truth"]
+            .as_array()
+            .expect("route field truth should render")
+            .iter()
+            .any(|row| {
+                row["field"].as_str() == Some("semantic_scoring_order")
                     && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
             }));
         assert!(payload["route_field_truth"]
