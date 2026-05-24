@@ -69,6 +69,7 @@ jobs:
           name: windows-release-assets
           path: |
             dist/vida-stack-v*-windows-x86_64.zip
+            dist/vida-stack-v*-windows-x86_64.manifest.json
             dist/vida-install.ps1
           if-no-files-found: error
 
@@ -150,6 +151,10 @@ jobs:
           assert data["installed_compatibility_contracts"]["taskflow"] == "canonical taskflow runtime", data["installed_compatibility_contracts"]
           assert data["installed_compatibility_contracts"]["docflow"] == "canonical docflow runtime", data["installed_compatibility_contracts"]
           assert data["bundled_binaries"] == ["bin/vida", "bin/taskflow", "bin/docflow", "bin/vida-pi-agent"], data["bundled_binaries"]
+          assert data["binary_versions"]["vida"]["matches_expected_version"] is True, data["binary_versions"]["vida"]
+          assert data["binary_versions"]["vida"]["build_timestamp"], data["binary_versions"]["vida"]
+          assert data["binary_versions"]["taskflow"]["matches_expected_version"] is True, data["binary_versions"]["taskflow"]
+          assert data["binary_versions"]["docflow"]["matches_expected_version"] is True, data["binary_versions"]["docflow"]
           assert data["installer_managed_runtimes"] == ["vida", "taskflow", "docflow", "vida-pi-agent"], data["installer_managed_runtimes"]
 
           archive = sorted(Path("dist").glob("vida-stack-v*.tar.gz"))[0]
@@ -256,6 +261,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path $binDir, $projectDir | Out-Null
           $archive = Get-ChildItem -LiteralPath dist -Filter "vida-stack-v*-windows-x86_64.zip" | Select-Object -First 1
           if (-not $archive) { throw "Windows release zip was not generated" }
+          $manifestPath = Get-ChildItem -LiteralPath dist -Filter "vida-stack-v*-windows-x86_64.manifest.json" | Select-Object -First 1
+          if (-not $manifestPath) { throw "Windows release manifest was not generated" }
+          $manifest = Get-Content -LiteralPath $manifestPath.FullName -Raw | ConvertFrom-Json
+          $expectedVidaVersion = $manifest.binary_versions.vida.version_line
+          if (-not $expectedVidaVersion) { throw "Windows release manifest did not record vida version_line" }
+          if (-not $manifest.binary_versions.vida.matches_expected_version) { throw "Windows release manifest vida version mismatch" }
+          if (-not $manifest.binary_versions.vida.build_timestamp) { throw "Windows release manifest vida build timestamp missing" }
 
           pwsh -NoProfile -ExecutionPolicy Bypass -File dist/vida-install.ps1 install --archive $archive.FullName --root $installRoot --bin-dir $binDir --force
           if ($LASTEXITCODE -ne 0) { throw "Windows installer install failed" }
@@ -274,6 +286,10 @@ jobs:
           }
           vida --version | Out-File -FilePath (Join-Path $tmpRoot "vida-version.txt") -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw "vida version failed" }
+          $actualVidaVersion = (Get-Content -LiteralPath (Join-Path $tmpRoot "vida-version.txt") -Raw).Trim()
+          if ($actualVidaVersion -ne $expectedVidaVersion) {
+            throw "installed vida version mismatch: expected '$expectedVidaVersion', got '$actualVidaVersion'"
+          }
           vida --help | Out-File -FilePath (Join-Path $tmpRoot "vida-help.txt") -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw "vida help failed" }
           taskflow help | Out-File -FilePath (Join-Path $tmpRoot "taskflow-help.txt") -Encoding utf8

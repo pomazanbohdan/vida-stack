@@ -79,6 +79,25 @@ jobs:
           fi
           bash scripts/build-release.sh "${RELEASE_TAG}"
 
+      - name: Validate exact-version release evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifests = sorted(Path("dist").glob("vida-stack-*.manifest.json"))
+          assert manifests, "release manifest was not generated"
+          data = json.loads(manifests[0].read_text(encoding="utf-8"))
+          assert data["version"] == "${{ env.RELEASE_TAG }}", data["version"]
+          vida = data["binary_versions"]["vida"]
+          assert vida["matches_expected_version"] is True, vida
+          assert vida["build_timestamp"], vida
+          assert data["binary_versions"]["taskflow"]["matches_expected_version"] is True, data["binary_versions"]["taskflow"]
+          assert data["binary_versions"]["docflow"]["matches_expected_version"] is True, data["binary_versions"]["docflow"]
+          PY
+
       - name: Collect release assets
         shell: bash
         run: |

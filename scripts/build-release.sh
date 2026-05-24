@@ -167,6 +167,16 @@ verify_runtime_binary_version() {
   esac
 }
 
+runtime_binary_version_line() {
+  local binary_path="$1"
+  local actual
+  actual="$("$binary_path" --version 2>/dev/null | head -n 1 | tr -d '\r' || true)"
+  if [[ -z "$actual" && "$WINDOWS_RELEASE" == "yes" && -f "${binary_path}.version" ]]; then
+    actual="$(head -n 1 "${binary_path}.version" | tr -d '\r')"
+  fi
+  printf '%s\n' "$actual"
+}
+
 copy_runtime_binary vida "$VIDA_BIN"
 copy_runtime_binary taskflow "$TASKFLOW_BIN"
 copy_runtime_binary docflow "$DOCFLOW_BIN"
@@ -174,6 +184,9 @@ copy_runtime_binary vida-pi-agent "$PI_AGENT_BIN"
 verify_runtime_binary_version vida "$VIDA_BIN"
 verify_runtime_binary_version taskflow "$TASKFLOW_BIN"
 verify_runtime_binary_version docflow "$DOCFLOW_BIN"
+VIDA_VERSION_LINE="$(runtime_binary_version_line "$VIDA_BIN")"
+TASKFLOW_VERSION_LINE="$(runtime_binary_version_line "$TASKFLOW_BIN")"
+DOCFLOW_VERSION_LINE="$(runtime_binary_version_line "$DOCFLOW_BIN")"
 "$PI_AGENT_BIN" --help >/dev/null 2>&1 || fail "Packaged vida-pi-agent help check failed: $PI_AGENT_BIN"
 rm -f "${VIDA_BIN}.version" "${TASKFLOW_BIN}.version" "${DOCFLOW_BIN}.version" "${PI_AGENT_BIN}.version"
 cp "$ROOT_DIR/docs/framework/templates/vida.config.yaml.template" "$INSTALL_ASSETS_DIR/vida.config.yaml.template"
@@ -185,17 +198,30 @@ PY_DIST_DIR="$(normalize_path_for_python "$DIST_DIR")"
 PY_INSTALLER_ASSET="$(normalize_path_for_python "$INSTALLER_ASSET")"
 PY_WINDOWS_INSTALLER_ASSET="$(normalize_path_for_python "$WINDOWS_INSTALLER_ASSET")"
 
-MANIFEST_OUT="$PY_MANIFEST_OUT" ARCHIVE_BASE="$ARCHIVE_BASE" VERSION="$VERSION" WINDOWS_RELEASE="$WINDOWS_RELEASE" "$PYTHON_BIN" - <<'PY'
+MANIFEST_OUT="$PY_MANIFEST_OUT" ARCHIVE_BASE="$ARCHIVE_BASE" VERSION="$VERSION" WINDOWS_RELEASE="$WINDOWS_RELEASE" VIDA_VERSION_LINE="$VIDA_VERSION_LINE" TASKFLOW_VERSION_LINE="$TASKFLOW_VERSION_LINE" DOCFLOW_VERSION_LINE="$DOCFLOW_VERSION_LINE" "$PYTHON_BIN" - <<'PY'
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 manifest_path = Path(os.environ["MANIFEST_OUT"])
 archive_base = os.environ["ARCHIVE_BASE"]
 version = os.environ["VERSION"]
+expected_version = version.removeprefix("v")
 windows_release = os.environ["WINDOWS_RELEASE"] == "yes"
 binary_roots = ["bin/vida.exe", "bin/taskflow.exe", "bin/docflow.exe", "bin/vida-pi-agent.exe"] if windows_release else ["bin/vida", "bin/taskflow", "bin/docflow", "bin/vida-pi-agent"]
+
+def binary_version_record(label: str, path: str, line: str) -> dict:
+    match = re.fullmatch(rf"{re.escape(label)}\s+(\S+)(?:\s+\(built\s+([^)]+)\))?", line)
+    return {
+        "path": path,
+        "version_line": line,
+        "expected_version": expected_version,
+        "matches_expected_version": bool(match and match.group(1) == expected_version),
+        "build_timestamp": match.group(2) if match else None,
+    }
+
 manifest = {
     "artifact_name": archive_base,
     "version": version,
@@ -221,6 +247,11 @@ manifest = {
         "vida taskflow",
     ],
     "bundled_binaries": binary_roots,
+    "binary_versions": {
+        "vida": binary_version_record("vida", binary_roots[0], os.environ["VIDA_VERSION_LINE"]),
+        "taskflow": binary_version_record("taskflow", binary_roots[1], os.environ["TASKFLOW_VERSION_LINE"]),
+        "docflow": binary_version_record("docflow", binary_roots[2], os.environ["DOCFLOW_VERSION_LINE"]),
+    },
     "installer_managed_runtimes": [
         "vida",
         "taskflow",
