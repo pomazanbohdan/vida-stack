@@ -3800,18 +3800,10 @@ fn registered_design_doc_path_for_task(task_id: &str) -> Option<String> {
 }
 
 async fn existing_design_backed_task_design_doc_path(
-    store: &StateStore,
+    _store: &StateStore,
     task_id: &str,
 ) -> Option<String> {
-    let inferred = inferred_design_doc_path_for_task(task_id)?;
-    let is_design_backed_task = store
-        .show_task(task_id)
-        .await
-        .map(|task| task.issue_type == "design")
-        .unwrap_or(false);
-    if !is_design_backed_task {
-        return None;
-    }
+    let inferred = inferred_design_doc_path_for_task(task_id);
     let design_doc_path = inferred
         .as_deref()
         .and_then(|path| {
@@ -3962,47 +3954,18 @@ async fn try_existing_design_backed_implementation_override(
     let Some(design_doc_path) = design_doc_path else {
         return Ok(());
     };
-    let existing_design_scope_discussion = selection.conversational_mode.as_deref()
-        == Some("scope_discussion")
-        && selection.tracked_flow_entry.as_deref() == Some("spec-pack");
-    let existing_design_work_pool_discussion = selection.conversational_mode.as_deref()
-        == Some("pbi_discussion")
-        && selection.tracked_flow_entry.as_deref() == Some("work-pool-pack");
     let already_explicit_implementation = selection.conversational_mode.is_none()
         && selection.selected_role == "worker"
         && selection
             .reason
             .starts_with("auto_explicit_implementation_request");
 
-    let matched_terms = if design_doc_has_bounded_scope
-        && (existing_design_scope_discussion || already_explicit_implementation)
-    {
-        vec!["existing_design_backed_spec_override".to_string()]
-    } else if existing_design_work_pool_discussion {
-        vec!["existing_design_backed_work_pool_override".to_string()]
-    } else if already_explicit_implementation {
+    if design_doc_has_bounded_scope && already_explicit_implementation {
         selection.execution_plan =
             build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, selection);
         inject_tracked_design_doc_path(&mut selection.execution_plan, &design_doc_path);
         return Ok(());
-    } else {
-        return Ok(());
-    };
-
-    selection.selected_role = "worker".to_string();
-    selection.conversational_mode = None;
-    selection.tracked_flow_entry = Some("dev-pack".to_string());
-    selection.allow_freeform_chat = false;
-    selection.matched_terms = matched_terms.clone();
-    selection.confidence = if matched_terms.len() >= 3 {
-        "high".to_string()
-    } else {
-        "medium".to_string()
-    };
-    selection.reason = "auto_existing_design_backed_implementation_request_override".to_string();
-    selection.execution_plan =
-        build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, selection);
-    inject_tracked_design_doc_path(&mut selection.execution_plan, &design_doc_path);
+    }
     Ok(())
 }
 
@@ -9242,7 +9205,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn derive_seeded_run_graph_prefers_worker_for_existing_design_backed_qwen_remediation_task(
+    async fn derive_seeded_run_graph_keeps_design_backed_qwen_remediation_out_of_worker_without_explicit_terms(
     ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -9292,35 +9255,26 @@ mod tests {
         .await
         .expect("seed should be generated");
 
-        assert_eq!(payload.role_selection.selected_role, "worker");
-        assert!(payload.role_selection.conversational_mode.is_none());
-        assert_eq!(
+        assert_eq!(payload.role_selection.selected_role, "pm");
+        assert_ne!(
             payload.role_selection.tracked_flow_entry.as_deref(),
             Some("dev-pack")
         );
-        assert_eq!(
+        assert_ne!(
             payload.role_selection.reason,
             "auto_existing_design_backed_implementation_request_override"
         );
-        assert!(payload
+        assert!(!payload
             .role_selection
             .matched_terms
             .iter()
-            .any(|term| term == "existing_design_backed_work_pool_override"));
-        assert_eq!(payload.status.task_class, "implementation");
-        assert_eq!(payload.status.route_task_class, "implementation");
-        assert_ne!(payload.status.next_node.as_deref(), Some("pm"));
-        assert_eq!(
-            payload.role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
-                .as_str()
-                .map(|path| path.replace('\\', "/")),
-            Some("docs/product/spec/reconcile-qwen-cli-carrier-drift-design.md")
-                .map(str::to_string)
-        );
+            .any(|term| term == "existing_design_backed_work_pool_override"
+                || term == "existing_design_backed_generic_override"));
+        assert_ne!(payload.status.route_task_class, "implementation");
     }
 
     #[tokio::test]
-    async fn derive_seeded_run_graph_prefers_worker_for_existing_design_backed_blocker_without_file_terms(
+    async fn derive_seeded_run_graph_keeps_design_backed_blocker_out_of_worker_without_explicit_terms(
     ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -9370,9 +9324,8 @@ mod tests {
         .await
         .expect("seed should be generated");
 
-        assert_eq!(payload.role_selection.selected_role, "worker");
-        assert!(payload.role_selection.conversational_mode.is_none());
-        assert_eq!(
+        assert_eq!(payload.role_selection.selected_role, "pm");
+        assert_ne!(
             payload.role_selection.reason,
             "auto_existing_design_backed_implementation_request_override"
         );
@@ -9380,19 +9333,76 @@ mod tests {
             .role_selection
             .matched_terms
             .iter()
-            .all(|term| term != ".rs" && term != "crates/" && term != "src/"));
-        assert!(!payload.role_selection.matched_terms.is_empty());
-        assert_eq!(
+            .all(|term| term != ".rs"
+                && term != "crates/"
+                && term != "src/"
+                && term != "existing_design_backed_generic_override"));
+        assert_ne!(
             payload.role_selection.tracked_flow_entry.as_deref(),
             Some("dev-pack")
         );
-        assert_eq!(payload.status.task_class, "implementation");
-        assert_eq!(payload.status.route_task_class, "implementation");
-        assert_eq!(
-            payload.role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
-                .as_str(),
-            Some("docs/product/spec/design-backed-reseed-blocker-design.md")
+        assert_ne!(payload.status.route_task_class, "implementation");
+    }
+
+    #[tokio::test]
+    async fn derive_seeded_run_graph_does_not_promote_generic_design_doc_to_worker() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open state store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "feature-generic-design-scope",
+                title: "Generic design scope",
+                display_id: None,
+                description: "Clarify the product scope for an existing design document.",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create generic design task");
+
+        let design_doc_path = harness
+            .path()
+            .join("docs/product/spec/generic-design-scope-design.md");
+        std::fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
+            .expect("create design doc directory");
+        std::fs::write(
+            &design_doc_path,
+            "# Generic Design Scope\n\nStatus: `approved`\n\n## Bounded File Set\n- `docs/product/spec/generic-design-scope-design.md`\n",
+        )
+        .expect("write generic design doc");
+
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            "feature-generic-design-scope",
+            "Clarify the product scope for an existing design document.",
+        )
+        .await
+        .expect("seed should be generated");
+
+        assert_ne!(
+            payload.role_selection.reason,
+            "auto_existing_design_backed_implementation_request_override"
         );
+        assert!(!payload
+            .role_selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "existing_design_backed_generic_override"));
     }
 
     #[tokio::test]
@@ -9449,7 +9459,7 @@ mod tests {
         assert!(payload.role_selection.conversational_mode.is_none());
         assert_eq!(
             payload.role_selection.reason,
-            "auto_existing_design_backed_implementation_request_override"
+            "auto_explicit_implementation_request"
         );
         assert_eq!(payload.status.task_class, "implementation");
         assert_eq!(payload.status.route_task_class, "implementation");
