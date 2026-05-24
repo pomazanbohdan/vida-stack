@@ -653,7 +653,7 @@ impl StateStore {
                         continue;
                     };
                     // Only consider truly open states as violations, not completed or other intermediate states
-                    if matches!(child.status.as_str(), "open" | "in_progress") {
+                    if child.status != "closed" {
                         issues.push(TaskGraphIssue {
                             issue_type: "closed_parent_has_open_child".to_string(),
                             issue_id: task.id.clone(),

@@ -90,8 +90,7 @@ impl StateStore {
                 let child = &tasks[*index];
                 let child_status = child.status.as_str();
                 // Child is open and NOT in our closure chain
-                (child_status == "open" || child_status == "in_progress")
-                    && !tasks_being_closed.contains(&child.id)
+                child_status != "closed" && !tasks_being_closed.contains(&child.id)
             });
 
             if child_indices.is_empty() || has_open_child_not_in_chain {
@@ -1288,7 +1287,7 @@ impl StateStore {
         if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
             if status == "closed" {
                 let tasks = self.all_tasks().await?;
-                let open_children = tasks
+                let non_closed_children = tasks
                     .iter()
                     .filter(|candidate| {
                         candidate.id != task_id
@@ -1300,11 +1299,11 @@ impl StateStore {
                     })
                     .map(|candidate| candidate.id.clone())
                     .collect::<Vec<_>>();
-                if !open_children.is_empty() {
+                if !non_closed_children.is_empty() {
                     return Err(StateStoreError::InvalidTaskRecord {
                         reason: format!(
-                            "cannot close task `{task_id}` while open child tasks exist: {}",
-                            open_children.join(", ")
+                            "cannot close task `{task_id}` while non-closed child tasks exist: {}",
+                            non_closed_children.join(", ")
                         ),
                     });
                 }
@@ -1787,11 +1786,11 @@ impl StateStore {
         reason: &str,
     ) -> Result<TaskRecord, StateStoreError> {
         let tasks = self.all_tasks().await?;
-        let open_children = tasks
+        let non_closed_children = tasks
             .iter()
             .filter(|task| {
                 task.id != task_id
-                    && matches!(task.status.as_str(), "open" | "in_progress")
+                    && task.status != "closed"
                     && task.dependencies.iter().any(|dependency| {
                         dependency.edge_type == "parent-child"
                             && dependency.depends_on_id == task_id
@@ -1799,11 +1798,11 @@ impl StateStore {
             })
             .map(|task| task.id.clone())
             .collect::<Vec<_>>();
-        if !open_children.is_empty() {
+        if !non_closed_children.is_empty() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
-                    "cannot close task `{task_id}` while open child tasks exist: {}",
-                    open_children.join(", ")
+                    "cannot close task `{task_id}` while non-closed child tasks exist: {}",
+                    non_closed_children.join(", ")
                 ),
             });
         }
