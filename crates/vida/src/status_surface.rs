@@ -102,40 +102,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             );
             return ExitCode::SUCCESS;
         }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
-                &state_dir,
-                status_json_projection_name(summary_only),
-                STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
-            )
-            .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
-        {
-            println!(
-                "{}",
-                render_cached_status_projection_for_operator(summary_only, &cached)
-            );
-            return ExitCode::SUCCESS;
-        }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
-                &state_dir,
-                status_json_projection_name(summary_only),
-            )
-            .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
-        {
-            println!(
-                "{}",
-                render_cached_status_projection_for_operator(summary_only, &cached)
-            );
-            return ExitCode::SUCCESS;
-        }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &state_dir,
-                status_json_projection_name(summary_only),
-                STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
-            )
-            .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
+        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
+            &state_dir,
+            status_json_projection_name(summary_only),
+            STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
+        )
+        .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
         {
             println!(
                 "{}",

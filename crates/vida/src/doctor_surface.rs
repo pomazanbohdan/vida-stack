@@ -522,13 +522,11 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             println!("{cached}");
             return doctor_cached_json_projection_exit_code(&cached);
         }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &state_dir,
-                doctor_json_projection_name(summary_only),
-                DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
-            )
-        {
+        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
+            &state_dir,
+            doctor_json_projection_name(summary_only),
+            DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
+        ) {
             println!("{cached}");
             return doctor_cached_json_projection_exit_code(&cached);
         }
@@ -1317,19 +1315,6 @@ fn doctor_cached_json_projection_with_dependency_marker(
         DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
         dependency_modified,
     )
-    .or_else(|| {
-        crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
-            state_dir,
-            projection_name,
-            DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
-        )
-    })
-    .or_else(|| {
-        crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
-            state_dir,
-            projection_name,
-        )
-    })
 }
 
 async fn doctor_dependency_graph_issues(
