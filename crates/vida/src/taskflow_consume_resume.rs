@@ -1829,26 +1829,22 @@ fn ready_handoff_status_supersedes_blocked_dispatch_receipt(
         || !status.status.eq_ignore_ascii_case("ready")
         || !status.recovery_ready
         || !status.resume_target.starts_with("dispatch.")
+        || status.active_node == dispatch_receipt.dispatch_target
     {
         return false;
     }
-    if status.active_node == dispatch_receipt.dispatch_target {
-        return false;
-    }
-    let receipt_has_blocker = dispatch_receipt
-        .blocker_code
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty())
-        || !dispatch_receipt.downstream_dispatch_blockers.is_empty()
-        || matches!(
-            dispatch_receipt.dispatch_status.as_str(),
-            "blocked" | "failed"
-        )
-        || matches!(
-            dispatch_receipt.lane_status.as_str(),
-            "lane_blocked" | "lane_failed" | "lane_exception_takeover"
-        );
-    receipt_has_blocker
+
+    dispatch_receipt.lane_status == "lane_exception_takeover"
+        && dispatch_receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && dispatch_receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
 }
 
 fn runtime_consumption_resume_receipt_next_actions(
@@ -7045,6 +7041,36 @@ agent_system:
         assert!(blocker_codes
             .iter()
             .any(|code| code == "pending_review_clean_evidence"));
+    }
+
+    #[test]
+    fn runtime_consumption_resume_does_not_ignore_non_exception_blocked_receipt_after_ready_handoff() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-ready-after-blocked",
+            "implementation",
+            "implementation",
+        );
+        status.active_node = "coach".to_string();
+        status.next_node = Some("review_ensemble".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "coach_active".to_string();
+        status.handoff_state = "handoff_pending".to_string();
+        status.resume_target = "dispatch.review_ensemble".to_string();
+        status.recovery_ready = true;
+
+        let mut receipt = taskflow_consume_resume_test_receipt("agent_lane", "blocked");
+        receipt.run_id = status.run_id.clone();
+        receipt.dispatch_target = "test_author".to_string();
+        receipt.lane_status = "lane_failed".to_string();
+        receipt.blocker_code = Some("configured_backend_dispatch_failed".to_string());
+        receipt.downstream_dispatch_blockers =
+            vec!["pending_review_clean_evidence".to_string()];
+
+        assert!(!ready_handoff_status_supersedes_blocked_dispatch_receipt(
+            Some(&status),
+            &receipt
+        ));
+        assert!(!runtime_consumption_resume_receipt_blocker_codes(&receipt).is_empty());
     }
 
     #[test]
