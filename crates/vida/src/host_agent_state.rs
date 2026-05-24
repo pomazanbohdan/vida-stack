@@ -49,7 +49,13 @@ pub(crate) fn load_or_initialize_host_agent_observability_state(
                 "budget": {
                     "total_estimated_units": 0,
                     "by_agent_id": {},
+                    "by_carrier_id": {},
+                    "by_selected_tier": {},
                     "by_task_class": {},
+                    "by_task_id": {},
+                    "by_runtime_role": {},
+                    "by_source": {},
+                    "by_session_id": {},
                     "event_count": 0,
                     "latest_event_at": serde_json::Value::Null,
                 },
@@ -116,6 +122,10 @@ fn increment_object_counter(
     key: &str,
     delta: u64,
 ) {
+    let key = key.trim();
+    if key.is_empty() {
+        return;
+    }
     let current = object
         .get(key)
         .and_then(serde_json::Value::as_u64)
@@ -124,6 +134,31 @@ fn increment_object_counter(
         key.to_string(),
         serde_json::Value::Number(serde_json::Number::from(current + delta)),
     );
+}
+
+fn ensure_budget_counter_object<'a>(
+    budget: &'a mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<&'a mut serde_json::Map<String, serde_json::Value>> {
+    if budget
+        .get(key)
+        .and_then(serde_json::Value::as_object)
+        .is_none()
+    {
+        budget.insert(key.to_string(), serde_json::json!({}));
+    }
+    budget
+        .get_mut(key)
+        .and_then(serde_json::Value::as_object_mut)
+}
+
+fn host_feedback_session_id() -> String {
+    std::env::var("VIDA_SESSION_ID")
+        .ok()
+        .or_else(|| std::env::var("CODEX_SESSION_ID").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown_session".to_string())
 }
 
 fn host_feedback_artifact_suffix(recorded_at: &str) -> String {
@@ -398,6 +433,7 @@ pub(crate) fn append_host_agent_observability_event(
         .format(&Rfc3339)
         .expect("rfc3339 timestamp should render");
     let estimated_units = input.estimated_task_price_units.unwrap_or_default();
+    let session_id = host_feedback_session_id();
     let feedback_event = host_feedback_feedback_event(input, &recorded_at);
     let evaluation_baseline = host_feedback_evaluation_baseline(input, &recorded_at);
     let prompt_lifecycle_baseline = host_feedback_prompt_lifecycle_baseline(input, &recorded_at);
@@ -416,6 +452,8 @@ pub(crate) fn append_host_agent_observability_event(
         "source": input.source,
         "agent_id": input.agent_id,
         "selected_tier": input.selected_tier.unwrap_or(input.agent_id),
+        "carrier_id": input.agent_id,
+        "session_id": session_id,
         "runtime_role": input.runtime_role.unwrap_or(""),
         "task_id": input.task_id.unwrap_or(""),
         "task_display_id": input.task_display_id.unwrap_or(""),
@@ -454,31 +492,37 @@ pub(crate) fn append_host_agent_observability_event(
             total_estimated_units + estimated_units,
         )),
     );
-    if budget
-        .get("by_agent_id")
-        .and_then(serde_json::Value::as_object)
-        .is_none()
-    {
-        budget.insert("by_agent_id".to_string(), serde_json::json!({}));
-    }
-    if budget
-        .get("by_task_class")
-        .and_then(serde_json::Value::as_object)
-        .is_none()
-    {
-        budget.insert("by_task_class".to_string(), serde_json::json!({}));
-    }
-    if let Some(by_agent_id) = budget
-        .get_mut("by_agent_id")
-        .and_then(serde_json::Value::as_object_mut)
-    {
+    if let Some(by_agent_id) = ensure_budget_counter_object(budget, "by_agent_id") {
         increment_object_counter(by_agent_id, input.agent_id, estimated_units);
     }
-    if let Some(by_task_class) = budget
-        .get_mut("by_task_class")
-        .and_then(serde_json::Value::as_object_mut)
-    {
+    if let Some(by_carrier_id) = ensure_budget_counter_object(budget, "by_carrier_id") {
+        increment_object_counter(by_carrier_id, input.agent_id, estimated_units);
+    }
+    if let Some(by_selected_tier) = ensure_budget_counter_object(budget, "by_selected_tier") {
+        increment_object_counter(
+            by_selected_tier,
+            input.selected_tier.unwrap_or(input.agent_id),
+            estimated_units,
+        );
+    }
+    if let Some(by_task_class) = ensure_budget_counter_object(budget, "by_task_class") {
         increment_object_counter(by_task_class, input.task_class, estimated_units);
+    }
+    if let Some(task_id) = input.task_id {
+        if let Some(by_task_id) = ensure_budget_counter_object(budget, "by_task_id") {
+            increment_object_counter(by_task_id, task_id, estimated_units);
+        }
+    }
+    if let Some(runtime_role) = input.runtime_role {
+        if let Some(by_runtime_role) = ensure_budget_counter_object(budget, "by_runtime_role") {
+            increment_object_counter(by_runtime_role, runtime_role, estimated_units);
+        }
+    }
+    if let Some(by_source) = ensure_budget_counter_object(budget, "by_source") {
+        increment_object_counter(by_source, input.source, estimated_units);
+    }
+    if let Some(by_session_id) = ensure_budget_counter_object(budget, "by_session_id") {
+        increment_object_counter(by_session_id, &session_id, estimated_units);
     }
     budget.insert(
         "event_count".to_string(),
@@ -796,6 +840,18 @@ mod tests {
             ledger["events"][0]["feedback_event"]["artifact_type"],
             "feedback_event"
         );
+        assert_eq!(ledger["budget"]["total_estimated_units"], 4);
+        assert_eq!(ledger["budget"]["by_agent_id"]["junior"], 4);
+        assert_eq!(ledger["budget"]["by_carrier_id"]["junior"], 4);
+        assert_eq!(ledger["budget"]["by_selected_tier"]["junior"], 4);
+        assert_eq!(ledger["budget"]["by_task_class"]["implementation"], 4);
+        assert_eq!(ledger["budget"]["by_task_id"]["task-1"], 4);
+        assert_eq!(ledger["budget"]["by_runtime_role"]["implementer"], 4);
+        assert_eq!(ledger["budget"]["by_source"]["vida agent-feedback"], 4);
+        let session_id = ledger["events"][0]["session_id"]
+            .as_str()
+            .expect("event session id should be recorded");
+        assert_eq!(ledger["budget"]["by_session_id"][session_id], 4);
         let prompt_lifecycle = load_or_initialize_prompt_lifecycle_state(harness.path());
         assert_eq!(
             prompt_lifecycle["workflows"]["delegated_development_packet"]["lifecycle_state"],

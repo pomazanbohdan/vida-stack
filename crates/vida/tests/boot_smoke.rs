@@ -7413,6 +7413,34 @@ fn status_json_exposes_host_agent_summary() {
         .is_some_and(|count| count >= 6));
     assert!(parsed["host_agents"]["named_lanes"].is_null());
     assert_eq!(parsed["host_agents"]["budget"]["total_estimated_units"], 0);
+    assert_eq!(
+        parsed["host_agents"]["budget"]["by_agent_id"],
+        serde_json::json!({})
+    );
+    assert_eq!(
+        parsed["host_agents"]["budget"]["by_task_class"],
+        serde_json::json!({})
+    );
+    assert_eq!(
+        parsed["host_agents"]["budget"]["by_selected_tier"],
+        serde_json::json!({})
+    );
+    assert_eq!(
+        parsed["host_agents"]["budget"]["by_carrier_id"],
+        serde_json::json!({})
+    );
+    assert_eq!(
+        parsed["host_agents"]["budget"]["by_task_id"],
+        serde_json::json!({})
+    );
+    assert_eq!(
+        parsed["host_agents"]["budget"]["by_source"],
+        serde_json::json!({})
+    );
+    assert_eq!(
+        parsed["host_agents"]["budget"]["by_session_id"],
+        serde_json::json!({})
+    );
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
@@ -7658,6 +7686,25 @@ fn taskflow_task_close_records_auto_feedback_and_budget() {
     let observability_json: serde_json::Value =
         serde_json::from_str(&observability).expect("observability json should parse");
     assert_eq!(observability_json["budget"]["total_estimated_units"], 8);
+    assert_eq!(observability_json["budget"]["by_agent_id"]["middle"], 8);
+    assert_eq!(
+        observability_json["budget"]["by_task_class"]["specification"],
+        8
+    );
+    assert_eq!(
+        observability_json["budget"]["by_selected_tier"]["middle"],
+        8
+    );
+    assert_eq!(observability_json["budget"]["by_carrier_id"]["middle"], 8);
+    assert_eq!(observability_json["budget"]["by_task_id"][&spec_task_id], 8);
+    assert_eq!(
+        observability_json["budget"]["by_source"]["vida taskflow task close"],
+        8
+    );
+    let session_id = observability_json["events"][0]["session_id"]
+        .as_str()
+        .expect("budget event should record session id");
+    assert_eq!(observability_json["budget"]["by_session_id"][session_id], 8);
     assert_eq!(
         observability_json["events"][0]["source"],
         "vida taskflow task close"
@@ -7703,6 +7750,38 @@ fn taskflow_task_close_records_auto_feedback_and_budget() {
     );
     let status_json: serde_json::Value =
         serde_json::from_slice(&status.stdout).expect("status json should parse");
+    assert_eq!(
+        status_json["host_agents"]["budget"]["total_estimated_units"],
+        8
+    );
+    assert_eq!(
+        status_json["host_agents"]["budget"]["by_agent_id"]["middle"],
+        8
+    );
+    assert_eq!(
+        status_json["host_agents"]["budget"]["by_task_class"]["specification"],
+        8
+    );
+    assert_eq!(
+        status_json["host_agents"]["budget"]["by_selected_tier"]["middle"],
+        8
+    );
+    assert_eq!(
+        status_json["host_agents"]["budget"]["by_carrier_id"]["middle"],
+        8
+    );
+    assert_eq!(
+        status_json["host_agents"]["budget"]["by_task_id"][&spec_task_id],
+        8
+    );
+    assert_eq!(
+        status_json["host_agents"]["budget"]["by_source"]["vida taskflow task close"],
+        8
+    );
+    assert_eq!(
+        status_json["host_agents"]["budget"]["by_session_id"][session_id],
+        8
+    );
     assert_eq!(
         status_json["host_agents"]["latest_feedback_event"]["artifact_type"],
         "feedback_event"
