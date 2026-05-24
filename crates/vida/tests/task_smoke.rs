@@ -944,6 +944,8 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
     assert_eq!(summary_task_a["parent_id"], "vida-root");
     assert_eq!(summary_task_a["parent_edge"]["parent_id"], "vida-root");
     assert_eq!(summary_task_a["parent_edge"]["edge_type"], "parent-child");
+    assert_eq!(summary_task_a["parent_edge"]["metadata"], Value::Null);
+    assert_eq!(summary_task_a["parent_edge"]["thread_id"], Value::Null);
 
     let ready_stdout = run_and_assert_success(&["task", "ready", "--json"], &state_dir);
     assert!(
