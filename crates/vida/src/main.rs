@@ -27,6 +27,7 @@ mod docflow_proxy;
 mod docflow_runtime_verdict;
 mod docs_surface;
 mod doctor_surface;
+mod external_provider_health;
 mod host_agent_state;
 mod host_runtime_materialization;
 mod host_runtime_registry;
