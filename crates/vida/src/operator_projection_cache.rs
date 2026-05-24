@@ -328,12 +328,7 @@ fn latest_state_mutation_marker(state_dir: &Path) -> std::io::Result<SystemTime>
             .is_some_and(|name| {
                 matches!(
                     name,
-                    "operator-projections"
-                        | "LOCK"
-                        | ".vida-authoritative-open.guard"
-                        | "wal"
-                        | "sstables"
-                        | "vlog"
+                    "operator-projections" | "LOCK" | ".vida-authoritative-open.guard"
                 )
             })
         {
