@@ -522,6 +522,16 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             println!("{cached}");
             return doctor_cached_json_projection_exit_code(&cached);
         }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                &state_dir,
+                doctor_json_projection_name(summary_only),
+                DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
+            )
+        {
+            println!("{cached}");
+            return doctor_cached_json_projection_exit_code(&cached);
+        }
     }
 
     match super::StateStore::open_existing_read_only_with_timeout(
@@ -1307,6 +1317,19 @@ fn doctor_cached_json_projection_with_dependency_marker(
         DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
         dependency_modified,
     )
+    .or_else(|| {
+        crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
+            state_dir,
+            projection_name,
+            DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
+        )
+    })
+    .or_else(|| {
+        crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
+            state_dir,
+            projection_name,
+        )
+    })
 }
 
 async fn doctor_dependency_graph_issues(
@@ -1367,7 +1390,7 @@ mod tests {
     }
 
     #[test]
-    fn doctor_summary_cache_rejects_launcher_marker_stale_projection() {
+    fn doctor_summary_cache_accepts_launcher_marker_stale_state_fresh_projection() {
         let root = std::env::temp_dir().join(format!(
             "vida-doctor-summary-launcher-cache-{}-{}",
             std::process::id(),
@@ -1389,12 +1412,18 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(10));
         let dependency_modified = std::time::SystemTime::now();
-        assert!(doctor_cached_json_projection_with_dependency_marker(
+        let cached = doctor_cached_json_projection_with_dependency_marker(
             &root,
             true,
             Some(dependency_modified),
         )
-        .is_none());
+        .expect("launcher-stale but state-fresh doctor projection should remain admissible");
+        let cached: serde_json::Value =
+            serde_json::from_str(&cached).expect("annotated doctor cache should parse");
+        assert_eq!(
+            cached["projection_cache"]["status"],
+            "launcher_stale_recent_projection"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

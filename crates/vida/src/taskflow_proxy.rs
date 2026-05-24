@@ -4398,6 +4398,41 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             println!("{rendered}");
             return cached_operator_projection_exit_code(&rendered);
         }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
+                &proxy_state_root,
+                TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
+                TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
+            )
+        {
+            let rendered =
+                compact_cached_taskflow_graph_summary_projection(&cached).unwrap_or(cached);
+            println!("{rendered}");
+            return cached_operator_projection_exit_code(&rendered);
+        }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
+                &proxy_state_root,
+                TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
+            )
+        {
+            let rendered =
+                compact_cached_taskflow_graph_summary_projection(&cached).unwrap_or(cached);
+            println!("{rendered}");
+            return cached_operator_projection_exit_code(&rendered);
+        }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                &proxy_state_root,
+                TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
+                TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
+            )
+        {
+            let rendered =
+                compact_cached_taskflow_graph_summary_projection(&cached).unwrap_or(cached);
+            println!("{rendered}");
+            return cached_operator_projection_exit_code(&rendered);
+        }
     }
 
     let all_tasks = match graph_summary_task_rows(&proxy_state_root).await {

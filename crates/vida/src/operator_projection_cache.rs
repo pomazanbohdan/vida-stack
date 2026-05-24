@@ -63,6 +63,45 @@ pub(crate) fn read_state_recent_json_projection(
     read_recent_json_projection_with_dependency_marker(state_dir, projection_name, max_age, None)
 }
 
+pub(crate) fn read_launcher_stale_state_fresh_recent_json_projection(
+    state_dir: &Path,
+    projection_name: &str,
+    max_age: Duration,
+) -> Option<String> {
+    read_recent_json_projection_with_state_freshness_status(
+        state_dir,
+        projection_name,
+        max_age,
+        "launcher_stale_recent_projection",
+        "bounded_launcher_marker_stale_ok_for_read_only_operator_query",
+    )
+}
+
+pub(crate) fn read_state_fresh_json_projection_for_read_only_operator(
+    state_dir: &Path,
+    projection_name: &str,
+) -> Option<String> {
+    let path = projection_path(state_dir, projection_name);
+    if path_is_symlink(&path) {
+        return None;
+    }
+    let cache_modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+    let state_modified = latest_state_mutation_marker(state_dir).ok()?;
+    if cache_modified <= state_modified {
+        return None;
+    }
+    let cache_age = SystemTime::now().duration_since(cache_modified).ok()?;
+    let body = read_json_without_following_symlinks(&path).ok()?;
+    annotate_projection_cache_with_status(
+        &body,
+        projection_name,
+        cache_age,
+        "state_fresh_structural_projection",
+        "state_marker_fresh_structural_cache_ok_for_read_only_operator_query",
+    )
+    .or(Some(body))
+}
+
 pub(crate) fn read_state_stale_recent_json_projection(
     state_dir: &Path,
     projection_name: &str,
@@ -98,6 +137,38 @@ pub(crate) fn read_recent_json_projection_with_dependency_marker(
     }
     let body = read_json_without_following_symlinks(&path).ok()?;
     annotate_recent_projection(&body, projection_name, cache_age, max_age).or(Some(body))
+}
+
+fn read_recent_json_projection_with_state_freshness_status(
+    state_dir: &Path,
+    projection_name: &str,
+    max_age: Duration,
+    status: &str,
+    admissibility: &str,
+) -> Option<String> {
+    let path = projection_path(state_dir, projection_name);
+    if path_is_symlink(&path) {
+        return None;
+    }
+    let cache_modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+    let state_modified = latest_state_mutation_marker(state_dir).ok()?;
+    if cache_modified <= state_modified {
+        return None;
+    }
+    let cache_age = SystemTime::now().duration_since(cache_modified).ok()?;
+    if cache_age > max_age {
+        return None;
+    }
+    let body = read_json_without_following_symlinks(&path).ok()?;
+    annotate_recent_projection_with_status(
+        &body,
+        projection_name,
+        cache_age,
+        max_age,
+        status,
+        admissibility,
+    )
+    .or(Some(body))
 }
 
 fn read_recent_json_projection_allowing_state_marker(
@@ -222,6 +293,30 @@ fn annotate_recent_projection_with_status(
     serde_json::to_string_pretty(&payload).ok()
 }
 
+fn annotate_projection_cache_with_status(
+    body: &str,
+    projection_name: &str,
+    cache_age: Duration,
+    status: &str,
+    freshness_contract: &str,
+) -> Option<String> {
+    let mut payload = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    let serde_json::Value::Object(object) = &mut payload else {
+        return None;
+    };
+    object.insert(
+        "projection_cache".to_string(),
+        serde_json::json!({
+            "status": status,
+            "projection_name": projection_name,
+            "age_millis": cache_age.as_millis(),
+            "max_age_millis": null,
+            "freshness_contract": freshness_contract,
+        }),
+    );
+    serde_json::to_string_pretty(&payload).ok()
+}
+
 fn latest_state_mutation_marker(state_dir: &Path) -> std::io::Result<SystemTime> {
     let mut latest = SystemTime::UNIX_EPOCH;
     for entry in std::fs::read_dir(state_dir)? {
@@ -233,7 +328,12 @@ fn latest_state_mutation_marker(state_dir: &Path) -> std::io::Result<SystemTime>
             .is_some_and(|name| {
                 matches!(
                     name,
-                    "operator-projections" | "LOCK" | ".vida-authoritative-open.guard" | "wal"
+                    "operator-projections"
+                        | "LOCK"
+                        | ".vida-authoritative-open.guard"
+                        | "wal"
+                        | "sstables"
+                        | "vlog"
                 )
             })
         {
@@ -313,10 +413,12 @@ fn write_bytes_without_following_symlinks(path: &Path, body: &[u8]) -> std::io::
 mod tests {
     use super::{
         projection_path, read_fresh_json_projection,
-        read_fresh_json_projection_with_dependency_marker, read_recent_json_projection,
+        read_fresh_json_projection_with_dependency_marker,
+        read_launcher_stale_state_fresh_recent_json_projection, read_recent_json_projection,
         read_recent_json_projection_with_dependency_marker, read_state_fresh_json_projection,
-        read_state_recent_json_projection, read_state_stale_recent_json_projection,
-        touch_state_mutation_marker, write_json_projection,
+        read_state_fresh_json_projection_for_read_only_operator, read_state_recent_json_projection,
+        read_state_stale_recent_json_projection, touch_state_mutation_marker,
+        write_json_projection,
     };
     use std::{fs, time::Duration};
 
@@ -408,6 +510,37 @@ mod tests {
             Duration::from_secs(60)
         )
         .is_some());
+        let launcher_stale = read_launcher_stale_state_fresh_recent_json_projection(
+            &root,
+            "doctor-summary-latest",
+            Duration::from_secs(60),
+        )
+        .expect("launcher-stale state-fresh projection should be admissible");
+        let launcher_stale: serde_json::Value =
+            serde_json::from_str(&launcher_stale).expect("annotated cache should parse");
+        assert_eq!(
+            launcher_stale["projection_cache"]["status"],
+            "launcher_stale_recent_projection"
+        );
+        assert_eq!(
+            launcher_stale["projection_cache"]["freshness_contract"],
+            "bounded_launcher_marker_stale_ok_for_read_only_operator_query"
+        );
+        let state_fresh =
+            read_state_fresh_json_projection_for_read_only_operator(&root, "doctor-summary-latest")
+                .expect(
+                    "state-fresh projection should remain admissible without wall-clock expiry",
+                );
+        let state_fresh: serde_json::Value =
+            serde_json::from_str(&state_fresh).expect("state-fresh cache should parse");
+        assert_eq!(
+            state_fresh["projection_cache"]["status"],
+            "state_fresh_structural_projection"
+        );
+        assert_eq!(
+            state_fresh["projection_cache"]["freshness_contract"],
+            "state_marker_fresh_structural_cache_ok_for_read_only_operator_query"
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -429,6 +562,31 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         touch_state_mutation_marker(&root);
         assert!(read_fresh_json_projection(&root, "taskflow-graph-summary-latest").is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn json_projection_cache_ignores_storage_engine_mtime_noise() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-storage-noise-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("sstables")).expect("sstables dir should be writable");
+        fs::create_dir_all(root.join("vlog")).expect("vlog dir should be writable");
+        let payload = serde_json::json!({"status": "pass", "cached": true});
+        write_json_projection(&root, "doctor-full-latest", &payload);
+
+        std::thread::sleep(Duration::from_millis(10));
+        fs::write(root.join("sstables").join("read-noise"), "engine")
+            .expect("storage engine mtime noise should write");
+        fs::write(root.join("vlog").join("read-noise"), "engine")
+            .expect("storage engine mtime noise should write");
+
+        assert!(read_fresh_json_projection(&root, "doctor-full-latest").is_some());
         let _ = fs::remove_dir_all(root);
     }
 
