@@ -3013,6 +3013,98 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    trait StateStoreFixtureTaskExt {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        >;
+    }
+
+    impl StateStoreFixtureTaskExt for crate::StateStore {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id,
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                } = request;
+                let generated_parent_id = (issue_type != "epic" && parent_id.is_none())
+                    .then(|| format!("{task_id}-fixture-parent"));
+                if let Some(parent_task_id) = generated_parent_id.as_deref() {
+                    let parent_labels: Vec<String> = Vec::new();
+                    let parent_status = if matches!(status.trim(), "closed" | "completed") {
+                        "closed"
+                    } else {
+                        "open"
+                    };
+                    self.create_task(crate::state_store::CreateTaskRequest {
+                        task_id: parent_task_id,
+                        title: "Fixture parent epic",
+                        display_id: None,
+                        description: "Test-only parent epic for strict task hierarchy fixtures",
+                        issue_type: "epic",
+                        status: parent_status,
+                        priority,
+                        parent_id: None,
+                        labels: &parent_labels,
+                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                        created_by,
+                        source_repo,
+                    })
+                    .await?;
+                }
+                self.create_task(crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id: parent_id.or(generated_parent_id.as_deref()),
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                })
+                .await
+            })
+        }
+    }
+
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
@@ -4097,7 +4189,7 @@ mod tests {
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: "feature-close-dev",
                 title: "Implement bounded fix",
                 display_id: None,
@@ -4172,7 +4264,7 @@ mod tests {
         let labels = Vec::new();
 
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: "feature-terminal-closure",
                 title: "Closed terminal closure task",
                 display_id: None,
@@ -4641,7 +4733,7 @@ mod tests {
         let store = StateStore::open(root.clone()).await.expect("open store");
         let labels = Vec::new();
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: "task-closed-active-run",
                 title: "Closed task with stale active run",
                 display_id: None,
@@ -5578,7 +5670,7 @@ mod tests {
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: "task-closed-exception",
                 title: "Closed task with exception-backed closure receipt",
                 display_id: None,
@@ -5682,7 +5774,7 @@ mod tests {
         let store = StateStore::open(root.clone()).await.expect("open store");
         let labels = Vec::new();
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: "task-upstream",
                 title: "Upstream task",
                 display_id: None,
@@ -5771,13 +5863,13 @@ mod tests {
         let store = StateStore::open(root.clone()).await.expect("open store");
         let labels = Vec::new();
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: "task-completed-binding",
                 title: "Completed explicit binding task",
                 display_id: None,
                 description: "",
                 issue_type: "task",
-                status: "completed",
+                status: "closed",
                 priority: 0,
                 parent_id: None,
                 labels: &labels,
@@ -5835,7 +5927,7 @@ mod tests {
         let store = StateStore::open(root.clone()).await.expect("open store");
         let labels = Vec::new();
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: "run-next-lawful-stale",
                 title: "Next lawful stale binding task",
                 display_id: None,
@@ -5964,7 +6056,7 @@ mod tests {
         let store = StateStore::open(root.clone()).await.expect("open store");
         let labels = Vec::new();
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: "task-closed",
                 title: "Closed task",
                 display_id: None,
@@ -6031,7 +6123,7 @@ mod tests {
         let store = StateStore::open(root.clone()).await.expect("open store");
         let labels = Vec::new();
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: "task-closed-direct",
                 title: "Closed direct task",
                 display_id: None,
@@ -6149,7 +6241,7 @@ mod tests {
         let store = StateStore::open(root.clone()).await.expect("open store");
         let labels = Vec::new();
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: "task-closed",
                 title: "Closed task",
                 display_id: None,

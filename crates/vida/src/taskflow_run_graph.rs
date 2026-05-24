@@ -947,10 +947,9 @@ fn recovery_projection_resolves_persisted_open_cycle(
     if summary.delegation_gate.blocker_code.as_deref() != Some("open_delegated_cycle") {
         return false;
     }
-    if projection_truth.projection_vs_receipt_parity != "reconciled_from_receipt" {
-        return false;
-    }
-    if !projection_truth_blocker_codes(projection_truth).is_empty() {
+    if projection_truth.projection_vs_receipt_parity != "reconciled_from_receipt"
+        && projection_truth.projection_vs_receipt_parity != "aligned"
+    {
         return false;
     }
     projection_truth
@@ -962,17 +961,14 @@ fn recovery_projection_resolves_persisted_open_cycle(
                     .downstream_dispatch_status
                     .as_deref()
                     .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"));
-            let clean_resolved_receipt = receipt.dispatch_status == "executed"
-                && (receipt.lane_status == "lane_completed"
-                    || (receipt.lane_status == "lane_running" && ready_downstream_handoff))
-                && receipt.blocker_code.is_none()
-                && receipt.downstream_dispatch_blockers.is_empty();
-            let downstream_has_no_blocking_state = !receipt.downstream_dispatch_ready
-                || receipt
-                    .downstream_dispatch_status
-                    .as_deref()
-                    .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"));
-            clean_resolved_receipt && downstream_has_no_blocking_state
+            let upstream_lane_completed = receipt.dispatch_status == "executed"
+                && receipt.lane_status == "lane_completed"
+                && receipt.blocker_code.is_none();
+            let ready_running_handoff = receipt.dispatch_status == "executed"
+                && receipt.lane_status == "lane_running"
+                && ready_downstream_handoff
+                && receipt.blocker_code.is_none();
+            upstream_lane_completed || ready_running_handoff
         })
 }
 
@@ -981,6 +977,7 @@ fn recovery_ready_handoff_resolves_open_cycle(
 ) -> bool {
     summary.delegation_gate.delegated_cycle_open
         && summary.delegation_gate.delegated_cycle_state == "handoff_pending"
+        && summary.delegation_gate.blocker_code.is_none()
         && summary.recovery_ready
         && summary.resume_status == "ready"
         && summary.resume_target.starts_with("dispatch.")
@@ -1618,7 +1615,9 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
     let (recommended_command, recommended_surface) = if let Some(summary) = recovery {
         let (_codes, _why_not_now, _next_action, command, surface) =
             recovery_surface_contract(summary, &projection_truth);
-        if recovery_projection_resolves_persisted_open_cycle(summary, &projection_truth) {
+        if recovery_projection_resolves_persisted_open_cycle(summary, &projection_truth)
+            && blocker_codes.is_empty()
+        {
             (None, None)
         } else {
             (
@@ -4963,7 +4962,8 @@ async fn reseed_explicit_task_graph_binding_for_dispatch_init(
     if bound_task_id == requested_run_id {
         return Ok(None);
     }
-    if let Ok(task) = store.show_task(bound_task_id).await {
+    let bound_task = store.show_task(bound_task_id).await.ok();
+    if let Some(task) = bound_task.as_ref() {
         if taskflow_task_status_is_terminal_for_dispatch_init(&task.status) {
             return Err(format!(
                 "Run `{requested_run_id}` has explicit continuation binding to terminal task_graph_task `{bound_task_id}` with status `{}`; bind a non-terminal bounded unit before dispatch-init.",
@@ -4972,7 +4972,9 @@ async fn reseed_explicit_task_graph_binding_for_dispatch_init(
         }
     }
 
-    let request_text = if let Some(request_text) = binding
+    let request_text = if let Some(task) = bound_task.as_ref() {
+        task_record_dispatch_seed_request_text(task)
+    } else if let Some(request_text) = binding
         .request_text
         .as_deref()
         .map(str::trim)
@@ -6688,6 +6690,98 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    trait StateStoreFixtureTaskExt {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        >;
+    }
+
+    impl StateStoreFixtureTaskExt for crate::StateStore {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id,
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                } = request;
+                let generated_parent_id = (issue_type != "epic" && parent_id.is_none())
+                    .then(|| format!("{task_id}-fixture-parent"));
+                if let Some(parent_task_id) = generated_parent_id.as_deref() {
+                    let parent_labels: Vec<String> = Vec::new();
+                    let parent_status = if matches!(status.trim(), "closed" | "completed") {
+                        "closed"
+                    } else {
+                        "open"
+                    };
+                    self.create_task(crate::state_store::CreateTaskRequest {
+                        task_id: parent_task_id,
+                        title: "Fixture parent epic",
+                        display_id: None,
+                        description: "Test-only parent epic for strict task hierarchy fixtures",
+                        issue_type: "epic",
+                        status: parent_status,
+                        priority,
+                        parent_id: None,
+                        labels: &parent_labels,
+                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                        created_by,
+                        source_repo,
+                    })
+                    .await?;
+                }
+                self.create_task(crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id: parent_id.or(generated_parent_id.as_deref()),
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                })
+                .await
+            })
+        }
+    }
 
     fn clean_ready_downstream_dispatch_receipt(run_id: &str) -> RunGraphDispatchReceipt {
         RunGraphDispatchReceipt {
@@ -9254,7 +9348,7 @@ mod tests {
             .await
             .expect("activation snapshot should be written");
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "taskflow-runtime-run-binding-task-missing-actionability",
                 title: "Runtime run binding task missing actionability",
                 display_id: None,
@@ -9265,7 +9359,16 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
-                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec![
+                        "crates/vida/src/taskflow_run_graph.rs".to_string(),
+                        "crates/vida/src/runtime_dispatch_state.rs".to_string(),
+                    ],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_reseeds_design_backed_explicit_binding_into_implementer_lane -- --nocapture".to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
                 created_by: "test",
                 source_repo: "",
             })
@@ -9335,7 +9438,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "feature-existing-design-route-fix",
                 title: "Existing design route fix",
                 display_id: None,
@@ -9412,7 +9515,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "feature-reconcile-qwen-cli-carrier-drift-across-config-code",
                 title: "Qwen carrier drift remediation",
                 display_id: None,
@@ -9481,7 +9584,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "feature-design-backed-reseed-blocker",
                 title: "Design-backed reseed blocker",
                 display_id: None,
@@ -9551,7 +9654,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "feature-generic-design-scope",
                 title: "Generic design scope",
                 display_id: None,
@@ -9612,7 +9715,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "feature-direct-explicit-implementation-seed",
                 title: "Direct explicit implementation seed",
                 display_id: None,
@@ -9865,7 +9968,7 @@ mod tests {
             "crates/vida/src/runtime_dispatch_downstream_packets.rs".to_string(),
         ];
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-writer-planner-scope",
                 title: "Writer planner scope",
                 display_id: None,
@@ -10282,7 +10385,7 @@ mod tests {
 
         let labels = vec![String::from("runtime-recovery")];
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-closed-bound",
                 title: "Closed bound task",
                 display_id: None,
@@ -10360,7 +10463,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "taskflow-graph-summary-open-cycle-gate",
                 title: "Graph summary must respect open delegated cycle gate",
                 display_id: None,
@@ -10434,7 +10537,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-dispatch-init-read-mostly",
                 title: "Dispatch init should not hold writable store during preparation",
                 display_id: None,
@@ -10503,7 +10606,7 @@ mod tests {
             .expect("stale snapshot should persist");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-dispatch-init-stale-snapshot",
                 title: "Dispatch init should capture stale launcher snapshot read-only",
                 display_id: None,
@@ -10559,7 +10662,7 @@ mod tests {
 
         let labels = vec![String::from("runtime-recovery")];
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-closed-dispatch-init",
                 title: "Closed dispatch init task",
                 display_id: None,
@@ -10595,7 +10698,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-dispatch-context-repair",
                 title: "Repair dispatch-init context gap",
                 display_id: None,
@@ -10666,7 +10769,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-dispatch-context-fast-path",
                 title: "Task record title should not replace seeded context",
                 display_id: None,
@@ -10727,7 +10830,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-dispatch-init-idempotent-fast-path",
                 title: "Dispatch init should reuse an existing routed packet",
                 display_id: None,
@@ -10801,7 +10904,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-dispatch-init-route-drift-refresh",
                 title: "Dispatch init refreshes stale route assignment",
                 display_id: None,
@@ -10937,12 +11040,12 @@ mod tests {
             .expect("persist explicit continuation binding");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: bound_task_id,
-                title: "Design-backed reseed canonicalization qwen blocker",
+                title: "Implement design-backed reseed canonicalization qwen blocker",
                 display_id: None,
                 description:
-                    "Bounded audit-remediation blocker for design-backed reseed canonicalization.",
+                    "Implement the bounded audit-remediation blocker for design-backed reseed canonicalization.",
                 issue_type: "task",
                 status: "in_progress",
                 priority: 1,

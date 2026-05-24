@@ -6605,6 +6605,98 @@ mod tests {
     use std::process::ExitCode;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+    trait StateStoreFixtureTaskExt {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        >;
+    }
+
+    impl StateStoreFixtureTaskExt for crate::StateStore {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id,
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                } = request;
+                let generated_parent_id = (issue_type != "epic" && parent_id.is_none())
+                    .then(|| format!("{task_id}-fixture-parent"));
+                if let Some(parent_task_id) = generated_parent_id.as_deref() {
+                    let parent_labels: Vec<String> = Vec::new();
+                    let parent_status = if matches!(status.trim(), "closed" | "completed") {
+                        "closed"
+                    } else {
+                        "open"
+                    };
+                    self.create_task(crate::state_store::CreateTaskRequest {
+                        task_id: parent_task_id,
+                        title: "Fixture parent epic",
+                        display_id: None,
+                        description: "Test-only parent epic for strict task hierarchy fixtures",
+                        issue_type: "epic",
+                        status: parent_status,
+                        priority,
+                        parent_id: None,
+                        labels: &parent_labels,
+                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                        created_by,
+                        source_repo,
+                    })
+                    .await?;
+                }
+                self.create_task(crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id: parent_id.or(generated_parent_id.as_deref()),
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                })
+                .await
+            })
+        }
+    }
+
     #[test]
     fn multi_session_paths_intersect_on_segment_boundaries_only() {
         assert!(super::paths_intersect(
@@ -6900,7 +6992,7 @@ mod tests {
             .await
             .expect("open store");
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "snapshot-ready",
                 title: "Snapshot ready",
                 display_id: None,
@@ -6930,8 +7022,7 @@ mod tests {
             .await
             .expect("authoritative rows should load");
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, "snapshot-ready");
+        assert!(rows.iter().any(|row| row.id == "snapshot-ready"));
     }
 
     #[tokio::test]
@@ -6949,7 +7040,7 @@ mod tests {
             .await
             .expect("open store");
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "authoritative-ready",
                 title: "Authoritative ready",
                 display_id: None,
@@ -6978,8 +7069,7 @@ mod tests {
             .await
             .expect("authoritative rows should load");
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, "authoritative-ready");
+        assert!(rows.iter().any(|row| row.id == "authoritative-ready"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -7121,6 +7211,20 @@ mod tests {
         let store = crate::state_store::StateStore::open(root.clone())
             .await
             .expect("open store");
+        let mut foreign_task = task(
+            "foreign-blocked-task",
+            "task",
+            "in_progress",
+            1,
+            &[],
+            Vec::new(),
+        );
+        foreign_task.planner_metadata.owned_paths = vec!["crates/vida/src/foreign.rs".to_string()];
+        foreign_task.execution_semantics.conflict_domain = Some("foreign-domain".to_string());
+        store
+            .persist_task_record(foreign_task)
+            .await
+            .expect("persist foreign blocked task");
         let foreign = store
             .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
                 claim_id: "foreign-blocked-claim".to_string(),

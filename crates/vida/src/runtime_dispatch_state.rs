@@ -6656,6 +6656,98 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+    trait StateStoreFixtureTaskExt {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        >;
+    }
+
+    impl StateStoreFixtureTaskExt for crate::StateStore {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id,
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                } = request;
+                let generated_parent_id = (issue_type != "epic" && parent_id.is_none())
+                    .then(|| format!("{task_id}-fixture-parent"));
+                if let Some(parent_task_id) = generated_parent_id.as_deref() {
+                    let parent_labels: Vec<String> = Vec::new();
+                    let parent_status = if matches!(status.trim(), "closed" | "completed") {
+                        "closed"
+                    } else {
+                        "open"
+                    };
+                    self.create_task(crate::state_store::CreateTaskRequest {
+                        task_id: parent_task_id,
+                        title: "Fixture parent epic",
+                        display_id: None,
+                        description: "Test-only parent epic for strict task hierarchy fixtures",
+                        issue_type: "epic",
+                        status: parent_status,
+                        priority,
+                        parent_id: None,
+                        labels: &parent_labels,
+                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                        created_by,
+                        source_repo,
+                    })
+                    .await?;
+                }
+                self.create_task(crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id: parent_id.or(generated_parent_id.as_deref()),
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                })
+                .await
+            })
+        }
+    }
+
     fn harness_state_root(harness: &TempStateHarness) -> PathBuf {
         harness.path().join(crate::state_store::default_state_dir())
     }
@@ -8073,7 +8165,7 @@ mod tests {
     async fn create_and_close_task(store: &crate::StateStore, task_id: &str) {
         let labels = vec!["dev-pack".to_string()];
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id,
                 title: "Dev pack",
                 display_id: None,
@@ -8444,21 +8536,24 @@ mod tests {
                     .expect("state store should open");
                 let labels: Vec<String> = Vec::new();
                 runtime
-                    .block_on(store.create_task(crate::state_store::CreateTaskRequest {
-                        task_id: "run-agent-dispatch",
-                        title: "Run agent dispatch",
-                        display_id: None,
-                        description: "test task backing the execute-dispatch run graph",
-                        issue_type: "task",
-                        status: "in_progress",
-                        priority: 1,
-                        parent_id: None,
-                        labels: &labels,
-                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
-                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
-                        created_by: "tester",
-                        source_repo: ".",
-                    }))
+                    .block_on(store.create_task_with_fixture_parent(
+                        crate::state_store::CreateTaskRequest {
+                            task_id: "run-agent-dispatch",
+                            title: "Run agent dispatch",
+                            display_id: None,
+                            description: "test task backing the execute-dispatch run graph",
+                            issue_type: "task",
+                            status: "in_progress",
+                            priority: 1,
+                            parent_id: None,
+                            labels: &labels,
+                            execution_semantics:
+                                crate::state_store::TaskExecutionSemantics::default(),
+                            planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                            created_by: "tester",
+                            source_repo: ".",
+                        },
+                    ))
                     .expect("run graph task should exist");
                 let dispatch_packet_path = harness.path().join("agent-dispatch.json");
                 fs::write(
@@ -8841,21 +8936,24 @@ mod tests {
                     .expect("state store should open");
                 let labels: Vec<String> = Vec::new();
                 runtime
-                    .block_on(store.create_task(crate::state_store::CreateTaskRequest {
-                        task_id: "run-agent-init-execute-dispatch",
-                        title: "Run agent init execute-dispatch",
-                        display_id: None,
-                        description: "test task backing the execute-dispatch run graph",
-                        issue_type: "task",
-                        status: "in_progress",
-                        priority: 1,
-                        parent_id: None,
-                        labels: &labels,
-                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
-                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
-                        created_by: "tester",
-                        source_repo: ".",
-                    }))
+                    .block_on(store.create_task_with_fixture_parent(
+                        crate::state_store::CreateTaskRequest {
+                            task_id: "run-agent-init-execute-dispatch",
+                            title: "Run agent init execute-dispatch",
+                            display_id: None,
+                            description: "test task backing the execute-dispatch run graph",
+                            issue_type: "task",
+                            status: "in_progress",
+                            priority: 1,
+                            parent_id: None,
+                            labels: &labels,
+                            execution_semantics:
+                                crate::state_store::TaskExecutionSemantics::default(),
+                            planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                            created_by: "tester",
+                            source_repo: ".",
+                        },
+                    ))
                     .expect("run graph task should exist");
                 let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
@@ -13223,7 +13321,7 @@ mod tests {
             .await
             .expect("state store should open");
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "feature-bridge-dev",
                 title: "Bridge dev task",
                 display_id: None,
@@ -13368,7 +13466,7 @@ mod tests {
             .await
             .expect("state store should open");
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "feature-bridge-open-dev",
                 title: "Open bridge dev task",
                 display_id: None,
@@ -14213,7 +14311,7 @@ mod tests {
             let owned_paths = vec!["crates/vida/src/runtime_dispatch_state.rs".to_string()];
             let labels = vec!["runtime-recovery".to_string()];
             store
-                .create_task(CreateTaskRequest {
+                .create_task_with_fixture_parent(CreateTaskRequest {
                     task_id: "run-analysis-task-metadata-preview",
                     title: "Runtime recovery",
                     display_id: None,
@@ -14394,7 +14492,7 @@ mod tests {
                 .expect("state store should open");
             let labels = vec!["runtime-recovery".to_string()];
             store
-                .create_task(CreateTaskRequest {
+                .create_task_with_fixture_parent(CreateTaskRequest {
                     task_id: "run-analysis-task-metadata-unsafe-preview",
                     title: "Runtime recovery",
                     display_id: None,
@@ -14992,7 +15090,7 @@ mod tests {
 
         let labels = vec!["spec-pack".to_string()];
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: spec_task_id,
                 title: "Closed spec pack",
                 display_id: None,
@@ -15109,7 +15207,7 @@ mod tests {
 
         let labels = vec!["spec-pack".to_string()];
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: spec_task_id,
                 title: "Closed spec pack",
                 display_id: None,
