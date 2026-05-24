@@ -590,8 +590,12 @@ pub(crate) fn print_task_dependency_tree(
         .map(|child| {
             serde_json::json!({
                 "id": child.child_id,
+                "display_id": child.child_display_id,
+                "title": child.child_title,
                 "status": child.child_status,
+                "priority": child.child_priority,
                 "issue_type": child.child_issue_type,
+                "labels": child.child_labels,
                 "missing": child.missing,
                 "cycle": child.cycle,
             })
@@ -697,7 +701,15 @@ pub(crate) fn print_task_direct_children(
         } else {
             child.child_status.as_str()
         };
-        println!("child\t{}\t{}\t{}", child.child_id, state, issue_type);
+        let title = child.child_title.as_deref().unwrap_or("");
+        let priority = child
+            .child_priority
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        println!(
+            "child\t{}\t{}\t{}\t{}\t{}",
+            child.child_id, state, issue_type, priority, title
+        );
     }
 }
 
@@ -736,9 +748,14 @@ fn print_task_dependency_tree_child(child: &TaskDependencyTreeChild, depth: usiz
     } else {
         child.child_status.as_str()
     };
+    let title = child.child_title.as_deref().unwrap_or("");
+    let priority = child
+        .child_priority
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
     println!(
-        "{indent}child\t{}\t{}\t{}",
-        child.child_id, state, issue_type
+        "{indent}child\t{}\t{}\t{}\t{}\t{}",
+        child.child_id, state, issue_type, priority, title
     );
 
     if let Some(node) = &child.node {

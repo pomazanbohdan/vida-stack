@@ -375,8 +375,16 @@ pub struct TaskDependencyTreeEdge {
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 pub struct TaskDependencyTreeChild {
     pub child_id: String,
+    #[serde(default)]
+    pub child_display_id: Option<String>,
+    #[serde(default)]
+    pub child_title: Option<String>,
     pub child_status: String,
+    #[serde(default)]
+    pub child_priority: Option<u32>,
     pub child_issue_type: Option<String>,
+    #[serde(default)]
+    pub child_labels: Vec<String>,
     pub node: Option<Box<TaskDependencyTreeNode>>,
     pub cycle: bool,
     pub missing: bool,

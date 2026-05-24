@@ -468,8 +468,12 @@ impl StateStore {
             for child_id in child_ids {
                 let mut child = TaskDependencyTreeChild {
                     child_id: child_id.clone(),
+                    child_display_id: None,
+                    child_title: None,
                     child_status: "missing".to_string(),
+                    child_priority: None,
                     child_issue_type: None,
+                    child_labels: Vec::new(),
                     node: None,
                     cycle: false,
                     missing: false,
@@ -477,8 +481,12 @@ impl StateStore {
                 if active.contains(child_id) {
                     child.cycle = true;
                 } else if let Some(child_task) = by_id.get(child_id) {
+                    child.child_display_id = child_task.display_id.clone();
+                    child.child_title = Some(child_task.title.clone());
                     child.child_status = child_task.status.clone();
+                    child.child_priority = Some(child_task.priority);
                     child.child_issue_type = Some(child_task.issue_type.clone());
+                    child.child_labels = child_task.labels.clone();
                     child.node = Some(Box::new(Self::build_task_dependency_tree(
                         by_id,
                         children_by_parent,

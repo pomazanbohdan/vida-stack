@@ -1238,6 +1238,10 @@ fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
             "Sandbox child",
             "--parent-id",
             "sandbox-parent",
+            "--priority",
+            "2",
+            "--labels",
+            "child-verification,tree-detail",
             "--json",
         ],
         &state_dir,
@@ -1274,7 +1278,31 @@ fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
     assert_eq!(parent_children["root_task_id"], "sandbox-parent");
     assert_eq!(parent_children["child_count"], 1);
     assert_eq!(parent_children["children"][0]["child_id"], "sandbox-child");
+    assert_eq!(
+        parent_children["children"][0]["child_title"],
+        "Sandbox child"
+    );
     assert_eq!(parent_children["children"][0]["child_status"], "open");
+    assert_eq!(parent_children["children"][0]["child_priority"], 2);
+    assert_eq!(
+        parent_children["children"][0]["child_labels"][0],
+        "child-verification"
+    );
+
+    let parent_tree = run_command_json(&["task", "tree", "sandbox-parent", "--json"], &state_dir);
+    assert_eq!(parent_tree["status"], "pass");
+    assert_eq!(parent_tree["surface"], "vida task tree");
+    assert_eq!(parent_tree["root_task_id"], "sandbox-parent");
+    assert_eq!(parent_tree["child_count"], 1);
+    assert_eq!(parent_tree["children"][0]["id"], "sandbox-child");
+    assert_eq!(parent_tree["children"][0]["title"], "Sandbox child");
+    assert_eq!(parent_tree["children"][0]["status"], "open");
+    assert_eq!(parent_tree["children"][0]["priority"], 2);
+    assert_eq!(parent_tree["children"][0]["issue_type"], "task");
+    assert_eq!(
+        parent_tree["children"][0]["labels"][0],
+        "child-verification"
+    );
 
     let graph = run_command_json(&["task", "validate-graph", "--json"], &state_dir);
     assert_eq!(graph["status"], "pass");
