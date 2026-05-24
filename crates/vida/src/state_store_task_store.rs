@@ -47,10 +47,17 @@ impl StateStore {
         parent_id: Option<&str>,
         now: &str,
         reason: &str,
+        leaf_task_id: Option<&str>,
     ) -> Vec<TaskRecord> {
         let mut closed = Vec::new();
         let mut current_parent_id = parent_id.map(ToOwned::to_owned);
         let mut visited = BTreeSet::new();
+
+        // Track all tasks being closed in this operation (leaf + all parents)
+        let mut tasks_being_closed = BTreeSet::new();
+        if let Some(leaf_id) = leaf_task_id {
+            tasks_being_closed.insert(leaf_id.to_string());
+        }
 
         while let Some(parent_id) = current_parent_id {
             if !visited.insert(parent_id.clone()) {
@@ -60,6 +67,10 @@ impl StateStore {
             let Some(parent_index) = tasks.iter().position(|task| task.id == parent_id) else {
                 break;
             };
+
+            // Add this parent to the closure chain before checking children
+            tasks_being_closed.insert(parent_id.clone());
+
             let child_indices = tasks
                 .iter()
                 .enumerate()
@@ -73,13 +84,20 @@ impl StateStore {
                         .then_some(index)
                 })
                 .collect::<Vec<_>>();
-            if child_indices.is_empty()
-                || child_indices
-                    .iter()
-                    .any(|index| matches!(tasks[*index].status.as_str(), "open" | "in_progress"))
-            {
+
+            // Only stop if there's an open child that is NOT being closed in this operation
+            let has_open_child_not_in_chain = child_indices.iter().any(|index| {
+                let child = &tasks[*index];
+                let child_status = child.status.as_str();
+                // Child is open and NOT in our closure chain
+                (child_status == "open" || child_status == "in_progress")
+                    && !tasks_being_closed.contains(&child.id)
+            });
+
+            if child_indices.is_empty() || has_open_child_not_in_chain {
                 break;
             }
+
             let has_unresolved_non_parent_blockers = tasks[parent_index]
                 .dependencies
                 .iter()
@@ -1414,6 +1432,7 @@ impl StateStore {
                     parent_id.as_deref(),
                     &task.updated_at,
                     &format!("all direct child tasks closed after closing `{task_id}`"),
+                    Some(task_id),
                 ),
             )
         } else {
@@ -1587,7 +1606,7 @@ impl StateStore {
             .iter()
             .filter(|task| {
                 task.id != task_id
-                    && task.status != "closed"
+                    && matches!(task.status.as_str(), "open" | "in_progress")
                     && task.dependencies.iter().any(|dependency| {
                         dependency.edge_type == "parent-child"
                             && dependency.depends_on_id == task_id
@@ -1622,9 +1641,9 @@ impl StateStore {
             parent_id.as_deref(),
             &task.updated_at,
             &format!("all direct child tasks closed after closing `{task_id}`"),
+            Some(task_id),
         );
-        let issues = Self::validate_task_graph_rows(&reconciled_tasks);
-        if let Some(first) = issues.first() {
+        if let Some(first) = Self::validate_task_graph_rows(&reconciled_tasks).first() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
                     "task close would create invalid graph: {} on {}",
@@ -1636,6 +1655,12 @@ impl StateStore {
         for parent in &closed_parents {
             self.persist_task_record(parent.clone()).await?;
             self.refresh_run_graph_continuation_after_task_close(&parent.id)
+                .await?;
+        }
+        self.release_active_task_claims_for_task(task_id, "task_closed")
+            .await?;
+        for parent in &closed_parents {
+            self.release_active_task_claims_for_task(&parent.id, "task_closed")
                 .await?;
         }
         self.refresh_run_graph_continuation_after_task_close(task_id)
@@ -1854,6 +1879,89 @@ mod tests {
             .await
             .expect("validate")
             .is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn close_task_releases_active_task_claims() {
+        let root = unique_task_store_temp_root("vida-close-task-releases-claims");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "claim-parent",
+                title: "Claim parent",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "claimed-task",
+                title: "Claimed task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: Some("claim-parent"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "claim-claimed-task".to_string(),
+                state_root_id: root.display().to_string(),
+                worktree_environment_id: "worktree".to_string(),
+                orchestrator_session_id: "session-a".to_string(),
+                process_id: Some(std::process::id()),
+                task_id: Some("claimed-task".to_string()),
+                run_id: None,
+                lane_id: None,
+                claim_kind: "active_task_session_claim".to_string(),
+                conflict_domain: Some("task:claimed-task".to_string()),
+                owned_paths: Vec::new(),
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Observe,
+                lease_seconds: 3600,
+            })
+            .await
+            .expect("claim task");
+
+        store
+            .close_task("claimed-task", "done")
+            .await
+            .expect("close task");
+
+        assert!(store
+            .active_orchestrator_claims()
+            .await
+            .expect("active claims")
+            .iter()
+            .all(|claim| claim.task_id.as_deref() != Some("claimed-task")));
+        let claim = store
+            .orchestrator_claim("claim-claimed-task")
+            .await
+            .expect("load claim")
+            .expect("claim exists");
+        assert_eq!(claim.status, "released");
+        assert_eq!(claim.release_reason.as_deref(), Some("task_closed"));
+
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2690,4 +2798,7 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
     }
+
+    // ==================== Core Rule #12 Override Tests ====================
+    // ==================== Cascading Closure Tests ====================
 }

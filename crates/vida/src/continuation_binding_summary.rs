@@ -815,6 +815,9 @@ pub(crate) fn add_taskflow_active_work_truth(
         .unwrap_or_default()
         .to_string();
     let active_bounded_unit = summary.get("active_bounded_unit").cloned();
+    let summary_active_unit_missing = active_bounded_unit
+        .as_ref()
+        .map_or(true, serde_json::Value::is_null);
     let run_graph_task_id = active_bounded_unit
         .as_ref()
         .and_then(|unit| unit.get("task_id"))
@@ -859,6 +862,70 @@ pub(crate) fn add_taskflow_active_work_truth(
             "orthogonal_to_taskflow_active_work".to_string(),
             serde_json::Value::Bool(orthogonal),
         );
+    }
+
+    if summary_active_unit_missing {
+        if let [candidate] = taskflow_active_candidates.as_slice() {
+            if let serde_json::Value::Object(object) = &mut summary {
+                object.insert(
+                    "status".to_string(),
+                    serde_json::Value::String("bound".to_string()),
+                );
+                object.insert(
+                    "continuation_allowed".to_string(),
+                    serde_json::Value::Bool(true),
+                );
+                object.insert(
+                    "continuation_required_now".to_string(),
+                    serde_json::Value::Bool(false),
+                );
+                object.insert(
+                    "active_bounded_unit".to_string(),
+                    serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": candidate.get("task_id").cloned().unwrap_or(serde_json::Value::Null),
+                        "task_status": candidate.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                        "issue_type": candidate.get("issue_type").cloned().unwrap_or(serde_json::Value::Null),
+                        "title": candidate.get("title").cloned().unwrap_or(serde_json::Value::Null),
+                    }),
+                );
+                object.insert(
+                    "binding_source".to_string(),
+                    serde_json::Value::String("taskflow_single_in_progress".to_string()),
+                );
+                object.insert(
+                    "binding_scope".to_string(),
+                    serde_json::Value::String("taskflow_active".to_string()),
+                );
+                object.insert(
+                    "why_this_unit".to_string(),
+                    serde_json::Value::String(
+                        "Single TaskFlow in_progress task is the authoritative active bounded unit."
+                            .to_string(),
+                    ),
+                );
+                object.insert(
+                    "primary_path".to_string(),
+                    serde_json::Value::String("taskflow_selection_path".to_string()),
+                );
+                object.insert(
+                    "sequential_vs_parallel_posture".to_string(),
+                    serde_json::Value::String("sequential_only_taskflow_active".to_string()),
+                );
+                object.insert(
+                    "pause_boundary_gate".to_string(),
+                    serde_json::Value::String("forbidden_while_active_task_present".to_string()),
+                );
+                object.insert("ambiguity_reason".to_string(), serde_json::Value::Null);
+                object.insert(
+                    "next_actions".to_string(),
+                    serde_json::json!([
+                        "Continue or close the single TaskFlow in-progress bounded unit before selecting another ready task."
+                    ]),
+                );
+            }
+            return summary;
+        }
     }
 
     if !orthogonal {
@@ -1188,6 +1255,49 @@ mod tests {
                     .is_some_and(|value| value.contains("resolve the blocker"))
             })
         }));
+    }
+
+    #[test]
+    fn taskflow_active_work_truth_promotes_single_in_progress_task_when_runtime_summary_is_ambiguous(
+    ) {
+        let active_task = task_record(
+            "agent-mode-external-report-receipt-blocker-batch-20260521",
+            "in_progress",
+        );
+        let runtime_summary = serde_json::json!({
+            "status": "ambiguous",
+            "continuation_allowed": false,
+            "continuation_required_now": false,
+            "active_bounded_unit": serde_json::Value::Null,
+            "binding_source": serde_json::Value::Null,
+            "why_this_unit": serde_json::Value::Null,
+            "primary_path": "diagnosis_path",
+            "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
+            "pause_boundary_gate": "forbidden_while_ambiguous",
+            "ambiguity_reason": "runtime_evidence_ambiguous",
+            "next_actions": []
+        });
+
+        let summary = add_taskflow_active_work_truth(
+            runtime_summary,
+            taskflow_active_candidates_from_tasks(&[active_task]),
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "agent-mode-external-report-receipt-blocker-batch-20260521"
+        );
+        assert_eq!(summary["binding_source"], "taskflow_single_in_progress");
+        assert_eq!(
+            summary["why_this_unit"],
+            "Single TaskFlow in_progress task is the authoritative active bounded unit."
+        );
+        assert_eq!(
+            summary["sequential_vs_parallel_posture"],
+            "sequential_only_taskflow_active"
+        );
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
     }
 
     #[test]

@@ -2,6 +2,7 @@ use super::*;
 use crate::task_cli_render::{
     print_task_bulk_reparent_result, print_task_direct_children, print_task_update_graph_blocked,
 };
+use crate::taskflow_proxy::paths_intersect;
 
 #[derive(Debug, Clone)]
 pub(crate) struct TaskReadMetadata {
@@ -1929,7 +1930,7 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
     let project_root = project_root_for_task_state(&state_dir).unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     });
-    match open_task_store(state_dir).await {
+    match open_task_store(state_dir.clone()).await {
         Ok(store) => {
             let mut parent_id = command.parent_id.clone();
             let mut display_id = command.display_id.clone().unwrap_or_default();
@@ -2042,6 +2043,94 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
             }
             let labels = parse_label_values(&command.labels);
             let source_repo = project_root.display().to_string();
+
+            // Multi-session admission check (rule #3)
+            // Check if another session holds an active exclusive claim on the same work scope
+            let owner_evidence = crate::orchestrator_session_surface::build_runtime_owner_evidence(
+                &state_dir, false,
+            );
+            let current_session_id = match &owner_evidence {
+                Ok(evidence) => evidence["current_session"]["session_id"]
+                    .as_str()
+                    .unwrap_or("unknown"),
+                Err(_) => "unknown",
+            };
+            let active_foreign_claims = store.active_foreign_claims(current_session_id).await;
+
+            // Build a temporary task record for conflict checking
+            let temp_execution_semantics = task_execution_semantics_from_create_args(&command);
+            let temp_planner_metadata: state_store::TaskPlannerMetadata = planner_metadata.clone();
+            let temp_task_id = command.task_id.trim().to_string();
+
+            // Check for foreign claim conflicts
+            if let Ok(foreign_claims) = &active_foreign_claims {
+                // Use the same conflict checking logic as taskflow_proxy
+                // We need to check if any foreign claim conflicts with our task
+                let has_conflict = foreign_claims.iter().any(|claim| {
+                    let claim_status = claim.status.trim().to_ascii_lowercase();
+                    let claim_is_blocking_status = claim_status == "blocked";
+                    let claim_is_exclusive = claim.lease_mode == "exclusive";
+                    if !claim_is_blocking_status && !claim_is_exclusive {
+                        return false;
+                    }
+                    // Check same task_id
+                    if claim.task_id.as_deref() == Some(temp_task_id.as_str()) {
+                        return true;
+                    }
+                    // Check same conflict_domain
+                    if let Some(claim_domain) = claim.conflict_domain.as_deref() {
+                        if temp_execution_semantics.conflict_domain.as_deref() == Some(claim_domain)
+                        {
+                            return true;
+                        }
+                    }
+                    // Check intersecting owned_paths (from planner_metadata, not execution_semantics)
+                    if !claim.owned_paths.is_empty()
+                        && !temp_planner_metadata.owned_paths.is_empty()
+                    {
+                        for claim_path in &claim.owned_paths {
+                            for task_path in &temp_planner_metadata.owned_paths {
+                                if paths_intersect(claim_path, task_path) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                    // Exclusive claims also block writes intersecting their read-only paths.
+                    if claim_is_exclusive {
+                        if !claim.read_only_paths.is_empty()
+                            && !temp_planner_metadata.owned_paths.is_empty()
+                        {
+                            for claim_path in &claim.read_only_paths {
+                                for task_path in &temp_planner_metadata.owned_paths {
+                                    if paths_intersect(claim_path, task_path) {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    false
+                });
+
+                if has_conflict {
+                    if command.json {
+                        crate::print_json_pretty(&serde_json::json!({
+                            "status": "blocked",
+                            "blocker_codes": ["foreign_claim_conflict_blocked"],
+                            "reason": "Another orchestrator session holds an active exclusive claim on the same task, run, conflict domain, or intersecting paths. Wait for that session to complete or explicitly reclaim/supersede the claim before continuing.",
+                            "next_action": "vida orchestrator-session show --json",
+                            "blocking_surface": "vida orchestrator-session show",
+                            "current_session_id": current_session_id,
+                        }));
+                    } else {
+                        eprintln!("Another orchestrator session holds an active exclusive claim on this work scope.");
+                        eprintln!("Inspect active sessions and claims with `vida orchestrator-session show --json`");
+                    }
+                    return ExitCode::from(1);
+                }
+            }
+
             match store
                 .create_task(state_store::CreateTaskRequest {
                     task_id: &command.task_id,
@@ -6994,6 +7083,25 @@ mod tests {
             ]
         );
         assert!(next_actions[0].contains("Resolve the blocked condition"));
+    }
+
+    #[test]
+    fn task_close_feedback_blocker_summary_ignores_historical_blocker_proof_context() {
+        let reason = "Closed after proof: previous task close JSON returned close_feedback_canonical_status_blocked/canonical_gate_blocked as historical blocker context; proof passed.";
+        let telemetry = task_close_host_agent_telemetry(
+            std::path::Path::new(".vida/data/state"),
+            false,
+            None,
+            &serde_json::json!({"id": "task-close-feedback-regression"}),
+            reason,
+            "test",
+        );
+
+        assert_ne!(
+            telemetry["reason"],
+            "feedback_deferred_for_canonical_close_status"
+        );
+        assert!(task_close_feedback_blocker_summary(&telemetry).is_none());
     }
 
     #[test]

@@ -2167,6 +2167,35 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             match StateStore::open_existing_read_only(state_dir).await {
                 Ok(store) => match store.latest_run_graph_recovery_summary().await {
                     Ok(summary) => {
+                        let summary = match summary {
+                            Some(summary) => {
+                                let status = match store.run_graph_status(&summary.run_id).await {
+                                    Ok(status) => status,
+                                    Err(error) => {
+                                        eprintln!(
+                                            "Failed to read run-graph status for release-admission stale recovery check: {error}"
+                                        );
+                                        return ExitCode::from(1);
+                                    }
+                                };
+                                match store
+                                    .run_graph_status_is_stale_after_release_admission_complete(
+                                        &status,
+                                    )
+                                    .await
+                                {
+                                    Ok(true) => None,
+                                    Ok(false) => Some(summary),
+                                    Err(error) => {
+                                        eprintln!(
+                                            "Failed to classify release-admitted stale recovery: {error}"
+                                        );
+                                        return ExitCode::from(1);
+                                    }
+                                }
+                            }
+                            None => None,
+                        };
                         let projection_truth = match summary.as_ref() {
                             Some(summary) => match store.run_graph_status(&summary.run_id).await {
                                 Ok(status) => {

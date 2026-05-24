@@ -376,12 +376,14 @@ impl StateStore {
         let tree_rows = by_id.values().cloned().collect::<Vec<_>>();
         let children_by_parent = Self::parent_child_reverse_index(&tree_rows);
         let mut active = BTreeSet::new();
+        let mut expanded = BTreeSet::new();
         let mut node_visits = 0usize;
         Self::build_task_dependency_tree(
             &by_id,
             &children_by_parent,
             task_id,
             &mut active,
+            &mut expanded,
             0,
             &mut node_visits,
         )
@@ -392,6 +394,7 @@ impl StateStore {
         children_by_parent: &BTreeMap<String, Vec<String>>,
         task_id: &str,
         active: &mut BTreeSet<String>,
+        expanded: &mut BTreeSet<String>,
         depth: usize,
         node_visits: &mut usize,
     ) -> Result<TaskDependencyTreeNode, StateStoreError> {
@@ -418,6 +421,14 @@ impl StateStore {
                 task_id: task_id.to_string(),
             })?;
 
+        if !expanded.insert(task.id.clone()) {
+            return Ok(TaskDependencyTreeNode {
+                task,
+                dependencies: Vec::new(),
+                children: Vec::new(),
+            });
+        }
+
         active.insert(task.id.clone());
         let mut dependencies = Vec::new();
         for dependency in &task.dependencies {
@@ -442,6 +453,7 @@ impl StateStore {
                     children_by_parent,
                     &dependency.depends_on_id,
                     active,
+                    expanded,
                     depth + 1,
                     node_visits,
                 )?));
@@ -472,6 +484,7 @@ impl StateStore {
                         children_by_parent,
                         child_id,
                         active,
+                        expanded,
                         depth + 1,
                         node_visits,
                     )?));
@@ -639,7 +652,8 @@ impl StateStore {
                     let Some(child) = by_id.get(child_id) else {
                         continue;
                     };
-                    if child.status != "closed" {
+                    // Only consider truly open states as violations, not completed or other intermediate states
+                    if matches!(child.status.as_str(), "open" | "in_progress") {
                         issues.push(TaskGraphIssue {
                             issue_type: "closed_parent_has_open_child".to_string(),
                             issue_id: task.id.clone(),
@@ -803,6 +817,25 @@ mod tests {
         parallel_group: Option<&str>,
         conflict_domain: Option<&str>,
     ) {
+        let parent_id = format!("{task_id}-parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: &parent_id,
+                title: &parent_id,
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("parent task should be created");
         store
             .create_task(CreateTaskRequest {
                 task_id,
@@ -812,7 +845,7 @@ mod tests {
                 issue_type: "task",
                 status: "open",
                 priority: 1,
-                parent_id: None,
+                parent_id: Some(&parent_id),
                 labels: &[],
                 execution_semantics: TaskExecutionSemantics {
                     execution_mode: execution_mode.map(ToOwned::to_owned),
@@ -956,6 +989,60 @@ mod tests {
             }
             other => panic!("expected InvalidTaskRecord depth error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn task_dependency_tree_expands_shared_subtree_once() {
+        let shared_chain_len = 50;
+        let child_count = 250;
+        let mut rows = Vec::with_capacity(shared_chain_len + child_count + 1);
+        rows.push(task_record("root-task", "open"));
+
+        for index in 0..shared_chain_len {
+            let task_id = format!("shared-{index}");
+            let mut task = task_record(&task_id, "open");
+            if index > 0 {
+                task.dependencies.push(TaskDependencyRecord {
+                    issue_id: task_id.clone(),
+                    depends_on_id: format!("shared-{}", index - 1),
+                    edge_type: "blocks".to_string(),
+                    created_at: "1".to_string(),
+                    created_by: "test".to_string(),
+                    metadata: "{}".to_string(),
+                    thread_id: String::new(),
+                });
+            }
+            rows.push(task);
+        }
+
+        for index in 0..child_count {
+            let task_id = format!("child-{index}");
+            let mut task = task_record(&task_id, "open");
+            task.dependencies.push(TaskDependencyRecord {
+                issue_id: task_id.clone(),
+                depends_on_id: "root-task".to_string(),
+                edge_type: "parent-child".to_string(),
+                created_at: "1".to_string(),
+                created_by: "test".to_string(),
+                metadata: "{}".to_string(),
+                thread_id: String::new(),
+            });
+            task.dependencies.push(TaskDependencyRecord {
+                issue_id: task_id.clone(),
+                depends_on_id: format!("shared-{}", shared_chain_len - 1),
+                edge_type: "blocks".to_string(),
+                created_at: "1".to_string(),
+                created_by: "test".to_string(),
+                metadata: "{}".to_string(),
+                thread_id: String::new(),
+            });
+            rows.push(task);
+        }
+
+        let tree = StateStore::task_dependency_tree_from_rows(&rows, "root-task")
+            .expect("shared dependency subtree should not exhaust node visits");
+
+        assert_eq!(tree.children.len(), child_count);
     }
 
     #[tokio::test]
@@ -1196,18 +1283,37 @@ mod tests {
             .await
             .expect("tree should render");
 
-        assert_eq!(tree.dependencies.len(), 1);
+        assert_eq!(
+            tree.dependencies
+                .iter()
+                .filter(|edge| edge.edge_type == "blocks")
+                .count(),
+            1
+        );
         assert_eq!(tree.children.len(), 1);
-        let dependency_node = tree.dependencies[0]
+        let dependency_node = tree
+            .dependencies
+            .iter()
+            .find(|edge| edge.edge_type == "blocks")
+            .expect("blocks dependency should be present")
             .node
             .as_ref()
             .expect("dependency node should be included");
         assert_eq!(dependency_node.task.id, "dependency-task");
-        assert_eq!(dependency_node.dependencies.len(), 1);
         assert_eq!(
-            dependency_node.dependencies[0].depends_on_id,
-            "nested-dependency"
+            dependency_node
+                .dependencies
+                .iter()
+                .filter(|edge| edge.edge_type == "blocks")
+                .count(),
+            1
         );
+        let nested_dependency = dependency_node
+            .dependencies
+            .iter()
+            .find(|edge| edge.edge_type == "blocks")
+            .expect("nested blocks dependency should be present");
+        assert_eq!(nested_dependency.depends_on_id, "nested-dependency");
         let child_node = tree.children[0]
             .node
             .as_ref()

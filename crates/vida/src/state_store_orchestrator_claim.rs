@@ -69,6 +69,7 @@ pub(crate) struct OrchestratorClaim {
     pub state_root_id: String,
     pub worktree_environment_id: String,
     pub orchestrator_session_id: String,
+    pub process_id: Option<u32>,
     pub task_id: Option<String>,
     pub run_id: Option<String>,
     pub lane_id: Option<String>,
@@ -135,6 +136,7 @@ pub(crate) struct AcquireOrchestratorClaimRequest {
     pub state_root_id: String,
     pub worktree_environment_id: String,
     pub orchestrator_session_id: String,
+    pub process_id: Option<u32>,
     pub task_id: Option<String>,
     pub run_id: Option<String>,
     pub lane_id: Option<String>,
@@ -239,6 +241,12 @@ fn claim_conflict(
 ) -> Option<OrchestratorClaimCompatibilityConflict> {
     if !claim_modes_conflict(request.lease_mode, &claim.lease_mode) {
         return None;
+    }
+    // Process-level conflict: same process cannot have multiple conflicting claims.
+    if let (Some(req_pid), Some(claim_pid)) = (request.process_id, claim.process_id) {
+        if req_pid == claim_pid {
+            return Some(claim_conflict_payload("process", claim, None));
+        }
     }
     if request.task_id.is_some() && request.task_id == claim.task_id {
         return Some(claim_conflict_payload("task", claim, None));
@@ -347,6 +355,25 @@ impl StateStore {
             .await?;
         let rows: Vec<OrchestratorClaim> = query.take(0)?;
         Ok(rows)
+    }
+
+    /// Returns active orchestrator claims from OTHER sessions (not the current one).
+    /// Used for multi-session admission rule #3: a blocked task owned by session A
+    /// must not stop session B when session B is working on a different task.
+    pub(crate) async fn active_foreign_claims(
+        &self,
+        current_session_id: &str,
+    ) -> Result<Vec<OrchestratorClaim>, StateStoreError> {
+        let all_active = self.active_orchestrator_claims().await?;
+        Ok(all_active
+            .into_iter()
+            .filter(|claim| claim.orchestrator_session_id != current_session_id)
+            .filter(|claim| {
+                let status = claim.status.trim().to_ascii_lowercase();
+                // Include active, renewed, and blocked claims from other sessions
+                status == "active" || status == "renewed" || status == "blocked"
+            })
+            .collect())
     }
 
     pub(crate) async fn transfer_active_orchestrator_claims_to_session(
@@ -499,6 +526,7 @@ impl StateStore {
             state_root_id: request.state_root_id,
             worktree_environment_id: request.worktree_environment_id,
             orchestrator_session_id: request.orchestrator_session_id,
+            process_id: request.process_id,
             task_id: request.task_id,
             run_id: request.run_id,
             lane_id: request.lane_id,
@@ -638,6 +666,33 @@ impl StateStore {
         Ok(claim)
     }
 
+    pub(crate) async fn release_active_task_claims_for_task(
+        &self,
+        task_id: &str,
+        reason: &str,
+    ) -> Result<Vec<OrchestratorClaim>, StateStoreError> {
+        let _guard = ClaimAcquireGuard::acquire(self.root()).await?;
+        let now = claim_timestamp(claim_time());
+        let active = self.active_orchestrator_claims().await?;
+        let mut released = Vec::new();
+        for mut claim in active
+            .into_iter()
+            .filter(|claim| claim.task_id.as_deref() == Some(task_id))
+        {
+            claim.status = OrchestratorClaimStatus::Released.as_str().to_string();
+            claim.released_at = Some(now.clone());
+            claim.release_reason = Some(reason.to_string());
+            claim.resource_revision += 1;
+            let _: Option<OrchestratorClaim> = self
+                .db
+                .upsert(("orchestrator_claim", claim.claim_id.as_str()))
+                .content(claim.clone())
+                .await?;
+            released.push(claim);
+        }
+        Ok(released)
+    }
+
     #[cfg(test)]
     pub(crate) async fn mark_orchestrator_claim_blocked_for_test(
         &self,
@@ -764,6 +819,7 @@ mod tests {
             state_root_id: "state-root".to_string(),
             worktree_environment_id: "worktree".to_string(),
             orchestrator_session_id: session_id.to_string(),
+            process_id: None, // Use None for tests to avoid process-level conflicts
             task_id: Some(task_id.to_string()),
             run_id: Some(run_id.to_string()),
             lane_id: Some("lane".to_string()),
@@ -806,6 +862,47 @@ mod tests {
         assert_eq!(first.status, "active");
         assert_eq!(second.status, "active");
         assert_eq!(store.active_orchestrator_claims().await.unwrap().len(), 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn orchestrator_claim_observe_mode_does_not_self_conflict_by_process() {
+        let root = temp_state_dir("observe-process");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let process_id = Some(42);
+        let first = store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                process_id,
+                lease_mode: LeaseMode::Observe,
+                ..claim_request(
+                    "claim-1",
+                    "session-1",
+                    "task-1",
+                    "run-1",
+                    "domain-a",
+                    &["crates/vida/src/a.rs"],
+                )
+            })
+            .await
+            .expect("first observe claim");
+        let second = store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                process_id,
+                lease_mode: LeaseMode::Observe,
+                ..claim_request(
+                    "claim-2",
+                    "session-1",
+                    "task-2",
+                    "run-2",
+                    "domain-b",
+                    &["crates/vida/src/b.rs"],
+                )
+            })
+            .await
+            .expect("second observe claim from same process");
+
+        assert_eq!(first.status, "active");
+        assert_eq!(second.status, "active");
         let _ = fs::remove_dir_all(root);
     }
 

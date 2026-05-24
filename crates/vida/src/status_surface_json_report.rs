@@ -219,6 +219,18 @@ pub(crate) fn build_status_json_report(
         "current_session".to_string(),
         inputs.operator_session_projection["current_session"].clone(),
     );
+    object.insert(
+        "active_bounded_unit".to_string(),
+        inputs.continuation_binding["active_bounded_unit"].clone(),
+    );
+    object.insert(
+        "why_this_unit".to_string(),
+        inputs.continuation_binding["why_this_unit"].clone(),
+    );
+    object.insert(
+        "sequential_vs_parallel_posture".to_string(),
+        inputs.continuation_binding["sequential_vs_parallel_posture"].clone(),
+    );
     if !inputs.summary_only {
         object.insert(
             "operator_session_projection".to_string(),

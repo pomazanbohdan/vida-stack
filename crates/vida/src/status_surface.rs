@@ -91,6 +91,19 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
+    if as_json {
+        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+            &state_dir,
+            status_json_projection_name(summary_only),
+        ) {
+            println!(
+                "{}",
+                render_cached_status_projection_for_operator(summary_only, &cached)
+            );
+            return ExitCode::SUCCESS;
+        }
+    }
+
     match StateStore::open_existing_read_only_with_timeout(
         state_dir.clone(),
         STATUS_SURFACE_LOCK_TIMEOUT,
@@ -314,18 +327,21 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+                let all_tasks = match store.list_tasks(None, true).await {
+                    Ok(tasks) => tasks,
+                    Err(error) => {
+                        eprintln!("Failed to read tasks for TaskFlow active work truth: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
                 let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
                     match latest_run_graph_status.as_ref() {
-                        Some(status) => match store.show_task(&status.task_id).await {
-                            Ok(task) => (task.status == "closed", false),
-                            Err(state_store::StateStoreError::MissingTask { .. }) => (false, true),
-                            Err(error) => {
-                                eprintln!(
-                                    "Failed to read tasks for latest run-graph task state: {error}"
-                                );
-                                return ExitCode::from(1);
+                        Some(status) => {
+                            match all_tasks.iter().find(|task| task.id == status.task_id) {
+                                Some(task) => (task.status == "closed", false),
+                                None => (false, true),
                             }
-                        },
+                        }
                         None => (false, false),
                     };
                 let continuation_binding =
@@ -357,8 +373,27 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         latest_run_graph_task_closed,
                         latest_run_graph_task_missing,
                     );
-                let continuation_binding_ambiguous =
-                    continuation_binding["status"].as_str() == Some("ambiguous");
+                let in_progress_tasks = all_tasks
+                    .iter()
+                    .filter(|task| task.status == "in_progress")
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let taskflow_active_candidates =
+                    crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
+                        &in_progress_tasks,
+                    );
+                let has_taskflow_active_candidates = !taskflow_active_candidates.is_empty();
+                let continuation_binding =
+                    crate::continuation_binding_summary::add_taskflow_active_work_truth(
+                        continuation_binding,
+                        taskflow_active_candidates,
+                    );
+                let continuation_binding_ambiguous = continuation_binding["status"].as_str()
+                    == Some("ambiguous")
+                    && (has_taskflow_active_candidates
+                        || continuation_binding["continuation_required_now"]
+                            .as_bool()
+                            .unwrap_or(false));
                 let status_truth_inputs = build_status_truth_inputs(
                     store.root(),
                     runtime_consumption.latest_snapshot_path.as_deref(),
@@ -812,12 +847,12 @@ async fn refresh_cached_status_projection_runtime_fields(
         Ok(binding) => binding,
         Err(_) => return None,
     };
+    let all_tasks = store.list_tasks(None, true).await.ok()?;
     let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
         match latest_run_graph_status.as_ref() {
-            Some(status) => match store.show_task(&status.task_id).await {
-                Ok(task) => (task.status == "closed", false),
-                Err(state_store::StateStoreError::MissingTask { .. }) => (false, true),
-                Err(_) => return None,
+            Some(status) => match all_tasks.iter().find(|task| task.id == status.task_id) {
+                Some(task) => (task.status == "closed", false),
+                None => (false, true),
             },
             None => (false, false),
         };
@@ -851,6 +886,19 @@ async fn refresh_cached_status_projection_runtime_fields(
             latest_run_graph_task_closed,
             latest_run_graph_task_missing,
         );
+    let in_progress_tasks = all_tasks
+        .iter()
+        .filter(|task| task.status == "in_progress")
+        .cloned()
+        .collect::<Vec<_>>();
+    let taskflow_active_candidates =
+        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
+            &in_progress_tasks,
+        );
+    let continuation_binding = crate::continuation_binding_summary::add_taskflow_active_work_truth(
+        continuation_binding,
+        taskflow_active_candidates,
+    );
     let mut root_session_write_guard = payload["root_session_write_guard"].clone();
     root_session_write_guard =
         crate::status_surface_write_guard::merge_live_exception_takeover_write_guard_with_task_authority(
@@ -1185,8 +1233,13 @@ mod tests {
         restore_vida_session_id(saved_session_id);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn status_stale_projection_overlay_refreshes_continuation_binding() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::remove_var("VIDA_SESSION_ID");
+        }
         let nanos = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1200,6 +1253,24 @@ mod tests {
             .expect("open state store");
         store
             .create_task(state_store::CreateTaskRequest {
+                task_id: "task-live-status-parent",
+                title: "Live status overlay parent",
+                display_id: None,
+                description: "test parent",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: state_store::TaskExecutionSemantics::default(),
+                planner_metadata: state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("create live parent task");
+        store
+            .create_task(state_store::CreateTaskRequest {
                 task_id: "task-live-status",
                 title: "Live status overlay task",
                 display_id: None,
@@ -1207,7 +1278,7 @@ mod tests {
                 issue_type: "task",
                 status: "open",
                 priority: 1,
-                parent_id: None,
+                parent_id: Some("task-live-status-parent"),
                 labels: &[],
                 execution_semantics: state_store::TaskExecutionSemantics::default(),
                 planner_metadata: state_store::TaskPlannerMetadata::default(),
@@ -1287,6 +1358,7 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+        restore_vida_session_id(saved_session_id);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1310,6 +1382,24 @@ mod tests {
             .expect("open state store");
         store
             .create_task(state_store::CreateTaskRequest {
+                task_id: "task-foreign-status-parent",
+                title: "Foreign status parent",
+                display_id: None,
+                description: "test parent",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: state_store::TaskExecutionSemantics::default(),
+                planner_metadata: state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("create foreign parent task");
+        store
+            .create_task(state_store::CreateTaskRequest {
                 task_id: "task-foreign-status",
                 title: "Foreign status task",
                 display_id: None,
@@ -1317,7 +1407,7 @@ mod tests {
                 issue_type: "task",
                 status: "open",
                 priority: 1,
-                parent_id: None,
+                parent_id: Some("task-foreign-status-parent"),
                 labels: &[],
                 execution_semantics: state_store::TaskExecutionSemantics::default(),
                 planner_metadata: state_store::TaskPlannerMetadata::default(),

@@ -9873,6 +9873,7 @@ agent_system:
                 .expect("open store");
 
             let run_id = "run-specification-bridge";
+            let spec_parent_id = "feature-spec-bridge";
             let spec_task_id = "feature-spec-bridge-spec";
             let design_doc_path = root.join("docs/spec-bridge-design.md");
             fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
@@ -9883,6 +9884,24 @@ agent_system:
             let labels = vec!["spec-pack".to_string()];
             store
                 .create_task(crate::state_store::CreateTaskRequest {
+                    task_id: spec_parent_id,
+                    title: "Spec bridge feature",
+                    display_id: None,
+                    description: "",
+                    issue_type: "epic",
+                    status: "closed",
+                    priority: 0,
+                    parent_id: None,
+                    labels: &labels,
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create spec parent epic");
+            store
+                .create_task(crate::state_store::CreateTaskRequest {
                     task_id: spec_task_id,
                     title: "Closed spec pack",
                     display_id: None,
@@ -9890,7 +9909,7 @@ agent_system:
                     issue_type: "task",
                     status: "closed",
                     priority: 0,
-                    parent_id: None,
+                    parent_id: Some(spec_parent_id),
                     labels: &labels,
                     execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
                     planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
@@ -10089,6 +10108,7 @@ agent_system:
                 .expect("open store");
 
             let run_id = "run-specification-stale-design-blockers";
+            let spec_parent_id = "feature-spec-stale-design-blockers";
             let spec_task_id = "feature-spec-stale-design-blockers-spec";
             let design_doc_path = root.join("docs/spec-stale-design-blockers.md");
             fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
@@ -10102,6 +10122,24 @@ agent_system:
             let labels = vec!["spec-pack".to_string()];
             store
                 .create_task(CreateTaskRequest {
+                    task_id: spec_parent_id,
+                    title: "Stale design blocker feature",
+                    display_id: None,
+                    description: "",
+                    issue_type: "epic",
+                    status: "closed",
+                    priority: 0,
+                    parent_id: None,
+                    labels: &labels,
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create closed spec parent");
+            store
+                .create_task(CreateTaskRequest {
                     task_id: spec_task_id,
                     title: "Closed stale spec pack",
                     display_id: None,
@@ -10109,7 +10147,7 @@ agent_system:
                     issue_type: "task",
                     status: "closed",
                     priority: 0,
-                    parent_id: None,
+                    parent_id: Some(spec_parent_id),
                     labels: &labels,
                     execution_semantics: TaskExecutionSemantics::default(),
                     planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
@@ -11974,6 +12012,24 @@ agent_system:
 
         store
             .create_task(CreateTaskRequest {
+                task_id: "task-close-heal-parent",
+                title: "Task close heal parent",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "closed",
+                priority: 0,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create closed task parent");
+        store
+            .create_task(CreateTaskRequest {
                 task_id: "task-close-heal",
                 title: "Closed task",
                 display_id: None,
@@ -11981,7 +12037,7 @@ agent_system:
                 issue_type: "task",
                 status: "closed",
                 priority: 0,
-                parent_id: None,
+                parent_id: Some("task-close-heal-parent"),
                 labels: &[],
                 execution_semantics: TaskExecutionSemantics::default(),
                 planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
@@ -14132,6 +14188,24 @@ agent_system:
         let labels: Vec<String> = Vec::new();
         store
             .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "active-downstream-result-parent",
+                title: "Active downstream result parent",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create parent task");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
                 task_id: run_id,
                 title: "Active downstream blocked result",
                 display_id: None,
@@ -14139,7 +14213,7 @@ agent_system:
                 issue_type: "task",
                 status: "open",
                 priority: 1,
-                parent_id: None,
+                parent_id: Some("active-downstream-result-parent"),
                 labels: &labels,
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
                 planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
@@ -16796,6 +16870,24 @@ agent_system:
         let store = StateStore::open(root.clone()).await.expect("open store");
         store
             .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "feature-resume-parent",
+                title: "Resume parent",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "closed",
+                priority: 2,
+                parent_id: None,
+                labels: &[String::from("dev-pack")],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("parent task should be created");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
                 task_id: "feature-resume-dev",
                 title: "Resume dev task",
                 display_id: None,
@@ -16803,7 +16895,7 @@ agent_system:
                 issue_type: "task",
                 status: "closed",
                 priority: 2,
-                parent_id: None,
+                parent_id: Some("feature-resume-parent"),
                 labels: &[String::from("dev-pack")],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
                 planner_metadata: crate::state_store::TaskPlannerMetadata::default(),

@@ -16,10 +16,42 @@ pub(crate) async fn build_operator_session_projection(
         );
     let auto_claim_summary =
         ensure_current_session_claims_for_active_tasks(store, &current_session).await?;
+    let tasks = store.list_tasks(None, true).await?;
+    let active_task_ids = tasks
+        .iter()
+        .filter(|task| task.status == "in_progress" && task.issue_type != "epic")
+        .map(|task| task.id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
     let active_claims = store.active_orchestrator_claims().await?;
+    let is_active_task_claim = |claim: &crate::state_store::OrchestratorClaim| {
+        claim
+            .task_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|task_id| !task_id.is_empty())
+            .map(|task_id| active_task_ids.contains(task_id))
+            .unwrap_or(true)
+    };
+    let inactive_task_claims = active_claims
+        .iter()
+        .filter(|claim| !is_active_task_claim(claim))
+        .map(|claim| {
+            serde_json::json!({
+                "claim_id": claim.claim_id,
+                "orchestrator_session_id": claim.orchestrator_session_id,
+                "task_id": claim.task_id,
+                "run_id": claim.run_id,
+                "conflict_domain": claim.conflict_domain,
+                "lease_mode": claim.lease_mode,
+                "status": claim.status,
+                "classification": "inactive_task_claim",
+            })
+        })
+        .collect::<Vec<_>>();
     let current_session_task_claims = active_claims
         .iter()
         .filter(|claim| claim.orchestrator_session_id == current_session_id)
+        .filter(|claim| is_active_task_claim(claim))
         .filter(|claim| {
             claim
                 .task_id
@@ -43,6 +75,7 @@ pub(crate) async fn build_operator_session_projection(
         .iter()
         .filter(|claim| claim.orchestrator_session_id != current_session_id)
         .filter(|claim| !stale_session_ids.contains(&claim.orchestrator_session_id))
+        .filter(|claim| is_active_task_claim(claim))
         .cloned()
         .collect::<Vec<_>>();
     let project_foreign_runs = project_foreign_claims
@@ -122,6 +155,7 @@ pub(crate) async fn build_operator_session_projection(
         "current_session_task_claims": current_session_task_claims,
         "auto_claimed_active_tasks": auto_claim_summary["auto_claimed_active_tasks"].clone(),
         "active_task_claim_blockers": auto_claim_summary["active_task_claim_blockers"].clone(),
+        "inactive_task_claims": inactive_task_claims,
         "global_blockers": global_blockers,
         "claim_conflicts": claim_conflicts,
         "runtime_owner_evidence": {
@@ -194,6 +228,7 @@ async fn ensure_current_session_claims_for_active_tasks(
                 state_root_id: state_root_id.clone(),
                 worktree_environment_id: worktree_environment_id.to_string(),
                 orchestrator_session_id: current_session_id.to_string(),
+                process_id: Some(std::process::id()),
                 task_id: Some(task.id.clone()),
                 run_id: None,
                 lane_id: None,
@@ -260,6 +295,8 @@ mod tests {
     ) -> serde_json::Value {
         let mut other = current.clone();
         other["session_id"] = serde_json::Value::String(session_id.to_string());
+        other["identity_source"] = serde_json::Value::String("VIDA_SESSION_ID".to_string());
+        other["fallback_replaces_legacy_stable_worktree_state_hash"] = serde_json::Value::Null;
         other["process_id"] = serde_json::Value::Number(process_id.into());
         other["owner_annotation"] = serde_json::Value::String("foreign_session".to_string());
         other
@@ -412,6 +449,7 @@ mod tests {
                 state_root_id: root.display().to_string(),
                 worktree_environment_id: "worktree".to_string(),
                 orchestrator_session_id: "foreign-session".to_string(),
+                process_id: Some(std::process::id()),
                 task_id: Some("active-foreign".to_string()),
                 run_id: None,
                 lane_id: None,
@@ -528,6 +566,7 @@ mod tests {
                 state_root_id: "state-root".to_string(),
                 worktree_environment_id: "worktree".to_string(),
                 orchestrator_session_id: "stale-foreign-session".to_string(),
+                process_id: Some(std::process::id()),
                 task_id: Some("task-foreign".to_string()),
                 run_id: Some("run-foreign".to_string()),
                 lane_id: Some("lane".to_string()),
@@ -553,6 +592,57 @@ mod tests {
             .as_array()
             .expect("foreign runs")
             .is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn projection_omits_claim_conflicts_for_inactive_task_claims() {
+        let root = temp_state_dir("inactive-task-claim");
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        store
+            .persist_task_record(task_record("closed-task", "closed"))
+            .await
+            .expect("persist closed task");
+        store
+            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
+                claim_id: "claim-closed-task".to_string(),
+                state_root_id: root.display().to_string(),
+                worktree_environment_id: "worktree".to_string(),
+                orchestrator_session_id: "foreign-session".to_string(),
+                process_id: Some(std::process::id()),
+                task_id: Some("closed-task".to_string()),
+                run_id: None,
+                lane_id: None,
+                claim_kind: "active_task_session_claim".to_string(),
+                conflict_domain: Some("task:closed-task".to_string()),
+                owned_paths: vec!["crates/vida/src/operator_session_projection.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: crate::state_store::LeaseMode::Observe,
+                lease_seconds: 3600,
+            })
+            .await
+            .expect("claim");
+
+        let projection = build_operator_session_projection(&store)
+            .await
+            .expect("projection");
+
+        assert!(projection["claim_conflicts"]
+            .as_array()
+            .expect("claim conflicts")
+            .is_empty());
+        assert!(projection["project_foreign_runs"]
+            .as_array()
+            .expect("foreign runs")
+            .is_empty());
+        assert!(projection["inactive_task_claims"]
+            .as_array()
+            .expect("inactive task claims")
+            .iter()
+            .any(|claim| claim["claim_id"] == "claim-closed-task"));
 
         let _ = std::fs::remove_dir_all(root);
     }

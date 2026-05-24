@@ -596,6 +596,137 @@ fn raw_authoritative_dispatch_blocker_codes(
     blocker_codes
 }
 
+/// Checks if a task conflicts with any foreign (other session) claims
+/// Conflict conditions (from multi-orchestrator-session-ownership-and-claims-design.md):
+/// 1. Foreign claim has lease_mode == "exclusive" AND same conflict_domain
+/// 2. Foreign claim has lease_mode == "exclusive" AND intersecting owned_paths
+/// 3. Foreign claim has lease_mode == "exclusive" AND same task_id or run_id
+/// 4. Foreign claim status == "blocked" (regardless of lease mode, as it indicates active work)
+fn has_foreign_claim_conflict(
+    task: Option<&GraphSummaryTaskRef>,
+    current_session_id: &str,
+    foreign_claims: &[crate::state_store::OrchestratorClaim],
+) -> bool {
+    let Some(task) = task else {
+        return false;
+    };
+
+    for claim in foreign_claims {
+        // Skip claims from current session
+        if claim.orchestrator_session_id == current_session_id {
+            continue;
+        }
+
+        // Skip expired claims
+        if claim.status == "expired" || claim.status == "stale" {
+            continue;
+        }
+
+        // Check if claim is blocked - this always blocks
+        if claim.status == "blocked" {
+            // Only block if the claim intersects with our work
+            if claim_conflicts_with_task(claim, task) {
+                return true;
+            }
+        }
+
+        // Check for exclusive lease mode conflicts
+        if claim.lease_mode == "exclusive" {
+            if claim_conflicts_with_task(claim, task) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Checks if a claim conflicts with a task based on conflict domain, paths, or direct resource overlap
+fn claim_conflicts_with_task(
+    claim: &crate::state_store::OrchestratorClaim,
+    task: &GraphSummaryTaskRef,
+) -> bool {
+    // Same task_id
+    if claim.task_id.as_deref() == Some(task.id.as_str()) {
+        return true;
+    }
+
+    // Same conflict_domain
+    if let Some(claim_domain) = claim.conflict_domain.as_deref() {
+        if task.conflict_domain.as_deref() == Some(claim_domain) {
+            return true;
+        }
+    }
+
+    // Intersecting owned_paths
+    if !claim.owned_paths.is_empty() && !task.owned_paths.is_empty() {
+        for claim_path in &claim.owned_paths {
+            for task_path in &task.owned_paths {
+                if paths_intersect(claim_path, task_path) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+fn normalize_conflict_path(path: &str) -> Option<String> {
+    let mut value = path.trim().replace('\\', "/");
+    while let Some(stripped) = value.strip_prefix("./") {
+        value = stripped.to_string();
+    }
+    let mut parts = Vec::new();
+    for part in value.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            value => parts.push(value),
+        }
+    }
+    value = parts.join("/");
+    #[cfg(windows)]
+    {
+        value = value.to_ascii_lowercase();
+    }
+    value = value.trim_matches('/').to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+/// Checks if two normalized paths intersect on segment boundaries.
+pub(crate) fn paths_intersect(path1: &str, path2: &str) -> bool {
+    let Some(p1) = normalize_conflict_path(path1) else {
+        return false;
+    };
+    let Some(p2) = normalize_conflict_path(path2) else {
+        return false;
+    };
+    p1 == p2
+        || p1
+            .strip_prefix(p2.as_str())
+            .is_some_and(|suffix| suffix.starts_with('/'))
+        || p2
+            .strip_prefix(p1.as_str())
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+/// Filters claims to only active foreign claims (not from current session, not expired/stale)
+fn active_foreign_claims<'a>(
+    all_claims: &'a [crate::state_store::OrchestratorClaim],
+    current_session_id: &str,
+) -> Vec<&'a crate::state_store::OrchestratorClaim> {
+    all_claims
+        .iter()
+        .filter(|claim| claim.orchestrator_session_id != current_session_id)
+        .filter(|claim| {
+            let status = claim.status.trim().to_ascii_lowercase();
+            status == "active" || status == "blocked" || status == "renewed"
+        })
+        .collect()
+}
+
 fn extend_graph_summary_next_actions(
     next_actions: &mut Vec<String>,
     decision: &TaskflowNextDecision,
@@ -2724,6 +2855,21 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
             .map_err(|error| format!("Failed to classify latest run-graph ownership: {error}"))?,
         None => false,
     };
+
+    // Get current session ID and foreign claims for multi-session admission rule #3
+    // A blocked task owned by session A must not stop session B when session B is working on
+    // a different task, a disjoint path set, or an observe-only diagnosis.
+    let owner_evidence =
+        crate::orchestrator_session_surface::build_runtime_owner_evidence(state_dir, false)
+            .map_err(|error| format!("Failed to build runtime owner evidence: {error}"))?;
+    let current_session_id = owner_evidence["current_session"]["session_id"]
+        .as_str()
+        .unwrap_or_default();
+    let active_foreign_claims = store
+        .active_foreign_claims(&current_session_id)
+        .await
+        .map_err(|error| format!("Failed to read active foreign orchestrator claims: {error}"))?;
+
     let decision = build_taskflow_next_decision(
         ready_tasks.first(),
         recovery_holds_unresolved_active_bound_run(recovery.as_ref(), dispatch.as_ref()),
@@ -2737,6 +2883,8 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
         latest_run_graph_legacy_ownerless,
         explicit_binding.as_ref(),
         terminal_consume_continue_run_id.as_deref(),
+        current_session_id,
+        &active_foreign_claims,
     );
     if latest_run_graph.is_none()
         && explicit_task_binding_matches_ready_task(explicit_binding.as_ref(), ready_tasks.first())
@@ -2888,6 +3036,8 @@ fn build_taskflow_next_decision(
     latest_run_graph_legacy_ownerless: bool,
     explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     terminal_consume_continue_run_id: Option<&str>,
+    current_session_id: &str,
+    active_foreign_claims: &[crate::state_store::OrchestratorClaim],
 ) -> TaskflowNextDecision {
     let ready_head = ready_head.map(graph_summary_task_ref);
     let latest_run_graph_status_is_blocked =
@@ -2927,6 +3077,18 @@ fn build_taskflow_next_decision(
     let completed_without_explicit_next_unit =
         terminal_completed_without_next_unit(latest_run_graph_status)
             && !explicit_next_task_binding;
+
+    // Check for foreign claim conflicts (multi-session admission rule #3)
+    // A blocked task owned by session A must not stop session B when session B is working on
+    // a different task, a disjoint path set, or an observe-only diagnosis.
+    // But if another live session holds an active exclusive claim on the same task/run,
+    // intersecting owned paths, or same exclusive conflict domain, we must block.
+    let foreign_claim_blocks_admission = has_foreign_claim_conflict(
+        ready_head.as_ref(),
+        current_session_id,
+        active_foreign_claims,
+    );
+
     let admissibility_gate = if recovery_holds_current_active_bound_run {
         "delegated_cycle_runtime_gate".to_string()
     } else if active_exception_takeover_continuation {
@@ -2935,6 +3097,8 @@ fn build_taskflow_next_decision(
         "terminal_continue_snapshot_without_next_bounded_unit".to_string()
     } else if latest_run_graph_status_blocks_admission {
         "latest_run_graph_status_blocked".to_string()
+    } else if foreign_claim_blocks_admission {
+        "foreign_claim_conflict_blocked".to_string()
     } else if completed_without_explicit_next_unit {
         "completed_without_explicit_next_bounded_unit".to_string()
     } else if ready_head.is_some() {
@@ -2951,6 +3115,7 @@ fn build_taskflow_next_decision(
             || active_exception_takeover_continuation
             || terminal_consume_continue_without_next_unit
             || latest_run_graph_status_blocks_admission
+            || foreign_claim_blocks_admission
             || completed_without_explicit_next_unit),
         admissibility_gate,
     };
@@ -3147,6 +3312,37 @@ fn build_taskflow_next_decision(
                     summary: "The latest run graph is blocked, so `vida taskflow next` must not present a ready backlog task as dispatchable.".to_string(),
                     blocker_codes: blocker_codes.clone(),
                     blocking_surface: Some("vida taskflow recovery status".to_string()),
+                }),
+                Some(next_action),
+            )
+        } else if foreign_claim_blocks_admission {
+            // Multi-session admission rule #3: reject if another live session holds an active
+            // exclusive claim on the same task/run, intersecting owned paths, or same exclusive conflict domain
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::ForeignClaimConflictBlocked,
+            ) {
+                blocker_codes.push(code);
+            }
+            next_actions.push(
+                "Another orchestrator session holds an active exclusive claim on the same task, run, conflict domain, or intersecting paths. Wait for that session to complete or explicitly reclaim/supersede the claim before continuing.".to_string(),
+            );
+            next_actions.push(
+                "Inspect active sessions and claims with `vida orchestrator-session show --json` to identify the conflicting session.".to_string(),
+            );
+            let next_action = TaskflowNextAction {
+                command: "vida orchestrator-session show --json".to_string(),
+                surface: "vida orchestrator-session show".to_string(),
+                reason: "another live session holds a conflicting exclusive claim; inspect session ownership before continuing".to_string(),
+            };
+            (
+                Some(next_action.command.clone()),
+                Some(next_action.surface.clone()),
+                None,
+                Some(TaskflowNextWhyNotNow {
+                    category: "foreign_claim_conflict_blocked".to_string(),
+                    summary: "Another orchestrator session holds an active exclusive claim on the same task, run, conflict domain, or intersecting paths, so `vida taskflow next` must not admit backlog work.".to_string(),
+                    blocker_codes: blocker_codes.clone(),
+                    blocking_surface: Some("vida orchestrator-session show".to_string()),
                 }),
                 Some(next_action),
             )
@@ -3997,6 +4193,39 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         },
         _ => false,
     };
+
+    // Get current session ID and foreign claims for multi-session admission rule #3
+    let owner_evidence = match crate::orchestrator_session_surface::build_runtime_owner_evidence(
+        &state_dir, false,
+    ) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            eprintln!("Failed to build runtime owner evidence: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let current_session_id = owner_evidence["current_session"]["session_id"]
+        .as_str()
+        .unwrap_or_default();
+    let active_claims = match store.as_ref() {
+        Some(store) => match store.active_orchestrator_claims().await {
+            Ok(claims) => claims,
+            Err(error) => {
+                eprintln!("Failed to read active orchestrator claims: {error}");
+                return ExitCode::from(1);
+            }
+        },
+        None => Vec::new(),
+    };
+    let active_foreign_claims: Vec<_> = active_claims
+        .into_iter()
+        .filter(|claim| claim.orchestrator_session_id != current_session_id)
+        .filter(|claim| {
+            let status = claim.status.trim().to_ascii_lowercase();
+            status == "active" || status == "blocked" || status == "renewed"
+        })
+        .collect();
+
     let decision = build_taskflow_next_decision(
         ready_tasks.first(),
         recovery_holds_active_bound_run,
@@ -4013,6 +4242,8 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             .ok()
             .flatten()
             .as_deref(),
+        current_session_id,
+        &active_foreign_claims,
     );
     let (shared_fields, operator_contracts, artifact_refs) = taskflow_next_operator_contracts(
         &decision,
@@ -4345,6 +4576,37 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         crate::latest_terminal_consume_continue_snapshot_run_id(&proxy_state_root)
             .ok()
             .flatten();
+
+    // Get current session ID and foreign claims for multi-session admission rule #3
+    let owner_evidence = match crate::orchestrator_session_surface::build_runtime_owner_evidence(
+        &proxy_state_root,
+        false,
+    ) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            eprintln!("Failed to build runtime owner evidence: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let current_session_id = owner_evidence["current_session"]["session_id"]
+        .as_str()
+        .unwrap_or_default();
+    let active_claims = match store.active_orchestrator_claims().await {
+        Ok(claims) => claims,
+        Err(error) => {
+            eprintln!("Failed to read active orchestrator claims: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let active_foreign_claims: Vec<_> = active_claims
+        .into_iter()
+        .filter(|claim| claim.orchestrator_session_id != current_session_id)
+        .filter(|claim| {
+            let status = claim.status.trim().to_ascii_lowercase();
+            status == "active" || status == "blocked" || status == "renewed"
+        })
+        .collect();
+
     let waves = build_graph_summary_waves(&all_tasks, &ready_tasks, &blocked_tasks);
     let continuation_decision = build_taskflow_next_decision(
         ready_tasks.first(),
@@ -4359,6 +4621,8 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         latest_run_graph_legacy_ownerless,
         explicit_binding.as_ref(),
         terminal_consume_continue_run_id.as_deref(),
+        current_session_id,
+        &active_foreign_claims,
     );
     let continuation_binding_summary =
         crate::continuation_binding_summary::build_continuation_binding_summary_with_task_authority(
@@ -6296,6 +6560,23 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[test]
+    fn multi_session_paths_intersect_on_segment_boundaries_only() {
+        assert!(super::paths_intersect(
+            "crates/vida/src",
+            "./crates/vida/src/taskflow_proxy.rs"
+        ));
+        assert!(super::paths_intersect(
+            "crates\\vida\\src\\taskflow_proxy.rs",
+            "crates/vida/src/taskflow_proxy.rs"
+        ));
+        assert!(!super::paths_intersect(
+            "crates/vida/src/foo.rs",
+            "crates/vida/src/foo.rs.bak"
+        ));
+        assert!(!super::paths_intersect("", "crates/vida/src"));
+    }
+
+    #[test]
     fn cached_operator_projection_exit_code_preserves_blocked_status() {
         assert_eq!(
             cached_operator_projection_exit_code(r#"{"status":"pass"}"#),
@@ -6800,6 +7081,7 @@ mod tests {
                 state_root_id: "state-root".to_string(),
                 worktree_environment_id: "worktree".to_string(),
                 orchestrator_session_id: "foreign-session".to_string(),
+                process_id: None,
                 task_id: Some("foreign-blocked-task".to_string()),
                 run_id: Some("foreign-blocked-run".to_string()),
                 lane_id: Some("foreign-lane".to_string()),
@@ -6925,6 +7207,8 @@ mod tests {
             false,
             None,
             None,
+            "test-session",
+            &[],
         );
 
         assert_eq!(blocked_decision.status, "blocked");
@@ -6966,6 +7250,8 @@ mod tests {
             false,
             Some(&explicit_binding),
             None,
+            "test-session",
+            &[],
         );
 
         assert_eq!(allowed_decision.status, "pass");
@@ -7056,6 +7342,8 @@ mod tests {
             true,
             Some(&explicit_binding),
             None,
+            "test-session",
+            &[],
         );
 
         assert_eq!(decision.status, "pass");
@@ -7115,6 +7403,8 @@ mod tests {
             true,
             Some(&explicit_binding),
             None,
+            "test-session",
+            &[],
         );
 
         assert_eq!(decision.status, "blocked");
@@ -7157,6 +7447,8 @@ mod tests {
             false,
             None,
             None,
+            "test-session",
+            &[],
         );
 
         assert_eq!(decision.status, "blocked");
@@ -7438,6 +7730,7 @@ mod tests {
             state_root_id: "state-root".to_string(),
             worktree_environment_id: "worktree".to_string(),
             orchestrator_session_id: "other-session".to_string(),
+            process_id: None,
             task_id: None,
             run_id: None,
             lane_id: None,
@@ -9229,6 +9522,8 @@ agent_system:
             false,
             None,
             Some("run-terminal"),
+            "test-session",
+            &[],
         );
         let summary = serde_json::json!({
             "status": "ambiguous",
@@ -9416,6 +9711,8 @@ agent_system:
             false,
             None,
             None,
+            "test-session",
+            &[],
         );
 
         assert_eq!(decision.status, "blocked");
@@ -9505,6 +9802,8 @@ agent_system:
             false,
             None,
             None,
+            "test-session",
+            &[],
         );
 
         assert_eq!(decision.status, "blocked");
@@ -9556,6 +9855,8 @@ agent_system:
             false,
             None,
             None,
+            "test-session",
+            &[],
         );
 
         assert_eq!(decision.status, "blocked");
@@ -9661,6 +9962,8 @@ agent_system:
             false,
             Some(&stale_binding),
             None,
+            "test-session",
+            &[],
         );
 
         assert_eq!(decision.status, "pass");
@@ -9726,6 +10029,8 @@ agent_system:
             false,
             None,
             None,
+            "test-session",
+            &[],
         );
 
         assert_eq!(decision.status, "pass");
@@ -9796,6 +10101,8 @@ agent_system:
             false,
             None,
             Some("runtime-audit-state-store-init-lock-timeout"),
+            "test-session",
+            &[],
         );
 
         assert_eq!(decision.status, "blocked");
@@ -9898,6 +10205,8 @@ agent_system:
             false,
             Some(&binding),
             Some("closed-run"),
+            "test-session",
+            &[],
         );
 
         assert_eq!(decision.status, "pass");
@@ -9980,6 +10289,8 @@ agent_system:
             false,
             None,
             Some("closed-run"),
+            "test-session",
+            &[],
         );
 
         assert_eq!(decision.status, "blocked");
@@ -10056,6 +10367,8 @@ agent_system:
             false,
             None,
             None,
+            "test-session",
+            &[],
         );
 
         assert_eq!(decision.status, "blocked");
@@ -10133,6 +10446,8 @@ agent_system:
             false,
             None,
             None,
+            "test-session",
+            &[],
         );
         let mut next_actions = decision.next_actions.clone();
 
@@ -10170,6 +10485,8 @@ agent_system:
             false,
             None,
             None,
+            "test-session",
+            &[],
         );
         let mut next_actions = decision.next_actions.clone();
 
@@ -10230,6 +10547,8 @@ agent_system:
             false,
             Some(&stale_binding),
             None,
+            "test-session",
+            &[],
         );
 
         assert_eq!(
@@ -10305,6 +10624,8 @@ agent_system:
             false,
             None,
             None,
+            "test-session",
+            &[],
         );
 
         assert_eq!(decision.status, "blocked");

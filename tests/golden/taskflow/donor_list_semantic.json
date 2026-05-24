@@ -30,5 +30,13 @@
     "dependency_edge_types": [
       "parent-child"
     ]
+  },
+  {
+    "id": "vida-c",
+    "status": "closed",
+    "priority": 3,
+    "issue_type": "task",
+    "dependency_targets": [],
+    "dependency_edge_types": []
   }
 ]

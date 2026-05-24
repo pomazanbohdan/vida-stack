@@ -264,12 +264,19 @@ fn merge_current_session(
     let legacy_synthesized_prefix =
         stable_fallback_id.replacen("local-worktree-", "local-session-", 1);
     sessions.retain(|session| {
-        !(session["identity_source"].as_str() == Some("synthesized_local_session_token")
+        let is_legacy_stale = session["identity_source"].as_str()
+            == Some("synthesized_local_session_token")
             && (session["fallback_replaces_legacy_stable_worktree_state_hash"].as_str()
                 == Some(stable_fallback_id.as_str())
                 || session["session_id"]
                     .as_str()
-                    .is_some_and(|id| id.starts_with(&format!("{legacy_synthesized_prefix}-")))))
+                    .is_some_and(|id| id.starts_with(&format!("{legacy_synthesized_prefix}-"))));
+
+        let is_stale_generated = session["identity_source"].as_str()
+            == Some("generated_local_session_token")
+            && session["session_id"].as_str() != Some(current_id.as_str());
+
+        !(is_legacy_stale || is_stale_generated)
     });
     let mut replaced = false;
     for session in &mut sessions {

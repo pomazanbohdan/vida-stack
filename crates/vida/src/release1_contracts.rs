@@ -1165,6 +1165,7 @@ pub(crate) enum BlockerCode {
     EmptyEffectiveBundleArtifactCount,
     MissingEffectiveBundleReceipt,
     NoReadyTasks,
+    ForeignClaimConflictBlocked,
     ExecutionPreparationGateBlocked,
     TaskGraphEmpty,
     MissingDocflowActivation,
@@ -1345,6 +1346,7 @@ impl BlockerCode {
             Self::EmptyEffectiveBundleArtifactCount => "empty_effective_bundle_artifact_count",
             Self::MissingEffectiveBundleReceipt => "missing_effective_bundle_receipt",
             Self::NoReadyTasks => "no_ready_tasks",
+            Self::ForeignClaimConflictBlocked => "foreign_claim_conflict_blocked",
             Self::ExecutionPreparationGateBlocked => "execution_preparation_gate_blocked",
             Self::TaskGraphEmpty => "task_graph_empty",
             Self::MissingDocflowActivation => "missing_docflow_activation",
@@ -1541,6 +1543,7 @@ impl BlockerCode {
             }
             "missing_effective_bundle_receipt" => Some(Self::MissingEffectiveBundleReceipt),
             "no_ready_tasks" => Some(Self::NoReadyTasks),
+            "foreign_claim_conflict_blocked" => Some(Self::ForeignClaimConflictBlocked),
             "execution_preparation_gate_blocked" => Some(Self::ExecutionPreparationGateBlocked),
             "task_graph_empty" => Some(Self::TaskGraphEmpty),
             "missing_docflow_activation" => Some(Self::MissingDocflowActivation),
