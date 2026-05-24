@@ -1827,6 +1827,23 @@ mod tests {
                     .expect("state store should open");
                 runtime
                     .block_on(store.create_task(crate::state_store::CreateTaskRequest {
+                        task_id: "run-agent-init-timeout-epic",
+                        title: "Timeout dispatch fixture epic",
+                        display_id: None,
+                        description: "Parent epic for the timeout dispatch fixture",
+                        issue_type: "epic",
+                        status: "open",
+                        priority: 1,
+                        parent_id: None,
+                        labels: &[],
+                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                        created_by: "test",
+                        source_repo: "",
+                    }))
+                    .expect("timeout fixture parent should exist");
+                runtime
+                    .block_on(store.create_task(crate::state_store::CreateTaskRequest {
                         task_id: "run-agent-init-timeout",
                         title: "Timeout dispatch fixture",
                         display_id: None,
@@ -1834,7 +1851,7 @@ mod tests {
                         issue_type: "defect",
                         status: "open",
                         priority: 1,
-                        parent_id: None,
+                        parent_id: Some("run-agent-init-timeout-epic"),
                         labels: &[],
                         execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
                         planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
