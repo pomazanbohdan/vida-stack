@@ -928,6 +928,22 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
     assert!(
         list_stdout.contains("\"id\": \"vida-a\"") || list_stdout.contains("\"id\":\"vida-a\"")
     );
+    let list_json: Value = serde_json::from_str(&list_stdout).expect("task list json should parse");
+    let list_task_a = task_row_by_id(&list_json, "vida-a");
+    assert_eq!(list_task_a["parent_id"], "vida-root");
+    assert_eq!(list_task_a["parent_edge"]["parent_id"], "vida-root");
+    assert_eq!(list_task_a["parent_edge"]["edge_type"], "parent-child");
+
+    let summary_list_stdout = run_and_assert_success(
+        &["task", "list", "--all", "--summary", "--json"],
+        &state_dir,
+    );
+    let summary_list_json: Value =
+        serde_json::from_str(&summary_list_stdout).expect("summary task list json should parse");
+    let summary_task_a = task_row_by_id(&summary_list_json, "vida-a");
+    assert_eq!(summary_task_a["parent_id"], "vida-root");
+    assert_eq!(summary_task_a["parent_edge"]["parent_id"], "vida-root");
+    assert_eq!(summary_task_a["parent_edge"]["edge_type"], "parent-child");
 
     let ready_stdout = run_and_assert_success(&["task", "ready", "--json"], &state_dir);
     assert!(

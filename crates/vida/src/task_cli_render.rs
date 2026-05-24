@@ -169,6 +169,48 @@ fn task_list_output_policy(summary_only: bool, explicit_full: bool) -> serde_jso
     })
 }
 
+fn task_parent_edge_value(task: &TaskRecord) -> serde_json::Value {
+    task.dependencies
+        .iter()
+        .find(|dependency| dependency.edge_type == "parent-child")
+        .map(|dependency| {
+            serde_json::json!({
+                "parent_id": dependency.depends_on_id,
+                "edge_type": dependency.edge_type,
+                "metadata": dependency.metadata,
+                "thread_id": dependency.thread_id,
+                "created_at": dependency.created_at,
+                "created_by": dependency.created_by,
+            })
+        })
+        .unwrap_or(serde_json::Value::Null)
+}
+
+fn task_list_row_value(task: &TaskRecord, full: bool) -> serde_json::Value {
+    let parent_edge = task_parent_edge_value(task);
+    let parent_id = parent_edge
+        .get("parent_id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    if full {
+        let mut value = serde_json::to_value(task).expect("task record should serialize");
+        value["parent_id"] = parent_id;
+        value["parent_edge"] = parent_edge;
+        return value;
+    }
+
+    serde_json::json!({
+        "id": task.id,
+        "display_id": task.display_id,
+        "status": task.status,
+        "title": task.title,
+        "priority": task.priority,
+        "issue_type": task.issue_type,
+        "parent_id": parent_id,
+        "parent_edge": parent_edge,
+    })
+}
+
 pub(crate) fn print_task_list(
     render: RenderMode,
     tasks: &[TaskRecord],
@@ -186,14 +228,7 @@ pub(crate) fn print_task_list(
                 "output_policy": output_policy,
                 "view": "summary",
                 "task_count": tasks.len(),
-                "tasks": tasks.iter().map(|task| serde_json::json!({
-                    "id": task.id,
-                    "display_id": task.display_id,
-                    "status": task.status,
-                    "title": task.title,
-                    "priority": task.priority,
-                    "issue_type": task.issue_type,
-                })).collect::<Vec<_>>(),
+                "tasks": tasks.iter().map(|task| task_list_row_value(task, false)).collect::<Vec<_>>(),
             }),
         )
     } else {
@@ -204,7 +239,7 @@ pub(crate) fn print_task_list(
                 "output_policy": output_policy,
                 "view": "full",
                 "task_count": tasks.len(),
-                "tasks": tasks,
+                "tasks": tasks.iter().map(|task| task_list_row_value(task, true)).collect::<Vec<_>>(),
             }),
         )
     };
