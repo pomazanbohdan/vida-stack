@@ -4165,6 +4165,66 @@ fn case11_agent_init_timeout_bridge_remains_blocked_evidence_without_impossible_
 }
 
 #[test]
+fn agent_init_execute_dispatch_missing_packet_json_is_operator_envelope() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let output = run_command_capture(
+        &[
+            "agent-init",
+            "--json",
+            "--role",
+            "worker",
+            "--execute-dispatch",
+            "Implement bounded change",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !output.status.success(),
+        "packetless execute-dispatch must fail closed"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "json mode should not emit plain stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "packetless execute-dispatch should render parseable json: {error}; stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+
+    assert_eq!(payload["surface"], "vida agent-init");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_code"],
+        "agent_init_execute_dispatch_missing_packet"
+    );
+    assert_eq!(
+        payload["operator_contracts"]["blocker_codes"][0],
+        "agent_init_execute_dispatch_missing_packet"
+    );
+    assert_eq!(
+        payload["shared_fields"]["artifact_refs"]["required_packet_flags"][0],
+        "--dispatch-packet"
+    );
+    assert!(payload["next_actions"][1]
+        .as_str()
+        .expect("second next action should render")
+        .contains("vida agent-init --dispatch-packet <path> --execute-dispatch --json"));
+    assert_eq!(
+        payload["dispatch_mode"]["missing_execution_evidence_semantics"],
+        "non_executing_bridge_blocker"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_next_lawful_prefers_authoritative_active_task_over_stale_missing_source_drift() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

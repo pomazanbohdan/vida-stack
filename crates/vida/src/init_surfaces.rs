@@ -18,6 +18,8 @@ const COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS: u64 = 30;
 const BOOT_RELEASE_VERIFICATION_RETRY_DELAY_MS: u64 = 25;
 const INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS: u64 = 45;
 const LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS: u64 = 30;
+const AGENT_INIT_EXECUTE_DISPATCH_MISSING_PACKET_ERROR: &str =
+    "Agent init execute-dispatch requires either `--dispatch-packet` or `--downstream-packet`.";
 static AGENT_INIT_READ_SURFACE_GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 fn orchestrator_init_bundle_timeout_payload(state_dir: &Path) -> serde_json::Value {
@@ -786,6 +788,62 @@ fn agent_init_dispatch_mode(
         "root_session_write_authority_granted": false,
         "continuation_authority_granted": false,
     })
+}
+
+fn agent_init_execute_dispatch_missing_packet_payload(
+    dispatch_mode: &serde_json::Value,
+) -> serde_json::Value {
+    let blocker_codes = vec!["agent_init_execute_dispatch_missing_packet"];
+    let next_actions = vec![
+        "Create or refresh a scheduler dispatch packet with `vida taskflow run-graph dispatch-init <task-id> --json`.",
+        "Retry execution with `vida agent-init --dispatch-packet <path> --execute-dispatch --json` or `vida agent-init --downstream-packet <path> --execute-dispatch --json`.",
+        "Do not treat packetless `vida agent-init --execute-dispatch` as activation, execution, or completion evidence.",
+    ];
+    let artifact_refs = serde_json::json!({
+        "surface": "vida agent-init",
+        "required_packet_flags": ["--dispatch-packet", "--downstream-packet"],
+        "receipt_backed_execution_required": true,
+    });
+    serde_json::json!({
+        "surface": "vida agent-init",
+        "status": "blocked",
+        "execution_state": "blocked",
+        "dispatch_mode": dispatch_mode,
+        "error": AGENT_INIT_EXECUTE_DISPATCH_MISSING_PACKET_ERROR,
+        "blocker_code": "agent_init_execute_dispatch_missing_packet",
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+            "risk_tier": null,
+            "trace_id": null,
+            "workflow_class": null
+        },
+        "shared_fields": {
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs
+        }
+    })
+}
+
+fn emit_agent_init_execute_dispatch_missing_packet(args: &AgentInitArgs) -> ExitCode {
+    if args.json {
+        let dispatch_mode = agent_init_dispatch_mode(args, &serde_json::Value::Null);
+        crate::print_json_pretty(&agent_init_execute_dispatch_missing_packet_payload(
+            &dispatch_mode,
+        ));
+    } else {
+        eprintln!("{AGENT_INIT_EXECUTE_DISPATCH_MISSING_PACKET_ERROR}");
+    }
+    ExitCode::from(2)
 }
 
 fn agent_init_packet_execute_command(selection: &serde_json::Value) -> Option<String> {
@@ -4021,10 +4079,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
             let store_state_root = store.root().to_path_buf();
             if args.execute_dispatch {
                 if packet_arg_count == 0 {
-                    eprintln!(
-                        "Agent init execute-dispatch requires either `--dispatch-packet` or `--downstream-packet`."
-                    );
-                    return ExitCode::from(2);
+                    return emit_agent_init_execute_dispatch_missing_packet(&args);
                 }
                 if packet_arg_count > 1 {
                     eprintln!(
@@ -4239,10 +4294,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
             if args.execute_dispatch {
                 let dispatch_setup = {
                     if packet_arg_count == 0 {
-                        eprintln!(
-                            "Agent init execute-dispatch requires either `--dispatch-packet` or `--downstream-packet`."
-                        );
-                        return ExitCode::from(2);
+                        return emit_agent_init_execute_dispatch_missing_packet(&args);
                     }
 
                     let resume_inputs = match super::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
