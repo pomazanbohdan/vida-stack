@@ -872,7 +872,13 @@ fn recovery_surface_contract(
             .map(|value| vec![value.to_string()])
             .unwrap_or_default()
     };
-    blocker_codes.extend(projection_truth_blocker_codes(projection_truth));
+    blocker_codes.extend(projection_truth_blocker_codes_for_ready_handoff(
+        &summary.active_node,
+        &summary.resume_status,
+        summary.recovery_ready,
+        &summary.resume_target,
+        projection_truth,
+    ));
     let blocker_codes = normalize_run_graph_blocker_codes(&blocker_codes, false);
 
     let next_action = projection_truth
@@ -1426,14 +1432,81 @@ fn projection_truth_blocker_codes(projection_truth: &RunGraphProjectionTruth) ->
     normalize_run_graph_blocker_codes(&blocker_codes, blocked_evidence_present)
 }
 
+fn exception_takeover_receipt_is_behind_ready_handoff(
+    active_node: &str,
+    status: &str,
+    recovery_ready: bool,
+    resume_target: &str,
+    receipt: &RunGraphDispatchReceipt,
+) -> bool {
+    receipt.lane_status == "lane_exception_takeover"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && status == "ready"
+        && recovery_ready
+        && resume_target.starts_with("dispatch.")
+        && active_node != receipt.dispatch_target
+}
+
+fn projection_truth_blocker_codes_for_ready_handoff(
+    active_node: &str,
+    status: &str,
+    recovery_ready: bool,
+    resume_target: &str,
+    projection_truth: &RunGraphProjectionTruth,
+) -> Vec<String> {
+    if projection_truth
+        .dispatch_receipt
+        .as_ref()
+        .is_some_and(|receipt| {
+            exception_takeover_receipt_is_behind_ready_handoff(
+                active_node,
+                status,
+                recovery_ready,
+                resume_target,
+                receipt,
+            )
+        })
+    {
+        return normalize_run_graph_blocker_codes(&[], projection_truth.stale_state_suspected);
+    }
+    projection_truth_blocker_codes(projection_truth)
+}
+
 fn run_graph_status_surface_blocker_codes(
     status: &RunGraphStatus,
     projection_truth: &RunGraphProjectionTruth,
 ) -> Vec<String> {
     let mut blocked_evidence_present =
         blocked_status_signal(&status.status) || blocked_status_signal(&status.lifecycle_stage);
-    let mut blocker_codes = projection_truth_blocker_codes(projection_truth);
-    if let Some(receipt) = projection_truth.dispatch_receipt.as_ref() {
+    let mut blocker_codes = projection_truth_blocker_codes_for_ready_handoff(
+        &status.active_node,
+        &status.status,
+        status.recovery_ready,
+        &status.resume_target,
+        projection_truth,
+    );
+    if let Some(receipt) = projection_truth
+        .dispatch_receipt
+        .as_ref()
+        .filter(|receipt| {
+            !exception_takeover_receipt_is_behind_ready_handoff(
+                &status.active_node,
+                &status.status,
+                status.recovery_ready,
+                &status.resume_target,
+                receipt,
+            )
+        })
+    {
         blocker_codes.extend(dispatch_receipt_blocker_codes(
             receipt,
             &mut blocked_evidence_present,
@@ -1502,7 +1575,13 @@ fn projection_truth_from_status_surface(
     let blocker_codes = if recovery.is_some_and(|summary| {
         recovery_projection_resolves_persisted_open_cycle(summary, &projection_truth)
     }) {
-        projection_truth_blocker_codes(&projection_truth)
+        projection_truth_blocker_codes_for_ready_handoff(
+            &status.active_node,
+            &status.status,
+            status.recovery_ready,
+            &status.resume_target,
+            &projection_truth,
+        )
     } else {
         dispatch_blocker_codes_from_status_surface(recovery, receipt)
     };
@@ -5744,9 +5823,11 @@ pub(crate) async fn derive_advanced_run_graph_status(
         });
     }
 
+    let writer_node = implementation_writer_node(&implementation);
+    let direct_writer_entry = compiled_control.first_execution_lane.clone();
     if existing.task_class == "implementation"
         && existing.route_task_class == "implementation"
-        && existing.active_node == implementation_writer_node(&implementation)
+        && (existing.active_node == writer_node || existing.active_node == direct_writer_entry)
     {
         if implementation.is_null() {
             return Err(
@@ -8391,6 +8472,90 @@ mod tests {
     }
 
     #[test]
+    fn run_graph_status_json_payload_does_not_block_on_stale_exception_receipt_after_handoff() {
+        let status = RunGraphStatus {
+            run_id: "run-advanced-after-exception".to_string(),
+            task_id: "task-advanced-after-exception".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "coach".to_string(),
+            next_node: Some("review_ensemble".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "coach_lane".to_string(),
+            lifecycle_stage: "coach_active".to_string(),
+            policy_gate: "review_findings".to_string(),
+            handoff_state: "awaiting_review_ensemble".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.review_ensemble".to_string(),
+            recovery_ready: true,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "test_author".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("exception-receipt".to_string()),
+            exception_path_receipt_id: Some("exception-receipt".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/test-author-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/test-author-result.json".to_string()),
+            blocker_code: Some("internal_dispatch_timeout_without_receipt".to_string()),
+            downstream_dispatch_target: Some("coach".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![
+                "internal_dispatch_timeout_without_receipt".to_string()
+            ],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("test_author".to_string()),
+            downstream_dispatch_last_target: Some("test_author".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-24T00:00:00Z".to_string(),
+        };
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason:
+                "run-graph status was reconciled against persisted dispatch receipt evidence"
+                    .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: true,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(
+                "vida taskflow consume continue --run-id run-advanced-after-exception --json"
+                    .to_string(),
+            ),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let payload = build_run_graph_status_json_payload(
+            "vida taskflow run-graph status",
+            &status,
+            &projection_truth,
+        )
+        .expect("advanced handoff payload should render");
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+        assert_eq!(
+            payload["projection_truth"]["dispatch_receipt"]["blocker_code"],
+            serde_json::json!("internal_dispatch_timeout_without_receipt")
+        );
+    }
+
+    #[test]
     fn status_surface_projection_truth_keeps_blocked_receipt_actionable() {
         let status = RunGraphStatus {
             run_id: "run-status-surface-blocked".to_string(),
@@ -11016,6 +11181,48 @@ mod tests {
         assert_eq!(payload.status.lifecycle_stage, "writer_active");
         assert_eq!(payload.status.next_node.as_deref(), Some("coach"));
         assert_eq!(payload.status.handoff_state, "awaiting_coach");
+    }
+
+    #[tokio::test]
+    async fn seeded_worker_test_author_lane_can_advance_to_coach() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let existing = RunGraphStatus {
+            run_id: "task-test-author-to-coach".to_string(),
+            task_id: "task-test-author-to-coach".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "test_author".to_string(),
+            next_node: Some("coach".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "test_author_lane".to_string(),
+            lifecycle_stage: "writer_active".to_string(),
+            policy_gate: "review_findings".to_string(),
+            handoff_state: "awaiting_coach".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach".to_string(),
+            recovery_ready: true,
+        };
+        store
+            .record_run_graph_status(&existing)
+            .await
+            .expect("record run status");
+
+        let payload = derive_advanced_run_graph_status(&store, existing)
+            .await
+            .expect("test-author lane should advance to coach");
+
+        assert_eq!(payload.status.active_node, "coach");
+        assert_eq!(payload.status.lifecycle_stage, "coach_active");
+        assert_eq!(payload.status.next_node.as_deref(), Some("review_ensemble"));
+        assert_eq!(payload.status.handoff_state, "awaiting_review_ensemble");
     }
 
     #[test]

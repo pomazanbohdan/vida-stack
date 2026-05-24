@@ -36,6 +36,9 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
     }
     let stale_downstream_blockers_are_superseded_by_ready_handoff =
         ready_dispatch_handoff_matches_downstream_receipt(&status, &receipt);
+    if active_exception_takeover_receipt_is_behind_status(&status, &receipt) {
+        return Ok(status);
+    }
     let executed_analysis_missing_owned_scope_handoff = receipt.dispatch_status == "executed"
         && receipt.dispatch_target == "analysis"
         && receipt
@@ -312,6 +315,17 @@ fn stored_receipt_has_active_exception_takeover(receipt: &RunGraphDispatchReceip
     receipt.lane_status.as_deref() == Some("lane_exception_takeover")
         && has_receipt_evidence_id(receipt.exception_path_receipt_id.as_deref())
         && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref())
+}
+
+fn active_exception_takeover_receipt_is_behind_status(
+    status: &RunGraphStatus,
+    receipt: &RunGraphDispatchReceiptStored,
+) -> bool {
+    stored_receipt_has_active_exception_takeover(receipt)
+        && status.status == "ready"
+        && status.recovery_ready
+        && status.resume_target.starts_with("dispatch.")
+        && status.active_node != receipt.dispatch_target
 }
 
 fn continuation_binding_active_kind(binding: &RunGraphContinuationBinding) -> Option<&str> {
@@ -4291,6 +4305,80 @@ mod tests {
         assert!(summary.downstream_dispatch_status.is_none());
         assert!(!summary.downstream_dispatch_ready);
         assert!(summary.downstream_dispatch_packet_path.is_none());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_status_keeps_advanced_handoff_after_exception_takeover_lane_moves_on() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-exception-takeover-advanced-handoff-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-exception-advanced",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "task-exception-advanced".to_string();
+        status.active_node = "test_author".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "test_author_blocked".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked run graph status");
+
+        let mut receipt = sample_dispatch_receipt("run-exception-advanced");
+        receipt.dispatch_target = "test_author".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.blocker_code = Some("internal_dispatch_timeout_without_receipt".to_string());
+        receipt.exception_path_receipt_id = Some("exception-receipt".to_string());
+        receipt.supersedes_receipt_id = Some("exception-receipt".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist exception takeover receipt");
+
+        let mut advanced = status.clone();
+        advanced.active_node = "coach".to_string();
+        advanced.next_node = Some("review_ensemble".to_string());
+        advanced.status = "ready".to_string();
+        advanced.lane_id = "coach_lane".to_string();
+        advanced.lifecycle_stage = "coach_active".to_string();
+        advanced.policy_gate = "review_findings".to_string();
+        advanced.handoff_state = "awaiting_review_ensemble".to_string();
+        advanced.checkpoint_kind = "execution_cursor".to_string();
+        advanced.resume_target = "dispatch.review_ensemble".to_string();
+        advanced.recovery_ready = true;
+        store
+            .record_run_graph_status(&advanced)
+            .await
+            .expect("persist advanced handoff status");
+
+        let reconciled = store
+            .run_graph_status("run-exception-advanced")
+            .await
+            .expect("load reconciled run graph status");
+        assert_eq!(reconciled.active_node, "coach");
+        assert_eq!(reconciled.status, "ready");
+        assert_eq!(reconciled.resume_target, "dispatch.review_ensemble");
+        assert!(reconciled.recovery_ready);
 
         let _ = fs::remove_dir_all(&root);
     }

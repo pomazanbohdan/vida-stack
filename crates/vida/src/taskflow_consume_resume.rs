@@ -1818,6 +1818,39 @@ fn runtime_consumption_resume_receipt_blocker_codes(
     }
 }
 
+fn ready_handoff_status_supersedes_blocked_dispatch_receipt(
+    status: Option<&crate::state_store::RunGraphStatus>,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    let Some(status) = status else {
+        return false;
+    };
+    if status.run_id != dispatch_receipt.run_id
+        || !status.status.eq_ignore_ascii_case("ready")
+        || !status.recovery_ready
+        || !status.resume_target.starts_with("dispatch.")
+    {
+        return false;
+    }
+    if status.active_node == dispatch_receipt.dispatch_target {
+        return false;
+    }
+    let receipt_has_blocker = dispatch_receipt
+        .blocker_code
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || !dispatch_receipt.downstream_dispatch_blockers.is_empty()
+        || matches!(
+            dispatch_receipt.dispatch_status.as_str(),
+            "blocked" | "failed"
+        )
+        || matches!(
+            dispatch_receipt.lane_status.as_str(),
+            "lane_blocked" | "lane_failed" | "lane_exception_takeover"
+        );
+    receipt_has_blocker
+}
+
 fn runtime_consumption_resume_receipt_next_actions(
     dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
     blocker_codes: &[String],
@@ -1883,9 +1916,9 @@ async fn emit_runtime_consumption_resume_json(
     });
     let runtime_dispatch_receipt_blocker_code =
         runtime_consumption_resume_blocker_code(store, &payload_json, blocker_run_id).await?;
-    let projection_truth = match run_graph_status {
+    let projection_truth = match run_graph_status.as_ref() {
         Ok(status) => Some(
-            crate::taskflow_run_graph::run_graph_projection_truth(store, &status)
+            crate::taskflow_run_graph::run_graph_projection_truth(store, status)
                 .await
                 .map_err(|error| {
                     format!(
@@ -1896,8 +1929,14 @@ async fn emit_runtime_consumption_resume_json(
         ),
         Err(_) => None,
     };
-    let mut blocker_codes =
-        runtime_consumption_resume_receipt_blocker_codes(&normalized_dispatch_receipt);
+    let mut blocker_codes = if ready_handoff_status_supersedes_blocked_dispatch_receipt(
+        run_graph_status.as_ref().ok(),
+        &normalized_dispatch_receipt,
+    ) {
+        Vec::new()
+    } else {
+        runtime_consumption_resume_receipt_blocker_codes(&normalized_dispatch_receipt)
+    };
     let mut next_actions = runtime_consumption_resume_receipt_next_actions(
         &normalized_dispatch_receipt,
         &blocker_codes,
@@ -6365,6 +6404,7 @@ mod tests {
         persisted_dispatch_packet_lineage_task_id,
         prefer_ready_downstream_packet_over_active_result, prepare_explicit_resume_retry_artifact,
         primary_backend_for_dispatch_receipt, read_dispatch_packet,
+        ready_handoff_status_supersedes_blocked_dispatch_receipt,
         reconcile_blocked_implementer_timeout_with_tracked_close_evidence,
         reconcile_blocked_verification_timeout_with_receipt_evidence,
         recover_missing_first_dispatch_receipt, resolve_default_resume_run_id,
@@ -7005,6 +7045,47 @@ agent_system:
         assert!(blocker_codes
             .iter()
             .any(|code| code == "pending_review_clean_evidence"));
+    }
+
+    #[test]
+    fn runtime_consumption_resume_ignores_stale_exception_takeover_receipt_after_ready_handoff() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-ready-after-takeover",
+            "implementation",
+            "implementation",
+        );
+        status.active_node = "coach".to_string();
+        status.next_node = Some("review_ensemble".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "coach_active".to_string();
+        status.handoff_state = "handoff_pending".to_string();
+        status.resume_target = "dispatch.review_ensemble".to_string();
+        status.recovery_ready = true;
+
+        let mut receipt = taskflow_consume_resume_test_receipt("agent_lane", "blocked");
+        receipt.run_id = status.run_id.clone();
+        receipt.dispatch_target = "test_author".to_string();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.blocker_code = Some("internal_dispatch_timeout_without_receipt".to_string());
+        receipt.downstream_dispatch_target = Some("coach".to_string());
+        receipt.downstream_dispatch_active_target = Some("test_author".to_string());
+        receipt.downstream_dispatch_blockers =
+            vec!["internal_dispatch_timeout_without_receipt".to_string()];
+        receipt.exception_path_receipt_id = Some("takeover-2".to_string());
+        receipt.supersedes_receipt_id = Some("takeover-1".to_string());
+
+        assert!(ready_handoff_status_supersedes_blocked_dispatch_receipt(
+            Some(&status),
+            &receipt
+        ));
+        assert!(!runtime_consumption_resume_receipt_blocker_codes(&receipt).is_empty());
+        let effective_blocker_codes =
+            if ready_handoff_status_supersedes_blocked_dispatch_receipt(Some(&status), &receipt) {
+                Vec::new()
+            } else {
+                runtime_consumption_resume_receipt_blocker_codes(&receipt)
+            };
+        assert!(effective_blocker_codes.is_empty());
     }
 
     #[test]
