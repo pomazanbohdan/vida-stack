@@ -1052,26 +1052,28 @@ agent_system:
 #     #   verification_route_task_class, independent_verification_required
 #     #
 #     # Diagnostic-only fields surfaced by route explain summaries:
-#     #   a3m_price_snapshot, dispatch_required, graph_strategy,
+#     #   provider_price_snapshot, dispatch_required, graph_strategy,
 #     #   internal_escalation_trigger, semantic_route_cache,
 #     #   semantic_scoring_order, write_scope
 #     #
 #     # Rejected unsupported knobs:
-#     #   a3m_costs_authoritative, a3m_hot_path_price_fetch,
-#     #   a3m_price_override, coach_executor_backend, deterministic_first,
-#     #   external_first_required, gateway_price_override,
-#     #   imported_price_override, local_execution_allowed,
+#     #   external_costs_authoritative, hot_path_price_fetch,
+#     #   hot_path_price_catalog_fetch, coach_executor_backend,
+#     #   deterministic_first, external_first_required, gateway_price_override,
+#     #   gateway_proxy_adapter, imported_price_override,
+#     #   imported_price_authority_override, local_execution_allowed,
 #     #   local_execution_preferred, max_cli_subagent_calls,
 #     #   max_coach_passes, max_fallback_hops, max_total_runtime_seconds,
 #     #   max_verification_passes, merge_policy, min_output_bytes,
-#     #   semantic_cache_authoritative,
+#     #   price_catalog_provider_fetch, semantic_cache_authoritative,
 #     #   semantic_cache_bypass_hard_filters, semantic_cache_closure_authority,
-#     #   semantic_cache_receipt_authority,
+#     #   semantic_cache_embedding_provider, semantic_cache_receipt_authority,
 #     #   semantic_cache_selected_candidate_authority,
 #     #   semantic_score_bypass_hard_filters,
 #     #   semantic_score_disable_hard_filters,
 #     #   semantic_score_override_authority,
-#     #   semantic_score_resurrect_rejected_candidate, web_search_required
+#     #   semantic_score_resurrect_rejected_candidate, web_search_required,
+#     #   workflow_learning_enabled
 #     #
 #     # Use max_runtime_seconds for route dispatch timeouts. The similarly named
 #     # max_total_runtime_seconds knob is intentionally rejected by
@@ -1083,9 +1085,10 @@ agent_system:
 #     # tries to make semantic cache authoritative is intentionally rejected by
 #     # `vida taskflow validate-routing`.
 #     #
-#     # a3m_price_snapshot is explain-only source evidence until it is imported
-#     # through the VIDA price-catalog lifecycle and backed by an apply receipt.
-#     # Route knobs that try to make imported A3M, gateway, or hot-path fetched
+#     # provider_price_snapshot is explain-only source evidence until it is
+#     # imported through the VIDA price-catalog lifecycle and backed by an apply
+#     # receipt. Route knobs that try to make imported external-reference,
+#     # gateway, or hot-path fetched
 #     # costs override VIDA profile-local normalized cost units are rejected by
 #     # `vida taskflow validate-routing`.
 #     #
