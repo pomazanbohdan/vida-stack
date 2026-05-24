@@ -69,6 +69,7 @@ mod runtime_dispatch_receipt_helpers;
 mod runtime_dispatch_state;
 mod runtime_dispatch_status;
 mod runtime_lane_summary;
+mod semantic_routing_features;
 mod shell_runtime_helpers;
 mod state_store;
 mod status_surface;

@@ -1,3 +1,7 @@
+use crate::semantic_routing_features::{
+    extract_semantic_routing_features, score_semantic_route, SemanticRoutingFeatureInput,
+    SemanticScoreInputs,
+};
 use crate::{
     carrier_runtime_section, infer_execution_runtime_role, infer_runtime_task_class, json_lookup,
     json_u64, role_supports_task_class, runtime_role_for_task_class, task_complexity_multiplier,
@@ -18,6 +22,129 @@ fn selection_strategy_supported(selection_strategy: &str) -> bool {
         selection_strategy,
         "balanced_cost_quality" | "quality_first" | "risk_aware" | "free_first_with_quality_floor"
     )
+}
+
+fn semantic_routing_enabled(compiled_bundle: &serde_json::Value) -> bool {
+    json_lookup(
+        &compiled_bundle["agent_system"]["semantic_routing"],
+        &["enabled"],
+    )
+    .and_then(serde_json::Value::as_bool)
+    .unwrap_or(false)
+}
+
+fn tier_score(raw: &str) -> f64 {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "minimal" => 15.0,
+        "low" => 35.0,
+        "medium" => 60.0,
+        "high" => 82.0,
+        "xhigh" | "very_high" => 95.0,
+        _ => 50.0,
+    }
+}
+
+fn speed_score(raw: &str) -> f64 {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "instant" => 95.0,
+        "fast" => 82.0,
+        "medium" => 60.0,
+        "slow" => 35.0,
+        _ => 50.0,
+    }
+}
+
+fn insert_semantic_routing_diagnostics(
+    assignment: &mut serde_json::Value,
+    request_text: &str,
+    task_class: &str,
+    runtime_role: &str,
+    route_key: &str,
+) {
+    if assignment["enabled"].as_bool() != Some(true) {
+        return;
+    }
+    let feature_vector = extract_semantic_routing_features(&SemanticRoutingFeatureInput {
+        request_text,
+        task_title: None,
+        task_description: None,
+        runtime_role: Some(runtime_role),
+        task_class: Some(task_class),
+        route_key: Some(route_key),
+        max_text_chars: 12_000,
+    });
+    let selected_quality_tier = assignment["selected_quality_tier"]
+        .as_str()
+        .unwrap_or_default();
+    let selected_reasoning_effort = assignment["selected_reasoning_effort"]
+        .as_str()
+        .unwrap_or_default();
+    let selected_speed_tier = assignment["selected_speed_tier"]
+        .as_str()
+        .unwrap_or_default();
+    let selected_over_budget = assignment["selected_over_budget"]
+        .as_bool()
+        .unwrap_or(false);
+    let selected_readiness = assignment["selected_model_profile_readiness_status"]
+        .as_str()
+        .unwrap_or_default();
+    let score_breakdown = score_semantic_route(
+        &feature_vector,
+        SemanticScoreInputs {
+            quality: tier_score(selected_quality_tier),
+            reasoning: tier_score(selected_reasoning_effort),
+            reliability: assignment["effective_score"].as_u64().unwrap_or(50) as f64,
+            speed: speed_score(selected_speed_tier),
+            cost: assignment["normalized_cost_units"].as_u64().unwrap_or(0) as f64,
+            domain_fit: if feature_vector.detected_domain == task_class {
+                85.0
+            } else if feature_vector
+                .matched_terms
+                .domain
+                .iter()
+                .any(|term| task_class.contains(term))
+            {
+                60.0
+            } else {
+                25.0
+            },
+            complexity_mismatch_penalty: 0.0,
+            lifecycle_penalty: 0.0,
+            over_budget_penalty: if selected_over_budget { 25.0 } else { 0.0 },
+            readiness_penalty: if selected_readiness == "blocked" {
+                25.0
+            } else {
+                0.0
+            },
+        },
+    );
+
+    if let Some(map) = assignment.as_object_mut() {
+        map.insert(
+            "semantic_routing".to_string(),
+            serde_json::json!({
+                "enabled": true,
+                "mode": "deterministic_rules",
+                "feature_source": feature_vector.feature_source,
+                "complexity_score": feature_vector.complexity_score,
+                "complexity_band": feature_vector.complexity_band,
+                "detected_domain": feature_vector.detected_domain,
+                "feature_vector": serde_json::to_value(&feature_vector).unwrap_or(serde_json::Value::Null),
+                "score_applied": true,
+                "strategy": "semantic_balanced_cost_quality",
+                "config_source_path": "agent_system.semantic_routing",
+                "advisory_only": true
+            }),
+        );
+        map.insert(
+            "semantic_route_score".to_string(),
+            serde_json::json!(score_breakdown.semantic_route_score),
+        );
+        map.insert(
+            "semantic_score_breakdown".to_string(),
+            serde_json::to_value(score_breakdown).unwrap_or(serde_json::Value::Null),
+        );
+    }
 }
 
 fn model_selection_enabled(
@@ -1744,17 +1871,28 @@ pub(crate) fn build_runtime_assignment(
     let task_class = infer_runtime_task_class(selection, requires_design_gate);
     let execution_runtime_role =
         infer_execution_runtime_role(selection, &task_class, requires_design_gate);
-    build_runtime_assignment_from_resolved_constraints(
+    let mut assignment = build_runtime_assignment_from_resolved_constraints(
         compiled_bundle,
         &selection.selected_role,
         &task_class,
         &execution_runtime_role,
-    )
+    );
+    if semantic_routing_enabled(compiled_bundle) {
+        insert_semantic_routing_diagnostics(
+            &mut assignment,
+            &selection.request,
+            &task_class,
+            &execution_runtime_role,
+            &selection.selected_role,
+        );
+    }
+    assignment
 }
 
 #[cfg(test)]
 mod tests {
-    use super::build_runtime_assignment_from_resolved_constraints;
+    use super::{build_runtime_assignment, build_runtime_assignment_from_resolved_constraints};
+    use crate::RuntimeConsumptionLaneSelection;
 
     fn compiled_bundle_with_roles(roles: Vec<serde_json::Value>) -> serde_json::Value {
         let worker_agents = roles
@@ -1801,6 +1939,81 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[test]
+    fn enabled_semantic_routing_adds_advisory_assignment_diagnostics() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "worker",
+            "tier": "middle",
+            "rate": 6,
+            "normalized_cost_units": 6,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "reasoning_band": "medium",
+            "default_model_profile": "developer",
+            "model_profiles": {
+                "developer": {
+                    "profile_id": "developer",
+                    "model_ref": "gpt-5.4",
+                    "provider": "openai",
+                    "reasoning_effort": "medium",
+                    "plan_mode_reasoning_effort": "high",
+                    "sandbox_mode": "workspace-write",
+                    "normalized_cost_units": 6,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+        compiled_bundle.as_object_mut().unwrap().insert(
+            "agent_system".to_string(),
+            serde_json::json!({
+                "semantic_routing": {
+                    "enabled": true,
+                    "mode": "deterministic_rules"
+                }
+            }),
+        );
+        let selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "worker".to_string(),
+            request: "Implement deterministic routing feature extraction with receipt-aware scoring helpers.".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "test".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: compiled_bundle.clone(),
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+
+        let assignment = build_runtime_assignment(&compiled_bundle, &selection, false);
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["task_class"], "implementation");
+        assert_eq!(assignment["semantic_routing"]["enabled"], true);
+        assert_eq!(
+            assignment["semantic_routing"]["feature_source"],
+            "vida_native_deterministic_rules"
+        );
+        assert_eq!(assignment["semantic_routing"]["score_applied"], true);
+        assert_eq!(assignment["semantic_routing"]["advisory_only"], true);
+        assert_eq!(
+            assignment["semantic_score_breakdown"]["advisory_only"],
+            true
+        );
+        assert!(assignment["semantic_route_score"].as_f64().is_some());
     }
 
     #[test]
