@@ -470,14 +470,31 @@ fn spawn_agent_init_execute_dispatch_worker(
     );
     let stdout_path = worker_dir.join(format!("{worker_id}.stdout.jsonl"));
     let stderr_path = worker_dir.join(format!("{worker_id}.stderr.log"));
-    let stdout = std::fs::File::create(&stdout_path)
-        .map_err(|error| format!("Failed to create dispatch worker stdout log: {error}"))?;
-    let stderr = std::fs::File::create(&stderr_path)
-        .map_err(|error| format!("Failed to create dispatch worker stderr log: {error}"))?;
     let executable = std::env::current_exe()
         .map_err(|error| format!("Failed to resolve current VIDA executable: {error}"))?;
     let packet_flag = dispatch_packet_flag_for_packet_path(&resume_inputs.dispatch_packet_path);
+    #[cfg(windows)]
+    {
+        return spawn_agent_init_execute_dispatch_worker_windows(
+            &executable,
+            project_root.as_ref(),
+            state_root,
+            resume_inputs,
+            packet_flag,
+            &stdout_path,
+            &stderr_path,
+            &worker_id,
+        );
+    }
+    #[cfg(not(windows))]
+    let stdout = std::fs::File::create(&stdout_path)
+        .map_err(|error| format!("Failed to create dispatch worker stdout log: {error}"))?;
+    #[cfg(not(windows))]
+    let stderr = std::fs::File::create(&stderr_path)
+        .map_err(|error| format!("Failed to create dispatch worker stderr log: {error}"))?;
+    #[cfg(not(windows))]
     let mut command = std::process::Command::new(executable);
+    #[cfg(not(windows))]
     command
         .arg("agent-init")
         .arg(packet_flag)
@@ -491,15 +508,13 @@ fn spawn_agent_init_execute_dispatch_worker(
         .stdin(std::process::Stdio::null())
         .stdout(stdout)
         .stderr(stderr);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(windows_dispatch_worker_creation_flags());
-    }
+    #[cfg(not(windows))]
     let child = command
         .spawn()
         .map_err(|error| format!("Failed to spawn agent-init dispatch worker: {error}"))?;
-    Ok(serde_json::json!({
+    #[cfg(not(windows))]
+    {
+        Ok(serde_json::json!({
         "worker_id": worker_id,
         "worker_pid": child.id(),
         "operator_handoff": "background_dispatch_worker",
@@ -508,6 +523,70 @@ fn spawn_agent_init_execute_dispatch_worker(
         "stderr_path": stderr_path.display().to_string(),
         "packet_arg": packet_flag,
         "packet_path": resume_inputs.dispatch_packet_path,
+        }))
+    }
+}
+
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn spawn_agent_init_execute_dispatch_worker_windows(
+    executable: &Path,
+    project_root: &Path,
+    state_root: &Path,
+    resume_inputs: &super::taskflow_consume_resume::ResumeInputs,
+    packet_flag: &str,
+    stdout_path: &Path,
+    stderr_path: &Path,
+    worker_id: &str,
+) -> Result<serde_json::Value, String> {
+    let worker_args = vec![
+        "agent-init".to_string(),
+        packet_flag.to_string(),
+        resume_inputs.dispatch_packet_path.clone(),
+        "--execute-dispatch".to_string(),
+        "--json".to_string(),
+        "--state-dir".to_string(),
+        state_root.display().to_string(),
+    ];
+    let script =
+        windows_dispatch_worker_start_process_script(executable, project_root, &worker_args);
+    let output = std::process::Command::new("powershell.exe")
+        .arg("-NoProfile")
+        .arg("-WindowStyle")
+        .arg("Hidden")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-Command")
+        .arg(script)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|error| {
+            format!("Failed to spawn Windows agent-init dispatch worker launcher: {error}")
+        })?;
+    if !output.status.success() {
+        return Err(format!(
+            "Windows agent-init dispatch worker launcher failed with status {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let worker_pid = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            (!trimmed.is_empty()).then_some(trimmed.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    Ok(serde_json::json!({
+        "worker_id": worker_id,
+        "worker_pid": worker_pid,
+        "operator_handoff": "background_dispatch_worker",
+        "operator_handoff_wait_seconds": AGENT_INIT_EXECUTE_DISPATCH_OPERATOR_HANDOFF_SECONDS,
+        "stdout_path": stdout_path.display().to_string(),
+        "stderr_path": stderr_path.display().to_string(),
+        "packet_arg": packet_flag,
+        "packet_path": resume_inputs.dispatch_packet_path,
+        "launcher": "powershell_start_process",
     }))
 }
 
@@ -519,6 +598,34 @@ fn windows_dispatch_worker_creation_flags() -> u32 {
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
 
     DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
+}
+
+#[cfg(windows)]
+fn windows_powershell_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(windows)]
+fn windows_dispatch_worker_start_process_script(
+    executable: &Path,
+    project_root: &Path,
+    worker_args: &[String],
+) -> String {
+    let args = worker_args
+        .iter()
+        .map(|arg| windows_powershell_single_quoted(arg))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "$ErrorActionPreference='Stop'; \
+         ${env_var}='1'; \
+         $p=Start-Process -PassThru -WindowStyle Hidden -FilePath {exe} -WorkingDirectory {cwd} -ArgumentList @({args}); \
+         [Console]::Out.WriteLine($p.Id)",
+        env_var = format!("env:{AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV}"),
+        exe = windows_powershell_single_quoted(&executable.display().to_string()),
+        cwd = windows_powershell_single_quoted(&project_root.display().to_string()),
+        args = args,
+    )
 }
 
 fn agent_init_dispatch_started_payload(
@@ -1547,6 +1654,36 @@ mod tests {
         assert_eq!(flags & CREATE_NEW_PROCESS_GROUP, CREATE_NEW_PROCESS_GROUP);
         assert_eq!(flags & CREATE_NO_WINDOW, CREATE_NO_WINDOW);
         assert_eq!(flags & CREATE_BREAKAWAY_FROM_JOB, CREATE_BREAKAWAY_FROM_JOB);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn agent_init_dispatch_worker_start_process_script_sets_worker_env() {
+        let script = windows_dispatch_worker_start_process_script(
+            std::path::Path::new(r"C:\Program Files\VIDA\vida.exe"),
+            std::path::Path::new(r"C:\project\vida-stack"),
+            &[
+                "agent-init".to_string(),
+                "--downstream-packet".to_string(),
+                r"C:\project\vida-stack\.vida\data\packet's.json".to_string(),
+                "--execute-dispatch".to_string(),
+                "--json".to_string(),
+            ],
+        );
+
+        assert!(script.contains("Start-Process -PassThru -WindowStyle Hidden"));
+        assert!(script.contains("$env:VIDA_AGENT_INIT_EXECUTE_DISPATCH_WORKER='1'"));
+        assert!(script.contains("'C:\\Program Files\\VIDA\\vida.exe'"));
+        assert!(script.contains("'C:\\project\\vida-stack'"));
+        assert!(
+            script.contains("'C:\\project\\vida-stack\\.vida\\data\\packet''s.json'"),
+            "PowerShell single-quoted arguments must escape embedded single quotes"
+        );
+        assert!(
+            !script.contains("RedirectStandardOutput"),
+            "Windows helper must not attach worker stdio handles that keep the foreground operator pipe open"
+        );
+        assert!(script.contains("[Console]::Out.WriteLine($p.Id)"));
     }
 
     #[test]
