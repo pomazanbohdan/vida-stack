@@ -368,6 +368,10 @@ fn dispatch_handoff_uses_internal_host(
     let lane_dispatch_backend_class = lane_dispatch.backend_dispatch["backend_class"].as_str();
     let lane_dispatch_execution_class =
         lane_dispatch.backend_dispatch["selected_execution_class"].as_str();
+    let lane_dispatch_internal_surface =
+        dispatch_surface_is_internal_host_surface(Some(lane_dispatch.surface.as_str()));
+    let receipt_internal_surface =
+        dispatch_surface_is_internal_host_surface(receipt.dispatch_surface.as_deref());
     let selected_backend_class = preferred_backend
         .as_deref()
         .or(receipt.selected_backend.as_deref())
@@ -388,8 +392,9 @@ fn dispatch_handoff_uses_internal_host(
     let internal_agent_backend = internal_host_carrier_backend
         || backend_class_is_internal(selected_backend_class.as_deref())
         || backend_class_is_internal(lane_dispatch_backend_class)
-        || lane_dispatch_execution_class == Some("internal");
-    lane_dispatch.surface == "vida agent-init"
+        || lane_dispatch_execution_class == Some("internal")
+        || receipt_internal_surface;
+    (lane_dispatch_internal_surface || receipt_internal_surface)
         && host_execution_class == "internal"
         && internal_agent_backend
 }
@@ -422,6 +427,16 @@ fn internal_host_receipt_backed_completion_is_enabled(entry: Option<&serde_yaml:
         yaml_lookup(entry, &["dispatch", "receipt_backed_completion_supported"])
             .and_then(serde_yaml::Value::as_bool)
     }) == Some(true)
+}
+
+fn dispatch_surface_is_internal_host_surface(surface: Option<&str>) -> bool {
+    let Some(surface) = surface.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    surface == "vida agent-init"
+        || surface
+            .strip_prefix("internal_cli:")
+            .is_some_and(|system| !system.trim().is_empty())
 }
 
 fn selected_backend_is_internal_host_bridge(
@@ -18498,6 +18513,22 @@ agent_system:
                 &direct_internal_receipt
             ),
             2
+        );
+
+        let mut direct_internal_middle_receipt = receipt.clone();
+        direct_internal_middle_receipt.dispatch_target = "test_author".to_string();
+        direct_internal_middle_receipt.dispatch_surface = Some("internal_cli:codex".to_string());
+        direct_internal_middle_receipt.dispatch_command = Some("codex exec --json".to_string());
+        direct_internal_middle_receipt.selected_backend = Some("middle".to_string());
+        direct_internal_middle_receipt.activation_agent_type = Some("middle".to_string());
+        assert_eq!(
+            dispatch_execution_started_stale_after_seconds(
+                &root,
+                &role_selection,
+                &direct_internal_middle_receipt
+            ),
+            2,
+            "all configured internal CLI carriers must use the operator no-output handoff guard, not only the internal_subagents backend"
         );
 
         let _ = std::fs::remove_dir_all(&root);
