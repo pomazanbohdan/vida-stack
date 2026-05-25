@@ -595,9 +595,8 @@ fn windows_dispatch_worker_creation_flags() -> u32 {
     const DETACHED_PROCESS: u32 = 0x00000008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
-    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
 
-    DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
+    DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
 }
 
 #[cfg(windows)]
@@ -1647,13 +1646,10 @@ mod tests {
         const DETACHED_PROCESS: u32 = 0x00000008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
-
         let flags = windows_dispatch_worker_creation_flags();
         assert_eq!(flags & DETACHED_PROCESS, DETACHED_PROCESS);
         assert_eq!(flags & CREATE_NEW_PROCESS_GROUP, CREATE_NEW_PROCESS_GROUP);
         assert_eq!(flags & CREATE_NO_WINDOW, CREATE_NO_WINDOW);
-        assert_eq!(flags & CREATE_BREAKAWAY_FROM_JOB, CREATE_BREAKAWAY_FROM_JOB);
     }
 
     #[cfg(windows)]
