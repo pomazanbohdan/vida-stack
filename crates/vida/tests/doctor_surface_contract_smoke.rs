@@ -63,11 +63,39 @@ fn write_final_snapshot(state_dir: &str, file_name: &str, snapshot: serde_json::
     let runtime_consumption_dir = format!("{state_dir}/runtime-consumption");
     std::fs::create_dir_all(&runtime_consumption_dir)
         .expect("runtime-consumption directory should be created");
+    let snapshot = final_snapshot_with_shared_fields(snapshot);
     std::fs::write(
         format!("{runtime_consumption_dir}/{file_name}"),
         snapshot.to_string(),
     )
     .expect("final runtime-consumption snapshot should be written");
+}
+
+fn final_snapshot_with_shared_fields(mut snapshot: serde_json::Value) -> serde_json::Value {
+    let Some(object) = snapshot.as_object_mut() else {
+        return snapshot;
+    };
+    if object.contains_key("shared_fields") {
+        return snapshot;
+    }
+    object.insert(
+        "shared_fields".to_string(),
+        serde_json::json!({
+            "status": object
+                .get("status")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!("blocked")),
+            "blocker_codes": object
+                .get("blocker_codes")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+            "next_actions": object
+                .get("next_actions")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+        }),
+    );
+    snapshot
 }
 
 fn case10_closure_admission_record() -> serde_json::Value {
@@ -1536,6 +1564,29 @@ fn status_and_doctor_quarantine_missing_task_orphan_run_graph() {
     sync_protocol_binding(&state_dir);
 
     let ready_task_id = "taskflow-defect-case-10-runtime-probe-closure-status-blocker";
+    let ready_parent_id = "taskflow-defect-case-10-runtime-probe-parent";
+    let ready_parent = vida()
+        .args([
+            "task",
+            "create",
+            ready_parent_id,
+            "CASE-10 runtime probe parent",
+            "--type",
+            "epic",
+            "--status",
+            "open",
+            "--priority",
+            "0",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("ready parent task should be created");
+    assert!(
+        ready_parent.status.success(),
+        "ready parent task creation should succeed: {}",
+        String::from_utf8_lossy(&ready_parent.stderr)
+    );
     let ready = vida()
         .args([
             "task",
@@ -1548,6 +1599,8 @@ fn status_and_doctor_quarantine_missing_task_orphan_run_graph() {
             "open",
             "--priority",
             "0",
+            "--parent-id",
+            ready_parent_id,
             "--json",
         ])
         .env("VIDA_STATE_DIR", &state_dir)
