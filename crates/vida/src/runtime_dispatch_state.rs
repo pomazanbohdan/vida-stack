@@ -242,11 +242,6 @@ fn dispatch_execution_started_stale_after_seconds(
 ) -> u64 {
     let handoff_timeout_seconds =
         dispatch_handoff_timeout_seconds(project_root, role_selection, receipt);
-    if dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
-        return configured_internal_host_no_output_timeout_seconds(project_root)
-            .map(|seconds| seconds.min(handoff_timeout_seconds).max(1))
-            .unwrap_or(handoff_timeout_seconds);
-    }
     if receipt
         .dispatch_surface
         .as_deref()
@@ -257,6 +252,11 @@ fn dispatch_execution_started_stale_after_seconds(
             .is_some_and(|command| command.trim_start().starts_with("vida agent-init"))
     {
         return handoff_timeout_seconds;
+    }
+    if dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
+        return configured_internal_host_no_output_timeout_seconds(project_root)
+            .map(|seconds| seconds.min(handoff_timeout_seconds).max(1))
+            .unwrap_or(handoff_timeout_seconds);
     }
     handoff_timeout_seconds
 }
@@ -18403,7 +18403,7 @@ agent_system:
     }
 
     #[test]
-    fn dispatch_execution_started_stale_after_seconds_uses_internal_no_output_guard() {
+    fn dispatch_execution_started_stale_after_seconds_preserves_agent_init_handoff_timeout() {
         let root = std::env::temp_dir().join(format!(
             "vida-inflight-stale-no-output-timeout-{}",
             time::OffsetDateTime::now_utc().unix_timestamp_nanos()
@@ -18496,7 +18496,7 @@ agent_system:
         );
         assert_eq!(
             dispatch_execution_started_stale_after_seconds(&root, &role_selection, &receipt),
-            2
+            422
         );
         assert_eq!(
             dispatch_execution_timeout_seconds(&root, &role_selection, &receipt),
