@@ -216,7 +216,16 @@ fn dispatch_handoff_timeout_seconds(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> u64 {
-    let preferred_backend = preferred_selected_backend_for_receipt(role_selection, receipt);
+    let receipt_external_backend = receipt
+        .selected_backend
+        .as_deref()
+        .filter(|backend_id| {
+            backend_class_from_execution_plan(&role_selection.execution_plan, backend_id).as_deref()
+                == Some("external_cli")
+        })
+        .map(str::to_string);
+    let preferred_backend = receipt_external_backend
+        .or_else(|| preferred_selected_backend_for_receipt(role_selection, receipt));
     if dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
         return internal_host_runtime_window_seconds(project_root, role_selection, receipt)
             .saturating_add(INTERNAL_DISPATCH_HANDOFF_TIMEOUT_GRACE_SECONDS);
@@ -297,7 +306,16 @@ pub(crate) fn sync_receipt_dispatch_handoff_surface(
     else {
         return;
     };
-    let preferred_backend = preferred_selected_backend_for_receipt(role_selection, receipt);
+    let receipt_external_backend = receipt
+        .selected_backend
+        .as_deref()
+        .filter(|backend_id| {
+            backend_class_from_execution_plan(&role_selection.execution_plan, backend_id).as_deref()
+                == Some("external_cli")
+        })
+        .map(str::to_string);
+    let preferred_backend = receipt_external_backend
+        .or_else(|| preferred_selected_backend_for_receipt(role_selection, receipt));
     let preferred_model_profile_id = preferred_selected_model_profile_for_dispatch_target(
         role_selection,
         &receipt.dispatch_target,
@@ -346,7 +364,16 @@ fn dispatch_handoff_uses_internal_host(
                 .map(|(system, _)| system.clone())
         })
         .unwrap_or_default();
-    let preferred_backend = preferred_selected_backend_for_receipt(role_selection, receipt);
+    let receipt_external_backend = receipt
+        .selected_backend
+        .as_deref()
+        .filter(|backend_id| {
+            backend_class_from_execution_plan(&role_selection.execution_plan, backend_id).as_deref()
+                == Some("external_cli")
+        })
+        .map(str::to_string);
+    let preferred_backend = receipt_external_backend
+        .or_else(|| preferred_selected_backend_for_receipt(role_selection, receipt));
     let preferred_model_profile_id = preferred_selected_model_profile_for_dispatch_target(
         role_selection,
         &receipt.dispatch_target,
@@ -371,6 +398,12 @@ fn dispatch_handoff_uses_internal_host(
         .and_then(|backend_id| {
             backend_class_from_execution_plan(&role_selection.execution_plan, backend_id)
         });
+    let receipt_backend_class = receipt.selected_backend.as_deref().and_then(|backend_id| {
+        backend_class_from_execution_plan(&role_selection.execution_plan, backend_id)
+    });
+    let selected_backend_known_external = selected_backend_class.as_deref() == Some("external_cli")
+        || receipt_backend_class.as_deref() == Some("external_cli")
+        || lane_dispatch_backend_class == Some("external_cli");
     let internal_host_carrier_backend = lane_dispatch_backend_class != Some("external_cli")
         && preferred_backend
             .as_deref()
@@ -385,8 +418,8 @@ fn dispatch_handoff_uses_internal_host(
     let internal_agent_backend = internal_host_carrier_backend
         || backend_class_is_internal(selected_backend_class.as_deref())
         || backend_class_is_internal(lane_dispatch_backend_class)
-        || lane_dispatch_execution_class == Some("internal")
-        || receipt_internal_surface;
+        || (lane_dispatch_execution_class == Some("internal") && !selected_backend_known_external)
+        || (receipt_internal_surface && !selected_backend_known_external);
     (lane_dispatch_internal_surface || receipt_internal_surface)
         && host_execution_class == "internal"
         && internal_agent_backend
@@ -3276,9 +3309,9 @@ pub(crate) fn configured_external_activation_parts(
         .ok_or_else(|| {
             "Configured external backend is missing non-empty `dispatch.command`".to_string()
         })?;
-    if !external_dispatch_command_is_config_safe(&command) {
+    if !external_dispatch_command_is_config_safe(&command, backend_entry) {
         return Err(format!(
-            "Configured external backend `{backend_id}` uses unsafe `dispatch.command` `{command}`; external dispatch commands must be config-owned command tokens, not shell snippets or path-like invocations"
+            "Configured external backend `{backend_id}` uses unsafe `dispatch.command` `{command}`; external dispatch commands must be config-owned command tokens that match backend trust metadata, not shell snippets, path-like invocations, or unrelated local binaries"
         ));
     }
     let mut args = yaml_string_list(yaml_lookup(dispatch, &["static_args"]));
@@ -3373,7 +3406,10 @@ pub(crate) fn configured_external_backend_dispatch_blocker(
     external_backend_dispatch_blocker(backend_id, backend_entry)
 }
 
-fn external_dispatch_command_is_config_safe(command: &str) -> bool {
+fn external_dispatch_command_is_config_safe(
+    command: &str,
+    backend_entry: &serde_yaml::Value,
+) -> bool {
     let trimmed = command.trim();
     if trimmed.is_empty()
         || trimmed.contains(std::path::MAIN_SEPARATOR)
@@ -3390,21 +3426,32 @@ fn external_dispatch_command_is_config_safe(command: &str) -> bool {
         return false;
     }
 
-    matches!(
-        trimmed,
-        "codex"
-            | "qwen"
-            | "claude"
-            | "gemini"
-            | "aider"
-            | "cursor-agent"
-            | "opencode"
-            | "hermes"
-            | "vida-pi-agent"
-            | "kilo"
-            | "vibe"
-            | "pi"
-    )
+    let backend_class = yaml_string(yaml_lookup(backend_entry, &["subagent_backend_class"]))
+        .map(|value| value.trim().to_ascii_lowercase());
+    let trusted_tokens = [
+        yaml_string(yaml_lookup(backend_entry, &["detect_command"])),
+        yaml_string(yaml_lookup(
+            backend_entry,
+            &["readiness", "adapter", "command"],
+        )),
+        yaml_string(yaml_lookup(backend_entry, &["dispatch", "trusted_command"])),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .filter(|value| {
+        value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    })
+    .collect::<Vec<_>>();
+
+    if trusted_tokens.is_empty() {
+        return backend_class.as_deref() != Some("external_cli");
+    }
+
+    trusted_tokens.iter().any(|token| token == trimmed)
 }
 
 pub(crate) fn render_command_display(command: &str, args: &[String]) -> String {
@@ -3570,11 +3617,13 @@ dispatch:
     }
 
     #[test]
-    fn configured_external_activation_parts_accepts_allowlisted_command_token() {
+    fn configured_external_activation_parts_accepts_config_derived_command_token() {
         let backend_entry: serde_yaml::Value = serde_yaml::from_str(
             r#"
+subagent_backend_class: external_cli
+detect_command: newly-configured-carrier
 dispatch:
-  command: vida-pi-agent
+  command: newly-configured-carrier
   static_args: ["run"]
   prompt_mode: positional
 "#,
@@ -3588,15 +3637,17 @@ dispatch:
             "/tmp/project/.vida/dispatch.json",
             None,
         )
-        .expect("allowlisted command token should be accepted");
-        assert_eq!(command, "vida-pi-agent");
+        .expect("command token matching backend trust metadata should be accepted");
+        assert_eq!(command, "newly-configured-carrier");
         assert_eq!(args[0], "run");
     }
 
     #[test]
-    fn configured_external_activation_parts_rejects_non_allowlisted_command_token() {
+    fn configured_external_activation_parts_rejects_command_mismatched_from_trust_metadata() {
         let backend_entry: serde_yaml::Value = serde_yaml::from_str(
             r#"
+subagent_backend_class: external_cli
+detect_command: trusted-carrier
 dispatch:
   command: python
   prompt_mode: positional
@@ -3611,10 +3662,41 @@ dispatch:
             "/tmp/project/.vida/dispatch.json",
             None,
         )
-        .expect_err("non-allowlisted command should be rejected");
+        .expect_err("external CLI command must match backend trust metadata");
 
         assert!(error.contains("unsafe"));
         assert!(error.contains("python"));
+    }
+
+    #[test]
+    fn configured_external_activation_parts_rejects_raw_provider_when_adapter_is_trusted() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+subagent_backend_class: external_cli
+detect_command: vida-pi-agent
+provider_command: pi
+dispatch:
+  command: pi
+  raw_provider_dispatch_forbidden: true
+  prompt_mode: stdin
+readiness:
+  adapter:
+    command: vida-pi-agent
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let error = configured_external_activation_parts(
+            "pi_cli",
+            &backend_entry,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            None,
+        )
+        .expect_err("raw provider command must not replace the trusted adapter command");
+
+        assert!(error.contains("unsafe"));
+        assert!(error.contains("pi"));
     }
 
     #[test]
@@ -3642,12 +3724,14 @@ dispatch:
     }
 
     #[test]
-    fn configured_external_activation_parts_accepts_allowlisted_adapter_but_rejects_path_like_variant(
+    fn configured_external_activation_parts_accepts_configured_adapter_but_rejects_path_like_variant(
     ) {
         let backend_entry: serde_yaml::Value = serde_yaml::from_str(
             r#"
+subagent_backend_class: external_cli
+detect_command: configured-adapter
 dispatch:
-  command: vida-pi-agent
+  command: configured-adapter
   static_args: ["--mode", "rpc"]
   prompt_mode: stdin
 "#,
@@ -3661,14 +3745,16 @@ dispatch:
             "/tmp/project/.vida/dispatch.json",
             None,
         )
-        .expect("allowlisted adapter command should be trusted");
-        assert_eq!(command, "vida-pi-agent");
+        .expect("configured adapter command should be trusted");
+        assert_eq!(command, "configured-adapter");
         assert_eq!(args, vec!["--mode".to_string(), "rpc".to_string()]);
 
         let path_like: serde_yaml::Value = serde_yaml::from_str(
             r#"
+subagent_backend_class: external_cli
+detect_command: configured-adapter
 dispatch:
-  command: ./vida-pi-agent
+  command: ./configured-adapter
   prompt_mode: stdin
 "#,
         )
@@ -3680,9 +3766,9 @@ dispatch:
             "/tmp/project/.vida/dispatch.json",
             None,
         )
-        .expect_err("path-like allowlisted adapter token must remain rejected");
+        .expect_err("path-like configured adapter must remain rejected");
         assert!(error.contains("unsafe"));
-        assert!(error.contains("./vida-pi-agent"));
+        assert!(error.contains("./configured-adapter"));
     }
 
     #[test]
@@ -7792,6 +7878,7 @@ host_environment:
             "  detect_command: cargo\n",
             "  dispatch:\n",
             "    command: qwen\n",
+            "    trusted_command: qwen\n",
             "    static_args:\n",
             "      - -y\n",
             "      - -o\n",
@@ -7806,6 +7893,7 @@ host_environment:
             "  detect_command: hermes\n",
             "  dispatch:\n",
             "    command: hermes\n",
+            "    trusted_command: hermes\n",
             "    static_args:\n",
             "      - chat\n",
             "      - -Q\n",
@@ -7903,6 +7991,10 @@ host_environment:
             .expect("test subagent dispatch should exist");
         dispatch.insert(
             serde_yaml::Value::String("command".to_string()),
+            serde_yaml::Value::String(command.to_string()),
+        );
+        dispatch.insert(
+            serde_yaml::Value::String("trusted_command".to_string()),
             serde_yaml::Value::String(command.to_string()),
         );
         dispatch.insert(
@@ -17307,6 +17399,7 @@ agent_system:
       subagent_backend_class: external_cli
       dispatch:
         command: sh
+        trusted_command: sh
         static_args: ["-lc", "printf '{\"type\":\"result\",\"is_error\":false,\"result\":\"ok\"}'"]
         prompt_mode: positional
 "#,
@@ -18233,6 +18326,8 @@ agent_system:
       enabled: true
       subagent_backend_class: external_cli
       dispatch:
+        command: hermes
+        trusted_command: hermes
         no_output_timeout_seconds: 8
 "#,
         )
@@ -19128,6 +19223,8 @@ agent_system:
       subagent_backend_class: external_cli
       max_runtime_seconds: 37
       dispatch:
+        command: hermes
+        trusted_command: hermes
         no_output_timeout_seconds: 37
 "#,
         )
