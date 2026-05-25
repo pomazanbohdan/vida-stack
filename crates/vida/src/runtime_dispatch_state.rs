@@ -109,13 +109,8 @@ fn configured_internal_host_handoff_timeout_seconds(project_root: &Path) -> Opti
     let (_system_id, system_entry) = selected_host_cli_system_for_runtime_dispatch(&overlay);
     system_entry
         .as_ref()
-        .and_then(|entry| {
-            yaml_lookup(entry, &["dispatch", "no_output_timeout_seconds"])
-                .and_then(serde_yaml::Value::as_u64)
-                .or_else(|| {
-                    yaml_lookup(entry, &["max_runtime_seconds"]).and_then(serde_yaml::Value::as_u64)
-                })
-        })
+        .and_then(|entry| yaml_lookup(entry, &["max_runtime_seconds"]))
+        .and_then(serde_yaml::Value::as_u64)
         .filter(|seconds| *seconds > 0)
 }
 
@@ -235,7 +230,7 @@ fn dispatch_handoff_timeout_seconds(
         .saturating_add(INTERNAL_DISPATCH_HANDOFF_TIMEOUT_GRACE_SECONDS)
 }
 
-fn dispatch_execution_started_stale_after_seconds(
+pub(crate) fn dispatch_execution_started_stale_after_seconds(
     project_root: &Path,
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
@@ -243,9 +238,7 @@ fn dispatch_execution_started_stale_after_seconds(
     let handoff_timeout_seconds =
         dispatch_handoff_timeout_seconds(project_root, role_selection, receipt);
     if dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
-        return configured_internal_host_no_output_timeout_seconds(project_root)
-            .map(|seconds| seconds.min(handoff_timeout_seconds).max(1))
-            .unwrap_or(handoff_timeout_seconds);
+        return handoff_timeout_seconds;
     }
     if receipt
         .dispatch_surface
@@ -18403,7 +18396,7 @@ agent_system:
     }
 
     #[test]
-    fn dispatch_execution_started_stale_after_seconds_uses_internal_no_output_guard() {
+    fn dispatch_execution_started_stale_after_seconds_keeps_internal_worker_runtime_window() {
         let root = std::env::temp_dir().join(format!(
             "vida-inflight-stale-no-output-timeout-{}",
             time::OffsetDateTime::now_utc().unix_timestamp_nanos()
@@ -18496,7 +18489,7 @@ agent_system:
         );
         assert_eq!(
             dispatch_execution_started_stale_after_seconds(&root, &role_selection, &receipt),
-            2
+            422
         );
         assert_eq!(
             dispatch_execution_timeout_seconds(&root, &role_selection, &receipt),
@@ -18512,7 +18505,7 @@ agent_system:
                 &role_selection,
                 &direct_internal_receipt
             ),
-            2
+            422
         );
 
         let mut direct_internal_middle_receipt = receipt.clone();
@@ -18527,8 +18520,8 @@ agent_system:
                 &role_selection,
                 &direct_internal_middle_receipt
             ),
-            2,
-            "all configured internal CLI carriers must use the operator no-output handoff guard, not only the internal_subagents backend"
+            242,
+            "configured internal CLI no-output guards must not shrink the background worker stale window"
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -20594,7 +20587,7 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
     }
 }
 
-fn write_runtime_dispatch_result(
+pub(crate) fn write_runtime_dispatch_result(
     state_root: &Path,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     body: &serde_json::Value,
@@ -20911,7 +20904,7 @@ fn canonical_lane_execution_receipt_artifact_json(
     .expect("lane execution receipt artifact should serialize")
 }
 
-fn runtime_dispatch_execution_started_result(
+pub(crate) fn runtime_dispatch_execution_started_result(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     stale_after_seconds: u64,
 ) -> serde_json::Value {

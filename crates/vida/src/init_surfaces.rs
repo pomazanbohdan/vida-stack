@@ -539,7 +539,7 @@ fn spawn_agent_init_execute_dispatch_worker_windows(
     stderr_path: &Path,
     worker_id: &str,
 ) -> Result<serde_json::Value, String> {
-    let worker_args = vec![
+    let worker_args = [
         "agent-init".to_string(),
         packet_flag.to_string(),
         resume_inputs.dispatch_packet_path.clone(),
@@ -548,35 +548,8 @@ fn spawn_agent_init_execute_dispatch_worker_windows(
         "--state-dir".to_string(),
         state_root.display().to_string(),
     ];
-    let script =
-        windows_dispatch_worker_start_process_script(executable, project_root, &worker_args);
-    let output = std::process::Command::new("powershell.exe")
-        .arg("-NoProfile")
-        .arg("-WindowStyle")
-        .arg("Hidden")
-        .arg("-ExecutionPolicy")
-        .arg("Bypass")
-        .arg("-Command")
-        .arg(script)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|error| {
-            format!("Failed to spawn Windows agent-init dispatch worker launcher: {error}")
-        })?;
-    if !output.status.success() {
-        return Err(format!(
-            "Windows agent-init dispatch worker launcher failed with status {:?}: {}",
-            output.status.code(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let worker_pid = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| {
-            let trimmed = line.trim();
-            (!trimmed.is_empty()).then_some(trimmed.to_string())
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    let worker_pid =
+        windows_spawn_detached_process(executable, project_root, &worker_args)?.to_string();
     Ok(serde_json::json!({
         "worker_id": worker_id,
         "worker_pid": worker_pid,
@@ -586,7 +559,7 @@ fn spawn_agent_init_execute_dispatch_worker_windows(
         "stderr_path": stderr_path.display().to_string(),
         "packet_arg": packet_flag,
         "packet_path": resume_inputs.dispatch_packet_path,
-        "launcher": "powershell_start_process",
+        "launcher": "win32_create_process",
     }))
 }
 
@@ -601,31 +574,294 @@ fn windows_dispatch_worker_creation_flags() -> u32 {
 }
 
 #[cfg(windows)]
-fn windows_powershell_single_quoted(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
+fn windows_spawn_detached_process(
+    executable: &Path,
+    working_dir: &Path,
+    args: &[String],
+) -> Result<u32, String> {
+    windows_create_detached_process(executable, working_dir, args)
 }
 
 #[cfg(windows)]
-fn windows_dispatch_worker_start_process_script(
+fn windows_quote_command_arg(value: &str) -> String {
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|ch| ch.is_whitespace() || matches!(ch, '"' | '\\'))
+    {
+        let mut quoted = String::from("\"");
+        let mut backslashes = 0;
+        for ch in value.chars() {
+            match ch {
+                '\\' => backslashes += 1,
+                '"' => {
+                    quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+                    quoted.push('"');
+                    backslashes = 0;
+                }
+                _ => {
+                    if backslashes > 0 {
+                        quoted.push_str(&"\\".repeat(backslashes));
+                        backslashes = 0;
+                    }
+                    quoted.push(ch);
+                }
+            }
+        }
+        if backslashes > 0 {
+            quoted.push_str(&"\\".repeat(backslashes * 2));
+        }
+        quoted.push('"');
+        quoted
+    } else {
+        value.to_string()
+    }
+}
+
+#[cfg(windows)]
+fn windows_command_line(executable: &Path, args: &[String]) -> String {
+    let mut parts = Vec::with_capacity(args.len() + 1);
+    parts.push(windows_quote_command_arg(&executable.display().to_string()));
+    parts.extend(args.iter().map(|arg| windows_quote_command_arg(arg)));
+    parts.join(" ")
+}
+
+#[cfg(windows)]
+fn windows_wide_null(value: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    std::ffi::OsStr::new(value)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+#[cfg(windows)]
+#[allow(non_snake_case)]
+#[repr(C)]
+struct WindowsStartupInfoW {
+    cb: u32,
+    lpReserved: *mut u16,
+    lpDesktop: *mut u16,
+    lpTitle: *mut u16,
+    dwX: u32,
+    dwY: u32,
+    dwXSize: u32,
+    dwYSize: u32,
+    dwXCountChars: u32,
+    dwYCountChars: u32,
+    dwFillAttribute: u32,
+    dwFlags: u32,
+    wShowWindow: u16,
+    cbReserved2: u16,
+    lpReserved2: *mut u8,
+    hStdInput: *mut std::ffi::c_void,
+    hStdOutput: *mut std::ffi::c_void,
+    hStdError: *mut std::ffi::c_void,
+}
+
+#[cfg(windows)]
+#[allow(non_snake_case)]
+#[repr(C)]
+struct WindowsStartupInfoExW {
+    StartupInfo: WindowsStartupInfoW,
+    lpAttributeList: *mut std::ffi::c_void,
+}
+
+#[cfg(windows)]
+#[allow(non_snake_case)]
+#[repr(C)]
+struct WindowsProcessInformation {
+    hProcess: *mut std::ffi::c_void,
+    hThread: *mut std::ffi::c_void,
+    dwProcessId: u32,
+    dwThreadId: u32,
+}
+
+#[cfg(windows)]
+#[allow(non_snake_case)]
+#[repr(C)]
+struct WindowsProcessEntry32W {
+    dwSize: u32,
+    cntUsage: u32,
+    th32ProcessID: u32,
+    th32DefaultHeapID: usize,
+    th32ModuleID: u32,
+    cntThreads: u32,
+    th32ParentProcessID: u32,
+    pcPriClassBase: i32,
+    dwFlags: u32,
+    szExeFile: [u16; 260],
+}
+
+#[cfg(windows)]
+extern "system" {
+    fn CreateProcessW(
+        lpApplicationName: *const u16,
+        lpCommandLine: *mut u16,
+        lpProcessAttributes: *mut std::ffi::c_void,
+        lpThreadAttributes: *mut std::ffi::c_void,
+        bInheritHandles: i32,
+        dwCreationFlags: u32,
+        lpEnvironment: *mut std::ffi::c_void,
+        lpCurrentDirectory: *const u16,
+        lpStartupInfo: *mut WindowsStartupInfoW,
+        lpProcessInformation: *mut WindowsProcessInformation,
+    ) -> i32;
+    fn InitializeProcThreadAttributeList(
+        lpAttributeList: *mut std::ffi::c_void,
+        dwAttributeCount: u32,
+        dwFlags: u32,
+        lpSize: *mut usize,
+    ) -> i32;
+    fn UpdateProcThreadAttribute(
+        lpAttributeList: *mut std::ffi::c_void,
+        dwFlags: u32,
+        Attribute: usize,
+        lpValue: *mut std::ffi::c_void,
+        cbSize: usize,
+        lpPreviousValue: *mut std::ffi::c_void,
+        lpReturnSize: *mut usize,
+    ) -> i32;
+    fn DeleteProcThreadAttributeList(lpAttributeList: *mut std::ffi::c_void);
+    fn CreateToolhelp32Snapshot(dwFlags: u32, th32ProcessID: u32) -> *mut std::ffi::c_void;
+    fn Process32FirstW(hSnapshot: *mut std::ffi::c_void, lppe: *mut WindowsProcessEntry32W) -> i32;
+    fn Process32NextW(hSnapshot: *mut std::ffi::c_void, lppe: *mut WindowsProcessEntry32W) -> i32;
+    fn OpenProcess(
+        dwDesiredAccess: u32,
+        bInheritHandle: i32,
+        dwProcessId: u32,
+    ) -> *mut std::ffi::c_void;
+    fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
+}
+
+#[cfg(windows)]
+fn windows_find_explorer_parent_process() -> Option<*mut std::ffi::c_void> {
+    const TH32CS_SNAPPROCESS: u32 = 0x00000002;
+    const PROCESS_CREATE_PROCESS: u32 = 0x0080;
+    let invalid_handle = (-1isize) as *mut std::ffi::c_void;
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot.is_null() || snapshot == invalid_handle {
+            return None;
+        }
+        let mut entry = std::mem::zeroed::<WindowsProcessEntry32W>();
+        entry.dwSize = std::mem::size_of::<WindowsProcessEntry32W>() as u32;
+        let mut found = None;
+        let mut ok = Process32FirstW(snapshot, &mut entry);
+        while ok != 0 {
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|ch| *ch == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let exe = String::from_utf16_lossy(&entry.szExeFile[..len]);
+            if exe.eq_ignore_ascii_case("explorer.exe") {
+                let handle = OpenProcess(PROCESS_CREATE_PROCESS, 0, entry.th32ProcessID);
+                if !handle.is_null() {
+                    found = Some(handle);
+                    break;
+                }
+            }
+            ok = Process32NextW(snapshot, &mut entry);
+        }
+        CloseHandle(snapshot);
+        found
+    }
+}
+
+#[cfg(windows)]
+fn windows_create_detached_process(
     executable: &Path,
-    project_root: &Path,
-    worker_args: &[String],
-) -> String {
-    let args = worker_args
-        .iter()
-        .map(|arg| windows_powershell_single_quoted(arg))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(
-        "$ErrorActionPreference='Stop'; \
-         ${env_var}='1'; \
-         $p=Start-Process -PassThru -WindowStyle Hidden -FilePath {exe} -WorkingDirectory {cwd} -ArgumentList @({args}); \
-         [Console]::Out.WriteLine($p.Id)",
-        env_var = format!("env:{AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV}"),
-        exe = windows_powershell_single_quoted(&executable.display().to_string()),
-        cwd = windows_powershell_single_quoted(&project_root.display().to_string()),
-        args = args,
-    )
+    working_dir: &Path,
+    args: &[String],
+) -> Result<u32, String> {
+    const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x00080000;
+    const PROC_THREAD_ATTRIBUTE_PARENT_PROCESS: usize = 0x00020000;
+    let mut command_line = windows_wide_null(&windows_command_line(executable, args));
+    let working_dir = windows_wide_null(&working_dir.display().to_string());
+    let old_worker_env = std::env::var_os(AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV);
+    std::env::set_var(AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV, "1");
+
+    let parent = windows_find_explorer_parent_process();
+    let mut attribute_storage = Vec::<usize>::new();
+    let mut startup = unsafe { std::mem::zeroed::<WindowsStartupInfoExW>() };
+    startup.StartupInfo.cb = std::mem::size_of::<WindowsStartupInfoExW>() as u32;
+
+    let mut creation_flags = windows_dispatch_worker_creation_flags();
+    if let Some(parent_handle) = parent {
+        let mut size = 0usize;
+        unsafe {
+            InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size);
+        }
+        attribute_storage.resize(
+            (size + std::mem::size_of::<usize>() - 1) / std::mem::size_of::<usize>(),
+            0,
+        );
+        let attribute_list = attribute_storage.as_mut_ptr() as *mut std::ffi::c_void;
+        let initialized =
+            unsafe { InitializeProcThreadAttributeList(attribute_list, 1, 0, &mut size) };
+        if initialized != 0 {
+            let mut parent_value = parent_handle;
+            let updated = unsafe {
+                UpdateProcThreadAttribute(
+                    attribute_list,
+                    0,
+                    PROC_THREAD_ATTRIBUTE_PARENT_PROCESS,
+                    (&mut parent_value as *mut *mut std::ffi::c_void).cast(),
+                    std::mem::size_of::<*mut std::ffi::c_void>(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if updated != 0 {
+                startup.lpAttributeList = attribute_list;
+                creation_flags |= EXTENDED_STARTUPINFO_PRESENT;
+            }
+        }
+    }
+
+    let mut process_info = unsafe { std::mem::zeroed::<WindowsProcessInformation>() };
+    let created = unsafe {
+        CreateProcessW(
+            std::ptr::null(),
+            command_line.as_mut_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+            creation_flags,
+            std::ptr::null_mut(),
+            working_dir.as_ptr(),
+            (&mut startup.StartupInfo) as *mut WindowsStartupInfoW,
+            &mut process_info,
+        )
+    };
+    let last_error = std::io::Error::last_os_error();
+    if !startup.lpAttributeList.is_null() {
+        unsafe {
+            DeleteProcThreadAttributeList(startup.lpAttributeList);
+        }
+    }
+    if let Some(parent_handle) = parent {
+        unsafe {
+            CloseHandle(parent_handle);
+        }
+    }
+    if let Some(old) = old_worker_env {
+        std::env::set_var(AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV, old);
+    } else {
+        std::env::remove_var(AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV);
+    }
+    if created == 0 {
+        return Err(format!(
+            "Failed to create detached Windows dispatch worker `{}`: {last_error}",
+            executable.display()
+        ));
+    }
+    unsafe {
+        CloseHandle(process_info.hThread);
+        CloseHandle(process_info.hProcess);
+    }
+    Ok(process_info.dwProcessId)
 }
 
 fn agent_init_dispatch_started_payload(
@@ -695,24 +931,28 @@ async fn start_agent_init_dispatch_worker_and_return(
     state_root: &Path,
     resume_inputs: &mut super::taskflow_consume_resume::ResumeInputs,
 ) -> Result<ExitCode, String> {
-    super::runtime_dispatch_state::record_dispatch_execution_started(
-        state_root,
-        &resume_inputs.role_selection,
-        &resume_inputs.run_graph_bootstrap,
-        &mut resume_inputs.dispatch_receipt,
-    )
-    .await?;
-    let worker = spawn_agent_init_execute_dispatch_worker(state_root, resume_inputs)?;
-    let Some(dispatch_result_path) = resume_inputs
-        .dispatch_receipt
-        .dispatch_result_path
-        .as_deref()
-    else {
-        return Err(
-            "Agent init async dispatch did not produce an in-flight result path.".to_string(),
+    let project_root = super::runtime_dispatch_project_root_from_state_root(state_root);
+    let stale_after_seconds =
+        super::runtime_dispatch_state::dispatch_execution_started_stale_after_seconds(
+            project_root.as_ref(),
+            &resume_inputs.role_selection,
+            &resume_inputs.dispatch_receipt,
         );
-    };
-    let result_body = std::fs::read_to_string(dispatch_result_path).map_err(|error| {
+    let in_flight_result = super::runtime_dispatch_state::runtime_dispatch_execution_started_result(
+        &resume_inputs.dispatch_receipt,
+        stale_after_seconds,
+    );
+    let dispatch_result_path = super::runtime_dispatch_state::write_runtime_dispatch_result(
+        state_root,
+        &resume_inputs.dispatch_receipt,
+        &in_flight_result,
+    )?;
+    resume_inputs.dispatch_receipt.dispatch_result_path = Some(dispatch_result_path.clone());
+    resume_inputs.dispatch_receipt.dispatch_status = "executing".to_string();
+    resume_inputs.dispatch_receipt.lane_status = "lane_running".to_string();
+    resume_inputs.dispatch_receipt.blocker_code = None;
+    let worker = spawn_agent_init_execute_dispatch_worker(state_root, resume_inputs)?;
+    let result_body = std::fs::read_to_string(&dispatch_result_path).map_err(|error| {
         format!(
             "Failed to read in-flight agent-init dispatch result `{dispatch_result_path}`: {error}"
         )
@@ -1658,32 +1898,26 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn agent_init_dispatch_worker_start_process_script_sets_worker_env() {
-        let script = windows_dispatch_worker_start_process_script(
+    fn agent_init_dispatch_worker_command_line_quotes_windows_args() {
+        let command_line = windows_command_line(
             std::path::Path::new(r"C:\Program Files\VIDA\vida.exe"),
-            std::path::Path::new(r"C:\project\vida-stack"),
             &[
                 "agent-init".to_string(),
                 "--downstream-packet".to_string(),
-                r"C:\project\vida-stack\.vida\data\packet's.json".to_string(),
-                "--execute-dispatch".to_string(),
-                "--json".to_string(),
+                r"C:\project\vida-stack\.vida\data\packet path.json".to_string(),
+                r#"quote"inside"#.to_string(),
+                r#"trail\"#.to_string(),
             ],
         );
 
-        assert!(script.contains("Start-Process -PassThru -WindowStyle Hidden"));
-        assert!(script.contains("$env:VIDA_AGENT_INIT_EXECUTE_DISPATCH_WORKER='1'"));
-        assert!(script.contains("'C:\\Program Files\\VIDA\\vida.exe'"));
-        assert!(script.contains("'C:\\project\\vida-stack'"));
+        assert!(command_line.starts_with("\"C:\\Program Files\\VIDA\\vida.exe\""));
+        assert!(command_line.contains("--downstream-packet"));
+        assert!(command_line.contains("\"C:\\project\\vida-stack\\.vida\\data\\packet path.json\""));
+        assert!(command_line.contains("\"quote\\\"inside\""));
         assert!(
-            script.contains("'C:\\project\\vida-stack\\.vida\\data\\packet''s.json'"),
-            "PowerShell single-quoted arguments must escape embedded single quotes"
+            command_line.ends_with("\"trail\\\\\""),
+            "trailing backslashes must be doubled before the closing quote"
         );
-        assert!(
-            !script.contains("RedirectStandardOutput"),
-            "Windows helper must not attach worker stdio handles that keep the foreground operator pipe open"
-        );
-        assert!(script.contains("[Console]::Out.WriteLine($p.Id)"));
     }
 
     #[test]
