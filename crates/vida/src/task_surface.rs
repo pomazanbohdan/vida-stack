@@ -1,7 +1,8 @@
 use super::*;
 use crate::task_cli_render::{
     print_task_bulk_reparent_result, print_task_defect_batch_rehome_result,
-    print_task_direct_children, print_task_update_graph_blocked,
+    print_task_direct_children, print_task_update_graph_blocked, task_ready_payload,
+    task_show_payload,
 };
 use crate::taskflow_proxy::paths_intersect;
 
@@ -31,6 +32,15 @@ impl TaskReadMetadata {
             detail,
         }
     }
+
+    fn fresh_snapshot(path: &std::path::Path) -> Self {
+        Self {
+            mode: "fresh_snapshot",
+            degraded: false,
+            snapshot_path: Some(path.display().to_string()),
+            detail: "served from canonical task snapshot evidence with freshness metadata",
+        }
+    }
 }
 
 fn task_json_success_status() -> &'static str {
@@ -40,6 +50,42 @@ fn task_json_success_status() -> &'static str {
 fn task_next_lawful_projection_name() -> &'static str {
     "task-next-lawful-latest"
 }
+
+fn safe_task_projection_component(value: &str) -> String {
+    let mut safe = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    safe.truncate(160);
+    if safe.is_empty() {
+        "unknown".to_string()
+    } else {
+        safe
+    }
+}
+
+fn task_show_projection_name(task_id: &str) -> String {
+    format!(
+        "task-show-{}-latest",
+        safe_task_projection_component(task_id)
+    )
+}
+
+fn task_ready_projection_name(scope_task_id: Option<&str>) -> String {
+    format!(
+        "task-ready-scope-{}-latest",
+        safe_task_projection_component(scope_task_id.unwrap_or("default"))
+    )
+}
+
+const TASK_READ_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
+    std::time::Duration::from_secs(300);
 
 fn task_update_graph_issue_from_invalid_record_reason(
     reason: &str,
@@ -150,6 +196,9 @@ async fn load_task_snapshot_rows_authoritative_first(
     state_dir: &std::path::Path,
 ) -> Result<(Vec<state_store::TaskRecord>, TaskReadMetadata), state_store::StateStoreError> {
     let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
+    if let Ok(rows) = StateStore::read_fresh_tasks_from_jsonl_snapshot(state_dir) {
+        return Ok((rows, TaskReadMetadata::fresh_snapshot(&snapshot_path)));
+    }
     match open_read_only_task_store(state_dir.to_path_buf()).await {
         Ok(store) => match store.list_tasks(None, true).await {
             Ok(rows) => Ok((rows, TaskReadMetadata::authoritative_live())),
@@ -208,12 +257,12 @@ async fn refresh_task_snapshot_after_mutation(
     store: &StateStore,
     surface: &str,
 ) -> Result<(), ExitCode> {
+    crate::operator_projection_cache::touch_state_mutation_marker(store.root());
+    StateStore::touch_task_snapshot_state_marker(store.root());
     store
         .refresh_task_snapshot()
         .await
-        .map(|_| {
-            crate::operator_projection_cache::touch_state_mutation_marker(store.root());
-        })
+        .map(|_| ())
         .map_err(|error| {
             eprintln!("Failed to refresh canonical task snapshot after {surface}: {error}");
             ExitCode::from(1)
@@ -225,12 +274,12 @@ async fn refresh_task_snapshot_for_task_after_mutation(
     task: &state_store::TaskRecord,
     surface: &str,
 ) -> Result<(), ExitCode> {
+    crate::operator_projection_cache::touch_state_mutation_marker(store.root());
+    StateStore::touch_task_snapshot_state_marker(store.root());
     store
         .refresh_task_snapshot_for_task(task)
         .await
-        .map(|_| {
-            crate::operator_projection_cache::touch_state_mutation_marker(store.root());
-        })
+        .map(|_| ())
         .map_err(|error| {
             eprintln!("Failed to refresh canonical task snapshot after {surface}: {error}");
             ExitCode::from(1)
@@ -3941,9 +3990,39 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match task_show_authoritative_first(state_dir, &command.task_id).await {
+            if command.json {
+                let projection_name = task_show_projection_name(&command.task_id);
+                if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+                    &state_dir,
+                    &projection_name,
+                ) {
+                    println!("{cached}");
+                    return ExitCode::SUCCESS;
+                }
+                if let Some(cached) =
+                    crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
+                        &state_dir,
+                        &projection_name,
+                        TASK_READ_RECENT_PROJECTION_MAX_AGE,
+                    )
+                {
+                    println!("{cached}");
+                    return ExitCode::SUCCESS;
+                }
+            }
+            match task_show_authoritative_first(state_dir.clone(), &command.task_id).await {
                 Ok((task, metadata)) => {
-                    print_task_show(command.render, &task, command.json, Some(&metadata));
+                    if command.json {
+                        let payload = task_show_payload(&task, Some(&metadata));
+                        crate::print_json_pretty(&payload);
+                        crate::operator_projection_cache::write_json_projection(
+                            &state_dir,
+                            &task_show_projection_name(&command.task_id),
+                            &payload,
+                        );
+                    } else {
+                        print_task_show(command.render, &task, false, Some(&metadata));
+                    }
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
@@ -4172,15 +4251,47 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match task_ready_authoritative_first(state_dir, command.scope.as_deref()).await {
+            if command.json {
+                let projection_name = task_ready_projection_name(command.scope.as_deref());
+                if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+                    &state_dir,
+                    &projection_name,
+                ) {
+                    println!("{cached}");
+                    return ExitCode::SUCCESS;
+                }
+                if let Some(cached) =
+                    crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
+                        &state_dir,
+                        &projection_name,
+                        TASK_READ_RECENT_PROJECTION_MAX_AGE,
+                    )
+                {
+                    println!("{cached}");
+                    return ExitCode::SUCCESS;
+                }
+            }
+            match task_ready_authoritative_first(state_dir.clone(), command.scope.as_deref()).await
+            {
                 Ok((tasks, metadata)) => {
-                    print_task_ready(
-                        command.render,
-                        command.scope.as_deref(),
-                        &tasks,
-                        command.json,
-                        Some(&metadata),
-                    );
+                    if command.json {
+                        let payload =
+                            task_ready_payload(command.scope.as_deref(), &tasks, Some(&metadata));
+                        crate::print_json_pretty(&payload);
+                        crate::operator_projection_cache::write_json_projection(
+                            &state_dir,
+                            &task_ready_projection_name(command.scope.as_deref()),
+                            &payload,
+                        );
+                    } else {
+                        print_task_ready(
+                            command.render,
+                            command.scope.as_deref(),
+                            &tasks,
+                            false,
+                            Some(&metadata),
+                        );
+                    }
                     ExitCode::SUCCESS
                 }
                 Err(error) => {

@@ -7542,10 +7542,10 @@ fn project_activator_materializes_configured_codex_profiles_for_read_only_codex_
     let architect = fs::read_to_string(format!("{project_root}/.codex/agents/architect.toml"))
         .expect("architect codex carrier should materialize");
 
-    assert!(junior.contains("model = \"gpt-5.4\""));
-    assert!(middle.contains("model = \"gpt-5.4\""));
-    assert!(senior.contains("model = \"gpt-5.4\""));
-    assert!(architect.contains("model = \"gpt-5.4\""));
+    assert!(junior.contains("model = \"gpt-5.5\""));
+    assert!(middle.contains("model = \"gpt-5.5\""));
+    assert!(senior.contains("model = \"gpt-5.5\""));
+    assert!(architect.contains("model = \"gpt-5.5\""));
     assert!(senior.contains("sandbox_mode = \"read-only\""));
     assert!(architect.contains("sandbox_mode = \"read-only\""));
     assert!(senior.contains("model_reasoning_effort = \"high\""));

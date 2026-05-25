@@ -159,7 +159,7 @@ fn seed_model_profile_readiness_dispatch_context(state_dir: &str) {
             "selected_backend_id": "internal_subagents",
             "selected_carrier_id": "internal_subagents",
             "selected_model_profile_id": "codex_gpt55_low_write",
-            "selected_model_ref": "gpt-5.4",
+            "selected_model_ref": "gpt-5.5",
             "selected_model_provider": "openai",
             "selected_reasoning_effort": "low",
             "selected_reasoning_control_mode": "fixed",
@@ -197,6 +197,17 @@ fn seed_model_profile_readiness_dispatch_context(state_dir: &str) {
             }
         });
         let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true,
+                        "review": true,
+                        "verification": true
+                    }
+                }
+            ],
             "development_flow": {
                 "dispatch_contract": {
                     "execution_lane_sequence": ["implementation"],

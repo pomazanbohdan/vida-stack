@@ -1368,6 +1368,7 @@ impl StateStore {
             for record in owner_records {
                 if Self::owner_evidence_matches_current_session(
                     &record.runtime_owner_evidence,
+                    &evidence,
                     current_session_id.as_str(),
                     current_stable_fallback.as_deref(),
                 ) {
@@ -1396,6 +1397,7 @@ impl StateStore {
 
     fn owner_evidence_matches_current_session(
         runtime_owner_evidence: &serde_json::Value,
+        current_runtime_owner_evidence: &serde_json::Value,
         current_session_id: &str,
         current_stable_fallback: Option<&str>,
     ) -> bool {
@@ -1404,12 +1406,75 @@ impl StateStore {
             .as_str()
             .is_some_and(|session_id| session_id.trim() == current_session_id)
             || current_stable_fallback.is_some_and(|fallback| {
-                current_session["fallback_replaces_legacy_stable_worktree_state_hash"]
+                let fallback = fallback.trim();
+                current_session["session_id"]
                     .as_str()
-                    .is_some_and(|record_fallback| {
-                        !fallback.is_empty() && record_fallback.trim() == fallback
-                    })
+                    .is_some_and(|session_id| !fallback.is_empty() && session_id.trim() == fallback)
+                    || current_session["fallback_replaces_legacy_stable_worktree_state_hash"]
+                        .as_str()
+                        .is_some_and(|record_fallback| {
+                            !fallback.is_empty() && record_fallback.trim() == fallback
+                        })
             })
+            || Self::legacy_same_worktree_owner_evidence_matches_current_session(
+                runtime_owner_evidence,
+                current_runtime_owner_evidence,
+            )
+    }
+
+    fn legacy_same_worktree_owner_evidence_matches_current_session(
+        runtime_owner_evidence: &serde_json::Value,
+        current_runtime_owner_evidence: &serde_json::Value,
+    ) -> bool {
+        if current_runtime_owner_evidence["mutation_gate"] != "current_session_allowed" {
+            return false;
+        }
+        if current_runtime_owner_evidence["live_other_sessions"]
+            .as_array()
+            .is_some_and(|sessions| !sessions.is_empty())
+        {
+            return false;
+        }
+        let recorded_session = &runtime_owner_evidence["current_session"];
+        let recorded_identity_source = recorded_session["identity_source"]
+            .as_str()
+            .map(str::trim)
+            .unwrap_or_default();
+        if !matches!(
+            recorded_identity_source,
+            "stable_local_worktree_session_id"
+                | "generated_local_session_token"
+                | "synthesized_local_session_token"
+        ) {
+            return false;
+        }
+        let current_session = &current_runtime_owner_evidence["current_session"];
+        Self::owner_path_field_matches(recorded_session, current_session, "worktree_environment_id")
+            || Self::owner_path_field_matches(recorded_session, current_session, "project_root")
+    }
+
+    fn owner_path_field_matches(
+        recorded_session: &serde_json::Value,
+        current_session: &serde_json::Value,
+        field: &str,
+    ) -> bool {
+        let Some(recorded) = recorded_session[field].as_str() else {
+            return false;
+        };
+        let Some(current) = current_session[field].as_str() else {
+            return false;
+        };
+        let recorded = Self::normalize_owner_path(recorded);
+        let current = Self::normalize_owner_path(current);
+        !recorded.is_empty() && recorded == current
+    }
+
+    fn normalize_owner_path(value: &str) -> String {
+        value
+            .trim()
+            .replace('/', "\\")
+            .trim_start_matches("\\\\?\\")
+            .to_ascii_lowercase()
     }
 
     async fn ensure_current_session_mutation_claim_for_run(
@@ -1485,6 +1550,7 @@ impl StateStore {
         if owner_records.iter().any(|record| {
             Self::owner_evidence_matches_current_session(
                 &record.runtime_owner_evidence,
+                &evidence,
                 current_session_id,
                 current_stable_fallback,
             )
@@ -1572,7 +1638,12 @@ impl StateStore {
 
         let mut claim_query = self
             .db
-            .query("SELECT claim_id FROM orchestrator_claim WHERE run_id = $run_id LIMIT 1;")
+            .query(
+                "SELECT claim_id FROM orchestrator_claim \
+                 WHERE run_id = $run_id \
+                 AND status IN ['active', 'renewed', 'blocked'] \
+                 LIMIT 1;",
+            )
             .bind(("run_id", run_id.to_string()))
             .await?;
         let claim_rows: Vec<serde_json::Value> = claim_query.take(0)?;
@@ -3127,6 +3198,46 @@ mod tests {
         }
     }
 
+    fn saved_runtime_session_env() -> Vec<(&'static str, Option<String>)> {
+        [
+            "VIDA_SESSION_ID",
+            "VIDA_ORCHESTRATOR_SESSION_ID",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_REMOTE_SESSION_ID",
+            "CODEX_SESSION_ID",
+            "CODEX_THREAD_ID",
+        ]
+        .into_iter()
+        .map(|name| (name, std::env::var(name).ok()))
+        .collect()
+    }
+
+    fn clear_runtime_session_env() {
+        unsafe {
+            for name in [
+                "VIDA_SESSION_ID",
+                "VIDA_ORCHESTRATOR_SESSION_ID",
+                "CLAUDE_CODE_SESSION_ID",
+                "CLAUDE_CODE_REMOTE_SESSION_ID",
+                "CODEX_SESSION_ID",
+                "CODEX_THREAD_ID",
+            ] {
+                std::env::remove_var(name);
+            }
+        }
+    }
+
+    fn restore_runtime_session_env(saved: Vec<(&'static str, Option<String>)>) {
+        unsafe {
+            for (name, value) in saved {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
     fn sample_run_graph_status() -> RunGraphStatus {
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             "run-vida-a",
@@ -3619,7 +3730,7 @@ mod tests {
             .run_graph_legacy_ownerless("legacy-claimed-run")
             .await
             .expect("classify pre-claim run"));
-        store
+        let claim = store
             .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
                 claim_id: "legacy-claimed-run-write".to_string(),
                 state_root_id: "state-root".to_string(),
@@ -3642,6 +3753,52 @@ mod tests {
             .run_graph_legacy_ownerless("legacy-claimed-run")
             .await
             .expect("claim should make run non-ownerless"));
+        store
+            .release_orchestrator_claim(&claim.claim_id, claim.resource_revision, "test release")
+            .await
+            .expect("release claim");
+        assert!(store
+            .run_graph_legacy_ownerless("legacy-claimed-run")
+            .await
+            .expect("released claim should not block ownerless classification"));
+
+        let mut expired = sample_run_graph_status();
+        expired.run_id = "legacy-expired-claim-run".to_string();
+        expired.task_id = "legacy-expired-claim-task".to_string();
+        store
+            .record_run_graph_status(&expired)
+            .await
+            .expect("persist expired-claim run graph status");
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "legacy-expired-claim-run-write".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-a".to_string(),
+                process_id: Some(std::process::id()),
+                task_id: Some("legacy-expired-claim-task".to_string()),
+                run_id: Some("legacy-expired-claim-run".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("legacy-expired-domain".to_string()),
+                owned_paths: vec!["crates/vida/src/taskflow_proxy.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Exclusive,
+                lease_seconds: -1,
+            })
+            .await
+            .expect("acquire expiring claim");
+        assert_eq!(
+            store
+                .expire_stale_orchestrator_claims()
+                .await
+                .expect("expire stale claims"),
+            1
+        );
+        assert!(store
+            .run_graph_legacy_ownerless("legacy-expired-claim-run")
+            .await
+            .expect("expired claim should not block ownerless classification"));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -3916,17 +4073,68 @@ mod tests {
                 "fallback_replaces_legacy_stable_worktree_state_hash": "local-worktree-worktreehash"
             }
         });
+        let current_owner_evidence = serde_json::json!({
+            "mutation_gate": "current_session_allowed",
+            "live_other_sessions": [],
+            "stale_sessions": [{
+                "session_id": "stale-foreign-project",
+                "project_root": "\\\\?\\C:\\project\\other",
+                "worktree_environment_id": "\\\\?\\C:\\project\\other"
+            }],
+            "current_session": {
+                "session_id": "local-session-worktreehash",
+                "fallback_replaces_legacy_stable_worktree_state_hash": "local-worktree-worktreehash"
+            }
+        });
 
         assert!(StateStore::owner_evidence_matches_current_session(
             &prior_owner_evidence,
+            &current_owner_evidence,
             "local-session-worktreehash",
             Some("local-worktree-worktreehash"),
         ));
         assert!(!StateStore::owner_evidence_matches_current_session(
             &prior_owner_evidence,
+            &current_owner_evidence,
             "local-session-other",
             Some("local-worktree-other"),
         ));
+    }
+
+    #[tokio::test]
+    async fn run_graph_mutation_adopts_legacy_same_worktree_owner_evidence_without_competing_owner()
+    {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_env = saved_runtime_session_env();
+        clear_runtime_session_env();
+
+        let root = temp_run_graph_root("vida-run-graph-legacy-owner-evidence-adopt");
+        let legacy_store = StateStore::open(root.clone())
+            .await
+            .expect("open legacy store");
+        let mut status = sample_run_graph_status();
+        status.run_id = "legacy-owner-evidence-run".to_string();
+        status.task_id = "legacy-owner-evidence-task".to_string();
+        legacy_store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist legacy ownerless status");
+        legacy_store
+            .record_run_graph_owner_evidence("legacy-owner-evidence-run", "dispatch_context")
+            .await
+            .expect("record legacy local owner evidence");
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "current-explicit-session");
+        }
+        let result = legacy_store.record_run_graph_status(&status).await;
+        assert!(
+            result.is_ok(),
+            "legacy same-worktree owner evidence should be adoptable when no live/stale competing owner exists: {result:?}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        restore_runtime_session_env(saved_env);
     }
 
     #[tokio::test]

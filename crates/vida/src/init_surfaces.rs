@@ -14,6 +14,9 @@ use super::{
 use crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload;
 
 const DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS: u64 = 10;
+const AGENT_INIT_EXECUTE_DISPATCH_RECONCILIATION_GRACE_SECONDS: u64 = 20;
+const AGENT_INIT_EXECUTE_DISPATCH_OPERATOR_HANDOFF_SECONDS: u64 = 2;
+const AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV: &str = "VIDA_AGENT_INIT_EXECUTE_DISPATCH_WORKER";
 const COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS: u64 = 30;
 const BOOT_RELEASE_VERIFICATION_RETRY_DELAY_MS: u64 = 25;
 const INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS: u64 = 45;
@@ -21,6 +24,50 @@ const LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS: u64 = 30;
 const AGENT_INIT_EXECUTE_DISPATCH_MISSING_PACKET_ERROR: &str =
     "Agent init execute-dispatch requires either `--dispatch-packet` or `--downstream-packet`.";
 static AGENT_INIT_READ_SURFACE_GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+fn agent_init_execute_dispatch_timeout_seconds(dispatch_handoff_timeout_seconds: u64) -> u64 {
+    dispatch_handoff_timeout_seconds
+        .saturating_add(AGENT_INIT_EXECUTE_DISPATCH_RECONCILIATION_GRACE_SECONDS)
+}
+
+fn agent_init_execute_dispatch_handoff_threshold_seconds() -> u64 {
+    AGENT_INIT_EXECUTE_DISPATCH_OPERATOR_HANDOFF_SECONDS
+        .saturating_add(AGENT_INIT_EXECUTE_DISPATCH_RECONCILIATION_GRACE_SECONDS)
+}
+
+fn agent_init_receipt_timeout_seconds(
+    dispatch_handoff_timeout_seconds: u64,
+    execute_dispatch_timeout_seconds: u64,
+) -> u64 {
+    dispatch_handoff_timeout_seconds.min(execute_dispatch_timeout_seconds)
+}
+
+fn agent_init_execute_dispatch_worker_active() -> bool {
+    std::env::var_os(AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV).is_some()
+}
+
+fn agent_init_execute_dispatch_should_handoff(
+    dispatch_handoff_timeout_seconds: u64,
+    uses_internal_host: bool,
+) -> bool {
+    #[cfg(test)]
+    {
+        let _ = dispatch_handoff_timeout_seconds;
+        let _ = uses_internal_host;
+        false
+    }
+    #[cfg(not(test))]
+    {
+        if agent_init_execute_dispatch_worker_active() {
+            return false;
+        }
+        if uses_internal_host {
+            return dispatch_handoff_timeout_seconds
+                > agent_init_execute_dispatch_handoff_threshold_seconds();
+        }
+        dispatch_handoff_timeout_seconds > AGENT_INIT_EXECUTE_DISPATCH_OPERATOR_HANDOFF_SECONDS
+    }
+}
 
 fn orchestrator_init_bundle_timeout_payload(state_dir: &Path) -> serde_json::Value {
     let blocker_codes = vec!["taskflow_consume_bundle_timeout"];
@@ -315,6 +362,259 @@ fn agent_init_dispatch_timeout_fallback_payload(
         }
     }
     payload
+}
+
+fn render_agent_init_dispatch_result_from_receipt(
+    dispatch_mode: &serde_json::Value,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
+    json_output: bool,
+    timeout_seconds: Option<u64>,
+    warning: Option<&str>,
+) -> Result<ExitCode, String> {
+    let Some(dispatch_result_path) = dispatch_receipt.dispatch_result_path.as_deref() else {
+        return Err(
+            "Agent init execute-dispatch did not produce a dispatch result artifact.".to_string(),
+        );
+    };
+    let result_body = std::fs::read_to_string(dispatch_result_path).map_err(|error| {
+        format!("Failed to read agent-init dispatch result `{dispatch_result_path}`: {error}")
+    })?;
+    let mut result_json =
+        serde_json::from_str::<serde_json::Value>(&result_body).map_err(|error| {
+            format!("Failed to parse agent-init dispatch result `{dispatch_result_path}`: {error}")
+        })?;
+    if let Some(timeout_seconds) = timeout_seconds {
+        result_json = agent_init_dispatch_timeout_operator_envelope(
+            result_json,
+            dispatch_mode,
+            &dispatch_receipt.run_id,
+            Some(dispatch_result_path),
+            timeout_seconds,
+            warning,
+        );
+    } else if let Some(object) = result_json.as_object_mut() {
+        object.insert("dispatch_mode".to_string(), dispatch_mode.clone());
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result_json)
+                .expect("agent-init dispatch result json should render")
+        );
+    } else {
+        crate::print_json_pretty(&result_json);
+    }
+    Ok(if dispatch_receipt.dispatch_status == "blocked" {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+fn safe_dispatch_worker_id(run_id: &str, dispatch_target: &str) -> String {
+    let ts = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("rfc3339 timestamp should render")
+        .replace(':', "-");
+    let raw = format!("{run_id}-{dispatch_target}-{ts}");
+    raw.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+fn dispatch_packet_flag_for_packet_path(packet_path: &str) -> &'static str {
+    let is_downstream = super::taskflow_consume_resume::read_dispatch_packet(packet_path)
+        .ok()
+        .is_some_and(|packet| {
+            packet
+                .get("packet_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("runtime_downstream_dispatch_packet")
+                || packet
+                    .get("downstream_dispatch_target")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .is_some_and(|value| !value.is_empty())
+        });
+    if is_downstream {
+        "--downstream-packet"
+    } else {
+        "--dispatch-packet"
+    }
+}
+
+fn spawn_agent_init_execute_dispatch_worker(
+    state_root: &Path,
+    resume_inputs: &super::taskflow_consume_resume::ResumeInputs,
+) -> Result<serde_json::Value, String> {
+    let project_root = super::runtime_dispatch_project_root_from_state_root(state_root);
+    let worker_dir = state_root
+        .join("runtime-consumption")
+        .join("dispatch-workers");
+    std::fs::create_dir_all(&worker_dir)
+        .map_err(|error| format!("Failed to create dispatch worker directory: {error}"))?;
+    let worker_id = safe_dispatch_worker_id(
+        &resume_inputs.dispatch_receipt.run_id,
+        &resume_inputs.dispatch_receipt.dispatch_target,
+    );
+    let stdout_path = worker_dir.join(format!("{worker_id}.stdout.jsonl"));
+    let stderr_path = worker_dir.join(format!("{worker_id}.stderr.log"));
+    let stdout = std::fs::File::create(&stdout_path)
+        .map_err(|error| format!("Failed to create dispatch worker stdout log: {error}"))?;
+    let stderr = std::fs::File::create(&stderr_path)
+        .map_err(|error| format!("Failed to create dispatch worker stderr log: {error}"))?;
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Failed to resolve current VIDA executable: {error}"))?;
+    let packet_flag = dispatch_packet_flag_for_packet_path(&resume_inputs.dispatch_packet_path);
+    let mut command = std::process::Command::new(executable);
+    command
+        .arg("agent-init")
+        .arg(packet_flag)
+        .arg(&resume_inputs.dispatch_packet_path)
+        .arg("--execute-dispatch")
+        .arg("--json")
+        .arg("--state-dir")
+        .arg(state_root)
+        .current_dir(project_root.as_ref())
+        .env(AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV, "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let child = command
+        .spawn()
+        .map_err(|error| format!("Failed to spawn agent-init dispatch worker: {error}"))?;
+    Ok(serde_json::json!({
+        "worker_id": worker_id,
+        "worker_pid": child.id(),
+        "operator_handoff": "background_dispatch_worker",
+        "operator_handoff_wait_seconds": AGENT_INIT_EXECUTE_DISPATCH_OPERATOR_HANDOFF_SECONDS,
+        "stdout_path": stdout_path.display().to_string(),
+        "stderr_path": stderr_path.display().to_string(),
+        "packet_arg": packet_flag,
+        "packet_path": resume_inputs.dispatch_packet_path,
+    }))
+}
+
+fn agent_init_dispatch_started_payload(
+    mut result_json: serde_json::Value,
+    dispatch_mode: &serde_json::Value,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
+    worker: serde_json::Value,
+) -> serde_json::Value {
+    let dispatch_result_path = dispatch_receipt.dispatch_result_path.as_deref();
+    let artifact_refs = serde_json::json!({
+        "run_id": dispatch_receipt.run_id,
+        "surface": "vida agent-init",
+        "dispatch_result_path": dispatch_result_path,
+        "dispatch_packet_path": dispatch_receipt.dispatch_packet_path,
+        "worker": worker,
+    });
+    let next_actions = vec![
+        format!(
+            "Poll lane state with `vida lane show {} --json`.",
+            dispatch_receipt.run_id
+        ),
+        format!(
+            "Poll run-graph state with `vida taskflow run-graph status {} --json`.",
+            dispatch_receipt.run_id
+        ),
+        "Do not rerun execute-dispatch while execution_state is executing; wait for the worker receipt or timeout evidence.".to_string(),
+    ];
+    if let Some(object) = result_json.as_object_mut() {
+        object.insert("dispatch_mode".to_string(), dispatch_mode.clone());
+        object.insert("async_dispatch".to_string(), serde_json::json!(true));
+        object.insert(
+            "operator_handoff".to_string(),
+            serde_json::json!("background_dispatch_worker"),
+        );
+        object.insert("next_actions".to_string(), serde_json::json!(next_actions));
+        object.insert("artifact_refs".to_string(), artifact_refs.clone());
+        object.insert(
+            "operator_contracts".to_string(),
+            serde_json::json!({
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": next_actions,
+                "artifact_refs": artifact_refs,
+                "risk_tier": null,
+                "trace_id": null,
+                "workflow_class": null,
+            }),
+        );
+        object.insert(
+            "shared_fields".to_string(),
+            serde_json::json!({
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": next_actions,
+                "artifact_refs": artifact_refs,
+            }),
+        );
+    }
+    result_json
+}
+
+async fn start_agent_init_dispatch_worker_and_return(
+    json_output: bool,
+    dispatch_mode: &serde_json::Value,
+    state_root: &Path,
+    resume_inputs: &mut super::taskflow_consume_resume::ResumeInputs,
+) -> Result<ExitCode, String> {
+    super::runtime_dispatch_state::record_dispatch_execution_started(
+        state_root,
+        &resume_inputs.role_selection,
+        &resume_inputs.run_graph_bootstrap,
+        &mut resume_inputs.dispatch_receipt,
+    )
+    .await?;
+    let worker = spawn_agent_init_execute_dispatch_worker(state_root, resume_inputs)?;
+    let Some(dispatch_result_path) = resume_inputs
+        .dispatch_receipt
+        .dispatch_result_path
+        .as_deref()
+    else {
+        return Err(
+            "Agent init async dispatch did not produce an in-flight result path.".to_string(),
+        );
+    };
+    let result_body = std::fs::read_to_string(dispatch_result_path).map_err(|error| {
+        format!(
+            "Failed to read in-flight agent-init dispatch result `{dispatch_result_path}`: {error}"
+        )
+    })?;
+    let result_json = serde_json::from_str::<serde_json::Value>(&result_body).map_err(|error| {
+        format!("Failed to parse in-flight agent-init dispatch result `{dispatch_result_path}`: {error}")
+    })?;
+    let result_json = agent_init_dispatch_started_payload(
+        result_json,
+        dispatch_mode,
+        &resume_inputs.dispatch_receipt,
+        worker,
+    );
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result_json)
+                .expect("agent-init async dispatch json should render")
+        );
+    } else {
+        crate::print_json_pretty(&result_json);
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn agent_init_execute_dispatch_resume_error_run_id(error: &str) -> Option<String> {
@@ -1187,6 +1487,28 @@ mod tests {
     }
 
     #[test]
+    fn agent_init_execute_dispatch_timeout_honors_dispatch_window_with_reconciliation_grace() {
+        assert_eq!(agent_init_execute_dispatch_timeout_seconds(1), 21);
+        assert!(
+            agent_init_execute_dispatch_timeout_seconds(45) > 45,
+            "agent-init outer timeout must leave room for dispatch timeout reconciliation"
+        );
+        assert!(
+            agent_init_execute_dispatch_timeout_seconds(90) > 90,
+            "agent-init outer timeout must outlive the external CLI wall timeout"
+        );
+        assert_eq!(agent_init_execute_dispatch_timeout_seconds(240), 260);
+        assert_eq!(
+            agent_init_receipt_timeout_seconds(
+                240,
+                agent_init_execute_dispatch_timeout_seconds(240)
+            ),
+            240
+        );
+        assert_eq!(agent_init_execute_dispatch_handoff_threshold_seconds(), 22);
+    }
+
+    #[test]
     fn orchestrator_init_cache_policy_rejects_state_marker_stale_summary_projection() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let payload = json!({
@@ -1762,6 +2084,10 @@ mod tests {
                     "      execution_class: internal\n",
                     "      execution_class: internal\n      max_runtime_seconds: 1\n",
                 );
+                let updated = updated.replace(
+                    "      max_runtime_seconds: 420\n      verification_gate: targeted_verification\n",
+                    "      max_runtime_seconds: 1\n      verification_gate: targeted_verification\n",
+                );
                 fs::write(&config_path, updated).expect("config should update");
 
                 let fake_bin = harness.path().join("fake-bin");
@@ -1796,13 +2122,17 @@ mod tests {
                 let config = fs::read_to_string(&config_path).expect("config should reload");
                 let fake_codex_command = fake_codex.to_string_lossy().replace('\\', "/");
                 let updated = if cfg!(windows) {
-                    config.replacen(
-                        "        command: codex\n        receipt_backed_completion_supported: true\n        static_args:\n          - exec\n          - --json\n",
-                        &format!(
-                            "        command: cmd\n        receipt_backed_completion_supported: true\n        static_args:\n          - /C\n          - '{fake_codex_command}'\n"
-                        ),
-                        1,
-                    )
+                    let replacement = format!(
+                        "        command: cmd\n        receipt_backed_completion_supported: true\n        windows_sandbox_spawn_supported: true\n        no_output_timeout_seconds: 1\n        static_args:\n          - /C\n          - '{fake_codex_command}'\n"
+                    );
+                    let with_windows_flag = "        command: codex\n        receipt_backed_completion_supported: true\n        windows_sandbox_spawn_supported: true\n        no_output_timeout_seconds: 2\n        static_args:\n          - exec\n          - --json\n";
+                    let without_windows_flag = "        command: codex\n        receipt_backed_completion_supported: true\n        no_output_timeout_seconds: 2\n        static_args:\n          - exec\n          - --json\n";
+                    let updated = config.replacen(with_windows_flag, &replacement, 1);
+                    if updated == config {
+                        config.replacen(without_windows_flag, &replacement, 1)
+                    } else {
+                        updated
+                    }
                 } else {
                     config.replacen(
                         "        command: codex\n",
@@ -1975,6 +2305,11 @@ mod tests {
                     recorded_receipt.blocker_code.as_deref(),
                     Some("internal_dispatch_timeout_without_receipt")
                 );
+                let recorded_status = runtime
+                    .block_on(store.run_graph_status("run-agent-init-timeout"))
+                    .expect("run graph status should load after timeout");
+                assert_eq!(recorded_status.status, "blocked");
+                assert_eq!(recorded_status.lifecycle_stage, "implementer_blocked");
                 let dispatch_result_path = recorded_receipt
                     .dispatch_result_path
                     .as_deref()
@@ -3204,8 +3539,42 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
     let framework_memory_source_root =
         PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
 
-    // Security: orchestrator-init JSON must come from authoritative state computation,
-    // not project-controlled projection cache files.
+    if args.json {
+        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+            &state_dir,
+            orchestrator_init_projection_name(args.full),
+        ) {
+            println!("{cached}");
+            return ExitCode::SUCCESS;
+        }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                &state_dir,
+                orchestrator_init_projection_name(args.full),
+                std::time::Duration::from_secs(300),
+            )
+        {
+            if let Some(overlay) =
+                crate::operator_projection_cache::read_runtime_continuation_binding_overlay(
+                    &state_dir,
+                )
+            {
+                if let Some(rendered) =
+                    crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload(
+                        &state_dir,
+                        &cached,
+                        &overlay,
+                    )
+                {
+                    println!("{rendered}");
+                    return ExitCode::SUCCESS;
+                }
+            }
+        }
+    }
+
+    // Security: orchestrator-init JSON may use only state-marker-fresh projections.
+    // Stale projections still fail closed to authoritative recomputation.
 
     match tokio::time::timeout(
         std::time::Duration::from_secs(COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS),
@@ -3516,8 +3885,37 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
         &resume_inputs.role_selection,
         &resume_inputs.dispatch_receipt,
     );
+    let uses_internal_host =
+        super::runtime_dispatch_state::dispatch_handoff_uses_internal_host_for_state_root(
+            &state_root,
+            &resume_inputs.role_selection,
+            &resume_inputs.dispatch_receipt,
+        );
+    if agent_init_execute_dispatch_should_handoff(
+        dispatch_handoff_timeout_seconds,
+        uses_internal_host,
+    ) {
+        return match start_agent_init_dispatch_worker_and_return(
+            json_output,
+            dispatch_mode,
+            &state_root,
+            &mut resume_inputs,
+        )
+        .await
+        {
+            Ok(exit_code) => exit_code,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::from(1)
+            }
+        };
+    }
     let execute_dispatch_timeout_seconds =
-        dispatch_handoff_timeout_seconds.saturating_add(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS);
+        agent_init_execute_dispatch_timeout_seconds(dispatch_handoff_timeout_seconds);
+    let receipt_timeout_seconds = agent_init_receipt_timeout_seconds(
+        dispatch_handoff_timeout_seconds,
+        execute_dispatch_timeout_seconds,
+    );
     match tokio::time::timeout(
         std::time::Duration::from_secs(execute_dispatch_timeout_seconds),
         super::execute_and_record_dispatch_receipt(
@@ -3531,6 +3929,24 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
     {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
+            if resume_inputs.dispatch_receipt.dispatch_status == "blocked"
+                && resume_inputs.dispatch_receipt.blocker_code.as_deref()
+                    == Some("internal_dispatch_timeout_without_receipt")
+            {
+                match render_agent_init_dispatch_result_from_receipt(
+                    dispatch_mode,
+                    &resume_inputs.dispatch_receipt,
+                    json_output,
+                    Some(execute_dispatch_timeout_seconds),
+                    None,
+                ) {
+                    Ok(exit_code) => return exit_code,
+                    Err(render_error) => {
+                        eprintln!("{render_error}");
+                        return ExitCode::from(1);
+                    }
+                }
+            }
             eprintln!("Failed to execute agent-init dispatch packet: {error}");
             return ExitCode::from(1);
         }
@@ -3539,7 +3955,7 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
                 &state_root,
                 &resume_inputs.role_selection,
                 &mut resume_inputs.dispatch_receipt,
-                dispatch_handoff_timeout_seconds,
+                receipt_timeout_seconds,
             ) {
                 if json_output {
                     crate::print_json_pretty(&agent_init_dispatch_timeout_fallback_payload(
@@ -3608,48 +4024,18 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
             return ExitCode::from(1);
         }
     }
-    let Some(dispatch_result_path) = resume_inputs
-        .dispatch_receipt
-        .dispatch_result_path
-        .as_deref()
-    else {
-        eprintln!("Agent init execute-dispatch did not produce a dispatch result artifact.");
-        return ExitCode::from(1);
-    };
-    let result_body = match std::fs::read_to_string(dispatch_result_path) {
-        Ok(body) => body,
+    match render_agent_init_dispatch_result_from_receipt(
+        dispatch_mode,
+        &resume_inputs.dispatch_receipt,
+        json_output,
+        None,
+        None,
+    ) {
+        Ok(exit_code) => exit_code,
         Err(error) => {
-            eprintln!(
-                "Failed to read agent-init dispatch result `{dispatch_result_path}`: {error}"
-            );
-            return ExitCode::from(1);
+            eprintln!("{error}");
+            ExitCode::from(1)
         }
-    };
-    let mut result_json = match serde_json::from_str::<serde_json::Value>(&result_body) {
-        Ok(json) => json,
-        Err(error) => {
-            eprintln!(
-                "Failed to parse agent-init dispatch result `{dispatch_result_path}`: {error}"
-            );
-            return ExitCode::from(1);
-        }
-    };
-    if let Some(object) = result_json.as_object_mut() {
-        object.insert("dispatch_mode".to_string(), dispatch_mode.clone());
-    }
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&result_json)
-                .expect("agent-init dispatch result json should render")
-        );
-    } else {
-        crate::print_json_pretty(&result_json);
-    }
-    if resume_inputs.dispatch_receipt.dispatch_status == "blocked" {
-        ExitCode::from(1)
-    } else {
-        ExitCode::SUCCESS
     }
 }
 
@@ -3876,7 +4262,8 @@ fn resume_inputs_from_downstream_packet_without_store(
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0) as u32,
         downstream_dispatch_active_target: None,
-        downstream_dispatch_last_target: Some(dispatch_target),
+        downstream_dispatch_last_target: string_field(&packet, "source_dispatch_target")
+            .or_else(|| string_field(&packet, "downstream_dispatch_last_target")),
         activation_agent_type: string_field(&packet, "activation_agent_type"),
         activation_runtime_role: string_field(&packet, "activation_runtime_role"),
         selected_backend: string_field(&packet, "selected_backend"),
@@ -3979,6 +4366,37 @@ fn resume_inputs_from_dispatch_packet_without_store(
         role_selection,
         run_graph_bootstrap,
     })
+}
+
+async fn merge_persisted_dispatch_receipt_without_resume_gate(
+    store: &StateStore,
+    mut inputs: super::taskflow_consume_resume::ResumeInputs,
+) -> Result<super::taskflow_consume_resume::ResumeInputs, String> {
+    let Some(receipt) = store
+        .run_graph_dispatch_receipt(&inputs.dispatch_receipt.run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read active dispatch receipt for packet-backed worker resume: {error}"
+            )
+        })?
+    else {
+        return Ok(inputs);
+    };
+    let active_packet_path = receipt
+        .dispatch_packet_path
+        .as_deref()
+        .map(normalized_packet_arg_path);
+    let requested_packet_path = normalized_packet_arg_path(&inputs.dispatch_packet_path);
+    let packet_matches = active_packet_path
+        .as_ref()
+        .is_some_and(|path| path == &requested_packet_path);
+    if receipt.dispatch_target == inputs.dispatch_receipt.dispatch_target && packet_matches {
+        inputs.dispatch_receipt = receipt;
+        inputs.dispatch_packet_path = requested_packet_path.display().to_string();
+        inputs.dispatch_receipt.dispatch_packet_path = Some(inputs.dispatch_packet_path.clone());
+    }
+    Ok(inputs)
 }
 
 pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
@@ -4104,7 +4522,56 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     );
                     return ExitCode::from(2);
                 }
-                let resume_inputs =
+                let resume_inputs = if agent_init_execute_dispatch_worker_active() {
+                    let packet_path = args
+                        .dispatch_packet
+                        .as_deref()
+                        .or(args.downstream_packet.as_deref())
+                        .expect("packet_arg_count > 0 should provide a packet path");
+                    match resume_inputs_from_dispatch_packet_without_store(packet_path) {
+                        Ok(inputs) => {
+                            match merge_persisted_dispatch_receipt_without_resume_gate(
+                                &store, inputs,
+                            )
+                            .await
+                            {
+                                Ok(inputs) => inputs,
+                                Err(error) => {
+                                    if args.json {
+                                        let dispatch_mode = agent_init_dispatch_mode(
+                                            &args,
+                                            &serde_json::Value::Null,
+                                        );
+                                        crate::print_json_pretty(
+                                            &agent_init_execute_dispatch_resume_error_payload(
+                                                &dispatch_mode,
+                                                &error,
+                                            ),
+                                        );
+                                        return ExitCode::from(1);
+                                    }
+                                    eprintln!("{error}");
+                                    return ExitCode::from(1);
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            if args.json {
+                                let dispatch_mode =
+                                    agent_init_dispatch_mode(&args, &serde_json::Value::Null);
+                                crate::print_json_pretty(
+                                    &agent_init_execute_dispatch_resume_error_payload(
+                                        &dispatch_mode,
+                                        &error,
+                                    ),
+                                );
+                                return ExitCode::from(1);
+                            }
+                            eprintln!("{error}");
+                            return ExitCode::from(1);
+                        }
+                    }
+                } else {
                     match super::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
                         &store,
                         None,
@@ -4138,7 +4605,8 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                             eprintln!("{error}");
                             return ExitCode::from(1);
                         }
-                    };
+                    }
+                };
                 let selection_value = serde_json::to_value(&resume_inputs.role_selection)
                     .unwrap_or(serde_json::Value::Null);
                 let dispatch_mode = agent_init_dispatch_mode(&args, &selection_value);
@@ -4314,182 +4782,94 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                         return emit_agent_init_execute_dispatch_missing_packet(&args);
                     }
 
-                    let resume_inputs = match super::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
-                        &store,
-                        None,
-                        args.dispatch_packet.as_deref(),
-                        args.downstream_packet.as_deref(),
-                    )
-                    .await
-                    {
-                        Ok(inputs) => inputs,
-                        Err(error) => {
-                            if args.json {
-                                crate::print_json_pretty(
-                                    &agent_init_execute_dispatch_resume_error_payload(
-                                        &dispatch_mode,
-                                        &error,
-                                    ),
-                                );
+                    let resume_inputs = if agent_init_execute_dispatch_worker_active() {
+                        let packet_path = args
+                            .dispatch_packet
+                            .as_deref()
+                            .or(args.downstream_packet.as_deref())
+                            .expect("packet_arg_count > 0 should provide a packet path");
+                        match resume_inputs_from_dispatch_packet_without_store(packet_path) {
+                            Ok(inputs) => {
+                                match merge_persisted_dispatch_receipt_without_resume_gate(
+                                    &store, inputs,
+                                )
+                                .await
+                                {
+                                    Ok(inputs) => inputs,
+                                    Err(error) => {
+                                        if args.json {
+                                            crate::print_json_pretty(
+                                                &agent_init_execute_dispatch_resume_error_payload(
+                                                    &dispatch_mode,
+                                                    &error,
+                                                ),
+                                            );
+                                            return ExitCode::from(1);
+                                        }
+                                        eprintln!("{error}");
+                                        return ExitCode::from(1);
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                if args.json {
+                                    crate::print_json_pretty(
+                                        &agent_init_execute_dispatch_resume_error_payload(
+                                            &dispatch_mode,
+                                            &error,
+                                        ),
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                                eprintln!("{error}");
                                 return ExitCode::from(1);
                             }
-                            eprintln!("{error}");
-                            return ExitCode::from(1);
+                        }
+                    } else {
+                        match super::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
+                            &store,
+                            None,
+                            args.dispatch_packet.as_deref(),
+                            args.downstream_packet.as_deref(),
+                        )
+                        .await
+                        {
+                            Ok(inputs) => inputs,
+                            Err(error) => {
+                                if args.json {
+                                    let (receipt_evidence, result_artifact) =
+                                        agent_init_execute_dispatch_resume_error_receipt_evidence(
+                                            &store,
+                                            &error,
+                                            args.dispatch_packet.as_deref(),
+                                        )
+                                        .await;
+                                    crate::print_json_pretty(
+                                        &agent_init_execute_dispatch_resume_error_payload_with_receipt_evidence(
+                                            &dispatch_mode,
+                                            &error,
+                                            receipt_evidence.as_ref(),
+                                            result_artifact.as_ref(),
+                                        ),
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                                eprintln!("{error}");
+                                return ExitCode::from(1);
+                            }
                         }
                     };
                     (store_state_root.clone(), resume_inputs)
                 };
                 drop(store);
-                let (state_root, mut resume_inputs) = dispatch_setup;
-                let dispatch_handoff_timeout_seconds =
-                    super::dispatch_handoff_timeout_seconds_for_state_root(
-                        &state_root,
-                        &resume_inputs.role_selection,
-                        &resume_inputs.dispatch_receipt,
-                    );
-                let execute_dispatch_timeout_seconds = dispatch_handoff_timeout_seconds
-                    .saturating_add(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS);
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(execute_dispatch_timeout_seconds),
-                    super::execute_and_record_dispatch_receipt(
-                        &state_root,
-                        &resume_inputs.role_selection,
-                        &resume_inputs.run_graph_bootstrap,
-                        &mut resume_inputs.dispatch_receipt,
-                    ),
+                let (state_root, resume_inputs) = dispatch_setup;
+                return execute_agent_init_dispatch_from_resume_inputs(
+                    args.json,
+                    &dispatch_mode,
+                    state_root,
+                    resume_inputs,
                 )
-                .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => {
-                        eprintln!("Failed to execute agent-init dispatch packet: {error}");
-                        return ExitCode::from(1);
-                    }
-                    Err(_) => {
-                        if let Err(error) =
-                            super::apply_dispatch_handoff_timeout_to_receipt_for_state_root(
-                                &state_root,
-                                &resume_inputs.role_selection,
-                                &mut resume_inputs.dispatch_receipt,
-                                dispatch_handoff_timeout_seconds,
-                            )
-                        {
-                            if args.json {
-                                crate::print_json_pretty(
-                                    &agent_init_dispatch_timeout_fallback_payload(
-                                        &dispatch_mode,
-                                        &resume_inputs.dispatch_receipt.run_id,
-                                        resume_inputs
-                                            .dispatch_receipt
-                                            .dispatch_result_path
-                                            .as_deref(),
-                                        execute_dispatch_timeout_seconds,
-                                        Some(&error.to_string()),
-                                    ),
-                                );
-                                return ExitCode::from(1);
-                            }
-                            eprintln!(
-                                "Timed out executing agent-init dispatch packet after {execute_dispatch_timeout_seconds}s total without receipt-backed completion, and failed to materialize timeout receipt: {error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                        let timeout_warning =
-                            best_effort_record_agent_init_dispatch_timeout_receipt(
-                                &state_root,
-                                &resume_inputs.run_graph_bootstrap,
-                                &resume_inputs.dispatch_receipt,
-                                execute_dispatch_timeout_seconds,
-                            )
-                            .await;
-                        if args.json {
-                            let dispatch_result_path = resume_inputs
-                                .dispatch_receipt
-                                .dispatch_result_path
-                                .as_deref();
-                            let result_json = dispatch_result_path
-                                .and_then(|path| {
-                                    std::fs::read_to_string(path)
-                                        .ok()
-                                        .and_then(|body| serde_json::from_str(&body).ok())
-                                })
-                                .map(|result_json| {
-                                    agent_init_dispatch_timeout_operator_envelope(
-                                        result_json,
-                                        &dispatch_mode,
-                                        &resume_inputs.dispatch_receipt.run_id,
-                                        dispatch_result_path,
-                                        execute_dispatch_timeout_seconds,
-                                        timeout_warning.as_deref(),
-                                    )
-                                })
-                                .unwrap_or_else(|| {
-                                    agent_init_dispatch_timeout_fallback_payload(
-                                        &dispatch_mode,
-                                        &resume_inputs.dispatch_receipt.run_id,
-                                        dispatch_result_path,
-                                        execute_dispatch_timeout_seconds,
-                                        timeout_warning.as_deref(),
-                                    )
-                                });
-                            crate::print_json_pretty(&result_json);
-                            return ExitCode::from(1);
-                        }
-                        if let Some(warning) = timeout_warning {
-                            eprintln!("{warning}");
-                        }
-                        eprintln!(
-                            "Timed out executing agent-init dispatch packet after {execute_dispatch_timeout_seconds}s total without receipt-backed completion"
-                        );
-                        return ExitCode::from(1);
-                    }
-                }
-                let Some(dispatch_result_path) = resume_inputs
-                    .dispatch_receipt
-                    .dispatch_result_path
-                    .as_deref()
-                else {
-                    eprintln!(
-                        "Agent init execute-dispatch did not produce a dispatch result artifact."
-                    );
-                    return ExitCode::from(1);
-                };
-                let result_body = match std::fs::read_to_string(dispatch_result_path) {
-                    Ok(body) => body,
-                    Err(error) => {
-                        eprintln!(
-                            "Failed to read agent-init dispatch result `{dispatch_result_path}`: {error}"
-                        );
-                        return ExitCode::from(1);
-                    }
-                };
-                let mut result_json = match serde_json::from_str::<serde_json::Value>(&result_body)
-                {
-                    Ok(json) => json,
-                    Err(error) => {
-                        eprintln!(
-                            "Failed to parse agent-init dispatch result `{dispatch_result_path}`: {error}"
-                        );
-                        return ExitCode::from(1);
-                    }
-                };
-                if let Some(object) = result_json.as_object_mut() {
-                    object.insert("dispatch_mode".to_string(), dispatch_mode.clone());
-                }
-                if args.json {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&result_json)
-                            .expect("agent-init dispatch result json should render")
-                    );
-                } else {
-                    crate::print_json_pretty(&result_json);
-                }
-                return if resume_inputs.dispatch_receipt.dispatch_status == "blocked" {
-                    ExitCode::from(1)
-                } else {
-                    ExitCode::SUCCESS
-                };
+                .await;
             }
 
             drop(store);
@@ -4716,6 +5096,68 @@ fn agent_init_packet_selection(
     }))
 }
 
+fn recomputed_agent_init_execution_truth(
+    selection: &serde_json::Value,
+    packet: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let role_selection = packet
+        .get("role_selection_full")
+        .cloned()
+        .and_then(|value| {
+            serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
+        })?;
+    let dispatch_target = agent_init_selection_dispatch_target(selection);
+    Some(
+        super::runtime_dispatch_state::dispatch_execution_route_summary(
+            &role_selection,
+            dispatch_target,
+            packet
+                .get("selected_backend")
+                .and_then(serde_json::Value::as_str),
+            packet
+                .get("selected_backend_override")
+                .and_then(serde_json::Value::as_str),
+        ),
+    )
+}
+
+fn packet_execution_truth_conflicts_with_runtime_assignment(
+    selection: &serde_json::Value,
+    packet: &serde_json::Value,
+    packet_execution_truth: &serde_json::Value,
+) -> bool {
+    let Some(role_selection) = packet
+        .get("role_selection_full")
+        .cloned()
+        .and_then(|value| {
+            serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
+        })
+    else {
+        return false;
+    };
+    let dispatch_target = agent_init_selection_dispatch_target(selection);
+    let (runtime_assignment, _) = super::runtime_dispatch_state::dispatch_target_runtime_assignment(
+        &role_selection.execution_plan,
+        dispatch_target,
+    );
+    let assignment_backend = runtime_assignment
+        .get("selected_backend_id")
+        .or_else(|| runtime_assignment.get("selected_carrier_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let packet_backend = packet_execution_truth
+        .get("effective_selected_backend")
+        .or_else(|| packet_execution_truth.get("selected_backend"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    matches!(
+        (assignment_backend, packet_backend),
+        (Some(assignment), Some(packet)) if assignment != packet
+    )
+}
+
 fn agent_init_execution_truth(selection: &serde_json::Value) -> serde_json::Value {
     let packet = selection
         .get("packet")
@@ -4726,31 +5168,22 @@ fn agent_init_execution_truth(selection: &serde_json::Value) -> serde_json::Valu
         return serde_json::Value::Null;
     }
 
-    packet
-        .get("execution_truth")
-        .cloned()
-        .or_else(|| {
-            let role_selection = packet
-                .get("role_selection_full")
-                .cloned()
-                .and_then(|value| {
-                    serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
-                })?;
-            let dispatch_target = agent_init_selection_dispatch_target(selection);
-            Some(
-                super::runtime_dispatch_state::dispatch_execution_route_summary(
-                    &role_selection,
-                    dispatch_target,
-                    packet
-                        .get("selected_backend")
-                        .and_then(serde_json::Value::as_str),
-                    packet
-                        .get("selected_backend_override")
-                        .and_then(serde_json::Value::as_str),
-                ),
-            )
-        })
-        .unwrap_or(serde_json::Value::Null)
+    let recomputed = recomputed_agent_init_execution_truth(selection, &packet);
+    let packet_execution_truth = packet.get("execution_truth").cloned();
+    match (packet_execution_truth, recomputed) {
+        (Some(packet_truth), Some(recomputed_truth))
+            if packet_execution_truth_conflicts_with_runtime_assignment(
+                selection,
+                &packet,
+                &packet_truth,
+            ) =>
+        {
+            recomputed_truth
+        }
+        (Some(packet_truth), _) => packet_truth,
+        (None, Some(recomputed_truth)) => recomputed_truth,
+        (None, None) => serde_json::Value::Null,
+    }
 }
 
 fn agent_init_role_selection(
@@ -5812,6 +6245,58 @@ mod agent_init_surface_tests {
     }
 
     #[test]
+    fn downstream_packet_resume_preserves_source_dispatch_target_as_previous_lane_context() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("downstream-packet.json");
+        fs::write(
+            &packet_path,
+            serde_json::to_string(&serde_json::json!({
+                "run_id": "run-duplicate-flow",
+                "source_dispatch_target": "implementer",
+                "downstream_dispatch_target": "coach",
+                "downstream_dispatch_ready": true,
+                "downstream_dispatch_blockers": [],
+                "downstream_dispatch_status": "packet_ready",
+                "downstream_lane_status": "packet_ready",
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": {
+                    "goal": "Verify downstream source context",
+                    "scope_in": ["downstream packet resume"],
+                    "definition_of_done": ["source dispatch target is preserved"],
+                    "verification_command": "vida agent-init --downstream-packet packet.json --execute-dispatch --json",
+                    "proof_target": "decoded dispatch receipt",
+                    "stop_rules": ["stop after decode"],
+                    "blocking_question": "Does the downstream packet carry previous-lane context?"
+                },
+                "activation_runtime_role": "coach",
+                "activation_agent_type": "middle",
+                "selected_backend": "middle",
+                "role_selection_full": test_role_selection(),
+                "run_graph_bootstrap": {
+                    "run_id": "run-duplicate-flow"
+                }
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("packet should write");
+
+        let inputs = resume_inputs_from_downstream_packet_without_store(
+            packet_path.to_str().expect("packet path should be utf-8"),
+        )
+        .expect("downstream packet should decode");
+
+        assert_eq!(inputs.dispatch_receipt.dispatch_target, "coach");
+        assert_eq!(
+            inputs
+                .dispatch_receipt
+                .downstream_dispatch_last_target
+                .as_deref(),
+            Some("implementer")
+        );
+    }
+
+    #[test]
     fn downstream_agent_init_backend_truth_prefers_downstream_target_over_stale_plan_assignment() {
         let mut role_selection = test_role_selection();
         role_selection.selected_role = "business_analyst".to_string();
@@ -5903,6 +6388,99 @@ mod agent_init_surface_tests {
             "implementation"
         );
         assert!(payload["backend_truth"]["assignment_blocker"].is_null());
+    }
+
+    #[test]
+    fn downstream_agent_init_backend_truth_uses_runtime_assignment_over_stale_selected_backend() {
+        let mut role_selection = test_role_selection();
+        role_selection.selected_role = "coach".to_string();
+        role_selection.execution_plan = serde_json::json!({
+            "development_flow": {
+                "coach": {
+                    "executor_backend": "internal_subagents",
+                    "fallback_executor_backend": "internal_subagents",
+                    "fanout_executor_backends": ["internal_subagents"],
+                    "carrier_runtime_assignment": {
+                        "enabled": true,
+                        "selected_backend_id": "pi_cli",
+                        "selected_carrier_id": "pi_cli",
+                        "selected_model_profile_id": "pi_gpt55_medium_guarded",
+                        "activation_agent_type": "pi_cli",
+                        "activation_runtime_role": "coach",
+                        "task_class": "coach",
+                        "runtime_role": "coach"
+                    }
+                }
+            },
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "coach": true
+                    }
+                },
+                {
+                    "backend_id": "pi_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "coach": true
+                    }
+                }
+            ]
+        });
+        let selection = agent_init_packet_selection(
+            "/tmp/downstream.json",
+            serde_json::json!({
+                "activation_runtime_role": "coach",
+                "request_text": "review bounded runtime fix",
+                "downstream_dispatch_target": "coach",
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "coach_review_packet",
+                "selected_backend": "internal_subagents",
+                "execution_truth": {
+                    "effective_selected_backend": "internal_subagents",
+                    "selected_backend_source": "stale_packet_selected_backend",
+                    "route_primary_backend": "internal_subagents",
+                    "route_fallback_backend": "internal_subagents"
+                },
+                "role_selection_full": role_selection,
+            }),
+            true,
+        )
+        .expect("downstream packet selection should build");
+        let payload = build_agent_init_surface_payload(
+            test_project_root(),
+            test_config_path(),
+            serde_json::json!({ "status": "ready" }),
+            selection,
+            serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({
+                "mode": "activation_view_only",
+                "activation_view_is_execution_evidence": false,
+                "required_completion_evidence": "receipt_backed_execution_evidence",
+                "root_session_write_authority_granted": false,
+                "continuation_authority_granted": false
+            }),
+            serde_json::json!({ "bundle_id": "bundle-test" }),
+            &test_activation_bundle(),
+            serde_json::json!({ "status": "ready", "roles": [] }),
+        );
+
+        assert_eq!(
+            payload["execution_truth"]["effective_selected_backend"],
+            "pi_cli"
+        );
+        assert_eq!(payload["backend_truth"]["selected_backend"], "pi_cli");
+        assert_eq!(payload["backend_truth"]["selected_carrier_id"], "pi_cli");
+        assert_eq!(
+            payload["backend_truth"]["selected_model_profile_id"],
+            "pi_gpt55_medium_guarded"
+        );
+        assert_eq!(
+            payload["backend_truth"]["assignment_source"],
+            "route_carrier_runtime_assignment"
+        );
     }
 
     #[test]

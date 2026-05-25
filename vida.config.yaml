@@ -31,14 +31,14 @@ host_environment:
         description: Level 1 Codex lane for cheap bounded implementation packets that own one explicit write scope and return concrete delivery evidence without self-approving closure.
         rate: 1
         reasoning_band: low
-        model: gpt-5.4
+        model: gpt-5.5
         model_reasoning_effort: low
         sandbox_mode: workspace-write
         default_model_profile: codex_gpt55_low_write
         model_profiles:
           codex_gpt55_low_write:
             provider: openai
-            model_ref: gpt-5.4
+            model_ref: gpt-5.5
             reasoning_effort: low
             plan_mode_reasoning_effort: medium
             sandbox_mode: workspace-write
@@ -78,14 +78,14 @@ host_environment:
         description: Level 2 Codex lane for bounded specification, planning, spec-conformance coach review, and medium implementation packets when the work still fits one packet and does not require senior proof or architecture escalation.
         rate: 4
         reasoning_band: medium
-        model: gpt-5.4
+        model: gpt-5.5
         model_reasoning_effort: medium
         sandbox_mode: workspace-write
         default_model_profile: codex_gpt55_medium_write
         model_profiles:
           codex_gpt55_medium_write:
             provider: openai
-            model_ref: gpt-5.4
+            model_ref: gpt-5.5
             reasoning_effort: medium
             plan_mode_reasoning_effort: high
             sandbox_mode: workspace-write
@@ -128,14 +128,14 @@ host_environment:
         description: Level 3 Codex lane for independent verification, proof-strength review, and high-confidence closure gates that fail closed on missing evidence.
         rate: 16
         reasoning_band: high
-        model: gpt-5.4
+        model: gpt-5.5
         model_reasoning_effort: high
         sandbox_mode: read-only
         default_model_profile: codex_gpt55_high_readonly
         model_profiles:
           codex_gpt55_high_readonly:
             provider: openai
-            model_ref: gpt-5.4
+            model_ref: gpt-5.5
             reasoning_effort: high
             plan_mode_reasoning_effort: high
             sandbox_mode: read-only
@@ -168,14 +168,14 @@ host_environment:
         description: Level 4 Codex lane for architecture preparation, hard escalation, and cross-scope conflict resolution when the normal implementer-coach-verifier path cannot close lawfully.
         rate: 48
         reasoning_band: xhigh
-        model: gpt-5.4
+        model: gpt-5.5
         model_reasoning_effort: xhigh
         sandbox_mode: read-only
         default_model_profile: codex_gpt55_xhigh_arch
         model_profiles:
           codex_gpt55_high_arch:
             provider: openai
-            model_ref: gpt-5.4
+            model_ref: gpt-5.5
             reasoning_effort: high
             plan_mode_reasoning_effort: high
             sandbox_mode: read-only
@@ -195,7 +195,7 @@ host_environment:
               required: true
           codex_gpt55_xhigh_arch:
             provider: openai
-            model_ref: gpt-5.4
+            model_ref: gpt-5.5
             reasoning_effort: xhigh
             plan_mode_reasoning_effort: xhigh
             sandbox_mode: read-only
@@ -253,6 +253,7 @@ host_environment:
         command: codex
         receipt_backed_completion_supported: true
         windows_sandbox_spawn_supported: true
+        no_output_timeout_seconds: 2
         static_args:
           - exec
           - --json
@@ -262,6 +263,7 @@ host_environment:
         workdir_flag: -C
         sandbox_flag: -s
         model_flag: -m
+        model_arg_transform: provider_local_name
         reasoning_effort_flag: -c
         reasoning_effort_value_template: 'model_reasoning_effort="{value}"'
         prompt_mode: stdin
@@ -992,7 +994,7 @@ agent_system:
       model_profiles:
         codex_gpt55_low_write:
           provider: openai
-          model_ref: gpt-5.4
+          model_ref: gpt-5.5
           reasoning_effort: low
           normalized_cost_units: 1
           pricing:
@@ -1018,7 +1020,7 @@ agent_system:
             required: true
         codex_gpt55_medium_write:
           provider: openai
-          model_ref: gpt-5.4
+          model_ref: gpt-5.5
           reasoning_effort: medium
           normalized_cost_units: 4
           pricing:
@@ -1050,7 +1052,7 @@ agent_system:
             required: true
         codex_gpt55_high_readonly:
           provider: openai
-          model_ref: gpt-5.4
+          model_ref: gpt-5.5
           reasoning_effort: high
           normalized_cost_units: 16
           speed_tier: medium
@@ -1070,7 +1072,7 @@ agent_system:
             required: true
         codex_gpt55_xhigh_arch:
           provider: openai
-          model_ref: gpt-5.4
+          model_ref: gpt-5.5
           reasoning_effort: xhigh
           normalized_cost_units: 48
           speed_tier: medium
@@ -1342,16 +1344,16 @@ agent_system:
           path: ~/.local/state/kilo/model.json
           expected_ref: kilo/x-ai/grok-code-fast-1:optimized:free
     vibe_cli:
-      enabled: false
+      enabled: true
       subagent_backend_class: external_cli
       detect_command: vibe
       role: free_primary
       orchestration_tier: external_free
       cost_priority: highest
       budget_cost_units: 0
-      models_hint: vibe/devstral-2
-      default_model: vibe/devstral-2
-      default_model_profile: vibe_devstral2_review
+      models_hint: vibe/mistral-medium-3.5
+      default_model: vibe/mistral-medium-3.5
+      default_model_profile: vibe_mistral_medium35_review
       capability_band: read_only,review_safe
       default_runtime_role: coach
       write_scope: none
@@ -1367,10 +1369,12 @@ agent_system:
         - ui_review
         - review
         - analysis
+        - coach
+        - verification
       model_profiles:
-        vibe_devstral2_review:
+        vibe_mistral_medium35_review:
           provider: vibe
-          model_ref: vibe/devstral-2
+          model_ref: vibe/mistral-medium-3.5
           reasoning_effort: provider_default
           normalized_cost_units: 0
           speed_tier: medium
@@ -1383,10 +1387,12 @@ agent_system:
             - ui_review
             - review
             - analysis
+            - coach
+            - verification
           reasoning_control:
             mode: config_file
             path: ~/.vibe/config.toml
-            expected_substring: 'active_model = "devstral-2"'
+            expected_substring: 'active_model = "mistral-medium-3.5"'
           readiness:
             mode: external_cli_profile
             required: true
@@ -1394,14 +1400,15 @@ agent_system:
       dispatch:
         command: vibe
         static_args:
-          - -p
           - --output
           - text
-          - --max-turns
-          - "1"
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
         workdir_flag: --workdir
         output_mode: stdout
-        prompt_mode: positional
+        prompt_mode: flag_value
+        prompt_flag: -p
         startup_timeout_seconds: 60
         no_output_timeout_seconds: 180
         progress_idle_timeout_seconds: 105
@@ -1413,14 +1420,14 @@ agent_system:
         model:
           mode: text_contains
           path: ~/.vibe/config.toml
-          expected_ref: vibe/devstral-2
-          expected_substring: 'active_model = "devstral-2"'
+          expected_ref: vibe/mistral-medium-3.5
+          expected_substring: 'active_model = "mistral-medium-3.5"'
         provider_failure:
           mode: file_contains
           path: ~/.vibe/logs/vibe.log
           substring: Invalid API key
     pi_cli:
-      enabled: true
+      enabled: false
       subagent_backend_class: external_cli
       detect_command: vida-pi-agent
       provider_command: pi
@@ -1521,6 +1528,9 @@ agent_system:
             - business_analyst
             - coach
           task_classes:
+            - implementation
+            - delivery_task
+            - execution_block
             - implementation_medium
             - specification
             - planning
@@ -1761,7 +1771,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        pi_cli: pi_gpt55_high_readonly
+        vibe_cli: vibe_mistral_medium35_review
         internal_subagents: codex_gpt55_medium_write
       fanout_executor_backends:
         - internal_subagents
@@ -1921,11 +1931,14 @@ agent_system:
       internal_escalation_trigger: unresolved_high_risk_findings
       independent_verification_required: no
     coach:
-      executor_backend: internal_subagents
-      subagents: internal_subagents
+      executor_backend: vibe_cli
+      subagents: vibe_cli
+      profiles:
+        vibe_cli: vibe_mistral_medium35_review
+        internal_subagents: codex_gpt55_high_readonly
       fanout_executor_backends:
-        - internal_subagents
-      fanout_subagents: internal_subagents
+        - vibe_cli
+      fanout_subagents: vibe_cli
       fanout_min_results: 1
       merge_policy: unanimous_approve_rework_bias
       write_scope: none
@@ -1957,7 +1970,7 @@ agent_system:
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: internal_subagents
+      coach_executor_backend: vibe_cli
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
@@ -1995,7 +2008,7 @@ agent_system:
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: internal_subagents
+      coach_executor_backend: vibe_cli
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
@@ -2026,7 +2039,7 @@ agent_system:
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: internal_subagents
+      coach_executor_backend: vibe_cli
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
@@ -2043,7 +2056,6 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        pi_cli: pi_gpt54_mini_low_guarded
         internal_subagents: codex_gpt55_low_write
       max_runtime_seconds: 420
       analysis_required: yes
@@ -2059,7 +2071,7 @@ agent_system:
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: internal_subagents
+      coach_executor_backend: vibe_cli
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
@@ -2074,11 +2086,11 @@ agent_system:
       max_verification_passes: 1
       max_fallback_hops: 2
       max_total_runtime_seconds: 540
-      fallback_executor_backend: pi_cli
+      fallback_executor_backend: internal_subagents
       bridge_fallback_subagent: internal_subagents
-      preferred_external_backend: pi_cli
-      write_readiness: guard_required_fail_closed_until_adapter_guard
-      internal_escalation_trigger: pi_guard_unavailable_or_cross_module_or_architecture_shift
+      preferred_external_backend: internal_subagents
+      write_readiness: codex_internal_agent_available
+      internal_escalation_trigger: internal_agent_unavailable_or_cross_module_or_architecture_shift
       verification_route_task_class: review_ensemble
       independent_verification_required: yes
     architecture:

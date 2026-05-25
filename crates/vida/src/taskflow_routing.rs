@@ -198,6 +198,61 @@ fn carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<Str
         .filter(|value| !value.is_empty())
 }
 
+fn execution_plan_backend_metadata_present(
+    execution_plan: &serde_json::Value,
+    backend_id: &str,
+) -> bool {
+    let backend_id = backend_id.trim();
+    if backend_id.is_empty() {
+        return false;
+    }
+    execution_plan["backend_admissibility_matrix"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|entry| entry["backend_id"].as_str() == Some(backend_id))
+}
+
+fn dispatch_backend_from_assignment(
+    execution_plan: &serde_json::Value,
+    assignment: &serde_json::Value,
+) -> Option<String> {
+    let readiness_backend = assignment["selected_external_backend_readiness"]["backend_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|backend_id| execution_plan_backend_metadata_present(execution_plan, backend_id))
+        .map(str::to_string);
+    if readiness_backend.is_some() {
+        return readiness_backend;
+    }
+
+    [
+        "effective_selected_backend",
+        "selected_dispatch_backend_id",
+        "dispatch_backend_id",
+        "selected_backend_id",
+    ]
+    .iter()
+    .filter_map(|key| json_string(assignment.get(*key)))
+    .find(|backend_id| execution_plan_backend_metadata_present(execution_plan, backend_id))
+    .or_else(|| {
+        let has_model_selector = [
+            "selected_model_profile_id",
+            "selected_model_ref",
+            "model_profile_id",
+            "model_ref",
+        ]
+        .iter()
+        .any(|key| json_string(assignment.get(*key)).is_some());
+        let has_legacy_tier_activation = json_string(assignment.get("selected_tier")).is_some()
+            && json_string(assignment.get("activation_agent_type")).is_some();
+        (has_model_selector || has_legacy_tier_activation)
+            .then(|| carrier_backend_from_assignment(assignment))
+            .flatten()
+    })
+}
+
 pub(crate) fn activation_backend_from_route(route: &serde_json::Value) -> Option<String> {
     carrier_backend_from_assignment(dispatch_contract_lane_activation(route))
 }
@@ -324,9 +379,14 @@ pub(crate) fn runtime_assignment_backend_for_route(
     execution_plan: &serde_json::Value,
     route: &serde_json::Value,
 ) -> Option<String> {
-    carrier_backend_from_assignment(runtime_assignment_from_route(route)).or_else(|| {
-        carrier_backend_from_assignment(runtime_assignment_from_execution_plan(execution_plan))
-    })
+    dispatch_backend_from_assignment(execution_plan, runtime_assignment_from_route(route)).or_else(
+        || {
+            dispatch_backend_from_assignment(
+                execution_plan,
+                runtime_assignment_from_execution_plan(execution_plan),
+            )
+        },
+    )
 }
 
 pub(crate) fn explicit_executor_backend_from_route(route: &serde_json::Value) -> Option<String> {
@@ -360,9 +420,9 @@ pub(crate) fn selected_backend_from_execution_plan_route(
 ) -> Option<String> {
     runtime_assignment_backend_for_route(execution_plan, route)
         .or_else(|| explicit_executor_backend_from_route(route))
-        .or_else(|| activation_backend_from_route(route))
         .or_else(|| route_backend_value(route, "fallback_executor_backend"))
         .or_else(|| route_backend_value(route, "fanout_executor_backends"))
+        .or_else(|| activation_backend_from_route(route))
         .or_else(|| legacy_route_backend_hint(route))
         .filter(|value| !value.is_empty())
 }
@@ -658,7 +718,7 @@ mod tests {
     };
 
     #[test]
-    fn selected_backend_prefers_carrier_tier_over_internal_subagents() {
+    fn selected_backend_prefers_configured_executor_backend_over_internal_carrier() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
                 "selected_tier": "middle",
@@ -683,12 +743,12 @@ mod tests {
         let route = &execution_plan["development_flow"]["implementation"];
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
-            Some("junior")
+            Some("internal_subagents")
         );
     }
 
     #[test]
-    fn selected_backend_prefers_runtime_assignment_over_explicit_executor_backend() {
+    fn selected_backend_does_not_treat_internal_carrier_as_dispatch_backend() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
                 "selected_tier": "middle",
@@ -712,7 +772,58 @@ mod tests {
         let route = &execution_plan["development_flow"]["implementation"];
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
-            Some("junior")
+            Some("internal_subagents")
+        );
+    }
+
+    #[test]
+    fn selected_backend_keeps_configured_external_backend_from_runtime_assignment() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "vibe_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "analysis": true,
+                        "coach": true,
+                        "implementation": false,
+                        "review": true,
+                        "verification": false
+                    }
+                },
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "analysis": true,
+                        "coach": true,
+                        "implementation": true,
+                        "review": true,
+                        "verification": true
+                    }
+                }
+            ],
+            "runtime_assignment": {
+                "selected_backend_id": "vibe_cli",
+                "selected_carrier_id": "vibe_cli",
+                "selected_external_backend_readiness": {
+                    "backend_id": "vibe_cli",
+                    "status": "carrier_ready",
+                    "blocked": false
+                }
+            },
+            "development_flow": {
+                "coach": {
+                    "executor_backend": "internal_subagents",
+                    "fallback_executor_backend": "internal_subagents"
+                }
+            },
+            "status": "execution_ready",
+        });
+        let route = &execution_plan["development_flow"]["coach"];
+        assert_eq!(
+            selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
+            Some("vibe_cli")
         );
     }
 
@@ -778,7 +889,7 @@ mod tests {
         let route = &execution_plan["development_flow"]["implementation"];
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
-            Some("middle")
+            Some("internal_subagents")
         );
         assert_eq!(
             super::runtime_assignment_source_from_execution_plan(&execution_plan),
@@ -808,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_assignment_wins_over_route_hints_and_legacy_hints() {
+    fn selected_backend_keeps_dispatch_backend_separate_from_selected_carrier() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
                 "selected_tier": "middle",
@@ -836,7 +947,7 @@ mod tests {
 
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
-            Some("middle")
+            Some("internal_subagents")
         );
     }
 
@@ -903,7 +1014,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_backend_prefers_runtime_assignment_over_route_fallback_hint() {
+    fn selected_backend_prefers_backend_fallback_over_internal_carrier_hint() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
                 "selected_tier": "senior",
@@ -918,7 +1029,7 @@ mod tests {
 
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, &route).as_deref(),
-            Some("senior")
+            Some("hermes_cli")
         );
     }
 
@@ -981,7 +1092,10 @@ mod tests {
         let payload = route_explain_payload(&execution_plan, "implementation", Some(route));
 
         assert_eq!(payload["route_present"].as_bool(), Some(true));
-        assert_eq!(payload["selected_backend"].as_str(), Some("senior"));
+        assert_eq!(
+            payload["selected_backend"].as_str(),
+            Some("internal_subagents")
+        );
         assert_eq!(payload["selected_carrier_id"].as_str(), Some("senior"));
         assert_eq!(
             payload["selected_model_profile_id"].as_str(),
@@ -1036,7 +1150,7 @@ mod tests {
             }));
         assert_eq!(
             payload["selection_source"].as_str(),
-            Some("runtime_assignment")
+            Some("route_primary_hint")
         );
         assert_eq!(
             payload["route_primary_backend"].as_str(),

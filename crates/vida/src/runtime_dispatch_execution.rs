@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
-use std::sync::mpsc::{self, TryRecvError};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
@@ -213,7 +213,282 @@ fn push_unique_backend_candidate(candidates: &mut Vec<String>, candidate: Option
     }
 }
 
-pub(crate) fn internal_codex_external_fallback_backend(
+fn external_readiness_blocker_allows_default_profile_retry(
+    readiness_verdict: &serde_json::Value,
+) -> bool {
+    readiness_verdict["blocker_code"].as_str()
+        == Some(crate::release1_contracts::blocker_code_str(
+            crate::release1_contracts::BlockerCode::ModelNotPinned,
+        ))
+        || readiness_verdict["status"].as_str() == Some("pi_model_unavailable")
+        || readiness_verdict["model_catalog"]["status"].as_str() == Some("model_not_found")
+}
+
+fn dispatch_profile_target_candidates(
+    dispatch_target: &str,
+) -> (Vec<&'static str>, Vec<&'static str>) {
+    match canonical_dispatch_target_for_admissibility(dispatch_target).as_str() {
+        "coach" => (vec!["coach"], vec!["coach", "review"]),
+        "verification" | "verifier" => (vec!["verifier"], vec!["verification", "review"]),
+        "analysis" => (
+            vec!["business_analyst", "worker"],
+            vec!["analysis", "planning", "specification"],
+        ),
+        "architecture" => (
+            vec!["solution_architect"],
+            vec!["architecture", "execution_preparation"],
+        ),
+        _ => (
+            vec!["worker"],
+            vec!["implementation", "delivery_task", "execution_block"],
+        ),
+    }
+}
+
+fn profile_list_allows(profile: &serde_json::Value, key: &str, candidates: &[&str]) -> bool {
+    let Some(rows) = profile.get(key).and_then(serde_json::Value::as_array) else {
+        return true;
+    };
+    if rows.is_empty() {
+        return true;
+    }
+    rows.iter()
+        .filter_map(serde_json::Value::as_str)
+        .any(|row| {
+            let row = row.trim();
+            !row.is_empty() && candidates.iter().any(|candidate| row == *candidate)
+        })
+}
+
+fn profile_supports_dispatch_target(profile: &serde_json::Value, dispatch_target: &str) -> bool {
+    let (role_candidates, task_class_candidates) =
+        dispatch_profile_target_candidates(dispatch_target);
+    profile_list_allows(profile, "runtime_roles", &role_candidates)
+        && profile_list_allows(profile, "task_classes", &task_class_candidates)
+}
+
+fn dispatch_target_requires_owned_scope(dispatch_target: &str) -> bool {
+    canonical_dispatch_target_for_admissibility(dispatch_target) == "implementation"
+}
+
+fn profile_compatible_with_packet_scope(
+    profile: &serde_json::Value,
+    dispatch_target: &str,
+    packet_has_concrete_owned_paths: bool,
+) -> bool {
+    if !crate::runtime_dispatch_state::selected_profile_requires_owned_path_guard(profile) {
+        return true;
+    }
+    packet_has_concrete_owned_paths || dispatch_target_requires_owned_scope(dispatch_target)
+}
+
+fn profile_id(profile: &serde_json::Value) -> Option<&str> {
+    profile["profile_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn selected_profile_for_backend(
+    backend_id: &str,
+    backend_entry: &serde_yaml::Value,
+    profile_id: Option<&str>,
+) -> Option<serde_json::Value> {
+    let profile_projection = crate::runtime_dispatch_state::external_backend_profile_projection(
+        backend_id,
+        backend_entry,
+    );
+    crate::model_profile_contract::selected_model_profile_from_json_row(
+        &profile_projection,
+        profile_id,
+    )
+}
+
+fn ready_external_profile_for_dispatch_target(
+    backend_id: &str,
+    backend_entry: &serde_yaml::Value,
+    dispatch_target: &str,
+    packet_has_concrete_owned_paths: bool,
+    excluded_profile_id: Option<&str>,
+) -> Option<(serde_json::Value, String)> {
+    let profile_projection = crate::runtime_dispatch_state::external_backend_profile_projection(
+        backend_id,
+        backend_entry,
+    );
+    let mut profiles =
+        crate::model_profile_contract::model_profiles_from_json_row(&profile_projection);
+    profiles.sort_by(|left, right| {
+        let left_guard =
+            crate::runtime_dispatch_state::selected_profile_requires_owned_path_guard(left);
+        let right_guard =
+            crate::runtime_dispatch_state::selected_profile_requires_owned_path_guard(right);
+        left_guard.cmp(&right_guard).then_with(|| {
+            profile_id(left)
+                .unwrap_or_default()
+                .cmp(profile_id(right).unwrap_or_default())
+        })
+    });
+
+    for profile in profiles {
+        let Some(candidate_profile_id) = profile_id(&profile) else {
+            continue;
+        };
+        if excluded_profile_id == Some(candidate_profile_id) {
+            continue;
+        }
+        if !profile_supports_dispatch_target(&profile, dispatch_target) {
+            continue;
+        }
+        if !profile_compatible_with_packet_scope(
+            &profile,
+            dispatch_target,
+            packet_has_concrete_owned_paths,
+        ) {
+            continue;
+        }
+        let readiness =
+            crate::status_surface_external_cli::external_cli_backend_readiness_verdict_for_profile(
+                backend_id,
+                backend_entry,
+                Some(candidate_profile_id),
+            );
+        if !readiness["blocked"].as_bool().unwrap_or(false) {
+            return Some((readiness, candidate_profile_id.to_string()));
+        }
+    }
+    None
+}
+
+fn external_cli_dispatch_readiness_verdict(
+    backend_id: &str,
+    backend_entry: &serde_yaml::Value,
+    selected_model_profile_id: Option<String>,
+    dispatch_target: &str,
+    packet_has_concrete_owned_paths: bool,
+) -> (serde_json::Value, Option<String>) {
+    let selected_readiness =
+        crate::status_surface_external_cli::external_cli_backend_readiness_verdict_for_profile(
+            backend_id,
+            backend_entry,
+            selected_model_profile_id.as_deref(),
+        );
+    let selected_profile = selected_model_profile_id.or_else(|| {
+        selected_readiness["selected_model_profile"]
+            .as_str()
+            .map(str::to_string)
+    });
+    let selected_profile_guard_incompatible = selected_profile
+        .as_deref()
+        .and_then(|profile_id| {
+            selected_profile_for_backend(backend_id, backend_entry, Some(profile_id))
+        })
+        .as_ref()
+        .is_some_and(|profile| {
+            !profile_compatible_with_packet_scope(
+                profile,
+                dispatch_target,
+                packet_has_concrete_owned_paths,
+            )
+        });
+    if selected_profile_guard_incompatible {
+        if let Some((mut fallback_readiness, fallback_profile)) =
+            ready_external_profile_for_dispatch_target(
+                backend_id,
+                backend_entry,
+                dispatch_target,
+                packet_has_concrete_owned_paths,
+                selected_profile.as_deref(),
+            )
+        {
+            if let Some(body) = fallback_readiness.as_object_mut() {
+                body.insert(
+                    "guarded_write_profile_retry".to_string(),
+                    serde_json::json!({
+                        "selected_model_profile": selected_profile,
+                        "reason": "selected_profile_requires_owned_paths_but_packet_has_no_owned_scope",
+                        "dispatch_target": dispatch_target,
+                    }),
+                );
+            }
+            return (fallback_readiness, Some(fallback_profile));
+        }
+
+        let mut blocked_readiness = selected_readiness;
+        if let Some(body) = blocked_readiness.as_object_mut() {
+            body.insert("blocked".to_string(), serde_json::json!(true));
+            body.insert(
+                "status".to_string(),
+                serde_json::json!("external_profile_requires_owned_paths"),
+            );
+            body.insert(
+                "blocker_code".to_string(),
+                serde_json::json!("missing_owned_write_scope"),
+            );
+            body.insert(
+                "next_actions".to_string(),
+                serde_json::json!([
+                    "Select a read-only external model profile for this non-write lane or provide bounded owned paths for a write-producing lane."
+                ]),
+            );
+        }
+        return (blocked_readiness, selected_profile);
+    }
+    if !selected_readiness["blocked"].as_bool().unwrap_or(false)
+        || selected_profile.is_none()
+        || !external_readiness_blocker_allows_default_profile_retry(&selected_readiness)
+    {
+        return (selected_readiness, selected_profile);
+    }
+
+    if let Some((mut fallback_readiness, fallback_profile)) =
+        ready_external_profile_for_dispatch_target(
+            backend_id,
+            backend_entry,
+            dispatch_target,
+            packet_has_concrete_owned_paths,
+            selected_profile.as_deref(),
+        )
+    {
+        if let Some(body) = fallback_readiness.as_object_mut() {
+            body.insert(
+                "stale_selected_profile_retry".to_string(),
+                serde_json::json!({
+                    "selected_model_profile": selected_profile,
+                    "selected_readiness_status": selected_readiness["status"].clone(),
+                    "selected_blocker_code": selected_readiness["blocker_code"].clone(),
+                }),
+            );
+        }
+        return (fallback_readiness, Some(fallback_profile));
+    }
+
+    let mut default_readiness =
+        crate::status_surface_external_cli::external_cli_backend_readiness_verdict_for_profile(
+            backend_id,
+            backend_entry,
+            None,
+        );
+    if default_readiness["blocked"].as_bool().unwrap_or(false) {
+        return (selected_readiness, selected_profile);
+    }
+
+    if let Some(body) = default_readiness.as_object_mut() {
+        body.insert(
+            "stale_selected_profile_retry".to_string(),
+            serde_json::json!({
+                "selected_model_profile": selected_profile,
+                "selected_readiness_status": selected_readiness["status"].clone(),
+                "selected_blocker_code": selected_readiness["blocker_code"].clone(),
+            }),
+        );
+    }
+    let default_profile = default_readiness["selected_model_profile"]
+        .as_str()
+        .map(str::to_string);
+    (default_readiness, default_profile)
+}
+
+pub(crate) fn internal_host_external_fallback_backend(
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_target: &str,
     blocked_backend_id: &str,
@@ -276,12 +551,13 @@ pub(crate) fn internal_codex_external_fallback_backend(
                 dispatch_target,
                 Some(candidate),
             );
-        let readiness =
-            crate::status_surface_external_cli::external_cli_backend_readiness_verdict_for_profile(
-                candidate,
-                backend_entry,
-                selected_model_profile_id.as_deref(),
-            );
+        let (readiness, _) = external_cli_dispatch_readiness_verdict(
+            candidate,
+            backend_entry,
+            selected_model_profile_id,
+            dispatch_target,
+            dispatch_target_requires_owned_scope(dispatch_target),
+        );
         !readiness["blocked"].as_bool().unwrap_or(false)
     })
 }
@@ -354,12 +630,13 @@ fn ready_external_readiness_fallback_backend(
                 dispatch_target,
                 Some(candidate),
             );
-        let readiness =
-            crate::status_surface_external_cli::external_cli_backend_readiness_verdict_for_profile(
-                candidate,
-                backend_entry,
-                selected_model_profile_id.as_deref(),
-            );
+        let (readiness, _) = external_cli_dispatch_readiness_verdict(
+            candidate,
+            backend_entry,
+            selected_model_profile_id,
+            dispatch_target,
+            dispatch_target_requires_owned_scope(dispatch_target),
+        );
         !readiness["blocked"].as_bool().unwrap_or(false)
     })
 }
@@ -389,10 +666,20 @@ fn configured_internal_host_dispatch_wall_timeout_seconds(
     )
 }
 
+fn configured_internal_host_dispatch_no_output_timeout_seconds(
+    selected_cli_entry: Option<&serde_yaml::Value>,
+) -> Option<u64> {
+    selected_cli_entry
+        .and_then(|entry| yaml_lookup(entry, &["dispatch", "no_output_timeout_seconds"]))
+        .and_then(serde_yaml::Value::as_u64)
+        .filter(|seconds| *seconds > 0)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandTimeoutWrapper {
     timeout_seconds: u64,
     kill_after_grace_seconds: u64,
+    no_output_timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -554,35 +841,102 @@ fn signal_process_group(process_group_id: u32, signal: libc::c_int) -> Result<()
     }
 }
 
-fn spawn_reader_thread<T>(stream: Option<T>) -> std::thread::JoinHandle<Vec<u8>>
+enum CommandOutputEvent {
+    Stdout(Vec<u8>),
+    Stderr(Vec<u8>),
+    StdoutDone,
+    StderrDone,
+}
+
+fn spawn_reader_thread<T>(
+    stream: Option<T>,
+    sender: mpsc::Sender<CommandOutputEvent>,
+    stdout: bool,
+) -> std::thread::JoinHandle<()>
 where
     T: Read + Send + 'static,
 {
     std::thread::spawn(move || {
-        let mut bytes = Vec::new();
         if let Some(mut stream) = stream {
-            let _ = stream.read_to_end(&mut bytes);
+            let mut buffer = [0_u8; 8192];
+            loop {
+                match stream.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        let event = if stdout {
+                            CommandOutputEvent::Stdout(buffer[..count].to_vec())
+                        } else {
+                            CommandOutputEvent::Stderr(buffer[..count].to_vec())
+                        };
+                        if sender.send(event).is_err() {
+                            return;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
         }
-        bytes
+        let _ = sender.send(if stdout {
+            CommandOutputEvent::StdoutDone
+        } else {
+            CommandOutputEvent::StderrDone
+        });
     })
 }
 
-fn try_complete_reader(
-    slot: &mut Option<Vec<u8>>,
-    receiver: &mpsc::Receiver<Vec<u8>>,
+fn drain_command_output_events(
+    receiver: &mpsc::Receiver<CommandOutputEvent>,
+    stdout: &mut Vec<u8>,
+    stderr: &mut Vec<u8>,
+    stdout_done: &mut bool,
+    stderr_done: &mut bool,
+) -> bool {
+    let mut observed_output = false;
+    while let Ok(event) = receiver.try_recv() {
+        match event {
+            CommandOutputEvent::Stdout(bytes) => {
+                observed_output |= !bytes.is_empty();
+                stdout.extend(bytes);
+            }
+            CommandOutputEvent::Stderr(bytes) => {
+                observed_output |= !bytes.is_empty();
+                stderr.extend(bytes);
+            }
+            CommandOutputEvent::StdoutDone => *stdout_done = true,
+            CommandOutputEvent::StderrDone => *stderr_done = true,
+        }
+    }
+    observed_output
+}
+
+#[cfg(windows)]
+fn terminate_windows_process_tree(
+    child: &mut std::process::Child,
+    reason: &str,
 ) -> Result<(), String> {
-    if slot.is_some() {
+    let pid = child.id();
+    if let Ok(status) = std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        if status.success() {
+            return Ok(());
+        }
+    }
+
+    if child
+        .try_wait()
+        .map_err(|error| format!("failed to inspect {reason} process after taskkill: {error}"))?
+        .is_some()
+    {
         return Ok(());
     }
 
-    match receiver.try_recv() {
-        Ok(bytes) => {
-            *slot = Some(bytes);
-            Ok(())
-        }
-        Err(TryRecvError::Empty) => Ok(()),
-        Err(TryRecvError::Disconnected) => Err("command output reader disconnected".to_string()),
-    }
+    child
+        .kill()
+        .map_err(|error| format!("failed to kill {reason} process tree for pid {pid}: {error}"))
 }
 
 fn execute_wrapped_command(
@@ -620,24 +974,32 @@ fn execute_wrapped_command(
     let process_group_id = child.id();
     let child_stdout = child.stdout.take();
     let child_stderr = child.stderr.take();
-    let (stdout_tx, stdout_rx) = mpsc::channel();
-    let (stderr_tx, stderr_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = stdout_tx.send(spawn_reader_thread(child_stdout).join().unwrap_or_default());
-    });
-    std::thread::spawn(move || {
-        let _ = stderr_tx.send(spawn_reader_thread(child_stderr).join().unwrap_or_default());
-    });
+    let (output_tx, output_rx) = mpsc::channel();
+    let _stdout_reader = spawn_reader_thread(child_stdout, output_tx.clone(), true);
+    let _stderr_reader = spawn_reader_thread(child_stderr, output_tx, false);
 
     let mut status = None;
-    let mut stdout = None;
-    let mut stderr = None;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut stdout_done = false;
+    let mut stderr_done = false;
     let mut timed_out = false;
+    let started_at = Instant::now();
     let mut timeout_progress = wrapped_command.timeout_wrapper.as_ref().map(|wrapper| {
         TimeoutProgress::WaitingForDeadline(
             Instant::now() + Duration::from_secs(wrapper.timeout_seconds),
         )
     });
+    let no_output_timeout_seconds = wrapped_command
+        .timeout_wrapper
+        .as_ref()
+        .and_then(|wrapper| {
+            wrapper
+                .no_output_timeout_seconds
+                .filter(|seconds| *seconds > 0)
+        });
+    let mut no_output_deadline =
+        no_output_timeout_seconds.map(|seconds| started_at + Duration::from_secs(seconds));
 
     loop {
         if status.is_none() {
@@ -645,23 +1007,56 @@ fn execute_wrapped_command(
                 format!("failed to wait on `{}`: {error}", wrapped_command.command)
             })?;
         }
-        try_complete_reader(&mut stdout, &stdout_rx)?;
-        try_complete_reader(&mut stderr, &stderr_rx)?;
+        if drain_command_output_events(
+            &output_rx,
+            &mut stdout,
+            &mut stderr,
+            &mut stdout_done,
+            &mut stderr_done,
+        ) {
+            if let Some(seconds) = no_output_timeout_seconds {
+                no_output_deadline = Some(Instant::now() + Duration::from_secs(seconds));
+            }
+        }
 
-        if status.is_some() && stdout.is_some() && stderr.is_some() {
+        if status.is_some() && stdout_done && stderr_done {
             return Ok(ObservedCommandOutput {
                 status: status.expect("status checked above"),
-                stdout: stdout.take().expect("stdout checked above"),
-                stderr: stderr.take().expect("stderr checked above"),
+                stdout,
+                stderr,
                 timed_out,
             });
+        }
+        if status.is_none() && no_output_deadline.is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            #[cfg(unix)]
+            signal_process_group(process_group_id, libc::SIGTERM)?;
+            #[cfg(windows)]
+            terminate_windows_process_tree(&mut child, "no-output")?;
+            #[cfg(all(not(unix), not(windows)))]
+            child
+                .kill()
+                .map_err(|error| format!("failed to kill no-output process: {error}"))?;
+            timed_out = true;
+            let kill_deadline = Instant::now()
+                + Duration::from_secs(
+                    wrapped_command
+                        .timeout_wrapper
+                        .as_ref()
+                        .map(|wrapper| wrapper.kill_after_grace_seconds)
+                        .unwrap_or_default(),
+                );
+            timeout_progress = Some(TimeoutProgress::WaitingForKill(kill_deadline));
+            no_output_deadline = None;
         }
         match timeout_progress.take() {
             Some(TimeoutProgress::WaitingForDeadline(deadline)) => {
                 if Instant::now() >= deadline {
                     #[cfg(unix)]
                     signal_process_group(process_group_id, libc::SIGTERM)?;
-                    #[cfg(not(unix))]
+                    #[cfg(windows)]
+                    terminate_windows_process_tree(&mut child, "timed out")?;
+                    #[cfg(all(not(unix), not(windows)))]
                     child
                         .kill()
                         .map_err(|error| format!("failed to kill timed out process: {error}"))?;
@@ -691,8 +1086,8 @@ fn execute_wrapped_command(
             Some(TimeoutProgress::TimedOut) => {
                 return Ok(ObservedCommandOutput {
                     status: synthetic_timeout_exit_status(),
-                    stdout: stdout.take().unwrap_or_default(),
-                    stderr: stderr.take().unwrap_or_default(),
+                    stdout,
+                    stderr,
                     timed_out: true,
                 });
             }
@@ -758,6 +1153,15 @@ fn wrap_command_with_optional_timeout(
     args: Vec<String>,
     timeout_seconds: Option<u64>,
 ) -> WrappedCommand {
+    wrap_command_with_optional_timeouts(command, args, timeout_seconds, None)
+}
+
+fn wrap_command_with_optional_timeouts(
+    command: String,
+    args: Vec<String>,
+    timeout_seconds: Option<u64>,
+    no_output_timeout_seconds: Option<u64>,
+) -> WrappedCommand {
     if let Some(timeout_seconds) = timeout_seconds.filter(|seconds| *seconds > 0) {
         let kill_after_grace_seconds =
             DEFAULT_DISPATCH_TIMEOUT_KILL_AFTER_GRACE_SECONDS.min(timeout_seconds.max(1));
@@ -767,6 +1171,9 @@ fn wrap_command_with_optional_timeout(
             timeout_wrapper: Some(CommandTimeoutWrapper {
                 timeout_seconds,
                 kill_after_grace_seconds,
+                no_output_timeout_seconds: no_output_timeout_seconds
+                    .filter(|seconds| *seconds > 0)
+                    .map(|seconds| seconds.min(timeout_seconds)),
             }),
         }
     } else {
@@ -978,6 +1385,26 @@ fn external_provider_output_confirms_execution(
     output.is_some_and(|parsed| !external_provider_output_indicates_error(parsed))
 }
 
+fn configured_external_dispatch_output_mode(backend_entry: &serde_yaml::Value) -> String {
+    yaml_lookup(backend_entry, &["dispatch", "output_mode"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("vida_result_json")
+        .to_string()
+}
+
+fn external_provider_output_confirms_execution_for_mode(
+    output_mode: &str,
+    stdout: &str,
+    output: Option<&ParsedExternalProviderOutput>,
+) -> bool {
+    match output {
+        Some(parsed) => !external_provider_output_indicates_error(parsed),
+        None => output_mode == "stdout" && !stdout.trim().is_empty(),
+    }
+}
+
 fn external_provider_error_message(output: &ParsedExternalProviderOutput) -> Option<String> {
     if output
         .error_message
@@ -1180,24 +1607,43 @@ fn internal_codex_output_confirms_execution(
     stderr: &str,
     exit_success: bool,
 ) -> bool {
+    let result_text_present = parsed_output
+        .result_text
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    let error_stream_allows_result = parsed_output
+        .error_messages
+        .iter()
+        .all(|message| internal_codex_error_message_allows_agent_result(message))
+        && internal_codex_stderr_allows_agent_result(stderr);
+
     exit_success
-        && parsed_output.error_messages.is_empty()
-        && internal_codex_stderr_is_benign_warning(stderr)
-        && parsed_output
-            .result_text
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
+        && result_text_present
+        && (parsed_output.error_messages.is_empty()
+            && internal_codex_stderr_is_benign_warning(stderr)
+            || error_stream_allows_result)
 }
 
-fn internal_codex_provider_failure_blocker_code(
-    selected_cli_system: &str,
+fn internal_codex_error_message_allows_agent_result(message: &str) -> bool {
+    message.contains("windows sandbox: spawn setup refresh")
+}
+
+fn internal_codex_stderr_allows_agent_result(stderr: &str) -> bool {
+    stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .all(|line| {
+            internal_codex_stderr_line_is_benign_warning(line)
+                || line.contains("windows sandbox: spawn setup refresh")
+        })
+}
+
+fn internal_host_provider_failure_blocker_code(
     stderr: &str,
     error_messages: &[String],
 ) -> Option<&'static str> {
-    if selected_cli_system != "codex" {
-        return None;
-    }
     let windows_sandbox_spawn_failed = stderr.contains("windows sandbox: spawn setup refresh")
         || error_messages
             .iter()
@@ -1216,15 +1662,12 @@ fn internal_codex_provider_failure_blocker_code(
     usage_limit_reached.then_some("provider_usage_limit_exceeded")
 }
 
-fn internal_codex_provider_failure_blocker_reason(
-    selected_cli_system: &str,
+fn internal_host_provider_failure_blocker_reason(
     blocker_code: &str,
     fallback_reason: String,
 ) -> String {
-    if selected_cli_system == "codex"
-        && blocker_code == "internal_codex_windows_sandbox_unavailable"
-    {
-        return "Internal Codex carrier reached `codex exec`, but the Windows sandbox failed while spawning worker shell commands. Retry with a configured backend/runtime profile whose sandbox is supported on this host, or route through a configured external CLI backend before claiming receipt-backed execution.".to_string();
+    if blocker_code == "internal_codex_windows_sandbox_unavailable" {
+        return "Internal host carrier reached its configured dispatch command, but the Windows sandbox failed while spawning worker shell commands. Retry with a configured backend/runtime profile whose sandbox is supported on this host, or route through a configured external CLI backend before claiming receipt-backed execution.".to_string();
     }
     fallback_reason
 }
@@ -1527,6 +1970,16 @@ fn configured_internal_host_runtime_env(
     ])
 }
 
+fn configured_internal_host_model_arg(dispatch: &serde_yaml::Value, model: &str) -> String {
+    match crate::yaml_string(yaml_lookup(dispatch, &["model_arg_transform"]))
+        .as_deref()
+        .map(str::trim)
+    {
+        Some("provider_local_name") => model.rsplit('/').next().unwrap_or(model).to_string(),
+        _ => model.to_string(),
+    }
+}
+
 fn configured_internal_host_activation_parts(
     system_entry: Option<&serde_yaml::Value>,
     project_root: &Path,
@@ -1582,7 +2035,7 @@ fn configured_internal_host_activation_parts(
     }
     if let Some(model_flag) = crate::yaml_string(yaml_lookup(dispatch, &["model_flag"])) {
         args.push(model_flag);
-        args.push(model.to_string());
+        args.push(configured_internal_host_model_arg(dispatch, model));
     }
     if let Some(reasoning_effort_flag) =
         crate::yaml_string(yaml_lookup(dispatch, &["reasoning_effort_flag"]))
@@ -1611,22 +2064,11 @@ fn configured_internal_host_activation_parts(
     Ok((command, args, stdin_payload))
 }
 
-fn command_name(command: &str) -> String {
-    let trimmed = command.trim().trim_matches('"').trim_matches('\'');
-    Path::new(trimmed)
-        .file_stem()
-        .or_else(|| Path::new(trimmed).file_name())
-        .and_then(|name| name.to_str())
-        .unwrap_or(trimmed)
-        .trim()
-        .to_ascii_lowercase()
-}
-
-fn configured_codex_cli_fallback_enabled(overlay: &serde_yaml::Value) -> bool {
-    configured_subagent_backend_entry(overlay, "codex_cli").is_some_and(|entry| {
-        crate::yaml_string(yaml_lookup(entry, &["subagent_backend_class"])).as_deref()
-            == Some("external_cli")
-    })
+fn configured_external_cli_fallback_enabled(overlay: &serde_yaml::Value) -> bool {
+    configured_external_cli_backend_ids(overlay, Some(true))
+        .into_iter()
+        .next()
+        .is_some()
 }
 
 fn internal_host_receipt_backed_completion_supported(
@@ -1679,43 +2121,25 @@ fn annotate_internal_host_completion_capability(
     );
 }
 
-fn internal_codex_app_bridge_requires_fail_closed(
-    selected_cli_system: &str,
+fn internal_host_app_bridge_requires_fail_closed(
     selected_cli_entry: Option<&serde_yaml::Value>,
     overlay: &serde_yaml::Value,
-    command: &str,
-    args: &[String],
 ) -> Option<&'static str> {
-    if selected_cli_system != "codex" {
-        return None;
-    }
-    if command_name(command) != "codex" {
-        return None;
-    }
-    if !args.iter().any(|arg| arg.trim() == "exec") {
-        return None;
-    }
     if internal_host_receipt_backed_completion_is_enabled(selected_cli_entry) {
         return None;
     }
-    if configured_codex_cli_fallback_enabled(overlay) {
-        return Some("internal Codex carrier unavailable; refusing external codex_cli bridge for internal backend");
+    if configured_external_cli_fallback_enabled(overlay) {
+        return Some("internal host carrier unavailable; refusing non-receipted internal bridge while an external CLI fallback is configured");
     }
-    Some("internal Codex carrier unavailable; external codex_cli fallback disabled")
+    Some("internal host carrier unavailable; external CLI fallback disabled")
 }
 
-fn internal_codex_windows_sandbox_preflight_blocker(
+fn internal_host_windows_sandbox_preflight_blocker(
     is_windows: bool,
-    selected_cli_system: &str,
     selected_cli_entry: Option<&serde_yaml::Value>,
-    command: &str,
-    args: &[String],
     sandbox_mode: Option<&str>,
 ) -> Option<(&'static str, String)> {
-    if !is_windows || selected_cli_system != "codex" || command_name(command) != "codex" {
-        return None;
-    }
-    if !args.iter().any(|arg| arg.trim() == "exec") {
+    if !is_windows {
         return None;
     }
     let sandbox_mode = sandbox_mode
@@ -1734,7 +2158,7 @@ fn internal_codex_windows_sandbox_preflight_blocker(
     Some((
         "internal_codex_windows_sandbox_unavailable",
         format!(
-            "Internal Codex carrier is configured for `codex exec` with sandbox_mode `{sandbox_mode}` on Windows, but this host has not declared `dispatch.windows_sandbox_spawn_supported=true`; failing before process launch avoids a long no-receipt timeout. Route through a configured backend/runtime profile whose sandbox is supported on this host, or enable the support flag only after proving receipt-backed execution."
+            "Internal host carrier is configured with sandbox_mode `{sandbox_mode}` on Windows, but this host has not declared `dispatch.windows_sandbox_spawn_supported=true`; failing before process launch avoids a long no-receipt timeout. Route through a configured backend/runtime profile whose sandbox is supported on this host, or enable the support flag only after proving receipt-backed execution."
         ),
     ))
 }
@@ -1775,7 +2199,7 @@ fn configured_external_cli_backend_ids(
     ids
 }
 
-fn internal_codex_windows_sandbox_recovery_actions(
+fn internal_host_windows_sandbox_recovery_actions(
     overlay: &serde_yaml::Value,
     selected_cli_system: &str,
     dispatch_target: &str,
@@ -1792,7 +2216,7 @@ fn internal_codex_windows_sandbox_recovery_actions(
             "Preferred: enable a configured external CLI backend that is admissible for dispatch target `{dispatch_target}` (`agent_system.subagents.<backend>.enabled=true`, `subagent_backend_class=external_cli`, readiness satisfied), then route this lane to that backend through the configured runtime assignment/fallback fields."
         ),
         format!(
-            "Alternative only after proof: if `{selected_cli_system}` has verified receipt-backed `codex exec` support for sandbox `{sandbox_mode}` on this Windows host, set `host_environment.systems.{selected_cli_system}.dispatch.windows_sandbox_spawn_supported=true` in `vida.config.yaml`."
+            "Alternative only after proof: if `{selected_cli_system}` has verified receipt-backed dispatch support for sandbox `{sandbox_mode}` on this Windows host, set `host_environment.systems.{selected_cli_system}.dispatch.windows_sandbox_spawn_supported=true` in `vida.config.yaml`."
         ),
         "Do not continue root-local implementation from this blocker; restore a receipt-backed backend route or record a separate configuration/readiness defect for the missing backend.".to_string(),
     ];
@@ -2139,28 +2563,20 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         dispatch_packet_path,
         &carrier,
     )?;
-    let preflight_blocker = internal_codex_app_bridge_requires_fail_closed(
-        &selected_cli_system,
-        selected_cli_entry.as_ref(),
-        &overlay,
-        &command,
-        &args,
-    )
-    .map(|reason| ("internal_codex_carrier_unavailable", reason.to_string()))
-    .or_else(|| {
-        internal_codex_windows_sandbox_preflight_blocker(
-            cfg!(windows),
-            &selected_cli_system,
-            selected_cli_entry.as_ref(),
-            &command,
-            &args,
-            carrier["sandbox_mode"].as_str(),
-        )
-    });
+    let preflight_blocker =
+        internal_host_app_bridge_requires_fail_closed(selected_cli_entry.as_ref(), &overlay)
+            .map(|reason| ("internal_codex_carrier_unavailable", reason.to_string()))
+            .or_else(|| {
+                internal_host_windows_sandbox_preflight_blocker(
+                    cfg!(windows),
+                    selected_cli_entry.as_ref(),
+                    carrier["sandbox_mode"].as_str(),
+                )
+            });
     if let Some((blocker_code, blocker_reason)) = preflight_blocker {
         let preflight_recovery_actions =
             if blocker_code == "internal_codex_windows_sandbox_unavailable" {
-                internal_codex_windows_sandbox_recovery_actions(
+                internal_host_windows_sandbox_recovery_actions(
                     &overlay,
                     &selected_cli_system,
                     &receipt.dispatch_target,
@@ -2170,7 +2586,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
                 vec![blocker_reason.clone()]
             };
         if allow_internal_codex_external_fallback {
-            if let Some(fallback_backend) = internal_codex_external_fallback_backend(
+            if let Some(fallback_backend) = internal_host_external_fallback_backend(
                 role_selection,
                 &receipt.dispatch_target,
                 backend_id,
@@ -2280,7 +2696,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             );
             dispatch.insert(
                 "external_cli_fallback_enabled".to_string(),
-                serde_json::json!(configured_codex_cli_fallback_enabled(&overlay)),
+                serde_json::json!(configured_external_cli_fallback_enabled(&overlay)),
             );
             annotate_internal_host_completion_capability(
                 dispatch,
@@ -2297,8 +2713,14 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         role_selection,
         receipt,
     ));
-    let wrapped_command =
-        wrap_command_with_optional_timeout(command.clone(), args.clone(), wall_timeout_seconds);
+    let no_output_timeout_seconds =
+        configured_internal_host_dispatch_no_output_timeout_seconds(selected_cli_entry.as_ref());
+    let wrapped_command = wrap_command_with_optional_timeouts(
+        command.clone(),
+        args.clone(),
+        wall_timeout_seconds,
+        no_output_timeout_seconds,
+    );
     let activation_command = crate::runtime_dispatch_state::render_command_display(
         &wrapped_command.command,
         &wrapped_command.args,
@@ -2443,6 +2865,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
                 "command": wrapped_command.command,
                 "timeout_seconds": timeout_wrapper.timeout_seconds,
                 "kill_after_grace_seconds": timeout_wrapper.kill_after_grace_seconds,
+                "no_output_timeout_seconds": timeout_wrapper.no_output_timeout_seconds,
                 "timed_out": timed_out,
                 "timeout_exit_code": exit_code,
             }),
@@ -2527,17 +2950,11 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
                 "internal host carrier for `{selected_cli_system}` exited without returning receipt-backed completion"
             )
         };
-        let blocker_code = internal_codex_provider_failure_blocker_code(
-            &selected_cli_system,
-            &stderr,
-            &parsed_output.error_messages,
-        )
-        .unwrap_or("configured_backend_dispatch_failed");
-        let blocker_reason = internal_codex_provider_failure_blocker_reason(
-            &selected_cli_system,
-            blocker_code,
-            blocker_reason,
-        );
+        let blocker_code =
+            internal_host_provider_failure_blocker_code(&stderr, &parsed_output.error_messages)
+                .unwrap_or("configured_backend_dispatch_failed");
+        let blocker_reason =
+            internal_host_provider_failure_blocker_reason(blocker_code, blocker_reason);
         body.insert("blocker_code".to_string(), serde_json::json!(blocker_code));
         body.insert(
             "blocker_reason".to_string(),
@@ -2761,18 +3178,26 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         return Ok(result);
     }
 
-    let selected_model_profile_id =
+    let route_selected_model_profile_id =
         crate::runtime_dispatch_state::preferred_selected_model_profile_for_dispatch_target(
             role_selection,
             &receipt.dispatch_target,
             Some(&backend_id),
         );
-    let readiness_verdict =
-        crate::status_surface_external_cli::external_cli_backend_readiness_verdict_for_profile(
-            &backend_id,
-            &backend_entry,
-            selected_model_profile_id.as_deref(),
-        );
+    let packet_has_concrete_owned_paths =
+        crate::taskflow_consume_resume::read_dispatch_packet(dispatch_packet_path)
+            .ok()
+            .as_ref()
+            .is_some_and(
+                crate::runtime_dispatch_state::runtime_dispatch_packet_has_concrete_owned_paths,
+            );
+    let (readiness_verdict, selected_model_profile_id) = external_cli_dispatch_readiness_verdict(
+        &backend_id,
+        &backend_entry,
+        route_selected_model_profile_id,
+        &receipt.dispatch_target,
+        packet_has_concrete_owned_paths,
+    );
     if readiness_verdict["blocked"].as_bool().unwrap_or(false) {
         if let Some(fallback_backend) = ready_external_readiness_fallback_backend(
             role_selection,
@@ -3016,8 +3441,13 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let parsed_output = parse_external_provider_output(&stdout);
+    let output_mode = configured_external_dispatch_output_mode(&backend_entry);
     let success = output.status.success()
-        && external_provider_output_confirms_execution(parsed_output.as_ref());
+        && external_provider_output_confirms_execution_for_mode(
+            &output_mode,
+            &stdout,
+            parsed_output.as_ref(),
+        );
     let exit_code = output.status.code();
     let timed_out = output.timed_out;
     body.insert(
@@ -3038,6 +3468,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
                 "command": wrapped_command.command,
                 "timeout_seconds": timeout_wrapper.timeout_seconds,
                 "kill_after_grace_seconds": timeout_wrapper.kill_after_grace_seconds,
+                "no_output_timeout_seconds": timeout_wrapper.no_output_timeout_seconds,
                 "timed_out": timed_out,
                 "timeout_exit_code": exit_code,
             }),
@@ -3163,27 +3594,33 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     use super::execute_wrapped_command;
     use super::{
-        agent_lane_dispatch_result, configured_external_dispatch_wall_timeout_seconds,
-        configured_internal_host_activation_parts, configured_internal_host_runtime_env,
-        dispatch_packet_path_should_render_as_downstream, dispatch_packet_prompt,
-        execute_external_agent_lane_dispatch, external_provider_output_confirms_execution,
-        internal_codex_app_bridge_requires_fail_closed, internal_codex_output_confirms_execution,
-        internal_codex_windows_sandbox_preflight_blocker,
-        internal_codex_windows_sandbox_recovery_actions,
-        internal_host_activation_only_blocker_code, mark_dispatch_result_execution_evidence,
+        agent_lane_dispatch_result, configured_external_dispatch_output_mode,
+        configured_external_dispatch_wall_timeout_seconds,
+        configured_internal_host_activation_parts,
+        configured_internal_host_dispatch_no_output_timeout_seconds,
+        configured_internal_host_dispatch_wall_timeout_seconds,
+        configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
+        dispatch_packet_prompt, execute_external_agent_lane_dispatch,
+        external_provider_output_confirms_execution,
+        external_provider_output_confirms_execution_for_mode,
+        internal_codex_output_confirms_execution, internal_host_activation_only_blocker_code,
+        internal_host_app_bridge_requires_fail_closed,
+        internal_host_windows_sandbox_preflight_blocker,
+        internal_host_windows_sandbox_recovery_actions, mark_dispatch_result_execution_evidence,
         parse_external_provider_output, parse_internal_codex_exec_output,
         ready_external_readiness_fallback_backend,
         should_render_store_backed_activation_view_for_internal_failure,
-        wrap_command_with_optional_timeout, CommandTimeoutWrapper,
+        wrap_command_with_optional_timeout, wrap_command_with_optional_timeouts,
+        CommandTimeoutWrapper,
     };
     use crate::RuntimeConsumptionLaneSelection;
     use std::path::{Path, PathBuf};
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     use std::process::Stdio;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     use std::time::{Duration, Instant};
 
     #[test]
@@ -3240,6 +3677,30 @@ mod tests {
     }
 
     #[test]
+    fn stdout_output_mode_accepts_nonempty_zero_exit_text_without_provider_binary_hardcode() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+dispatch:
+  output_mode: stdout
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let output_mode = configured_external_dispatch_output_mode(&backend_entry);
+        assert_eq!(output_mode, "stdout");
+        assert!(external_provider_output_confirms_execution_for_mode(
+            &output_mode,
+            "Reviewed packet and found no blocking issues.",
+            None,
+        ));
+        assert!(!external_provider_output_confirms_execution_for_mode(
+            &output_mode,
+            "   ",
+            None,
+        ));
+    }
+
+    #[test]
     fn parse_external_provider_output_trusts_pi_agent_end_success_even_when_result_mentions_auth_text(
     ) {
         let parsed = parse_external_provider_output(
@@ -3280,7 +3741,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_external_dispatch_wall_timeout_prefers_max_runtime_over_no_output_window() {
+    fn configured_external_dispatch_wall_timeout_honors_backend_max_runtime() {
         let backend_entry = serde_yaml::from_str(
             r#"
 max_runtime_seconds: 420
@@ -3451,6 +3912,11 @@ dispatch:
             "2026-05-22T22:05:56Z ERROR codex_core_skills::loader: failed to stat skills path C:\\Users\\pomaz\\.codex\\.tmp\\plugins\\plugins\\google-drive\\skills\\google-slides\\assets\\google-slides-small.svg: The system cannot find the path specified. (os error 3)\n2026-05-22T22:05:56Z ERROR codex_core_skills::loader: failed to read skills dir C:\\Users\\pomaz\\.codex\\.tmp\\plugins\\plugins\\google-drive\\skills\\google-slides\\references: The system cannot find the path specified. (os error 3)",
             true
         ));
+        assert!(internal_codex_output_confirms_execution(
+            &parsed_clean,
+            "2026-05-25T07:55:57Z ERROR codex_core::exec: exec error: windows sandbox: spawn setup refresh\n2026-05-25T07:55:57Z ERROR codex_core::tools::router: error=execution error: Io(Custom { kind: Other, error: \"windows sandbox: spawn setup refresh\" })",
+            true
+        ));
         assert!(!internal_codex_output_confirms_execution(
             &parsed_clean,
             "sandbox denied write to /workspace/secret",
@@ -3464,20 +3930,15 @@ dispatch:
     }
 
     #[test]
-    fn internal_codex_windows_sandbox_spawn_failure_gets_specific_blocker() {
+    fn internal_host_windows_sandbox_spawn_failure_gets_specific_blocker() {
         let stderr =
             "2026-05-22T02:27:30Z ERROR codex_core::exec: exec error: windows sandbox: spawn setup refresh";
 
         assert_eq!(
-            super::internal_codex_provider_failure_blocker_code("codex", stderr, &[]),
+            super::internal_host_provider_failure_blocker_code(stderr, &[]),
             Some("internal_codex_windows_sandbox_unavailable")
         );
-        assert_eq!(
-            super::internal_codex_provider_failure_blocker_code("opencode", stderr, &[]),
-            None
-        );
-        assert!(super::internal_codex_provider_failure_blocker_reason(
-            "codex",
+        assert!(super::internal_host_provider_failure_blocker_reason(
             "internal_codex_windows_sandbox_unavailable",
             stderr.to_string()
         )
@@ -3491,7 +3952,7 @@ dispatch:
         ];
 
         assert_eq!(
-            super::internal_codex_provider_failure_blocker_code("codex", "", &errors),
+            super::internal_host_provider_failure_blocker_code("", &errors),
             Some("provider_usage_limit_exceeded")
         );
     }
@@ -3600,7 +4061,7 @@ dispatch:
         )
         .expect("system entry should parse");
         let carrier = serde_json::json!({
-            "model": "gpt-5.4",
+            "model": "gpt-5.5",
             "model_reasoning_effort": "high",
             "sandbox_mode": "workspace-write"
         });
@@ -3626,7 +4087,7 @@ dispatch:
                 "-s".to_string(),
                 "workspace-write".to_string(),
                 "-m".to_string(),
-                "gpt-5.4".to_string(),
+                "gpt-5.5".to_string(),
                 "-c".to_string(),
                 "model_reasoning_effort=\"high\"".to_string(),
                 dispatch_packet_prompt("/tmp/project/.vida/dispatch.json"),
@@ -3652,7 +4113,7 @@ dispatch:
         )
         .expect("system entry should parse");
         let carrier = serde_json::json!({
-            "model": "gpt-5.4",
+            "model": "gpt-5.5",
             "model_reasoning_effort": "high",
             "sandbox_mode": "workspace-write"
         });
@@ -3676,7 +4137,7 @@ dispatch:
                 "-s".to_string(),
                 "workspace-write".to_string(),
                 "-m".to_string(),
-                "gpt-5.4".to_string(),
+                "gpt-5.5".to_string(),
                 "-c".to_string(),
                 "model_reasoning_effort=\"high\"".to_string(),
                 "-".to_string(),
@@ -3689,7 +4150,38 @@ dispatch:
     }
 
     #[test]
-    fn internal_codex_app_bridge_fail_closes_before_codex_exec_when_cli_fallback_disabled() {
+    fn configured_internal_host_activation_parts_can_use_provider_local_model_arg() {
+        let system_entry = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: codex
+  static_args: ["exec", "--json"]
+  model_flag: -m
+  model_arg_transform: provider_local_name
+  prompt_mode: stdin
+"#,
+        )
+        .expect("system entry should parse");
+        let carrier = serde_json::json!({
+            "model": "openai-codex/gpt-5.5",
+            "model_reasoning_effort": "high",
+            "sandbox_mode": "read-only"
+        });
+
+        let (_command, args, _stdin_payload) = configured_internal_host_activation_parts(
+            Some(&system_entry),
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            &carrier,
+        )
+        .expect("internal host activation parts");
+
+        assert!(args.windows(2).any(|pair| pair == ["-m", "gpt-5.5"]));
+        assert!(!args.iter().any(|arg| arg == "openai-codex/gpt-5.5"));
+    }
+
+    #[test]
+    fn internal_host_app_bridge_fail_closes_when_external_fallback_disabled() {
         let overlay = serde_yaml::from_str(
             r#"
 agent_system:
@@ -3697,44 +4189,23 @@ agent_system:
     internal_subagents:
       enabled: true
       subagent_backend_class: internal
-      role: codex_internal_primary
+      role: internal_primary_fixture
       default_model: gpt-5.5
-    codex_cli:
+    external_fixture:
       enabled: false
       subagent_backend_class: external_cli
       role: bridge_fallback
 "#,
         )
         .expect("overlay should parse");
-        let args = vec![
-            "exec".to_string(),
-            "--json".to_string(),
-            "-m".to_string(),
-            "gpt-5.5".to_string(),
-        ];
-
         assert_eq!(
-            internal_codex_app_bridge_requires_fail_closed("codex", None, &overlay, "codex", &args),
-            Some("internal Codex carrier unavailable; external codex_cli fallback disabled")
-        );
-        assert_eq!(
-            internal_codex_app_bridge_requires_fail_closed("qwen", None, &overlay, "codex", &args),
-            None
-        );
-        assert_eq!(
-            internal_codex_app_bridge_requires_fail_closed(
-                "codex",
-                None,
-                &overlay,
-                "fake-codex",
-                &args
-            ),
-            None
+            internal_host_app_bridge_requires_fail_closed(None, &overlay),
+            Some("internal host carrier unavailable; external CLI fallback disabled")
         );
     }
 
     #[test]
-    fn internal_codex_app_bridge_allows_codex_exec_when_receipt_backed_completion_is_configured() {
+    fn internal_host_app_bridge_allows_dispatch_when_receipt_backed_completion_is_configured() {
         let overlay = serde_yaml::from_str(
             r#"
 agent_system:
@@ -3754,22 +4225,15 @@ dispatch:
 "#,
         )
         .expect("selected cli entry should parse");
-        let args = vec!["exec".to_string(), "--json".to_string()];
 
         assert_eq!(
-            internal_codex_app_bridge_requires_fail_closed(
-                "codex",
-                Some(&selected_cli_entry),
-                &overlay,
-                "codex",
-                &args
-            ),
+            internal_host_app_bridge_requires_fail_closed(Some(&selected_cli_entry), &overlay),
             None
         );
     }
 
     #[test]
-    fn internal_codex_windows_workspace_write_preflight_fails_fast_without_support_flag() {
+    fn internal_host_windows_workspace_write_preflight_fails_fast_without_support_flag() {
         let selected_cli_entry = serde_yaml::from_str(
             r#"
 dispatch:
@@ -3778,38 +4242,28 @@ dispatch:
 "#,
         )
         .expect("selected cli entry should parse");
-        let args = vec!["exec".to_string(), "--json".to_string()];
 
-        let blocker = internal_codex_windows_sandbox_preflight_blocker(
+        let blocker = internal_host_windows_sandbox_preflight_blocker(
             true,
-            "codex",
             Some(&selected_cli_entry),
-            "codex",
-            &args,
             Some("workspace-write"),
         )
-        .expect("workspace-write codex exec should fail closed on Windows");
+        .expect("workspace-write dispatch should fail closed on Windows");
 
         assert_eq!(blocker.0, "internal_codex_windows_sandbox_unavailable");
         assert!(blocker.1.contains("failing before process launch"));
         assert_eq!(
-            internal_codex_windows_sandbox_preflight_blocker(
+            internal_host_windows_sandbox_preflight_blocker(
                 false,
-                "codex",
                 Some(&selected_cli_entry),
-                "codex",
-                &args,
                 Some("workspace-write"),
             ),
             None
         );
         assert_eq!(
-            internal_codex_windows_sandbox_preflight_blocker(
+            internal_host_windows_sandbox_preflight_blocker(
                 true,
-                "codex",
                 Some(&selected_cli_entry),
-                "codex",
-                &args,
                 Some("read-only"),
             ),
             None
@@ -3817,7 +4271,7 @@ dispatch:
     }
 
     #[test]
-    fn internal_codex_windows_workspace_write_preflight_honors_support_flag() {
+    fn internal_host_windows_workspace_write_preflight_honors_support_flag() {
         let selected_cli_entry = serde_yaml::from_str(
             r#"
 dispatch:
@@ -3827,15 +4281,11 @@ dispatch:
 "#,
         )
         .expect("selected cli entry should parse");
-        let args = vec!["exec".to_string(), "--json".to_string()];
 
         assert_eq!(
-            internal_codex_windows_sandbox_preflight_blocker(
+            internal_host_windows_sandbox_preflight_blocker(
                 true,
-                "codex",
                 Some(&selected_cli_entry),
-                "codex",
-                &args,
                 Some("workspace-write"),
             ),
             None
@@ -3843,7 +4293,7 @@ dispatch:
     }
 
     #[test]
-    fn internal_codex_windows_sandbox_recovery_actions_are_actionable() {
+    fn internal_host_windows_sandbox_recovery_actions_are_actionable() {
         let overlay = serde_yaml::from_str(
             r#"
 agent_system:
@@ -3858,7 +4308,7 @@ agent_system:
         )
         .expect("overlay should parse");
 
-        let actions = internal_codex_windows_sandbox_recovery_actions(
+        let actions = internal_host_windows_sandbox_recovery_actions(
             &overlay,
             "codex",
             "implementation",
@@ -4137,6 +4587,168 @@ agent_system:
             .as_deref(),
             Some("qwen_cli")
         );
+    }
+
+    #[test]
+    fn external_dispatch_readiness_retries_default_profile_when_route_profile_is_stale() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-external-default-profile-retry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let model_state_path = root.join("model-state.json");
+        std::fs::write(
+            &model_state_path,
+            r#"{"model":{"code":{"providerID":"openai-codex","modelID":"gpt-5.5"}}}"#,
+        )
+        .expect("write model state");
+        let model_state_path = model_state_path.display().to_string().replace('\\', "/");
+        let overlay = serde_yaml::from_str::<serde_yaml::Value>(&format!(
+            r#"
+agent_system:
+  subagents:
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      default_model_profile: qwen_gpt55_medium
+      model_profiles:
+        qwen_gpt54_low:
+          provider: qwen
+          model_ref: openai-codex/gpt-5.4-mini
+          reasoning_effort: low
+          normalized_cost_units: 1
+          runtime_roles: [worker]
+          task_classes: [implementation]
+        qwen_gpt55_medium:
+          provider: qwen
+          model_ref: openai-codex/gpt-5.5
+          reasoning_effort: medium
+          normalized_cost_units: 4
+          runtime_roles: [worker]
+          task_classes: [implementation]
+      readiness:
+        model:
+          mode: json_code_ref
+          path: "{model_state_path}"
+"#,
+        ))
+        .expect("overlay should parse");
+        let backend_entry =
+            crate::yaml_lookup(&overlay, &["agent_system", "subagents", "qwen_cli"])
+                .expect("backend should exist");
+
+        let (readiness, selected_profile) = super::external_cli_dispatch_readiness_verdict(
+            "qwen_cli",
+            backend_entry,
+            Some("qwen_gpt54_low".to_string()),
+            "implementer",
+            true,
+        );
+
+        assert_eq!(readiness["blocked"], false);
+        assert_eq!(readiness["status"], "carrier_ready");
+        assert_eq!(readiness["selected_model_profile"], "qwen_gpt55_medium");
+        assert_eq!(selected_profile.as_deref(), Some("qwen_gpt55_medium"));
+        assert_eq!(
+            readiness["stale_selected_profile_retry"]["selected_model_profile"],
+            "qwen_gpt54_low"
+        );
+        assert_eq!(
+            readiness["stale_selected_profile_retry"]["selected_blocker_code"],
+            crate::release1_contracts::blocker_code_str(
+                crate::release1_contracts::BlockerCode::ModelNotPinned
+            )
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn external_dispatch_readiness_uses_readonly_profile_for_coach_without_owned_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-external-readonly-profile-retry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let model_state_path = root.join("model-state.json");
+        std::fs::write(
+            &model_state_path,
+            r#"{"model":{"code":{"providerID":"openai-codex","modelID":"gpt-5.5"}}}"#,
+        )
+        .expect("write model state");
+        let model_state_path = model_state_path.display().to_string().replace('\\', "/");
+        let overlay = serde_yaml::from_str::<serde_yaml::Value>(&format!(
+            r#"
+agent_system:
+  subagents:
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      default_model_profile: qwen_gpt55_medium_guarded
+      model_profiles:
+        qwen_gpt55_high_readonly:
+          provider: qwen
+          model_ref: openai-codex/gpt-5.5
+          reasoning_effort: high
+          normalized_cost_units: 8
+          runtime_roles: [coach]
+          task_classes: [coach, review]
+          write_scope: none
+        qwen_gpt55_medium_guarded:
+          provider: qwen
+          model_ref: openai-codex/gpt-5.5
+          reasoning_effort: medium
+          normalized_cost_units: 4
+          runtime_roles: [coach]
+          task_classes: [coach]
+          write_scope: guard_required_owned_paths
+      readiness:
+        model:
+          mode: json_code_ref
+          path: "{model_state_path}"
+"#,
+        ))
+        .expect("overlay should parse");
+        let backend_entry =
+            crate::yaml_lookup(&overlay, &["agent_system", "subagents", "qwen_cli"])
+                .expect("backend should exist");
+
+        let (readiness, selected_profile) = super::external_cli_dispatch_readiness_verdict(
+            "qwen_cli",
+            backend_entry,
+            Some("qwen_gpt55_medium_guarded".to_string()),
+            "coach",
+            false,
+        );
+
+        assert_eq!(readiness["blocked"], false);
+        assert_eq!(readiness["status"], "carrier_ready");
+        assert_eq!(
+            readiness["selected_model_profile"],
+            "qwen_gpt55_high_readonly"
+        );
+        assert_eq!(
+            selected_profile.as_deref(),
+            Some("qwen_gpt55_high_readonly")
+        );
+        assert_eq!(
+            readiness["guarded_write_profile_retry"]["selected_model_profile"],
+            "qwen_gpt55_medium_guarded"
+        );
+        assert_eq!(
+            readiness["guarded_write_profile_retry"]["reason"],
+            "selected_profile_requires_owned_paths_but_packet_has_no_owned_scope"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -4438,7 +5050,7 @@ host_environment:
         prompt_mode: positional
       carriers:
         middle:
-          model: gpt-5.4
+          model: gpt-5.5
           model_reasoning_effort: medium
           sandbox_mode: workspace-write
 agent_system:
@@ -4450,7 +5062,7 @@ agent_system:
       model_profiles:
         internal_fast:
           provider: internal
-          model_ref: gpt-5.4
+          model_ref: gpt-5.5
           reasoning_effort: medium
           normalized_cost_units: 4
           write_scope: orchestrator_native
@@ -4652,7 +5264,7 @@ dispatch:
         )
         .expect("system entry should parse");
         let carrier = serde_json::json!({
-            "model": "gpt-5.4",
+            "model": "gpt-5.5",
             "sandbox_mode": "danger-full-access"
         });
 
@@ -4807,11 +5419,11 @@ dispatch:
             r#"
 carriers:
   junior:
-    model: gpt-5.4
+    model: gpt-5.5
     model_reasoning_effort: low
     sandbox_mode: workspace-write
   middle:
-    model: gpt-5.4
+    model: gpt-5.5
     model_reasoning_effort: medium
     sandbox_mode: workspace-write
 "#,
@@ -4898,13 +5510,13 @@ carriers:
             r#"
 carriers:
   middle:
-    model: gpt-5.4
+    model: gpt-5.5
     model_reasoning_effort: medium
     sandbox_mode: workspace-write
     default_model_profile: codex_gpt54_medium
     model_profiles:
       codex_gpt54_medium:
-        model_ref: gpt-5.4
+        model_ref: gpt-5.5
         reasoning_effort: medium
         sandbox_mode: workspace-write
         normalized_cost_units: 4
@@ -5009,7 +5621,7 @@ carriers:
             r#"
 carriers:
   middle:
-    model: gpt-5.4
+    model: gpt-5.5
     model_reasoning_effort: high
     sandbox_mode: workspace-write
 "#,
@@ -5139,7 +5751,7 @@ agent_system:
     fn selected_internal_host_carrier_applies_internal_subagent_write_scope_sandbox() {
         let carrier = serde_json::json!({
             "role_id": "senior",
-            "model": "gpt-5.4",
+            "model": "gpt-5.5",
             "model_reasoning_effort": "high",
             "sandbox_mode": "read-only"
         });
@@ -5196,6 +5808,7 @@ agent_system:
             Some(CommandTimeoutWrapper {
                 timeout_seconds: 5,
                 kill_after_grace_seconds: 1,
+                no_output_timeout_seconds: None,
             })
         );
     }
@@ -5213,7 +5826,84 @@ agent_system:
             Some(CommandTimeoutWrapper {
                 timeout_seconds: 420,
                 kill_after_grace_seconds: 1,
+                no_output_timeout_seconds: None,
             })
+        );
+    }
+
+    #[test]
+    fn wrap_command_with_optional_timeouts_caps_no_output_window_to_wall_timeout() {
+        let wrapped = wrap_command_with_optional_timeouts(
+            "local-bridge".to_string(),
+            vec!["run".to_string()],
+            Some(5),
+            Some(10),
+        );
+
+        assert_eq!(
+            wrapped.timeout_wrapper,
+            Some(CommandTimeoutWrapper {
+                timeout_seconds: 5,
+                kill_after_grace_seconds: 1,
+                no_output_timeout_seconds: Some(5),
+            })
+        );
+    }
+
+    #[test]
+    fn internal_host_dispatch_wall_timeout_honors_configured_route_window() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-internal-host-timeout-cap-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create temp root");
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "development_flow": {
+                "analysis": {
+                    "executor_backend": "internal_subagents",
+                    "max_runtime_seconds": 420
+                }
+            }
+        }));
+        let receipt = internal_codex_fallback_receipt(
+            project_root
+                .join("dispatch.json")
+                .to_str()
+                .expect("dispatch path should render"),
+        );
+
+        assert_eq!(
+            configured_internal_host_dispatch_wall_timeout_seconds(
+                &project_root,
+                &role_selection,
+                &receipt
+            ),
+            420
+        );
+
+        let _ = std::fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn internal_host_dispatch_no_output_timeout_reads_system_dispatch_config() {
+        let selected_cli_entry = serde_yaml::from_str(
+            r#"
+execution_class: internal
+dispatch:
+  command: local-bridge
+  no_output_timeout_seconds: 2
+  prompt_mode: stdin
+"#,
+        )
+        .expect("selected cli entry should parse");
+
+        assert_eq!(
+            configured_internal_host_dispatch_no_output_timeout_seconds(Some(&selected_cli_entry)),
+            Some(2)
         );
     }
 
@@ -5234,6 +5924,112 @@ agent_system:
 
         assert!(output.timed_out);
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[cfg(windows)]
+    fn windows_process_command_line_contains(token: &str) -> bool {
+        let script = format!(
+            "$token = '{}'; \
+             Get-CimInstance Win32_Process | \
+             Where-Object {{ $_.ProcessId -ne $PID -and $_.CommandLine -like \"*$token*\" }} | \
+             Select-Object -First 1 -ExpandProperty ProcessId",
+            token
+        );
+        let Ok(output) = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &script])
+            .output()
+        else {
+            return false;
+        };
+        !String::from_utf8_lossy(&output.stdout).trim().is_empty()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn execute_wrapped_command_kills_windows_descendant_process_tree_on_timeout() {
+        let token = format!(
+            "vida-process-tree-timeout-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        );
+        let child_command = format!("Start-Sleep -Seconds 30 # {token}");
+        let parent_command = format!(
+            "Start-Process -WindowStyle Hidden -FilePath powershell -ArgumentList @('-NoProfile','-Command','{}'); Start-Sleep -Seconds 30",
+            child_command.replace('\'', "''")
+        );
+        let wrapped = wrap_command_with_optional_timeouts(
+            "powershell".to_string(),
+            vec![
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                parent_command,
+            ],
+            Some(1),
+            Some(1),
+        );
+        let mut process = std::process::Command::new(&wrapped.command);
+        process.args(&wrapped.args).stdin(Stdio::null());
+
+        let started = Instant::now();
+        let output = execute_wrapped_command(process, &wrapped, None)
+            .expect("timed command should complete");
+
+        assert!(output.timed_out);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "expected Windows process-tree timeout wrapper to return promptly, got {:?}",
+            started.elapsed()
+        );
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(
+            !windows_process_command_line_contains(&token),
+            "timeout wrapper should kill descendant process carrying token {token}"
+        );
+    }
+
+    #[test]
+    fn execute_wrapped_command_times_out_after_initial_output_goes_idle() {
+        #[cfg(windows)]
+        let wrapped = wrap_command_with_optional_timeouts(
+            "powershell".to_string(),
+            vec![
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Write-Output started; Start-Sleep -Seconds 30".to_string(),
+            ],
+            Some(30),
+            Some(1),
+        );
+        #[cfg(unix)]
+        let wrapped = wrap_command_with_optional_timeouts(
+            "sh".to_string(),
+            vec!["-c".to_string(), "printf 'started\n'; sleep 30".to_string()],
+            Some(30),
+            Some(1),
+        );
+        #[cfg(not(any(unix, windows)))]
+        return;
+
+        let mut process = std::process::Command::new(&wrapped.command);
+        process.args(&wrapped.args).stdin(Stdio::null());
+
+        let started = Instant::now();
+        let output = execute_wrapped_command(process, &wrapped, None)
+            .expect("idle command should complete through timeout wrapper");
+
+        assert!(output.timed_out);
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("started"),
+            "timeout wrapper should preserve output observed before idle timeout"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "expected idle-output timeout wrapper to return promptly, got {:?}",
+            started.elapsed()
+        );
     }
 
     #[cfg(unix)]

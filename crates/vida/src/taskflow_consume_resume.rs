@@ -2483,6 +2483,152 @@ fn derive_specification_owned_paths_from_tracked_design_doc(
     Some(vec![design_doc_path.to_string()])
 }
 
+fn packet_template_child<'a>(
+    packet: &'a serde_json::Value,
+    packet_template_kind: &str,
+) -> Option<&'a serde_json::Value> {
+    packet
+        .get(packet_template_kind)
+        .filter(|value| !value.is_null())
+}
+
+fn nonempty_packet_string(packet: &serde_json::Value, key: &str) -> Option<String> {
+    packet
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn packet_run_id(packet: &serde_json::Value, active_packet: &serde_json::Value) -> Option<String> {
+    nonempty_packet_string(packet, "run_id")
+        .or_else(|| {
+            nonempty_packet_string(active_packet, "packet_id").and_then(|packet_id| {
+                packet_id
+                    .split("::")
+                    .next()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+        })
+        .or_else(|| {
+            nonempty_packet_string(active_packet, "source_packet_id").and_then(|packet_id| {
+                packet_id
+                    .split("::")
+                    .next()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+        })
+}
+
+fn source_dispatch_target_from_packet_id(packet_id: &str) -> Option<String> {
+    let segments = packet_id
+        .split("::")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    segments
+        .windows(2)
+        .find_map(|window| (window[1] == "delivery").then(|| window[0].to_string()))
+}
+
+fn coach_review_source_dispatch_target(
+    active_packet: &serde_json::Value,
+    dispatch_target: &str,
+) -> Option<String> {
+    nonempty_packet_string(active_packet, "reviewed_dispatch_target")
+        .filter(|value| value != dispatch_target)
+        .or_else(|| {
+            nonempty_packet_string(active_packet, "source_dispatch_target")
+                .filter(|value| value != dispatch_target)
+        })
+        .or_else(|| {
+            nonempty_packet_string(active_packet, "source_packet_id")
+                .and_then(|packet_id| source_dispatch_target_from_packet_id(&packet_id))
+                .filter(|value| value != dispatch_target)
+        })
+}
+
+fn coach_review_proof_target(active_packet: &serde_json::Value) -> String {
+    nonempty_packet_string(active_packet, "proof_target").unwrap_or_else(|| {
+        "bounded implementation result versus approved spec and definition of done".to_string()
+    })
+}
+
+fn coach_review_prompt_runtime_role(
+    packet: &serde_json::Value,
+    active_packet: &serde_json::Value,
+) -> String {
+    nonempty_packet_string(packet, "activation_runtime_role")
+        .or_else(|| nonempty_packet_string(active_packet, "handoff_runtime_role"))
+        .unwrap_or_else(|| "coach".to_string())
+}
+
+fn normalize_coach_review_packet_contract(
+    packet: &mut serde_json::Value,
+    packet_template_kind: &str,
+) -> bool {
+    if packet_template_kind != "coach_review_packet" {
+        return false;
+    }
+    let Some(active_packet) = packet_template_child(packet, packet_template_kind).cloned() else {
+        return false;
+    };
+    let Some(run_id) = packet_run_id(packet, &active_packet) else {
+        return false;
+    };
+    let dispatch_target = packet_dispatch_target(packet)
+        .unwrap_or("coach")
+        .trim()
+        .to_string();
+    let proof_target = coach_review_proof_target(&active_packet);
+    let source_dispatch_target =
+        coach_review_source_dispatch_target(&active_packet, &dispatch_target);
+    let canonical_packet = crate::runtime_dispatch_packets::runtime_coach_review_packet(
+        &run_id,
+        &dispatch_target,
+        source_dispatch_target.as_deref(),
+        &proof_target,
+    );
+
+    let mut normalized = false;
+    if packet.get(packet_template_kind) != Some(&canonical_packet) {
+        packet[packet_template_kind] = canonical_packet;
+        normalized = true;
+    }
+
+    let handoff_runtime_role = coach_review_prompt_runtime_role(packet, &active_packet);
+    let request_text = packet_request_text(packet).unwrap_or_default();
+    let orchestration_contract = packet
+        .get("role_selection_full")
+        .and_then(|value| value.get("execution_plan"))
+        .and_then(|value| value.get("orchestration_contract"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let canonical_prompt = crate::runtime_dispatch_packet_text::runtime_packet_prompt(
+        &run_id,
+        &dispatch_target,
+        &handoff_runtime_role,
+        request_text,
+        &orchestration_contract,
+    );
+    if packet
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        != Some(canonical_prompt.as_str())
+    {
+        packet["prompt"] = serde_json::json!(canonical_prompt);
+        normalized = true;
+    }
+
+    normalized
+}
+
 fn normalize_runtime_dispatch_packet(packet: &mut serde_json::Value) -> bool {
     let Some(packet_template_kind) = packet
         .get("packet_template_kind")
@@ -2499,6 +2645,13 @@ fn normalize_runtime_dispatch_packet(packet: &mut serde_json::Value) -> bool {
     if active_packet.is_null() {
         return false;
     }
+    let mut normalized = normalize_coach_review_packet_contract(packet, &packet_template_kind);
+    let Some(active_packet) = packet.get(&packet_template_kind) else {
+        return normalized;
+    };
+    if active_packet.is_null() {
+        return normalized;
+    }
     let missing_owned_paths = !packet_nonempty_string_array(active_packet, "owned_paths");
     let missing_scope_paths = !packet_has_owned_or_read_only_paths(active_packet);
     let derived_implementer_owned_paths = missing_owned_paths
@@ -2512,7 +2665,6 @@ fn normalize_runtime_dispatch_packet(packet: &mut serde_json::Value) -> bool {
     let Some(active_packet_object) = active_packet.as_object_mut() else {
         return false;
     };
-    let mut normalized = false;
     if missing_owned_paths {
         if let Some(owned_paths) = derived_implementer_owned_paths
             .clone()
@@ -2992,6 +3144,7 @@ fn dispatch_receipt_retry_eligible(
             Some(
                 "configured_backend_dispatch_failed"
                     | "internal_activation_view_only"
+                    | "internal_codex_windows_sandbox_unavailable"
                     | "timeout_without_takeover_authority"
                     | "tool_execution_failed"
             )
@@ -5397,6 +5550,34 @@ fn cached_deferred_handoff_projection_path(
     )
 }
 
+fn cached_deferred_handoff_projection_matches_dispatch_init_cache(
+    state_dir: &std::path::Path,
+    run_id: &str,
+    projection: &serde_json::Value,
+    dispatch_packet_path: &str,
+) -> bool {
+    let Some(dispatch_init_cache) =
+        crate::taskflow_run_graph::read_run_graph_dispatch_init_fast_cache(state_dir, run_id)
+    else {
+        return false;
+    };
+    let Some(cached_packet_path) = dispatch_init_cache["dispatch_packet_path"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    if cached_packet_path != dispatch_packet_path.trim() {
+        return false;
+    }
+    let projection_selected_backend = projection["selected_backend"].as_str().map(str::trim);
+    let cache_selected_backend = dispatch_init_cache["dispatch_receipt"]["selected_backend"]
+        .as_str()
+        .map(str::trim);
+    projection_selected_backend == cache_selected_backend
+}
+
 fn try_emit_cached_deferred_agent_handoff_projection(
     state_dir: &std::path::Path,
     surface_name: &str,
@@ -5438,6 +5619,14 @@ fn try_emit_cached_deferred_agent_handoff_projection(
         .ok_or_else(|| {
             "Cached routed handoff projection is missing dispatch_packet_path".to_string()
         })?;
+    if !cached_deferred_handoff_projection_matches_dispatch_init_cache(
+        state_dir,
+        run_id,
+        &projection,
+        dispatch_packet_path,
+    ) {
+        return Ok(None);
+    }
     let lane_id = projection["lane_id"].as_str().unwrap_or("agent_lane");
     let dispatch_target = lane_id.strip_suffix("_lane").unwrap_or(lane_id);
     let receipt = serde_json::json!({
@@ -6390,15 +6579,16 @@ mod tests {
     use super::{
         active_exception_takeover_resume_blocker_error,
         blocked_external_dispatch_artifact_mismatched_as_internal_activation,
-        build_failure_control_evidence, canonical_resume_dispatch_status,
-        canonical_resume_lane_status, canonical_resume_string_array_entries,
-        consume_advance_success_payload, consume_continue_blocking_step_with_timeout,
-        consume_continue_dispatch_handoff_timeout, consume_continue_handoff_with_timeout,
-        consume_continue_resume_error_blocker_code, consume_continue_resume_error_payload,
-        consume_continue_should_defer_agent_handoff, consume_continue_state_access_blocker_payload,
-        dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
-        dispatch_receipt_retry_eligible, emit_runtime_consumption_resume_json,
-        enforce_consume_continue_execution_preparation_gate,
+        build_failure_control_evidence,
+        cached_deferred_handoff_projection_matches_dispatch_init_cache,
+        canonical_resume_dispatch_status, canonical_resume_lane_status,
+        canonical_resume_string_array_entries, consume_advance_success_payload,
+        consume_continue_blocking_step_with_timeout, consume_continue_dispatch_handoff_timeout,
+        consume_continue_handoff_with_timeout, consume_continue_resume_error_blocker_code,
+        consume_continue_resume_error_payload, consume_continue_should_defer_agent_handoff,
+        consume_continue_state_access_blocker_payload, dispatch_receipt_internal_retry_eligible,
+        dispatch_receipt_primary_rebind_eligible, dispatch_receipt_retry_eligible,
+        emit_runtime_consumption_resume_json, enforce_consume_continue_execution_preparation_gate,
         fail_fast_state_store_open_read_only_with_timeout, normalize_runtime_dispatch_packet,
         normalize_stale_in_flight_dispatch_receipt, packet_path_components_for_platform,
         persisted_dispatch_packet_lineage_task_id,
@@ -6461,6 +6651,83 @@ mod tests {
             selected_backend: Some("middle".to_string()),
             recorded_at: "2026-05-21T00:00:00Z".to_string(),
         }
+    }
+
+    #[test]
+    fn cached_deferred_handoff_projection_requires_dispatch_init_cache_parity() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-deferred-cache-parity-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("temp root");
+        let stale_packet = root.join("stale-pi-packet.json");
+        let fresh_packet = root.join("fresh-middle-packet.json");
+        fs::write(&stale_packet, "{}").expect("stale packet");
+        fs::write(&fresh_packet, "{}").expect("fresh packet");
+
+        let project_root = crate::state_store::repo_root();
+        let source_config_digest = crate::launcher_activation_snapshot::config_file_digest(
+            &project_root.join("vida.config.yaml"),
+        )
+        .expect("config digest");
+        let cache_payload = serde_json::json!({
+            "surface": "vida taskflow run-graph dispatch-init",
+            "requested_run_id": "run-cache-parity",
+            "run_id": "run-cache-parity",
+            "source_config_digest": source_config_digest,
+            "authoritative_persistence": {
+                "status": "recorded",
+            },
+            "dispatch_packet_path": fresh_packet.display().to_string(),
+            "dispatch_receipt": {
+                "dispatch_status": "routed",
+                "dispatch_command": "vida agent-init --dispatch-packet fresh-middle-packet.json --execute-dispatch --json",
+                "selected_backend": "middle",
+            },
+        });
+        let cache_path = crate::taskflow_run_graph::run_graph_dispatch_init_fast_cache_path(
+            &root,
+            "run-cache-parity",
+        );
+        fs::create_dir_all(cache_path.parent().expect("cache dir")).expect("cache dir");
+        fs::write(
+            &cache_path,
+            serde_json::to_string_pretty(&cache_payload).expect("cache payload json"),
+        )
+        .expect("cache payload");
+
+        let stale_projection = serde_json::json!({
+            "run_id": "run-cache-parity",
+            "dispatch_status": "routed",
+            "selected_backend": "pi_cli",
+        });
+        assert!(
+            !cached_deferred_handoff_projection_matches_dispatch_init_cache(
+                &root,
+                "run-cache-parity",
+                &stale_projection,
+                &stale_packet.display().to_string(),
+            )
+        );
+
+        let fresh_projection = serde_json::json!({
+            "run_id": "run-cache-parity",
+            "dispatch_status": "routed",
+            "selected_backend": "middle",
+        });
+        assert!(
+            cached_deferred_handoff_projection_matches_dispatch_init_cache(
+                &root,
+                "run-cache-parity",
+                &fresh_projection,
+                &fresh_packet.display().to_string(),
+            )
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -6790,7 +7057,12 @@ mod tests {
                 .map(|duration| duration.as_nanos())
                 .unwrap_or(0)
         ));
-        fs::create_dir_all(&root).expect("temp root");
+        let state_root = root.join(".vida").join("data").join("state");
+        fs::create_dir_all(&state_root).expect("temp state root");
+        fs::write(root.join("AGENTS.md"), "test").expect("agents marker");
+        fs::create_dir_all(root.join(".vida").join("config")).expect("vida config dir");
+        fs::create_dir_all(root.join(".vida").join("db")).expect("vida db dir");
+        fs::create_dir_all(root.join(".vida").join("project")).expect("vida project dir");
         fs::write(
             root.join("vida.config.yaml"),
             r#"
@@ -6866,7 +7138,7 @@ agent_system:
         };
 
         assert_eq!(
-            consume_continue_dispatch_handoff_timeout(&root, &role_selection, &receipt),
+            consume_continue_dispatch_handoff_timeout(&state_root, &role_selection, &receipt),
             Duration::from_secs(422)
         );
 
@@ -6999,6 +7271,44 @@ agent_system:
             activation_runtime_role: Some("coach".to_string()),
             selected_backend: Some("hermes_cli".to_string()),
             recorded_at: "2026-05-12T00:00:00Z".to_string(),
+        };
+
+        assert!(dispatch_receipt_retry_eligible(&receipt));
+    }
+
+    #[test]
+    fn internal_codex_windows_sandbox_with_packet_is_retry_eligible() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-codex-windows-sandbox-retry".to_string(),
+            dispatch_target: "writer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec ...".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
+            blocker_code: Some("internal_codex_windows_sandbox_unavailable".to_string()),
+            downstream_dispatch_target: Some("coach".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("after writer".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![
+                "internal_codex_windows_sandbox_unavailable".to_string()
+            ],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("writer".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-05-25T00:00:00Z".to_string(),
         };
 
         assert!(dispatch_receipt_retry_eligible(&receipt));
@@ -7642,7 +7952,7 @@ host_environment:
       execution_class: internal
       carriers:
         middle:
-          model: gpt-5.4
+          model: gpt-5.5
           sandbox_mode: workspace-write
           model_reasoning_effort: medium
 agent_system:
@@ -7731,7 +8041,7 @@ host_environment:
       execution_class: internal
       carriers:
         middle:
-          model: gpt-5.4
+          model: gpt-5.5
           sandbox_mode: workspace-write
           model_reasoning_effort: medium
 agent_system:
@@ -9834,7 +10144,7 @@ host_environment:
       execution_class: internal
       carriers:
         middle:
-          model: gpt-5.4
+          model: gpt-5.5
           sandbox_mode: workspace-write
           model_reasoning_effort: medium
 agent_system:
@@ -12345,7 +12655,7 @@ host_environment:
       execution_class: internal
       carriers:
         middle:
-          model: gpt-5.4
+          model: gpt-5.5
           sandbox_mode: workspace-write
           model_reasoning_effort: medium
 agent_system:
@@ -12444,7 +12754,7 @@ host_environment:
       execution_class: internal
       carriers:
         middle:
-          model: gpt-5.4
+          model: gpt-5.5
           sandbox_mode: workspace-write
           model_reasoning_effort: medium
 agent_system:
@@ -13121,7 +13431,7 @@ host_environment:
       execution_class: internal
       carriers:
         middle:
-          model: gpt-5.4
+          model: gpt-5.5
           sandbox_mode: workspace-write
           model_reasoning_effort: medium
 agent_system:
@@ -13651,7 +13961,7 @@ host_environment:
       execution_class: internal
       carriers:
         middle:
-          model: gpt-5.4
+          model: gpt-5.5
           sandbox_mode: workspace-write
           model_reasoning_effort: medium
 agent_system:
@@ -16301,6 +16611,70 @@ agent_system:
             packet["coach_review_packet"]["read_only_paths"],
             serde_json::json!(DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS)
         );
+    }
+
+    #[test]
+    fn normalize_runtime_dispatch_packet_rewrites_stale_coach_review_contract_and_prompt() {
+        let mut packet = serde_json::json!({
+            "packet_kind": "runtime_downstream_dispatch_packet",
+            "packet_template_kind": "coach_review_packet",
+            "run_id": "run-stale-coach",
+            "downstream_dispatch_target": "coach",
+            "activation_runtime_role": "coach",
+            "request_text": "Review the bounded implementation evidence.",
+            "prompt": "First substantive response: publish a concise plan before edits or implementation.",
+            "role_selection_full": {
+                "execution_plan": {
+                    "orchestration_contract": {
+                        "replanning": {
+                            "checkpoints": ["after proof"]
+                        }
+                    }
+                }
+            },
+            "coach_review_packet": {
+                "packet_id": "run-stale-coach::coach::coach-review",
+                "source_packet_id": "run-stale-coach::coach::delivery",
+                "review_goal": "Judge whether `coach` remains aligned with the approved packet",
+                "owned_paths": [],
+                "definition_of_done": ["return bounded review evidence"],
+                "proof_target": "bounded coach proof",
+                "read_only_paths": ["crates/vida/src"],
+                "blocking_question": "Does `coach` match the approved bounded contract?"
+            }
+        });
+
+        assert!(normalize_runtime_dispatch_packet(&mut packet));
+        assert_eq!(
+            packet["coach_review_packet"]["reviewed_dispatch_target"],
+            serde_json::json!("implementer")
+        );
+        assert_eq!(
+            packet["coach_review_packet"]["source_packet_id"],
+            serde_json::json!("run-stale-coach::implementer::delivery")
+        );
+        assert_eq!(
+            packet["coach_review_packet"]["review_subject"],
+            serde_json::json!("bounded `implementer` delivery/result")
+        );
+        assert_eq!(
+            packet["coach_review_packet"]["expected_output"],
+            serde_json::json!([
+                "decision=approve|rework|blocker",
+                "checked_evidence",
+                "findings",
+                "risks",
+                "next_required_action"
+            ])
+        );
+        let prompt = packet["prompt"]
+            .as_str()
+            .expect("normalized packet should have prompt");
+        assert!(prompt.contains("Review/proof lane contract: do not edit files"));
+        assert!(prompt.contains("decision=approve|rework|blocker"));
+        assert!(!prompt.contains(
+            "First substantive response: publish a concise plan before edits or implementation."
+        ));
     }
 
     #[test]

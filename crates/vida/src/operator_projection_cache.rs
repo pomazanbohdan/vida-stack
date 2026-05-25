@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+const RUNTIME_CONTINUATION_BINDING_OVERLAY_PROJECTION_NAME: &str =
+    "runtime-continuation-binding-latest";
+
 #[cfg(unix)]
 const O_NOFOLLOW_FLAG: i32 = libc::O_NOFOLLOW;
 
@@ -11,7 +14,7 @@ pub(crate) fn read_fresh_json_projection(
     read_fresh_json_projection_with_dependency_marker(
         state_dir,
         projection_name,
-        current_launcher_mutation_marker(),
+        current_operator_dependency_mutation_marker(state_dir),
     )
 }
 
@@ -51,7 +54,7 @@ pub(crate) fn read_recent_json_projection(
         state_dir,
         projection_name,
         max_age,
-        current_launcher_mutation_marker(),
+        current_operator_dependency_mutation_marker(state_dir),
     )
 }
 
@@ -222,13 +225,160 @@ pub(crate) fn write_json_projection(
             return;
         }
     }
-    let Ok(body) = serde_json::to_string_pretty(payload) else {
+    let mut payload = payload.clone();
+    if let serde_json::Value::Object(object) = &mut payload {
+        object.insert(
+            "projection_cache_dependencies".to_string(),
+            serde_json::json!({
+                "task_snapshot_marker": task_snapshot_marker_value(state_dir)
+            }),
+        );
+    }
+    let Ok(body) = serde_json::to_string_pretty(&payload) else {
         return;
     };
     if path_is_symlink(&path) {
         return;
     }
     let _ = write_json_without_following_symlinks(&path, &body);
+}
+
+pub(crate) fn write_runtime_continuation_binding_overlay(
+    state_dir: &Path,
+    binding: &crate::state_store::RunGraphContinuationBinding,
+) {
+    let payload = serde_json::json!({
+        "schema_version": "runtime-continuation-binding-overlay-v1",
+        "task_snapshot_marker": task_snapshot_marker_value(state_dir),
+        "binding": binding,
+        "continuation_binding": {
+            "status": binding.status,
+            "continuation_allowed": binding.status == "bound",
+            "continuation_required_now": false,
+            "active_bounded_unit": binding.active_bounded_unit,
+            "binding_source": binding.binding_source,
+            "why_this_unit": binding.why_this_unit,
+            "primary_path": binding.primary_path,
+            "sequential_vs_parallel_posture": binding.sequential_vs_parallel_posture,
+            "pause_boundary_gate": "allowed_if_no_further_bound_work_is_evidenced",
+            "ambiguity_reason": serde_json::Value::Null,
+            "next_actions": []
+        }
+    });
+    write_json_projection(
+        state_dir,
+        RUNTIME_CONTINUATION_BINDING_OVERLAY_PROJECTION_NAME,
+        &payload,
+    );
+}
+
+pub(crate) fn read_runtime_continuation_binding_overlay(
+    state_dir: &Path,
+) -> Option<serde_json::Value> {
+    let path = projection_path(
+        state_dir,
+        RUNTIME_CONTINUATION_BINDING_OVERLAY_PROJECTION_NAME,
+    );
+    if path_is_symlink(&path) {
+        return None;
+    }
+    let overlay_modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+    if current_operator_dependency_mutation_marker(state_dir)
+        .is_some_and(|modified| overlay_modified <= modified)
+    {
+        return None;
+    }
+    let payload = serde_json::from_str::<serde_json::Value>(
+        &read_json_without_following_symlinks(&path).ok()?,
+    )
+    .ok()?;
+    if payload
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str)
+        != Some("runtime-continuation-binding-overlay-v1")
+    {
+        return None;
+    }
+    if payload
+        .get("task_snapshot_marker")
+        .cloned()
+        .unwrap_or_default()
+        != task_snapshot_marker_value(state_dir)
+    {
+        return None;
+    }
+    Some(payload)
+}
+
+pub(crate) fn apply_runtime_continuation_binding_overlay_to_payload(
+    state_dir: &Path,
+    cached: &str,
+    overlay: &serde_json::Value,
+) -> Option<String> {
+    let mut payload = serde_json::from_str::<serde_json::Value>(cached).ok()?;
+    if payload
+        .get("projection_cache_dependencies")
+        .and_then(|dependencies| dependencies.get("task_snapshot_marker"))
+        .cloned()
+        != Some(task_snapshot_marker_value(state_dir))
+    {
+        return None;
+    }
+    let continuation_binding = overlay.get("continuation_binding")?.clone();
+    let binding = overlay.get("binding").cloned();
+    let object = payload.as_object_mut()?;
+
+    object.insert(
+        "projection_cache".to_string(),
+        serde_json::json!({
+            "status": "state_marker_stale_recent_projection_with_runtime_continuation_overlay",
+            "projection_name": object
+                .get("surface")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("operator_projection"),
+            "freshness_contract": "cached_structural_projection_with_validated_continuation_binding_overlay"
+        }),
+    );
+
+    if let Some(init) = object
+        .get_mut("init")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        init.insert(
+            "continuation_binding".to_string(),
+            continuation_binding.clone(),
+        );
+    }
+
+    object.insert(
+        "continuation_binding".to_string(),
+        continuation_binding.clone(),
+    );
+    object.insert(
+        "active_bounded_unit".to_string(),
+        continuation_binding
+            .get("active_bounded_unit")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object.insert(
+        "why_this_unit".to_string(),
+        continuation_binding
+            .get("why_this_unit")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object.insert(
+        "sequential_vs_parallel_posture".to_string(),
+        continuation_binding
+            .get("sequential_vs_parallel_posture")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    );
+    if let Some(binding) = binding {
+        object.insert("explicit_continuation_binding".to_string(), binding);
+    }
+    serde_json::to_string_pretty(&payload).ok()
 }
 
 pub(crate) fn touch_state_mutation_marker(state_dir: &Path) {
@@ -321,17 +471,7 @@ fn latest_state_mutation_marker(state_dir: &Path) -> std::io::Result<SystemTime>
     let mut latest = SystemTime::UNIX_EPOCH;
     for entry in std::fs::read_dir(state_dir)? {
         let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| {
-                matches!(
-                    name,
-                    "operator-projections" | "LOCK" | ".vida-authoritative-open.guard"
-                )
-            })
-        {
+        if state_root_entry_is_projection_cache_noise(&entry) {
             continue;
         }
         if let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) {
@@ -343,11 +483,61 @@ fn latest_state_mutation_marker(state_dir: &Path) -> std::io::Result<SystemTime>
     Ok(latest)
 }
 
+fn state_root_entry_is_projection_cache_noise(entry: &std::fs::DirEntry) -> bool {
+    let name = entry.file_name();
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    if matches!(
+        name,
+        "operator-projections" | "LOCK" | ".vida-authoritative-open.guard"
+    ) {
+        return true;
+    }
+    if !matches!(name, "manifest" | "sstables" | "vlog" | "wal") {
+        return false;
+    }
+    entry
+        .file_type()
+        .map(|file_type| file_type.is_dir())
+        .unwrap_or(false)
+}
+
 pub(crate) fn current_launcher_mutation_marker() -> Option<SystemTime> {
     std::env::current_exe()
         .ok()
         .and_then(|path| std::fs::metadata(path).ok())
         .and_then(|metadata| metadata.modified().ok())
+}
+
+fn current_operator_dependency_mutation_marker(state_dir: &Path) -> Option<SystemTime> {
+    [
+        current_launcher_mutation_marker(),
+        project_config_mutation_marker(state_dir),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
+fn project_config_mutation_marker(state_dir: &Path) -> Option<SystemTime> {
+    state_dir
+        .ancestors()
+        .map(|ancestor| ancestor.join("vida.config.yaml"))
+        .find(|path| path.is_file())
+        .and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|metadata| metadata.modified().ok())
+}
+
+fn task_snapshot_marker_value(state_dir: &Path) -> serde_json::Value {
+    std::fs::read_to_string(
+        crate::state_store::StateStore::canonical_task_snapshot_marker_path_for_state_root(
+            state_dir,
+        ),
+    )
+    .ok()
+    .map(|value| serde_json::Value::String(value.trim().to_string()))
+    .unwrap_or(serde_json::Value::Null)
 }
 
 fn path_is_symlink(path: &Path) -> bool {
@@ -410,10 +600,11 @@ mod tests {
         projection_path, read_fresh_json_projection,
         read_fresh_json_projection_with_dependency_marker,
         read_launcher_stale_state_fresh_recent_json_projection, read_recent_json_projection,
-        read_recent_json_projection_with_dependency_marker, read_state_fresh_json_projection,
+        read_recent_json_projection_with_dependency_marker,
+        read_runtime_continuation_binding_overlay, read_state_fresh_json_projection,
         read_state_fresh_json_projection_for_read_only_operator, read_state_recent_json_projection,
         read_state_stale_recent_json_projection, touch_state_mutation_marker,
-        write_json_projection,
+        write_json_projection, write_runtime_continuation_binding_overlay,
     };
     use std::{fs, time::Duration};
 
@@ -433,7 +624,14 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         let payload = serde_json::json!({"status": "pass", "cached": true});
         write_json_projection(&root, "status-summary-latest", &payload);
-        assert!(read_fresh_json_projection(&root, "status-summary-latest").is_some());
+        let cached = read_fresh_json_projection(&root, "status-summary-latest")
+            .expect("fresh projection should read");
+        let cached: serde_json::Value =
+            serde_json::from_str(&cached).expect("projection should remain json");
+        assert!(cached
+            .get("projection_cache_dependencies")
+            .and_then(|dependencies| dependencies.get("task_snapshot_marker"))
+            .is_some());
 
         std::thread::sleep(Duration::from_millis(10));
         fs::write(&marker, "new").expect("marker should be updateable");
@@ -561,6 +759,31 @@ mod tests {
     }
 
     #[test]
+    fn json_projection_cache_invalidates_when_project_config_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-config-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let payload = serde_json::json!({"status": "pass", "cached": true});
+        write_json_projection(&root, "status-full-latest", &payload);
+        assert!(read_fresh_json_projection(&root, "status-full-latest").is_some());
+
+        std::thread::sleep(Duration::from_millis(10));
+        fs::write(
+            root.join("vida.config.yaml"),
+            "agent_system:\n  subagents: {}\n",
+        )
+        .expect("project config should write");
+        assert!(read_fresh_json_projection(&root, "status-full-latest").is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn json_projection_cache_ignores_storage_engine_mtime_noise() {
         let root = std::env::temp_dir().join(format!(
             "vida-operator-projection-cache-storage-noise-{}-{}",
@@ -572,6 +795,8 @@ mod tests {
         ));
         fs::create_dir_all(root.join("sstables")).expect("sstables dir should be writable");
         fs::create_dir_all(root.join("vlog")).expect("vlog dir should be writable");
+        fs::create_dir_all(root.join("manifest")).expect("manifest dir should be writable");
+        fs::create_dir_all(root.join("wal")).expect("wal dir should be writable");
         let payload = serde_json::json!({"status": "pass", "cached": true});
         write_json_projection(&root, "doctor-full-latest", &payload);
 
@@ -580,6 +805,10 @@ mod tests {
             .expect("storage engine mtime noise should write");
         fs::write(root.join("vlog").join("read-noise"), "engine")
             .expect("storage engine mtime noise should write");
+        fs::write(root.join("manifest").join("read-noise"), "engine")
+            .expect("manifest directory mtime noise should write");
+        fs::write(root.join("wal").join("read-noise"), "engine")
+            .expect("wal directory mtime noise should write");
 
         assert!(read_fresh_json_projection(&root, "doctor-full-latest").is_some());
         let _ = fs::remove_dir_all(root);
@@ -702,6 +931,156 @@ mod tests {
             Some(dependency_modified),
         )
         .is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_continuation_overlay_validates_task_snapshot_marker() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-runtime-continuation-overlay-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let marker =
+            crate::state_store::StateStore::canonical_task_snapshot_marker_path_for_state_root(
+                &root,
+            );
+        fs::write(&marker, "task-marker-1").expect("task marker should write");
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "run-overlay".to_string(),
+            task_id: "task-overlay".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "run_id": "run-overlay",
+                "task_id": "task-overlay",
+                "task_status": "open"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "test overlay".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: Some("task-overlay".to_string()),
+            recorded_at: "2026-05-25T00:00:00Z".to_string(),
+        };
+
+        write_runtime_continuation_binding_overlay(&root, &binding);
+        let overlay = read_runtime_continuation_binding_overlay(&root)
+            .expect("matching task marker should admit overlay");
+        assert_eq!(
+            overlay["continuation_binding"]["active_bounded_unit"]["task_id"],
+            "task-overlay"
+        );
+
+        fs::write(&marker, "task-marker-2").expect("task marker should update");
+        assert!(
+            read_runtime_continuation_binding_overlay(&root).is_none(),
+            "task snapshot marker drift must fail closed"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_continuation_overlay_updates_operator_payload() {
+        let overlay = serde_json::json!({
+            "binding": {
+                "run_id": "run-overlay",
+                "task_id": "task-overlay",
+                "status": "bound",
+                "active_bounded_unit": {
+                    "kind": "task_graph_task",
+                    "run_id": "run-overlay",
+                    "task_id": "task-overlay"
+                },
+                "binding_source": "explicit_continuation_bind_task",
+                "why_this_unit": "test overlay",
+                "primary_path": "normal_delivery_path",
+                "sequential_vs_parallel_posture": "sequential_only_explicit_task_bound",
+                "request_text": "task-overlay",
+                "recorded_at": "2026-05-25T00:00:00Z"
+            },
+            "continuation_binding": {
+                "status": "bound",
+                "continuation_allowed": true,
+                "continuation_required_now": false,
+                "active_bounded_unit": {
+                    "kind": "task_graph_task",
+                    "run_id": "run-overlay",
+                    "task_id": "task-overlay"
+                },
+                "binding_source": "explicit_continuation_bind_task",
+                "why_this_unit": "test overlay",
+                "primary_path": "normal_delivery_path",
+                "sequential_vs_parallel_posture": "sequential_only_explicit_task_bound",
+                "pause_boundary_gate": "allowed_if_no_further_bound_work_is_evidenced",
+                "ambiguity_reason": null,
+                "next_actions": []
+            }
+        });
+        let cached = serde_json::json!({
+            "surface": "vida orchestrator-init",
+            "status": "ready_enough_for_normal_work",
+            "init": {
+                "continuation_binding": {
+                    "status": "ambiguous",
+                    "active_bounded_unit": null
+                }
+            }
+        })
+        .to_string();
+
+        let root = std::env::temp_dir().join(format!(
+            "vida-runtime-continuation-payload-overlay-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let marker =
+            crate::state_store::StateStore::canonical_task_snapshot_marker_path_for_state_root(
+                &root,
+            );
+        fs::write(&marker, "task-marker-1").expect("task marker should write");
+        write_json_projection(
+            &root,
+            "orchestrator-init-summary-latest",
+            &serde_json::from_str::<serde_json::Value>(&cached).expect("cached payload"),
+        );
+        let cached = read_state_stale_recent_json_projection(
+            &root,
+            "orchestrator-init-summary-latest",
+            Duration::from_secs(60),
+        )
+        .expect("projection should be readable");
+
+        let rendered =
+            super::apply_runtime_continuation_binding_overlay_to_payload(&root, &cached, &overlay)
+                .expect("overlay should update payload");
+        let rendered: serde_json::Value =
+            serde_json::from_str(&rendered).expect("rendered overlay should parse");
+
+        assert_eq!(
+            rendered["init"]["continuation_binding"]["active_bounded_unit"]["task_id"],
+            "task-overlay"
+        );
+        assert_eq!(rendered["active_bounded_unit"]["task_id"], "task-overlay");
+        assert_eq!(
+            rendered["projection_cache"]["status"],
+            "state_marker_stale_recent_projection_with_runtime_continuation_overlay"
+        );
+
+        fs::write(&marker, "task-marker-2").expect("task marker should update");
+        assert!(
+            super::apply_runtime_continuation_binding_overlay_to_payload(&root, &cached, &overlay)
+                .is_none(),
+            "structural projection with stale task marker must fail closed"
+        );
         let _ = fs::remove_dir_all(root);
     }
 
