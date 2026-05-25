@@ -669,9 +669,6 @@ fn configured_internal_host_dispatch_wall_timeout_seconds(
 fn configured_internal_host_dispatch_no_output_timeout_seconds(
     selected_cli_entry: Option<&serde_yaml::Value>,
 ) -> Option<u64> {
-    if std::env::var_os(crate::init_surfaces::AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV).is_some() {
-        return None;
-    }
     selected_cli_entry
         .and_then(|entry| yaml_lookup(entry, &["dispatch", "no_output_timeout_seconds"]))
         .and_then(serde_yaml::Value::as_u64)
@@ -5941,7 +5938,7 @@ dispatch:
     }
 
     #[test]
-    fn internal_host_dispatch_no_output_timeout_is_operator_only_for_worker_process() {
+    fn internal_host_dispatch_no_output_timeout_is_kept_for_worker_process() {
         let selected_cli_entry = serde_yaml::from_str(
             r#"
 execution_class: internal
@@ -5960,7 +5957,7 @@ dispatch:
             configured_internal_host_dispatch_no_output_timeout_seconds(Some(&selected_cli_entry));
         std::env::remove_var(crate::init_surfaces::AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV);
 
-        assert_eq!(timeout, None);
+        assert_eq!(timeout, Some(2));
     }
 
     #[test]
