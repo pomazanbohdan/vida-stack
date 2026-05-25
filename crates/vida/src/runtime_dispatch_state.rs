@@ -221,7 +221,16 @@ fn dispatch_handoff_timeout_seconds(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> u64 {
-    let preferred_backend = preferred_selected_backend_for_receipt(role_selection, receipt);
+    let receipt_external_backend = receipt
+        .selected_backend
+        .as_deref()
+        .filter(|backend_id| {
+            backend_class_from_execution_plan(&role_selection.execution_plan, backend_id).as_deref()
+                == Some("external_cli")
+        })
+        .map(str::to_string);
+    let preferred_backend = receipt_external_backend
+        .or_else(|| preferred_selected_backend_for_receipt(role_selection, receipt));
     if dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
         return internal_host_runtime_window_seconds(project_root, role_selection, receipt)
             .saturating_add(INTERNAL_DISPATCH_HANDOFF_TIMEOUT_GRACE_SECONDS);
@@ -304,7 +313,16 @@ pub(crate) fn sync_receipt_dispatch_handoff_surface(
     else {
         return;
     };
-    let preferred_backend = preferred_selected_backend_for_receipt(role_selection, receipt);
+    let receipt_external_backend = receipt
+        .selected_backend
+        .as_deref()
+        .filter(|backend_id| {
+            backend_class_from_execution_plan(&role_selection.execution_plan, backend_id).as_deref()
+                == Some("external_cli")
+        })
+        .map(str::to_string);
+    let preferred_backend = receipt_external_backend
+        .or_else(|| preferred_selected_backend_for_receipt(role_selection, receipt));
     let preferred_model_profile_id = preferred_selected_model_profile_for_dispatch_target(
         role_selection,
         &receipt.dispatch_target,
@@ -353,7 +371,16 @@ fn dispatch_handoff_uses_internal_host(
                 .map(|(system, _)| system.clone())
         })
         .unwrap_or_default();
-    let preferred_backend = preferred_selected_backend_for_receipt(role_selection, receipt);
+    let receipt_external_backend = receipt
+        .selected_backend
+        .as_deref()
+        .filter(|backend_id| {
+            backend_class_from_execution_plan(&role_selection.execution_plan, backend_id).as_deref()
+                == Some("external_cli")
+        })
+        .map(str::to_string);
+    let preferred_backend = receipt_external_backend
+        .or_else(|| preferred_selected_backend_for_receipt(role_selection, receipt));
     let preferred_model_profile_id = preferred_selected_model_profile_for_dispatch_target(
         role_selection,
         &receipt.dispatch_target,
@@ -378,6 +405,12 @@ fn dispatch_handoff_uses_internal_host(
         .and_then(|backend_id| {
             backend_class_from_execution_plan(&role_selection.execution_plan, backend_id)
         });
+    let receipt_backend_class = receipt.selected_backend.as_deref().and_then(|backend_id| {
+        backend_class_from_execution_plan(&role_selection.execution_plan, backend_id)
+    });
+    let selected_backend_known_external = selected_backend_class.as_deref() == Some("external_cli")
+        || receipt_backend_class.as_deref() == Some("external_cli")
+        || lane_dispatch_backend_class == Some("external_cli");
     let internal_host_carrier_backend = lane_dispatch_backend_class != Some("external_cli")
         && preferred_backend
             .as_deref()
@@ -392,8 +425,8 @@ fn dispatch_handoff_uses_internal_host(
     let internal_agent_backend = internal_host_carrier_backend
         || backend_class_is_internal(selected_backend_class.as_deref())
         || backend_class_is_internal(lane_dispatch_backend_class)
-        || lane_dispatch_execution_class == Some("internal")
-        || receipt_internal_surface;
+        || (lane_dispatch_execution_class == Some("internal") && !selected_backend_known_external)
+        || (receipt_internal_surface && !selected_backend_known_external);
     (lane_dispatch_internal_surface || receipt_internal_surface)
         && host_execution_class == "internal"
         && internal_agent_backend
@@ -1336,8 +1369,11 @@ fn route_selected_backend_for_dispatch_target(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
 ) -> Option<String> {
-    execution_plan_route_for_dispatch_target(execution_plan, dispatch_target)
-        .and_then(|route| route_selected_backend(execution_plan, route))
+    admissible_selected_backend_for_dispatch_target(execution_plan, dispatch_target, None, None)
+        .or_else(|| {
+            execution_plan_route_for_dispatch_target(execution_plan, dispatch_target)
+                .and_then(|route| route_selected_backend(execution_plan, route))
+        })
 }
 
 fn route_has_backend_hints(execution_plan: &serde_json::Value, route: &serde_json::Value) -> bool {
@@ -1359,28 +1395,25 @@ fn admissible_backend_candidates_for_dispatch_target(
     let mut candidates = Vec::new();
     let inherited = inherited_selected_backend.map(str::to_string);
     let activation = activation_agent_type.map(str::to_string);
-    let (target_assignment, target_assignment_source) =
+    let (_, target_assignment_source) =
         dispatch_target_runtime_assignment(execution_plan, dispatch_target);
     let target_assignment_is_route_scoped = matches!(
         target_assignment_source,
         "route_carrier_runtime_assignment" | "route_runtime_assignment"
     );
-    let explicit_runtime_assignment_backend = runtime_assignment_selected_backend_for_target(
-        execution_plan,
-        dispatch_target,
-    )
-    .filter(|backend_id| {
-        assignment_selects_explicit_dispatch_backend(execution_plan, &target_assignment, backend_id)
-            || backend_has_execution_plan_dispatch_metadata(execution_plan, backend_id)
-    });
-    let has_explicit_runtime_assignment_backend =
-        explicit_runtime_assignment_backend.is_some() && target_assignment_is_route_scoped;
-    let runtime_assignment_backend = explicit_runtime_assignment_backend.or_else(|| {
-        (!strict_required).then(|| runtime_assignment_backend_for_route(execution_plan, route))?
-    });
+    let explicit_runtime_assignment_backend =
+        runtime_assignment_selected_backend_for_target(execution_plan, dispatch_target);
     let route_primary = route_primary_backend_hint_from_route(route);
     let route_fallback = fallback_executor_backend_from_route(route);
     let route_fanout = fanout_executor_backends_from_route(route);
+    let runtime_assignment_backend = explicit_runtime_assignment_backend.filter(|backend_id| {
+        if target_assignment_is_route_scoped || (!strict_required && route_is_backend_agnostic) {
+            return true;
+        }
+        !strict_required && backend_has_execution_plan_dispatch_metadata(execution_plan, backend_id)
+    });
+    let has_explicit_runtime_assignment_backend =
+        runtime_assignment_backend.is_some() && target_assignment_is_route_scoped;
     let route_backends_have_dispatch_metadata = route_primary
         .iter()
         .chain(route_fallback.iter())
@@ -1391,14 +1424,14 @@ fn admissible_backend_candidates_for_dispatch_target(
         });
     let prefer_route_backends_first = !route_is_backend_agnostic
         && (strict_required || route_backends_have_dispatch_metadata || inherited.is_none());
-    if !strict_required && !prefer_route_backends_first {
-        if let Some(inherited) = inherited.as_ref() {
-            candidates.push(inherited.clone());
+    if !strict_required {
+        if let Some(runtime_assignment_backend) = runtime_assignment_backend.as_ref() {
+            candidates.push(runtime_assignment_backend.clone());
         }
     }
     if !strict_required && !prefer_route_backends_first {
-        if let Some(runtime_assignment_backend) = runtime_assignment_backend.as_ref() {
-            candidates.push(runtime_assignment_backend.clone());
+        if let Some(inherited) = inherited.as_ref() {
+            candidates.push(inherited.clone());
         }
     }
     if prefer_route_backends_first {
@@ -1503,6 +1536,18 @@ pub(crate) fn admissible_selected_backend_for_dispatch_target(
         )
     };
     let route_activation_backend = route.and_then(activation_backend_from_route);
+    let explicit_route_policy_backends = route
+        .map(|route| {
+            route_primary_backend_hint_from_route(route)
+                .into_iter()
+                .chain(fallback_executor_backend_from_route(route))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let has_backend_admissibility_matrix = execution_plan["backend_admissibility_matrix"]
+        .as_array()
+        .map(|rows| !rows.is_empty())
+        .unwrap_or(false);
     if !strict_required {
         return candidates.into_iter().next();
     }
@@ -1511,7 +1556,11 @@ pub(crate) fn admissible_selected_backend_for_dispatch_target(
             execution_plan,
             candidate,
             dispatch_target,
-        ) || route_activation_backend.as_deref() == Some(candidate.as_str())
+        ) || (!has_backend_admissibility_matrix
+            && explicit_route_policy_backends
+                .iter()
+                .any(|backend| backend == candidate))
+            || route_activation_backend.as_deref() == Some(candidate.as_str())
             || (route_is_backend_agnostic
                 && backend_class_from_execution_plan(execution_plan, candidate).as_deref()
                     == Some("internal"))
@@ -1830,6 +1879,8 @@ fn runtime_assignment_selected_backend_for_target(
     let (assignment, _) = dispatch_target_runtime_assignment(execution_plan, dispatch_target);
     json_string(assignment.get("selected_backend_id"))
         .or_else(|| json_string(assignment.get("selected_carrier_id")))
+        .or_else(|| json_string(assignment.get("selected_tier")))
+        .or_else(|| json_string(assignment.get("activation_agent_type")))
 }
 
 fn selected_backend_override_conflicts_with_runtime_assignment(

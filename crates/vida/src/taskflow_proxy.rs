@@ -3098,8 +3098,7 @@ fn build_taskflow_next_decision(
         && !terminal_consume_continue_without_next_unit;
     let completed_without_explicit_next_unit =
         terminal_completed_without_next_unit(latest_run_graph_status)
-            && !explicit_next_task_binding
-            && !latest_run_graph_task_no_longer_active;
+            && !explicit_next_task_binding;
 
     // Check for foreign claim conflicts (multi-session admission rule #3)
     // A blocked task owned by session A must not stop session B when session B is working on
@@ -9143,7 +9142,7 @@ mod tests {
     }
 
     #[test]
-    fn route_payload_blocks_runtime_selected_carrier_without_matrix_row() {
+    fn route_payload_uses_admissible_fallback_when_runtime_selected_carrier_has_no_matrix_row() {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -9177,14 +9176,14 @@ mod tests {
 
         let payload = super::route_payload_for_dispatch_target(&execution_plan, "implementation");
 
-        assert_eq!(payload["selected_backend"].as_str(), Some("junior"));
         assert_eq!(
-            payload["selected_backend_admissible"].as_bool(),
-            Some(false)
+            payload["selected_backend"].as_str(),
+            Some("internal_subagents")
         );
+        assert_eq!(payload["selected_backend_admissible"].as_bool(), Some(true));
         assert_eq!(payload["status"].as_str(), Some("blocked"));
         assert!(payload["blocker_codes"].as_array().is_some_and(|codes| {
-            codes.contains(&serde_json::json!(
+            !codes.contains(&serde_json::json!(
                 "selected_backend_not_admissible_for_dispatch_target"
             ))
         }));

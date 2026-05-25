@@ -11432,7 +11432,10 @@ mod tests {
             .await
             .expect("context lookup should succeed")
             .expect("dispatch context should exist");
-        force_selected_model_ref(&mut context.role_selection, "gpt-5.5");
+        force_selected_model_ref(
+            &mut context.role_selection,
+            "stale-model-ref-for-catalog-drift-test",
+        );
         store
             .record_run_graph_dispatch_context(&context)
             .await
@@ -11473,7 +11476,10 @@ mod tests {
             "implementation",
             route,
         );
-        assert_ne!(payload["selected_model_ref"], "gpt-5.5");
+        assert_ne!(
+            payload["selected_model_ref"],
+            "stale-model-ref-for-catalog-drift-test"
+        );
     }
 
     #[tokio::test]
