@@ -494,8 +494,7 @@ fn spawn_agent_init_execute_dispatch_worker(
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(CREATE_NO_WINDOW);
+        command.creation_flags(windows_dispatch_worker_creation_flags());
     }
     let child = command
         .spawn()
@@ -510,6 +509,15 @@ fn spawn_agent_init_execute_dispatch_worker(
         "packet_arg": packet_flag,
         "packet_path": resume_inputs.dispatch_packet_path,
     }))
+}
+
+#[cfg(windows)]
+fn windows_dispatch_worker_creation_flags() -> u32 {
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
 }
 
 fn agent_init_dispatch_started_payload(
@@ -1523,6 +1531,19 @@ mod tests {
             agent_init_execute_dispatch_window_requires_operator_handoff(2),
             "2s dispatch windows must return operator-visible in-flight evidence instead of waiting for terminal agent output"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn agent_init_dispatch_worker_uses_detached_windows_process_flags() {
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let flags = windows_dispatch_worker_creation_flags();
+        assert_eq!(flags & DETACHED_PROCESS, DETACHED_PROCESS);
+        assert_eq!(flags & CREATE_NEW_PROCESS_GROUP, CREATE_NEW_PROCESS_GROUP);
+        assert_eq!(flags & CREATE_NO_WINDOW, CREATE_NO_WINDOW);
     }
 
     #[test]
