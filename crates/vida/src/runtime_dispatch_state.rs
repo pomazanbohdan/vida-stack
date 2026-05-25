@@ -3383,9 +3383,28 @@ fn external_dispatch_command_is_config_safe(command: &str) -> bool {
         return false;
     }
 
-    trimmed
+    let token_safe = trimmed
         .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'));
+    if !token_safe {
+        return false;
+    }
+
+    matches!(
+        trimmed,
+        "codex"
+            | "qwen"
+            | "claude"
+            | "gemini"
+            | "aider"
+            | "cursor-agent"
+            | "opencode"
+            | "hermes"
+            | "vida-pi-agent"
+            | "kilo"
+            | "vibe"
+            | "pi"
+    )
 }
 
 pub(crate) fn render_command_display(command: &str, args: &[String]) -> String {
@@ -3551,11 +3570,11 @@ dispatch:
     }
 
     #[test]
-    fn configured_external_activation_parts_accepts_configured_command_without_binary_hardcode() {
+    fn configured_external_activation_parts_accepts_allowlisted_command_token() {
         let backend_entry: serde_yaml::Value = serde_yaml::from_str(
             r#"
 dispatch:
-  command: newly-configured-carrier
+  command: vida-pi-agent
   static_args: ["run"]
   prompt_mode: positional
 "#,
@@ -3569,9 +3588,33 @@ dispatch:
             "/tmp/project/.vida/dispatch.json",
             None,
         )
-        .expect("config-owned command token should be accepted without a binary-name allowlist");
-        assert_eq!(command, "newly-configured-carrier");
+        .expect("allowlisted command token should be accepted");
+        assert_eq!(command, "vida-pi-agent");
         assert_eq!(args[0], "run");
+    }
+
+    #[test]
+    fn configured_external_activation_parts_rejects_non_allowlisted_command_token() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: python
+  prompt_mode: positional
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let error = configured_external_activation_parts(
+            "external_fixture",
+            &backend_entry,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            None,
+        )
+        .expect_err("non-allowlisted command should be rejected");
+
+        assert!(error.contains("unsafe"));
+        assert!(error.contains("python"));
     }
 
     #[test]
@@ -3599,12 +3642,12 @@ dispatch:
     }
 
     #[test]
-    fn configured_external_activation_parts_accepts_configured_adapter_but_rejects_path_like_variant(
+    fn configured_external_activation_parts_accepts_allowlisted_adapter_but_rejects_path_like_variant(
     ) {
         let backend_entry: serde_yaml::Value = serde_yaml::from_str(
             r#"
 dispatch:
-  command: configured-adapter
+  command: vida-pi-agent
   static_args: ["--mode", "rpc"]
   prompt_mode: stdin
 "#,
@@ -3618,14 +3661,14 @@ dispatch:
             "/tmp/project/.vida/dispatch.json",
             None,
         )
-        .expect("configured adapter command should be trusted by config");
-        assert_eq!(command, "configured-adapter");
+        .expect("allowlisted adapter command should be trusted");
+        assert_eq!(command, "vida-pi-agent");
         assert_eq!(args, vec!["--mode".to_string(), "rpc".to_string()]);
 
         let path_like: serde_yaml::Value = serde_yaml::from_str(
             r#"
 dispatch:
-  command: ./configured-adapter
+  command: ./vida-pi-agent
   prompt_mode: stdin
 "#,
         )
@@ -3637,9 +3680,9 @@ dispatch:
             "/tmp/project/.vida/dispatch.json",
             None,
         )
-        .expect_err("path-like configured adapter must remain rejected");
+        .expect_err("path-like allowlisted adapter token must remain rejected");
         assert!(error.contains("unsafe"));
-        assert!(error.contains("./configured-adapter"));
+        assert!(error.contains("./vida-pi-agent"));
     }
 
     #[test]
