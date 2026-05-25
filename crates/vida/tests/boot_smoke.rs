@@ -2027,6 +2027,16 @@ fn taskflow_graph_summary_reports_ready_blocked_and_critical_path() {
     let state_dir = unique_state_dir();
     let boot = boot_with_retry(&state_dir);
     assert!(boot.status.success());
+    create_scheduler_smoke_task(
+        &state_dir,
+        "graph-summary-ready",
+        "Graph summary ready task",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
 
     let output = bounded_vida_output_with_state_lock_retry(
         &["-k", "5s", "20s"],
@@ -2056,11 +2066,29 @@ fn taskflow_graph_summary_reports_ready_blocked_and_critical_path() {
 
 #[test]
 fn taskflow_graph_explain_reports_projection_truth() {
-    let output = vida()
-        .args(["taskflow", "graph", "explain", "--json"])
-        .output()
-        .expect("taskflow graph explain should run");
+    let state_dir = unique_state_dir();
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+    create_scheduler_smoke_task(
+        &state_dir,
+        "graph-explain-ready",
+        "Graph explain ready task",
+        "1",
+        "sequential",
+        None,
+        None,
+        None,
+    );
 
+    let output = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "taskflow graph explain should run",
+        |command| {
+            command
+                .args(["taskflow", "graph", "explain", "--json"])
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("taskflow graph explain json should parse");
