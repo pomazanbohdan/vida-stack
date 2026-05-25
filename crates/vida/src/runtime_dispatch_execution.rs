@@ -669,10 +669,37 @@ fn configured_internal_host_dispatch_wall_timeout_seconds(
 fn configured_internal_host_dispatch_no_output_timeout_seconds(
     selected_cli_entry: Option<&serde_yaml::Value>,
 ) -> Option<u64> {
+    if std::env::var_os(crate::init_surfaces::AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV).is_some() {
+        return None;
+    }
     selected_cli_entry
         .and_then(|entry| yaml_lookup(entry, &["dispatch", "no_output_timeout_seconds"]))
         .and_then(serde_yaml::Value::as_u64)
         .filter(|seconds| *seconds > 0)
+}
+
+fn configured_dispatch_packet_route_runtime_window_seconds(
+    project_root: &Path,
+    dispatch_packet_path: &str,
+) -> Option<u64> {
+    let packet = std::fs::read_to_string(dispatch_packet_path)
+        .ok()
+        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())?;
+    let route_key = packet
+        .pointer("/delivery_task_packet/handoff_task_class")
+        .or_else(|| packet.pointer("/runtime_assignment/task_class"))
+        .or_else(|| packet.pointer("/carrier_runtime_assignment/task_class"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let overlay =
+        crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root).ok()?;
+    yaml_lookup(
+        &overlay,
+        &["agent_system", "routing", route_key, "max_runtime_seconds"],
+    )
+    .and_then(serde_yaml::Value::as_u64)
+    .filter(|seconds| *seconds > 0)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2708,11 +2735,16 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         refresh_execution_truth(body, role_selection, receipt, Some(backend_id), "missing");
         return Ok(Some(result));
     }
-    let wall_timeout_seconds = Some(configured_internal_host_dispatch_wall_timeout_seconds(
-        project_root,
-        role_selection,
-        receipt,
-    ));
+    let wall_timeout_seconds = Some(
+        configured_dispatch_packet_route_runtime_window_seconds(project_root, dispatch_packet_path)
+            .unwrap_or_else(|| {
+                configured_internal_host_dispatch_wall_timeout_seconds(
+                    project_root,
+                    role_selection,
+                    receipt,
+                )
+            }),
+    );
     let no_output_timeout_seconds =
         configured_internal_host_dispatch_no_output_timeout_seconds(selected_cli_entry.as_ref());
     let wrapped_command = wrap_command_with_optional_timeouts(
@@ -3597,7 +3629,8 @@ mod tests {
     #[cfg(any(unix, windows))]
     use super::execute_wrapped_command;
     use super::{
-        agent_lane_dispatch_result, configured_external_dispatch_output_mode,
+        agent_lane_dispatch_result, configured_dispatch_packet_route_runtime_window_seconds,
+        configured_external_dispatch_output_mode,
         configured_external_dispatch_wall_timeout_seconds,
         configured_internal_host_activation_parts,
         configured_internal_host_dispatch_no_output_timeout_seconds,
@@ -5905,6 +5938,68 @@ dispatch:
             configured_internal_host_dispatch_no_output_timeout_seconds(Some(&selected_cli_entry)),
             Some(2)
         );
+    }
+
+    #[test]
+    fn internal_host_dispatch_no_output_timeout_is_operator_only_for_worker_process() {
+        let selected_cli_entry = serde_yaml::from_str(
+            r#"
+execution_class: internal
+dispatch:
+  command: local-bridge
+  no_output_timeout_seconds: 2
+  prompt_mode: stdin
+"#,
+        )
+        .expect("selected cli entry should parse");
+        std::env::set_var(
+            crate::init_surfaces::AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV,
+            "1",
+        );
+        let timeout =
+            configured_internal_host_dispatch_no_output_timeout_seconds(Some(&selected_cli_entry));
+        std::env::remove_var(crate::init_surfaces::AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV);
+
+        assert_eq!(timeout, None);
+    }
+
+    #[test]
+    fn dispatch_packet_handoff_task_class_selects_route_runtime_window() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-packet-route-window-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create temp root");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            r#"
+agent_system:
+  routing:
+    implementation:
+      max_runtime_seconds: 420
+"#,
+        )
+        .expect("write config");
+        let packet_path = project_root.join("dispatch-packet.json");
+        std::fs::write(
+            &packet_path,
+            r#"{"delivery_task_packet":{"handoff_task_class":"implementation"}}"#,
+        )
+        .expect("write packet");
+
+        assert_eq!(
+            configured_dispatch_packet_route_runtime_window_seconds(
+                &project_root,
+                packet_path.to_str().expect("packet path should render")
+            ),
+            Some(420)
+        );
+
+        let _ = std::fs::remove_dir_all(project_root);
     }
 
     #[cfg(unix)]

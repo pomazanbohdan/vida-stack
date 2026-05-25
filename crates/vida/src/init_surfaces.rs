@@ -16,7 +16,8 @@ use crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload;
 const DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS: u64 = 10;
 const AGENT_INIT_EXECUTE_DISPATCH_RECONCILIATION_GRACE_SECONDS: u64 = 20;
 const AGENT_INIT_EXECUTE_DISPATCH_OPERATOR_HANDOFF_SECONDS: u64 = 2;
-const AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV: &str = "VIDA_AGENT_INIT_EXECUTE_DISPATCH_WORKER";
+pub(crate) const AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV: &str =
+    "VIDA_AGENT_INIT_EXECUTE_DISPATCH_WORKER";
 const COLD_AUTHORITATIVE_STATE_OPEN_TIMEOUT_SECONDS: u64 = 30;
 const BOOT_RELEASE_VERIFICATION_RETRY_DELAY_MS: u64 = 25;
 const INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS: u64 = 45;
@@ -46,6 +47,12 @@ fn agent_init_execute_dispatch_worker_active() -> bool {
     std::env::var_os(AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV).is_some()
 }
 
+fn agent_init_execute_dispatch_window_requires_operator_handoff(
+    dispatch_handoff_timeout_seconds: u64,
+) -> bool {
+    dispatch_handoff_timeout_seconds >= AGENT_INIT_EXECUTE_DISPATCH_OPERATOR_HANDOFF_SECONDS
+}
+
 fn agent_init_execute_dispatch_should_handoff(
     dispatch_handoff_timeout_seconds: u64,
     uses_internal_host: bool,
@@ -61,11 +68,10 @@ fn agent_init_execute_dispatch_should_handoff(
         if agent_init_execute_dispatch_worker_active() {
             return false;
         }
-        if uses_internal_host {
-            return dispatch_handoff_timeout_seconds
-                > agent_init_execute_dispatch_handoff_threshold_seconds();
-        }
-        dispatch_handoff_timeout_seconds > AGENT_INIT_EXECUTE_DISPATCH_OPERATOR_HANDOFF_SECONDS
+        let _ = uses_internal_host;
+        agent_init_execute_dispatch_window_requires_operator_handoff(
+            dispatch_handoff_timeout_seconds,
+        )
     }
 }
 
@@ -1506,6 +1512,19 @@ mod tests {
             240
         );
         assert_eq!(agent_init_execute_dispatch_handoff_threshold_seconds(), 22);
+    }
+
+    #[test]
+    fn agent_init_execute_dispatch_window_handoff_starts_at_operator_target() {
+        assert!(
+            !agent_init_execute_dispatch_window_requires_operator_handoff(1),
+            "sub-target handoffs can complete synchronously"
+        );
+        assert!(
+            agent_init_execute_dispatch_window_requires_operator_handoff(2),
+            "2s dispatch windows must return operator-visible in-flight evidence instead of waiting for terminal agent output"
+        );
+        assert!(agent_init_execute_dispatch_window_requires_operator_handoff(22));
     }
 
     #[test]
