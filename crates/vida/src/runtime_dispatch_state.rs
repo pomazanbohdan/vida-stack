@@ -20992,6 +20992,13 @@ fn runtime_dispatch_internal_activation_timeout_result(
         "provider_error": format!(
             "internal host carrier timed out after {timeout_seconds}s before receipt-backed completion evidence was recorded"
         ),
+        "timeout_wrapper": {
+            "timeout_seconds": timeout_seconds,
+            "kill_after_grace_seconds": 1,
+            "no_output_timeout_seconds": serde_json::Value::Null,
+            "timed_out": true,
+            "timeout_exit_code": serde_json::Value::Null,
+        },
         "blocker_reason": "internal host carrier timed out before receipt-backed completion evidence was recorded",
         "note": "internal host carrier timed out before receipt-backed completion evidence was recorded",
     })
@@ -21188,6 +21195,16 @@ pub(crate) fn apply_internal_activation_timeout_to_receipt(
         receipt.dispatch_command = Some(dispatch_command);
     }
     Ok(())
+}
+
+fn annotate_internal_host_timeout_surface(
+    project_root: &Path,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) {
+    if let Ok(overlay) = load_project_overlay_yaml_for_root(project_root) {
+        let (selected_cli_system, _) = selected_host_cli_system_for_runtime_dispatch(&overlay);
+        receipt.dispatch_surface = Some(format!("internal_cli:{selected_cli_system}"));
+    }
 }
 
 pub(crate) fn apply_internal_activation_view_only_to_receipt(
@@ -21575,29 +21592,43 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
         },
         Err(_timeout_error) => {
             // Generate timeout execution result with receipt-backed completion evidence
-            let blocker_code = if dispatch_handoff_uses_internal_host(
-                project_root.as_ref(),
-                role_selection,
-                receipt,
-            ) {
+            let internal_host_timeout =
+                dispatch_handoff_uses_internal_host(project_root.as_ref(), role_selection, receipt);
+            let receipt_timeout_seconds = if internal_host_timeout {
+                internal_host_runtime_window_seconds(project_root.as_ref(), role_selection, receipt)
+            } else {
+                handoff_timeout_seconds
+            };
+            let blocker_code = if internal_host_timeout {
+                annotate_internal_host_timeout_surface(project_root.as_ref(), receipt);
                 INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
             } else {
                 "dispatch_handoff_timeout"
             };
             let execution_result = runtime_dispatch_internal_activation_timeout_result(
                 receipt,
-                handoff_timeout_seconds,
+                receipt_timeout_seconds,
                 blocker_code,
             );
 
             // Update receipt with timeout information
-            apply_dispatch_handoff_timeout_to_receipt(
-                state_root,
-                project_root.as_ref(),
-                role_selection,
-                receipt,
-                handoff_timeout_seconds,
-            )?;
+            if internal_host_timeout {
+                apply_internal_activation_timeout_to_receipt(
+                    state_root,
+                    project_root.as_ref(),
+                    role_selection,
+                    receipt,
+                    receipt_timeout_seconds,
+                )?;
+            } else {
+                apply_dispatch_handoff_timeout_to_receipt(
+                    state_root,
+                    project_root.as_ref(),
+                    role_selection,
+                    receipt,
+                    receipt_timeout_seconds,
+                )?;
+            }
 
             // Best-effort persist timeout receipt
             let deferred_coordination_warning = coordinate_dispatch_timeout_state_best_effort(

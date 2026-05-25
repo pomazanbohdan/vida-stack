@@ -33,7 +33,6 @@ fn agent_init_execute_dispatch_timeout_seconds(dispatch_handoff_timeout_seconds:
 
 fn agent_init_execute_dispatch_handoff_threshold_seconds() -> u64 {
     AGENT_INIT_EXECUTE_DISPATCH_OPERATOR_HANDOFF_SECONDS
-        .saturating_add(AGENT_INIT_EXECUTE_DISPATCH_RECONCILIATION_GRACE_SECONDS)
 }
 
 fn agent_init_receipt_timeout_seconds(
@@ -1511,7 +1510,7 @@ mod tests {
             ),
             240
         );
-        assert_eq!(agent_init_execute_dispatch_handoff_threshold_seconds(), 22);
+        assert_eq!(agent_init_execute_dispatch_handoff_threshold_seconds(), 2);
     }
 
     #[test]
@@ -1524,7 +1523,6 @@ mod tests {
             agent_init_execute_dispatch_window_requires_operator_handoff(2),
             "2s dispatch windows must return operator-visible in-flight evidence instead of waiting for terminal agent output"
         );
-        assert!(agent_init_execute_dispatch_window_requires_operator_handoff(22));
     }
 
     #[test]
@@ -4495,6 +4493,23 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
         let selection_value =
             serde_json::to_value(&resume_inputs.role_selection).unwrap_or(serde_json::Value::Null);
         let dispatch_mode = agent_init_dispatch_mode(&args, &selection_value);
+        if !agent_init_execute_dispatch_worker_active() {
+            let mut resume_inputs = resume_inputs;
+            return match start_agent_init_dispatch_worker_and_return(
+                args.json,
+                &dispatch_mode,
+                &state_dir,
+                &mut resume_inputs,
+            )
+            .await
+            {
+                Ok(exit_code) => exit_code,
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::from(1)
+                }
+            };
+        }
         return execute_agent_init_dispatch_from_resume_inputs(
             args.json,
             &dispatch_mode,
