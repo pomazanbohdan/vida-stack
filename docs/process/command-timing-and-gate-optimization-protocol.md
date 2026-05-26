@@ -113,6 +113,22 @@ If the diagnostic finds no slow operations, record `observed_operations: []` and
 3. Timing evidence belongs in the active TaskFlow task notes or linked artifact before closure.
 4. A timing optimization that changes CI, scripts, command output, command options, diagnostics, or release gating must be its own TaskFlow item unless it is the direct bounded work item already in progress.
 5. Timing diagnostics must optimize both wall-clock time and operator/agent iteration count. Reducing a 20-second command to 3 seconds is useful; reducing three separate reads to one structured output is also useful.
+6. After every session/environment self-diagnostic or command-timing audit, update this protocol or the more specific mapped owner document in the same bounded batch when a new reusable optimization factor is discovered. Examples include lost output from long gates, repeated slow read surfaces, missing artifact paths, a better fast recovery command, a new sharding pattern, or a command option that would avoid follow-up reads. Do not keep these findings only in chat.
+
+## Post-Pool Continuous Improvement Checklist
+
+After every coherent work pool is proven, committed, pushed, released, or otherwise closed, run and record this checklist before selecting unrelated follow-up work:
+
+1. command/operation timing diagnostics for the pool, including non-VIDA shell commands, tests, builds, CI, GitHub calls, runtime reads, and delegated/advisory lanes,
+2. VIDA runtime diagnostic status for normal orchestration surfaces, including status, init, next-lawful, recovery, run-graph, lane, dispatch, and task inspection where relevant,
+3. slow-surface classification against the two-second target and five-second hard-defect ceiling,
+4. token and output-volume reduction opportunities, including repeated JSON reads, broad logs, missing compact fields, and hidden failure details,
+5. stage-ordering and parallelism review for the next pool, including whether advisory prefetch should have started earlier,
+6. script/gate decision for every slow or failed gate: keep blocking, make fast proof, diagnostic-only for PR, move to main/release, remove/replace stale check, or create runtime defect,
+7. command-surface follow-up: missing options, help text, JSON fields, artifact paths, or recovery commands,
+8. documentation sync: whether this protocol, `project-error-search-runtime-diagnostics-protocol.md`, a project spec, or sidecar rule was updated for any new reusable optimization factor.
+
+The checklist is required even when build, release, commit, push, or CI proof is already green. Green gates prove the bounded change; they do not prove the session workflow is optimized.
 
 ## Recommended Local Patterns
 
@@ -122,6 +138,10 @@ If the diagnostic finds no slow operations, record `observed_operations: []` and
 4. For CI, prefer step-level timing from GitHub Actions plus script-level summaries inside long steps.
 5. For agent lanes, record role, resolved carrier/profile when available, duration, result, rework count, and proof outcome.
 6. For browser/simulator/emulator validation, record launch/setup time separately from user-flow validation time.
+7. For long local gates that may exceed the host-tool timeout, redirect stdout/stderr to a deterministic log file and print that path before starting the gate. A timed-out host tool call without a log artifact is itself an optimization defect because it forces reruns.
+8. For Rust workspace proof during active repair, prefer focused filters and package shards first, then run the workspace-wide gate once the coherent batch is assembled. If the workspace gate exceeds the local tool timeout, rerun it through a log-backed script or background job rather than repeating foreground calls that can lose output.
+9. For VIDA runtime recovery diagnostics, prefer the fastest authoritative inspection surface that exposes the needed evidence. If a timeout/recovery path only needs task metadata or current owned scope, use `vida task show <task-id> --json` before heavier lane or run-graph projections.
+10. If a long test shard or runtime command is killed because it exceeds the local tool timeout, immediately record the command, duration, missing artifact gap, and replacement proof strategy in the post-pool checklist.
 
 ## Prohibited Patterns
 
@@ -140,6 +160,7 @@ As of this protocol slice, the following observations are known from the active 
 2. `vida task next-lawful --json` observed around `17000 ms`.
 3. `vida task create` and `vida task update` observed around `14000 ms`.
 4. PR `validate` CI remained blocked for multiple minutes inside `cargo test --workspace --locked -- --test-threads=1`.
+5. Local `cargo test -p vida runtime_dispatch_state --locked -- --test-threads=1` exceeded the 120-second host-tool timeout during active runtime repair without a preserved foreground result; future runs of this shard should be log-backed or split further before becoming a blocking local gate.
 
 These observations do not prove one root cause. They prove that timing diagnostics must cover both local runtime commands and CI/test gates.
 

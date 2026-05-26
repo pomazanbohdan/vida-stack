@@ -62,15 +62,18 @@ For runtime continuation defects, inspect surfaces in this order unless the acti
 1. `vida status --json`
 2. `vida orchestrator-init --json`
 3. `vida task next-lawful --json`
-4. `vida taskflow run-graph status <run-id> --json`
-5. `vida taskflow recovery status <run-id> --json`
-6. `vida lane show <run-id> --json`
-7. dispatch result/receipt artifacts referenced by the surfaces
-8. TaskFlow task record and dependencies
-9. DocFlow proof/check surfaces
-10. code-level state-store/projection/command implementation
+4. `vida task show <task-id> --json` when the active task id is known and the recovery question only needs task metadata, owned paths, or proof target
+5. `vida taskflow run-graph status <run-id> --json`
+6. `vida taskflow recovery status <run-id> --json`
+7. `vida lane show <run-id> --json` when lane receipt/evidence state, exception-takeover state, or lane mutation readiness is specifically needed
+8. dispatch result/receipt artifacts referenced by the surfaces
+9. TaskFlow task record and dependencies
+10. DocFlow proof/check surfaces
+11. code-level state-store/projection/command implementation
 
 Derived cache, rendered projection, lane preview, advisory text, and operator summaries are evidence surfaces only. They do not override the authoritative state-store, receipt, proof, or explicit runtime law.
+
+When a session/environment self-diagnostic discovers a new reusable Error Search optimization, update this protocol in the same bounded batch. Current examples include preferring `vida task show <task-id> --json` over heavier lane/run-graph projections for timeout recovery metadata, and requiring log-backed execution for long proof gates that can exceed host-tool stdout retention.
 
 ## Multi-Defect Batch Rule
 
@@ -106,7 +109,8 @@ A VIDA runtime Error Search fix is not ready for commit until the proof matrix c
 2. adjacent contract tests for the affected command family,
 3. one debug runtime probe when the defect is observable through a local command,
 4. formatting or schema validation for edited source/docs,
-5. release build/install only when installed-runtime behavior must be validated or when preparing a push that depends on installed binary behavior.
+5. release build/install only when installed-runtime behavior must be validated or when preparing a push that depends on installed binary behavior,
+6. post-pool continuous-improvement diagnostics after the coherent fix pool is proven: command timings, VIDA runtime slow-surface status, token/output reduction opportunities, stage-ordering/parallelism findings, script/gate decisions, command-surface follow-ups, and documentation sync for any new reusable rule.
 
 Record timings for each proof command. If a repeated proof command exceeds the project timing target, create or update an operator-efficiency task.
 
