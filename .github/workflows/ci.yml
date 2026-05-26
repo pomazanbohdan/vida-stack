@@ -207,25 +207,26 @@ jobs:
           mkdir -p "$TMP_BIN" "$TMP_STATE" "$TMP_PROJECT"
 
           bash dist/vida-install.sh install --archive "$ARCHIVE_PATH" --root "$INSTALL_ROOT" --bin-dir "$TMP_BIN" --force
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" bash dist/vida-install.sh doctor --root "$INSTALL_ROOT" --bin-dir "$TMP_BIN"
+          RUNTIME_PATH="$INSTALL_ROOT/current/bin:$TMP_BIN:$PATH"
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" bash dist/vida-install.sh doctor --root "$INSTALL_ROOT" --bin-dir "$TMP_BIN"
 
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida root >/tmp/vida-root.txt
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida boot --state-dir "$TMP_STATE"
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor --state-dir "$TMP_STATE" >/tmp/vida-doctor.txt
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida status --state-dir "$TMP_STATE" --json >/tmp/vida-status.json
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor --state-dir "$TMP_STATE" --json >/tmp/vida-doctor-json.txt
-          PATH="$TMP_BIN:$PATH" taskflow help >/tmp/taskflow-help.txt
-          PATH="$TMP_BIN:$PATH" docflow --help >/tmp/docflow-help.txt
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$INSTALL_ROOT/current/bin:$TMP_BIN:$PATH" vida-pi-agent --help >/tmp/vida-pi-agent-help.txt
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida taskflow help >/tmp/vida-taskflow-help.txt
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida docflow help >/tmp/vida-docflow-help.txt
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida root >/tmp/vida-root.txt
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida boot --state-dir "$TMP_STATE"
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida doctor --state-dir "$TMP_STATE" >/tmp/vida-doctor.txt
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida status --state-dir "$TMP_STATE" --json >/tmp/vida-status.json
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida doctor --state-dir "$TMP_STATE" --json >/tmp/vida-doctor-json.txt
+          PATH="$RUNTIME_PATH" taskflow help >/tmp/taskflow-help.txt
+          PATH="$RUNTIME_PATH" docflow --help >/tmp/docflow-help.txt
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida-pi-agent --help >/tmp/vida-pi-agent-help.txt
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida taskflow help >/tmp/vida-taskflow-help.txt
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida docflow help >/tmp/vida-docflow-help.txt
 
-          PATH="$TMP_BIN:$PATH" docflow init >/tmp/docflow-init.txt
-          PATH="$TMP_BIN:$PATH" docflow init --json >/tmp/docflow-init.json
+          PATH="$RUNTIME_PATH" docflow init >/tmp/docflow-init.txt
+          PATH="$RUNTIME_PATH" docflow init --json >/tmp/docflow-init.json
 
           (
             cd "$TMP_PROJECT"
-            VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida init >/tmp/vida-init.txt
+            VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida init >/tmp/vida-init.txt
           )
 
           grep -q "TaskFlow CLI" /tmp/taskflow-help.txt
