@@ -210,7 +210,8 @@ jobs:
           RUNTIME_PATH="$INSTALL_ROOT/current/bin:$TMP_BIN:$PATH"
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" bash dist/vida-install.sh doctor --root "$INSTALL_ROOT" --bin-dir "$TMP_BIN"
 
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida root >/tmp/vida-root.txt
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" command -v vida >/tmp/vida-command.txt
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida --help >/tmp/vida-help.txt
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida boot --state-dir "$TMP_STATE"
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida doctor --state-dir "$TMP_STATE" >/tmp/vida-doctor.txt
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$RUNTIME_PATH" vida status --state-dir "$TMP_STATE" --json >/tmp/vida-status.json
@@ -234,7 +235,7 @@ jobs:
           grep -q "VIDA adapter for one-shot Pi RPC dispatch" /tmp/vida-pi-agent-help.txt
           grep -q "mode: agent_bootstrap" /tmp/docflow-init.txt
           grep -q '"mode":"agent_bootstrap"' /tmp/docflow-init.json
-          grep -q "$INSTALL_ROOT/current" /tmp/vida-root.txt
+          grep -q "$INSTALL_ROOT/current/bin/vida" /tmp/vida-command.txt
           grep -q "storage metadata: ok" /tmp/vida-doctor.txt
           grep -q '"surface": "vida status"' /tmp/vida-status.json
           test -f "$TMP_PROJECT/AGENTS.md"
