@@ -432,6 +432,7 @@ agent_extensions:
     profiles: docs/process/agent-extensions/profiles.yaml
     flows: docs/process/agent-extensions/flows.yaml
     dispatch_aliases: docs/process/agent-extensions/dispatch-aliases.yaml
+    hook_templates: docs/product/spec/hook-templates.yaml
   enabled_framework_roles:
     - orchestrator
     - worker
@@ -501,6 +502,7 @@ agent_extensions:
     - party_chat_council_small
     - party_chat_council_large
     - party_chat_council_modern_full
+  enabled_hook_templates: []
   default_flow_set: verified
   role_selection:
     mode: auto

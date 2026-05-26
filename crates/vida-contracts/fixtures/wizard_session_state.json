@@ -1,0 +1,37 @@
+{
+  "wizard_session_id": "wizard-01",
+  "wizard_kind": "project_init",
+  "session_id": "session-01",
+  "project_ref": {
+    "kind": "project_id",
+    "project_id": "project-01"
+  },
+  "current_step": "drafting",
+  "selected_preset": "default",
+  "inputs": [
+    {
+      "option_id": "agent_system_mode",
+      "value": {
+        "kind": "string",
+        "value": "internal"
+      },
+      "effective_value": {
+        "kind": "string",
+        "value": "internal"
+      },
+      "source": "operator_input",
+      "visible": true,
+      "enabled": true,
+      "required": true,
+      "dirty": true,
+      "valid": true,
+      "dependency_inputs": [],
+      "affected_materialization_targets": [
+        "agents_bootstrap"
+      ]
+    }
+  ],
+  "validation_findings": [],
+  "readiness_findings": [],
+  "receipt_refs": []
+}

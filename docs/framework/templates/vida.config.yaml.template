@@ -372,6 +372,7 @@ agent_extensions:
     profiles: .vida/project/agent-extensions/profiles.yaml
     flows: .vida/project/agent-extensions/flows.yaml
     dispatch_aliases: .vida/project/agent-extensions/dispatch-aliases.yaml
+    hook_templates: .vida/project/agent-extensions/hook-templates.yaml
   enabled_framework_roles:
     - orchestrator
     - worker
@@ -387,6 +388,7 @@ agent_extensions:
   enabled_shared_skills: []
   enabled_project_profiles: []
   enabled_project_flows: []
+  enabled_hook_templates: []
   default_flow_set: minimal
   role_selection:
     mode: auto

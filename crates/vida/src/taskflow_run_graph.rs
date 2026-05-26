@@ -738,6 +738,12 @@ fn next_lawful_operator_action_for_dispatch_resolution(
             .or_else(|| Some(format!("vida lane show {} --json", status.run_id)));
     }
     let _reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
+    if receipt.blocker_code.as_deref() == Some("internal_dispatch_timeout_without_receipt") {
+        return Some(format!(
+            "vida task show {} --json",
+            shell_quote(&status.task_id)
+        ));
+    }
     if let Some(receipt_id) = receipt
         .exception_path_receipt_id
         .as_deref()
@@ -898,6 +904,9 @@ fn recommended_surface_for_command(command: &str) -> String {
     if command.starts_with("vida taskflow run-graph status") {
         return "vida taskflow run-graph status".to_string();
     }
+    if command.starts_with("vida task show") {
+        return "vida task show".to_string();
+    }
     if command.starts_with("vida taskflow continuation bind") {
         return "vida taskflow continuation bind".to_string();
     }
@@ -939,6 +948,9 @@ fn recovery_next_action_reason(
     }
     if command.starts_with("vida lane show") {
         return "inspect the lane envelope for the dispatch blocker, then record structured exception-takeover evidence and supersession before any local recovery work".to_string();
+    }
+    if command.starts_with("vida task show") {
+        return "inspect the active task owned paths before recording structured exception-takeover evidence for the terminal dispatch blocker".to_string();
     }
     if command.starts_with("vida taskflow consume continue")
         && projection_truth
@@ -8216,6 +8228,32 @@ mod tests {
         assert_eq!(
             command.as_deref(),
             Some("vida lane show run-internal-codex-carrier --json")
+        );
+    }
+
+    #[test]
+    fn recovery_status_action_for_internal_timeout_points_to_task_show() {
+        let mut status = packet_gate_status("run-internal-timeout");
+        status.task_id = "task-internal-timeout".to_string();
+        status.status = "blocked".to_string();
+        status.recovery_ready = false;
+        status.resume_target = "none".to_string();
+        status.active_node = "test_author".to_string();
+        status.lifecycle_stage = "test_author_blocked".to_string();
+
+        let mut receipt = packet_gate_receipt("run-internal-timeout");
+        receipt.dispatch_target = "test_author".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some("internal_dispatch_timeout_without_receipt".to_string());
+        receipt.selected_backend = Some("internal_subagents".to_string());
+
+        let command =
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
+
+        assert_eq!(
+            command.as_deref(),
+            Some("vida task show task-internal-timeout --json")
         );
     }
 

@@ -15,6 +15,8 @@ const READ_ONLY_OPEN_MIN_TIMEOUT_MS: u64 = 10_000;
 const DATASTORE_CLOSE_SETTLE_MS: u64 = 250;
 const STALE_LOCK_MARKER_REMOVE_RETRY_COUNT: usize = 20;
 const STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS: u64 = 25;
+const FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_COUNT: usize = 8;
+const FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_DELAY_MS: u64 = DATASTORE_CLOSE_SETTLE_MS;
 
 struct AuthoritativeOpenGuard {
     file: std::fs::File,
@@ -197,7 +199,69 @@ impl StateStore {
     pub(crate) fn reclaim_self_owned_failed_authoritative_datastore_lock_marker(
         root: &Path,
     ) -> Result<bool, StateStoreError> {
-        Self::reclaim_recoverable_authoritative_datastore_lock_marker(root)
+        let lock_path = root.join("LOCK");
+        let mut lock_text = None;
+        for attempt in 0..STALE_LOCK_MARKER_REMOVE_RETRY_COUNT {
+            match fs::read_to_string(&lock_path) {
+                Ok(text) => {
+                    lock_text = Some(text);
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => {
+                    if attempt + 1 < STALE_LOCK_MARKER_REMOVE_RETRY_COUNT {
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS,
+                        ));
+                        continue;
+                    }
+                    return Ok(false);
+                }
+                Err(error) => return Err(StateStoreError::Io(error)),
+            }
+        }
+        let Some(lock_text) = lock_text else {
+            return Ok(false);
+        };
+        let Ok(pid) = lock_text.trim().parse::<u32>() else {
+            return Ok(false);
+        };
+        if pid != std::process::id() {
+            return Ok(false);
+        }
+        for attempt in 0..STALE_LOCK_MARKER_REMOVE_RETRY_COUNT {
+            match fs::remove_file(&lock_path) {
+                Ok(()) => return Ok(true),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => {
+                    if attempt + 1 < STALE_LOCK_MARKER_REMOVE_RETRY_COUNT {
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS,
+                        ));
+                        continue;
+                    }
+                    return Ok(false);
+                }
+                Err(error) => return Err(StateStoreError::Io(error)),
+            }
+        }
+        Ok(false)
+    }
+
+    fn reclaim_self_owned_failed_authoritative_datastore_lock_marker_after_timeout(
+        root: &Path,
+    ) -> Result<bool, StateStoreError> {
+        for attempt in 0..FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_COUNT {
+            if Self::reclaim_self_owned_failed_authoritative_datastore_lock_marker(root)? {
+                return Ok(true);
+            }
+            if attempt + 1 < FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_COUNT {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_DELAY_MS,
+                ));
+            }
+        }
+        Ok(false)
     }
 
     pub(crate) fn error_is_lock_contention(error: &StateStoreError) -> bool {
@@ -272,6 +336,8 @@ impl StateStore {
             match open_once(root.clone()).await {
                 Ok(store) => return Ok(store),
                 Err(error) if Self::error_is_lock_contention(&error) => {
+                    let _ =
+                        Self::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)?;
                     let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(&root)?;
                     if attempt + 1 < AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT {
                         tokio::time::sleep(std::time::Duration::from_millis(
@@ -310,12 +376,15 @@ impl StateStore {
         root: PathBuf,
         timeout: std::time::Duration,
     ) -> Result<Self, StateStoreError> {
-        match tokio::time::timeout(timeout, Self::open_existing(root)).await {
+        match tokio::time::timeout(timeout, Self::open_existing(root.clone())).await {
             Ok(result) => result,
-            Err(_) => Err(StateStoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "timed out while waiting for authoritative datastore lock; another VIDA process still holds the authoritative datastore lock, so stop or wait for that process and retry the command",
-            ))),
+            Err(_) => {
+                let _ = Self::reclaim_self_owned_failed_authoritative_datastore_lock_marker_after_timeout(&root)?;
+                Err(StateStoreError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "timed out while waiting for authoritative datastore lock; another VIDA process still holds the authoritative datastore lock, so stop or wait for that process and retry the command",
+                )))
+            }
         }
     }
 
@@ -329,6 +398,8 @@ impl StateStore {
             match Self::open_existing_read_only_once(root.clone()).await {
                 Ok(store) => return Ok(store),
                 Err(error) if Self::error_is_lock_contention(&error) => {
+                    let _ =
+                        Self::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)?;
                     let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(&root)?;
                     if attempt + 1 < READ_ONLY_OPEN_RETRY_COUNT {
                         tokio::time::sleep(std::time::Duration::from_millis(
@@ -351,12 +422,15 @@ impl StateStore {
         timeout: std::time::Duration,
     ) -> Result<Self, StateStoreError> {
         let timeout = Self::effective_read_only_open_timeout(timeout);
-        match tokio::time::timeout(timeout, Self::open_existing_read_only(root)).await {
+        match tokio::time::timeout(timeout, Self::open_existing_read_only(root.clone())).await {
             Ok(result) => result,
-            Err(_) => Err(StateStoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "timed out while waiting for authoritative datastore lock; another VIDA process still holds the authoritative datastore lock, so stop or wait for that process and retry the command",
-            ))),
+            Err(_) => {
+                let _ = Self::reclaim_self_owned_failed_authoritative_datastore_lock_marker_after_timeout(&root)?;
+                Err(StateStoreError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "timed out while waiting for authoritative datastore lock; another VIDA process still holds the authoritative datastore lock, so stop or wait for that process and retry the command",
+                )))
+            }
         }
     }
 
@@ -554,6 +628,51 @@ mod tests {
     }
 
     #[test]
+    fn self_owned_failed_authoritative_lock_cleanup_reclaims_current_pid() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-current-pid-failed-authoritative-lock-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create state root");
+        fs::write(root.join("LOCK"), std::process::id().to_string())
+            .expect("write current-pid lock");
+
+        let reclaimed =
+            StateStore::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)
+                .expect("current-pid failed lock marker should not error");
+
+        assert!(reclaimed);
+        assert!(!root.join("LOCK").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn self_owned_failed_authoritative_lock_cleanup_after_timeout_reclaims_current_pid() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-current-pid-timeout-authoritative-lock-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create state root");
+        fs::write(root.join("LOCK"), std::process::id().to_string())
+            .expect("write current-pid lock");
+
+        let reclaimed = StateStore::reclaim_self_owned_failed_authoritative_datastore_lock_marker_after_timeout(&root)
+            .expect("current-pid timeout lock cleanup should not error");
+
+        assert!(reclaimed);
+        assert!(!root.join("LOCK").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn recoverable_authoritative_lock_cleanup_reclaims_dead_foreign_pid() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -655,8 +774,9 @@ mod tests {
         fs::create_dir_all(&root).expect("create state root");
         fs::write(root.join("LOCK"), "unknown").expect("write invalid lock");
 
-        let reclaimed = StateStore::reclaim_recoverable_authoritative_datastore_lock_marker(&root)
-            .expect("invalid lock should not error");
+        let reclaimed =
+            StateStore::reclaim_self_owned_failed_authoritative_datastore_lock_marker(&root)
+                .expect("invalid lock should not error");
 
         assert!(!reclaimed);
         assert_eq!(
