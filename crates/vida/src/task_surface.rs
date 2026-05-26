@@ -3488,6 +3488,18 @@ fn runtime_dispatch_receipt_has_ready_downstream_handoff(
     })
 }
 
+fn runtime_dispatch_receipt_has_completed_lane(
+    expected_run_id: Option<&str>,
+    dispatch: Option<&state_store::RunGraphDispatchReceiptSummary>,
+) -> bool {
+    dispatch.is_some_and(|dispatch| {
+        expected_run_id.is_some_and(|run_id| dispatch.run_id == run_id)
+            && dispatch.dispatch_status == "executed"
+            && dispatch.lane_status == "lane_completed"
+            && dispatch.blocker_code.is_none()
+    })
+}
+
 fn downstream_dispatch_command_for_task_next_lawful(
     dispatch: &state_store::RunGraphDispatchReceiptSummary,
 ) -> Option<String> {
@@ -3504,6 +3516,10 @@ fn runtime_recovery_blocks_task_next_lawful(
                 == "blocked_open_delegated_cycle"
             || recovery.resume_status == "running")
             && !runtime_dispatch_receipt_has_ready_downstream_handoff(
+                Some(recovery.run_id.as_str()),
+                dispatch,
+            )
+            && !runtime_dispatch_receipt_has_completed_lane(
                 Some(recovery.run_id.as_str()),
                 dispatch,
             )
@@ -3592,9 +3608,30 @@ fn pass_ready_downstream_handoff_task_next_lawful_receipt(
             "Latest runtime dispatch records a ready downstream handoff for task `{}`.",
             binding.task_id
         ),
-        &binding.sequential_vs_parallel_posture,
+        "sequential_only_downstream_bound",
         ready_task_candidates,
         next_action,
+    )
+}
+
+fn pass_completed_lane_task_next_lawful_receipt(
+    binding: &state_store::RunGraphContinuationBinding,
+    ready_task_candidates: Vec<TaskContinuationCandidate>,
+) -> TaskNextLawfulReceipt {
+    pass_task_next_lawful_receipt(
+        binding.active_bounded_unit.clone(),
+        Some("latest_run_graph_completed_dispatch_receipt".to_string()),
+        &format!(
+            "Latest dispatch receipt records completed delegated lane evidence for task `{}`.",
+            binding.task_id
+        ),
+        "sequential_only_completed_lane_reconciled",
+        ready_task_candidates,
+        format!(
+            "Continue `{}` after completed delegated lane reconciliation; inspect `vida taskflow run-graph status {} --json` if downstream binding is still expected.",
+            binding.task_id,
+            crate::shell_quote(&binding.run_id)
+        ),
     )
 }
 
@@ -4494,6 +4531,17 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             )
                         }
                         Some(binding)
+                            if runtime_dispatch_receipt_has_completed_lane(
+                                Some(binding.run_id.as_str()),
+                                latest_dispatch_receipt.as_ref(),
+                            ) =>
+                        {
+                            pass_completed_lane_task_next_lawful_receipt(
+                                binding,
+                                ready_task_candidates,
+                            )
+                        }
+                        Some(binding)
                             if runtime_recovery_blocks_task_next_lawful(
                                 runtime_recovery.as_ref(),
                                 latest_dispatch_receipt.as_ref(),
@@ -5346,6 +5394,7 @@ mod tests {
         ensure_existing_task_mismatch_reason, load_adaptive_preview_finding_json,
         normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
         parse_label_values, parse_optional_label_value, parse_split_child_specs,
+        pass_completed_lane_task_next_lawful_receipt,
         pass_exception_takeover_task_next_lawful_receipt,
         pass_ready_downstream_handoff_task_next_lawful_receipt,
         persist_task_handoff_accept_receipt, runtime_binding_has_active_exception_takeover,
@@ -6705,6 +6754,89 @@ mod tests {
         assert!(receipt.next_action.as_deref().is_some_and(|action| {
             action.contains("vida taskflow consume continue --run-id running-run --json")
         }));
+    }
+
+    #[test]
+    fn task_next_lawful_allows_completed_lane_despite_stale_open_cycle_gate() {
+        let binding = test_continuation_binding(
+            "running-run",
+            "running-runtime-task",
+            "dispatch_execution_started",
+            "run_graph_task",
+        );
+        let recovery = state_store::RunGraphRecoverySummary {
+            run_id: "running-run".to_string(),
+            task_id: "running-runtime-task".to_string(),
+            active_node: "coach".to_string(),
+            lifecycle_stage: "coach_active".to_string(),
+            resume_node: None,
+            resume_status: "running".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: false,
+            delegation_gate: state_store::RunGraphDelegationGateSummary {
+                active_node: "coach".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "delegated_lane_active".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                lifecycle_stage: "coach_active".to_string(),
+            },
+        };
+        let dispatch = state_store::RunGraphDispatchReceiptSummary {
+            run_id: "running-run".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec".to_string()),
+            dispatch_packet_path: Some("packet.json".to_string()),
+            dispatch_result_path: Some("result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("middle".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "2026-05-26T01:00:00Z".to_string(),
+        };
+
+        assert!(!runtime_recovery_blocks_task_next_lawful(
+            Some(&recovery),
+            Some(&dispatch)
+        ));
+        let receipt = pass_completed_lane_task_next_lawful_receipt(&binding, Vec::new());
+
+        assert_eq!(receipt.status, "pass");
+        assert!(receipt.blocker_codes.is_empty());
+        assert_eq!(
+            receipt.binding_source.as_deref(),
+            Some("latest_run_graph_completed_dispatch_receipt")
+        );
+        assert_eq!(
+            receipt.sequential_vs_parallel_posture,
+            "sequential_only_completed_lane_reconciled"
+        );
     }
 
     #[test]

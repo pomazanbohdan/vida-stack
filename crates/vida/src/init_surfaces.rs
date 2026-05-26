@@ -4302,6 +4302,35 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
         return exit_code;
     }
 
+    if resume_inputs.dispatch_receipt.dispatch_status == "executed"
+        && resume_inputs.dispatch_receipt.lane_status == super::LaneStatus::LaneCompleted.as_str()
+        && resume_inputs.dispatch_receipt.blocker_code.is_none()
+        && super::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(
+            &resume_inputs.dispatch_receipt,
+        )
+    {
+        let warning =
+            super::runtime_dispatch_state::reconcile_executed_dispatch_result_state_best_effort(
+                &state_root,
+                &resume_inputs.run_graph_bootstrap,
+                &resume_inputs.dispatch_receipt,
+            )
+            .await;
+        return match render_agent_init_dispatch_result_from_receipt(
+            dispatch_mode,
+            &resume_inputs.dispatch_receipt,
+            json_output,
+            None,
+            warning.as_deref(),
+        ) {
+            Ok(exit_code) => exit_code,
+            Err(render_error) => {
+                eprintln!("{render_error}");
+                ExitCode::from(1)
+            }
+        };
+    }
+
     let dispatch_handoff_timeout_seconds = super::dispatch_handoff_timeout_seconds_for_state_root(
         &state_root,
         &resume_inputs.role_selection,
@@ -4373,6 +4402,39 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
             return ExitCode::from(1);
         }
         Err(_) => {
+            match super::runtime_dispatch_state::apply_existing_executed_dispatch_result_to_receipt(
+                &state_root,
+                &mut resume_inputs.dispatch_receipt,
+            ) {
+                Ok(true) => {
+                    let warning =
+                        super::runtime_dispatch_state::reconcile_executed_dispatch_result_state_best_effort(
+                            &state_root,
+                            &resume_inputs.run_graph_bootstrap,
+                            &resume_inputs.dispatch_receipt,
+                        )
+                        .await;
+                    return match render_agent_init_dispatch_result_from_receipt(
+                        dispatch_mode,
+                        &resume_inputs.dispatch_receipt,
+                        json_output,
+                        None,
+                        warning.as_deref(),
+                    ) {
+                        Ok(exit_code) => exit_code,
+                        Err(render_error) => {
+                            eprintln!("{render_error}");
+                            ExitCode::from(1)
+                        }
+                    };
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    eprintln!(
+                        "Failed to inspect existing executed dispatch result before timeout materialization: {error}"
+                    );
+                }
+            }
             if let Err(error) = super::apply_dispatch_handoff_timeout_to_receipt_for_state_root(
                 &state_root,
                 &resume_inputs.role_selection,

@@ -8,7 +8,7 @@ use crate::contract_profile_adapter::render_operator_contract_envelope;
 use crate::taskflow_task_bridge::proxy_state_dir;
 use crate::{state_store::StateStore, ProxyArgs};
 
-const LANE_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
+const LANE_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Serialize)]
 struct LaneEnvelope {

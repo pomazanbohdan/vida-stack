@@ -11158,8 +11158,8 @@ host_environment:
         let deadline = Instant::now() + Duration::from_secs(5);
         let (in_flight_receipt, in_flight_status) = loop {
             let probe_store = probe_runtime
-                .block_on(StateStore::open_existing(state_root.clone()))
-                .expect("state store reopen should succeed while dispatch is in flight");
+                .block_on(StateStore::open_existing_read_only(state_root.clone()))
+                .expect("read-only state store reopen should succeed while dispatch is in flight");
             let receipt = probe_runtime
                 .block_on(probe_store.run_graph_dispatch_receipt("run-in-flight-dispatch"))
                 .expect("in-flight receipt should load");
@@ -16408,6 +16408,105 @@ host_environment:
     }
 
     #[test]
+    fn existing_executed_dispatch_result_reconciles_before_timeout_materialization() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("implementer-packet.json");
+        fs::write(&packet_path, "{}").expect("packet should write");
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: "run-executed-before-timeout".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("configured_internal".to_string()),
+            dispatch_command: Some("configured dispatch".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("default".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        let executed_path = write_runtime_dispatch_result(
+            harness.path(),
+            &receipt,
+            &serde_json::json!({
+                "surface": "configured_internal",
+                "status": "pass",
+                "execution_state": "executed",
+                "provider_result": "implemented"
+            }),
+        )
+        .expect("executed dispatch result should write");
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT.to_string());
+        receipt.dispatch_result_path = None;
+
+        assert!(
+            apply_existing_executed_dispatch_result_to_receipt(harness.path(), &mut receipt)
+                .expect("executed result reconciliation should not fail")
+        );
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_completed");
+        assert_eq!(receipt.blocker_code, None);
+        assert_eq!(
+            receipt.dispatch_result_path.as_deref(),
+            Some(executed_path.as_str())
+        );
+
+        receipt.dispatch_status = "executed".to_string();
+        receipt.lane_status = "lane_running".to_string();
+        receipt.blocker_code = None;
+        receipt.dispatch_result_path = Some(executed_path.clone());
+
+        assert!(
+            normalize_stale_in_flight_dispatch_receipt(harness.path(), &mut receipt)
+                .expect("normalization should close executed open receipts")
+        );
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_completed");
+        assert_eq!(receipt.blocker_code, None);
+        assert_eq!(
+            receipt.dispatch_result_path.as_deref(),
+            Some(executed_path.as_str())
+        );
+
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT.to_string());
+        receipt.dispatch_result_path = None;
+
+        assert!(
+            normalize_stale_in_flight_dispatch_receipt(harness.path(), &mut receipt)
+                .expect("normalization should inspect executed results")
+        );
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_completed");
+        assert_eq!(receipt.blocker_code, None);
+        assert_eq!(
+            receipt.dispatch_result_path.as_deref(),
+            Some(executed_path.as_str())
+        );
+    }
+
+    #[test]
     fn write_runtime_dispatch_result_keeps_blocked_agent_lane_as_dispatch_artifact() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let receipt = RunGraphDispatchReceipt {
@@ -20777,6 +20876,203 @@ pub(crate) fn write_runtime_dispatch_result(
     Ok(result_path.display().to_string())
 }
 
+fn dispatch_result_matches_receipt(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    result: &serde_json::Value,
+) -> bool {
+    if result["run_id"].as_str() != Some(receipt.run_id.as_str()) {
+        return false;
+    }
+    if let Some(packet_path) = receipt
+        .dispatch_packet_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if result["source_dispatch_packet_path"]
+            .as_str()
+            .is_some_and(|value| value != packet_path)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn dispatch_result_is_executed_completion(result: &serde_json::Value) -> bool {
+    result["execution_state"].as_str() == Some("executed")
+        && result["status"].as_str().unwrap_or("pass") == "pass"
+}
+
+fn latest_executed_dispatch_result_for_receipt(
+    state_root: &Path,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<Option<(String, serde_json::Value)>, String> {
+    let result_dir = state_root
+        .join("runtime-consumption")
+        .join("dispatch-results");
+    let entries = match std::fs::read_dir(&result_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read dispatch-results directory `{}`: {error}",
+                result_dir.display()
+            ));
+        }
+    };
+    let mut latest: Option<(time::OffsetDateTime, String, serde_json::Value)> = None;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Failed to read dispatch-results entry in `{}`: {error}",
+                result_dir.display()
+            )
+        })?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(result) = crate::read_json_file_if_present(&path) else {
+            continue;
+        };
+        if !dispatch_result_matches_receipt(receipt, &result)
+            || !dispatch_result_is_executed_completion(&result)
+        {
+            continue;
+        }
+        let recorded_at = result["recorded_at"]
+            .as_str()
+            .and_then(|value| time::OffsetDateTime::parse(value, &Rfc3339).ok())
+            .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+        let path_string = path.display().to_string();
+        if latest
+            .as_ref()
+            .is_none_or(|(latest_recorded_at, _, _)| recorded_at > *latest_recorded_at)
+        {
+            latest = Some((recorded_at, path_string, result));
+        }
+    }
+    Ok(latest.map(|(_, path, result)| (path, result)))
+}
+
+pub(crate) fn apply_existing_executed_dispatch_result_to_receipt(
+    state_root: &Path,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) -> Result<bool, String> {
+    let Some((path, result)) = latest_executed_dispatch_result_for_receipt(state_root, receipt)?
+    else {
+        return Ok(false);
+    };
+    receipt.dispatch_result_path = Some(path);
+    receipt.dispatch_status = "executed".to_string();
+    let mut lane_status = LaneStatus::LaneCompleted;
+    if receipt
+        .exception_path_receipt_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+    {
+        lane_status = LaneStatus::LaneExceptionRecorded;
+    } else if receipt
+        .supersedes_receipt_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+    {
+        lane_status = LaneStatus::LaneSuperseded;
+    }
+    receipt.lane_status = lane_status.as_str().to_string();
+    receipt.blocker_code = None;
+    if let Some(dispatch_surface) = json_string(result.get("surface")) {
+        receipt.dispatch_surface = Some(dispatch_surface);
+    }
+    if let Some(dispatch_command) = json_string(result.get("activation_command")) {
+        receipt.dispatch_command = Some(dispatch_command);
+    }
+    Ok(true)
+}
+
+pub(crate) async fn reconcile_executed_dispatch_result_state_best_effort(
+    state_root: &Path,
+    run_graph_bootstrap: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Option<String> {
+    let store = match tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
+        StateStore::open_existing(state_root.to_path_buf()),
+    )
+    .await
+    {
+        Ok(Ok(store)) => store,
+        Ok(Err(error)) => {
+            return Some(format!(
+                "executed dispatch reconciliation deferred until next safe reopen: failed to reopen state store: {error}"
+            ));
+        }
+        Err(_) => {
+            return Some(format!(
+                "executed dispatch reconciliation deferred until next safe reopen: timed out reopening state store after {}s",
+                DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS
+            ));
+        }
+    };
+    if let Err(error) = store.record_run_graph_dispatch_receipt(receipt).await {
+        return Some(format!(
+            "executed dispatch reconciliation deferred until next safe reopen: failed to persist executed dispatch receipt: {error}"
+        ));
+    }
+    if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
+        match store.run_graph_status(&run_id).await {
+            Ok(status) => {
+                let receipt_matches_current_lane = status.active_node == receipt.dispatch_target
+                    || status.next_node.as_deref() == Some(receipt.dispatch_target.as_str());
+                let terminal_status =
+                    if receipt.dispatch_status == "executed" && receipt_matches_current_lane {
+                        match crate::taskflow_run_graph::derive_advanced_run_graph_status(
+                            &store,
+                            status.clone(),
+                        )
+                        .await
+                        {
+                            Ok(payload) => payload.status,
+                            Err(_) => {
+                                apply_first_handoff_execution_to_run_graph_status(&status, receipt)
+                            }
+                        }
+                    } else {
+                        apply_first_handoff_execution_to_run_graph_status(&status, receipt)
+                    };
+                if let Err(error) = store.record_run_graph_status(&terminal_status).await {
+                    return Some(format!(
+                        "executed dispatch reconciliation deferred until next safe reopen: failed to record terminal run-graph status: {error}"
+                    ));
+                }
+                if let Err(error) =
+                    crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                        &store,
+                        &terminal_status,
+                        "agent_init_execute_dispatch_executed_reconciliation",
+                    )
+                    .await
+                {
+                    return Some(format!(
+                        "executed dispatch reconciliation deferred until next safe reopen: failed to synchronize continuation binding: {error}"
+                    ));
+                }
+            }
+            Err(error) => {
+                return Some(format!(
+                    "executed dispatch reconciliation deferred until next safe reopen: failed to read run-graph status: {error}"
+                ));
+            }
+        }
+    }
+    None
+}
+
 fn normalized_dispatch_result_activation_evidence(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     body: &serde_json::Value,
@@ -21319,6 +21615,20 @@ pub(crate) fn normalize_stale_in_flight_dispatch_receipt(
 ) -> Result<bool, String> {
     let timeout_blocked_receipt = receipt.dispatch_status == "blocked"
         && receipt.blocker_code.as_deref() == Some("timeout_without_takeover_authority");
+    let internal_timeout_blocked_receipt = receipt.dispatch_status == "blocked"
+        && receipt.blocker_code.as_deref() == Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT);
+    if internal_timeout_blocked_receipt
+        && apply_existing_executed_dispatch_result_to_receipt(state_root, receipt)?
+    {
+        return Ok(true);
+    }
+    let executed_open_receipt = receipt.dispatch_status == "executed"
+        && receipt.lane_status == LaneStatus::LaneRunning.as_str();
+    if executed_open_receipt
+        && apply_existing_executed_dispatch_result_to_receipt(state_root, receipt)?
+    {
+        return Ok(true);
+    }
     if receipt.dispatch_status != "executing" && !timeout_blocked_receipt {
         return Ok(false);
     }

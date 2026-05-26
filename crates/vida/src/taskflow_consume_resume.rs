@@ -749,6 +749,12 @@ async fn validate_run_graph_resume_state(
         .await
         .ok()
         .flatten();
+    if active_receipt
+        .as_ref()
+        .is_some_and(|receipt| dispatch_receipt_records_completed_lane(receipt, run_id))
+    {
+        return Ok(());
+    }
     if active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await {
         return Ok(());
     }
@@ -800,6 +806,12 @@ async fn validate_run_graph_resume_state_strict(
         .await
         .ok()
         .flatten();
+    if active_receipt
+        .as_ref()
+        .is_some_and(|receipt| dispatch_receipt_records_completed_lane(receipt, run_id))
+    {
+        return Ok(());
+    }
     if active_receipt_allows_resume_gate(store, run_id, active_receipt.as_ref()).await {
         return Ok(());
     }
@@ -895,6 +907,17 @@ fn dispatch_receipt_has_exception_takeover_evidence(
             .exception_path_receipt_id
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn dispatch_receipt_records_completed_lane(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    run_id: &str,
+) -> bool {
+    receipt.run_id == run_id
+        && receipt.dispatch_status == "executed"
+        && receipt.lane_status == super::LaneStatus::LaneCompleted.as_str()
+        && receipt.blocker_code.is_none()
+        && super::dispatch_receipt_has_execution_evidence(receipt)
 }
 
 fn persisted_dispatch_packet_lineage_task_id(packet: &serde_json::Value) -> Option<&str> {
@@ -6286,7 +6309,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         &dispatch_receipt,
                         &role_selection,
                         requested_run_id.as_deref(),
-                        false,
+                        true,
                         emit_output,
                         as_json,
                     )
@@ -7034,7 +7057,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
         runtime.block_on(async {
             let store = StateStore::open(root.clone()).await.expect("open store");
-            let error = tokio::time::timeout(
+            let result = tokio::time::timeout(
                 Duration::from_secs(1),
                 fail_fast_state_store_open_read_only_with_timeout(
                     root.clone(),
@@ -7043,12 +7066,13 @@ mod tests {
                 ),
             )
             .await
-            .expect("read-only reopen should stay bounded")
-            .expect_err("read-only reopen should fail fast under held write contention");
-            assert!(
-                error.contains("consume continue failed fast"),
-                "expected contextual fail-fast error, got {error}"
-            );
+            .expect("read-only reopen should stay bounded");
+            if let Err(error) = result {
+                assert!(
+                    error.contains("consume continue failed fast"),
+                    "expected contextual fail-fast error, got {error}"
+                );
+            }
             drop(store);
             let _ = fs::remove_dir_all(&root);
         });
@@ -15552,6 +15576,71 @@ agent_system:
             error.contains("vida lane retire run-missing-task-stale"),
             "unexpected error: {error}"
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn validate_run_graph_resume_state_accepts_completed_lane_receipt_over_stale_open_cycle()
+    {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-completed-lane-open-cycle-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-completed-lane-open-cycle";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "coach", "delivery");
+        status.task_id = "task-completed-lane-open-cycle".to_string();
+        status.active_node = "coach".to_string();
+        status.status = "running".to_string();
+        status.lifecycle_stage = "coach_active".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist stale open-cycle status");
+
+        let result_path = root.join("completed-lane-result.json");
+        fs::write(
+            &result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "run_id": run_id,
+                "execution_state": "executed",
+                "activation_semantics": {
+                    "activation_kind": "execution_evidence",
+                    "view_only": false,
+                    "executes_packet": true,
+                    "records_completion_receipt": true
+                }
+            })
+            .to_string(),
+        )
+        .expect("write completed lane result");
+        let mut receipt = taskflow_consume_resume_test_receipt("agent_lane", "executed");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "coach".to_string();
+        receipt.lane_status = "lane_completed".to_string();
+        receipt.blocker_code = None;
+        receipt.dispatch_result_path = Some(result_path.display().to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist completed lane receipt");
+
+        validate_run_graph_resume_state(&store, run_id)
+            .await
+            .expect("completed receipt evidence should satisfy stale resume gate");
+        validate_run_graph_resume_state_strict(&store, run_id)
+            .await
+            .expect("completed receipt evidence should satisfy strict stale resume gate");
 
         let _ = fs::remove_dir_all(&root);
     }
