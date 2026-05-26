@@ -236,7 +236,7 @@ jobs:
           grep -q "mode: agent_bootstrap" /tmp/docflow-init.txt
           grep -q '"mode":"agent_bootstrap"' /tmp/docflow-init.json
           grep -q "$INSTALL_ROOT/current/bin/vida" /tmp/vida-command.txt
-          grep -q "storage metadata: ok" /tmp/vida-doctor.txt
+          grep -q "storage metadata: pass" /tmp/vida-doctor.txt
           grep -q '"surface": "vida status"' /tmp/vida-status.json
           test -f "$TMP_PROJECT/AGENTS.md"
           test -f "$TMP_PROJECT/AGENTS.sidecar.md"
