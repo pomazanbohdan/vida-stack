@@ -8,6 +8,8 @@ pub(crate) const DEFAULT_AGENT_EXTENSION_FLOWS_YAML: &str =
     include_str!("../../../docs/process/agent-extensions/flows.yaml");
 pub(crate) const DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_YAML: &str =
     include_str!("../../../docs/process/agent-extensions/dispatch-aliases.yaml");
+pub(crate) const DEFAULT_AGENT_EXTENSION_HOOK_TEMPLATES_YAML: &str =
+    include_str!("../../../docs/product/spec/hook-templates.yaml");
 pub(crate) const DEFAULT_RUNTIME_AGENT_EXTENSIONS_README: &str = r#"# Runtime Agent Extensions
 
 This directory holds the active runtime-owned agent-extension projections for the project.

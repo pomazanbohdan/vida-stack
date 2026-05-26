@@ -2895,6 +2895,10 @@ pub(crate) fn write_runtime_agent_extension_projections(project_root: &Path) -> 
         super::DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_YAML,
     )?;
     write_file_if_missing(
+        &root.join("hook-templates.yaml"),
+        super::DEFAULT_AGENT_EXTENSION_HOOK_TEMPLATES_YAML,
+    )?;
+    write_file_if_missing(
         &root.join("roles.sidecar.yaml"),
         super::DEFAULT_AGENT_EXTENSION_ROLES_SIDECAR_YAML,
     )?;
@@ -2931,7 +2935,8 @@ pub(crate) fn write_runtime_agent_extension_projections(project_root: &Path) -> 
                 ".vida/project/agent-extensions/skills.yaml",
                 ".vida/project/agent-extensions/profiles.yaml",
                 ".vida/project/agent-extensions/flows.yaml",
-                ".vida/project/agent-extensions/dispatch-aliases.yaml"
+                ".vida/project/agent-extensions/dispatch-aliases.yaml",
+                ".vida/project/agent-extensions/hook-templates.yaml"
             ],
             "sidecar_projection_files": [
                 ".vida/project/agent-extensions/roles.sidecar.yaml",
