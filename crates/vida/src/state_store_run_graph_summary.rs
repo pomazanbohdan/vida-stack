@@ -1565,6 +1565,24 @@ impl StateStore {
         })
     }
 
+    pub(crate) async fn current_session_can_mutate_run_graph_run(
+        &self,
+        run_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        match self
+            .ensure_current_session_mutation_claim_for_run(run_id)
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(StateStoreError::InvalidTaskRecord { reason })
+                if reason.contains("current session does not own run") =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     async fn run_graph_task_id_for_mutation_claim(
         &self,
         run_id: &str,

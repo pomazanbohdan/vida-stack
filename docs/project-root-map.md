@@ -37,7 +37,9 @@ This map does not cover extracted secondary bundles by default.
 11. `docs/process/github-issues-triage-guide.md`
    - project-owned GitHub Issues triage, label taxonomy, and diagnostic publication guide
 12. `docs/process/command-timing-and-gate-optimization-protocol.md`
-   - project-owned timing, slow-gate, script optimization, and operator-friction diagnostic protocol
+    - project-owned timing, slow-gate, script optimization, and operator-friction diagnostic protocol
+13. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
+    - project-owned VIDA runtime application of generic `Error Search / Bug Reasoning`
 
 ## Activation Triggers
 
@@ -75,7 +77,9 @@ Do not use this map as the default route for extracted bundles unless the task e
 10. GitHub Issues triage / label / issue workflow questions:
    - continue to `docs/process/github-issues-triage-guide.md`
 11. Command timing / slow gate / script optimization questions:
-   - continue to `docs/process/command-timing-and-gate-optimization-protocol.md`
+    - continue to `docs/process/command-timing-and-gate-optimization-protocol.md`
+12. Runtime defects / multi-defect pools / TaskFlow, DocFlow, run-graph, lane, dispatch, receipt, ownership, routing, or CI failure clusters:
+    - continue to `docs/process/project-error-search-runtime-diagnostics-protocol.md`
 
 ## Boundary Rule
 

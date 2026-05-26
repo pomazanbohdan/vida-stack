@@ -4486,12 +4486,39 @@ async fn sync_run_graph_after_retry_artifact(
 }
 
 async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<String, String> {
-    let latest_status = store
+    let global_latest_status = store
         .latest_run_graph_status()
         .await
         .map_err(|error| format!("Failed to read latest persisted run-graph state: {error}"))?;
-    let Some(status) = latest_status else {
+    let Some(global_status) = global_latest_status else {
         return Err("No persisted run-graph dispatch receipt is available".to_string());
+    };
+    let current_session_can_mutate_global = store
+        .current_session_can_mutate_run_graph_run(&global_status.run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to validate current-session ownership for run `{}`: {error}",
+                global_status.run_id
+            )
+        })?;
+    let status = if current_session_can_mutate_global {
+        global_status
+    } else {
+        let scoped_latest_status = store
+            .latest_run_graph_status_for_current_session()
+            .await
+            .map_err(|error| {
+                format!("Failed to read current-session persisted run-graph state: {error}")
+            })?;
+        if let Some(scoped_status) = scoped_latest_status {
+            scoped_status
+        } else {
+            return Err(format!(
+                "Default `vida taskflow consume continue --json` resolved latest run `{}`, but the current session does not own run `{}`. Pass `--run-id {}` only from an owning session, bind the intended bounded unit explicitly, or refresh status/recovery before continuing.",
+                global_status.run_id, global_status.run_id, global_status.run_id
+            ));
+        }
     };
     let explicit_continuation_binding = store
         .latest_explicit_run_graph_continuation_binding()
@@ -15921,6 +15948,87 @@ agent_system:
         assert!(error.contains("run-upstream"), "unexpected error: {error}");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_default_resume_run_id_rejects_foreign_latest_terminal_run_before_mutation() {
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-foreign-latest");
+        }
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-foreign-latest-terminal-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut foreign_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-foreign-terminal",
+            "closure",
+            "delivery",
+        );
+        foreign_status.task_id = "task-foreign-terminal".to_string();
+        foreign_status.active_node = "closure".to_string();
+        foreign_status.next_node = None;
+        foreign_status.status = "completed".to_string();
+        foreign_status.lifecycle_stage = "closure_complete".to_string();
+        foreign_status.handoff_state = "none".to_string();
+        foreign_status.resume_target = "none".to_string();
+        foreign_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&foreign_status)
+            .await
+            .expect("persist foreign terminal status");
+        store
+            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
+                claim_id: "foreign-terminal-run-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-foreign-latest".to_string(),
+                process_id: None,
+                task_id: Some("task-foreign-terminal".to_string()),
+                run_id: Some("run-foreign-terminal".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("run-graph-continuation-ownership".to_string()),
+                owned_paths: vec!["foreign/path.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: crate::state_store::LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire foreign run claim");
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-current-consume");
+        }
+        let error = match resolve_default_resume_run_id(&store).await {
+            Ok(run_id) => panic!("foreign latest run must not be selected by default: {run_id}"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("current session does not own run `run-foreign-terminal`"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("--run-id run-foreign-terminal"),
+            "unexpected error: {error}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        match saved_session_id {
+            Some(value) => unsafe {
+                std::env::set_var("VIDA_SESSION_ID", value);
+            },
+            None => unsafe {
+                std::env::remove_var("VIDA_SESSION_ID");
+            },
+        }
     }
 
     #[tokio::test]

@@ -11,7 +11,7 @@ Purpose: compress the algorithm descriptions without losing their essence by kee
 | MAR | Selector score `23-32`; complex tasks with regression risk | 3 rounds (Actor/Evaluator/Critic/Reflector) | Weighted rubric score >= 8/10 and no unresolved critical residual risk | <8 after 3 rounds -> META |
 | 5-SOL | Selector score `33-42`; choice between alternatives / design directions | R1: 5 options -> weighted option ledger -> R2: 5 new options -> legal hybrid/top option | Admissible choice with weighted option score + confidence >= 80, or explicit cautious band | Low score/confidence or legality pressure -> META |
 | META | Selector score `>42`; high risk/uncertainty, security/auth, explicit meta-analysis | Select domain packet -> choose blocks -> admissibility gate -> family-weighted confidence -> synthesize | Admissible result with confidence >= 80% and proof receipts | If <80% after repair loop -> best admissible option/user decision |
-| Bug Reasoning | Bugs/incidents | classify -> root-cause trace -> root-cause receipt -> falsifiable hypothesis -> verification | Root cause confirmed, not the symptom | High severity / wide blast radius -> route by severity map |
+| Error Search / Bug Reasoning | Bugs/incidents/regressions/multi-error pools | scope -> evidence freeze -> cluster -> authority map -> root-cause trace -> falsifiable hypothesis -> fix locus -> proof matrix | Root cause confirmed and proof covers blast radius | Governance/authority ambiguity -> META; alternatives after root cause -> 5-SOL |
 | Web-Search Gate | Unstable external knowledge | detect trigger -> find sources -> reconcile | >=2 sources (>=3 for sec/arch) | If sources conflict -> escalate algorithm |
 
 ## Unified Scoring Contract
@@ -72,12 +72,12 @@ Purpose: compress the algorithm descriptions without losing their essence by kee
 - Family weights: task-class dependent, with validation heavier for security/schema work and options heavier for architecture/tech-stack work.
 - Escalation: if confidence remains low.
 
-### Bug Reasoning
-- When: bugs, incidents, regressions.
-- Input: a reproducible error.
-- Steps: classification -> root-cause trace -> root-cause receipt -> falsifiable hypothesis -> verification.
-- Success: root cause fixed, not just the symptom.
-- Escalation: wide blast radius or non-reproducibility.
+### Error Search / Bug Reasoning
+- When: bugs, incidents, regressions, repeated technical failures, or multi-error pools.
+- Input: observable failure evidence, ideally reproducible, with environment/config/timing context when available.
+- Steps: trigger scope -> evidence freeze -> symptom clustering -> authority/source-of-truth map -> root-cause trace -> optional delta minimization -> falsifiable hypothesis -> fix locus decision -> proof matrix -> post-fix learning.
+- Success: the first wrong transition point is fixed, the proof matrix covers the claimed blast radius, and a regression guard or follow-up exists when the defect is likely to recur.
+- Escalation: non-reproducible critical failures, governance/source-of-truth ambiguity, safety or ownership ambiguity -> META; multiple admissible fix designs after root-cause receipt -> 5-SOL.
 
 ### Web-Search Gate
 - When: external knowledge may be stale.

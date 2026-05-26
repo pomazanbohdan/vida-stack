@@ -39,7 +39,7 @@ Default progression:
 Mandatory overrides:
 
 1. route to `META` for framework-owned behavior change, protocol conflict, execution-gate mismatch, or fail-closed law risk,
-2. route to bug/error reasoning when regression or repeated technical failure dominates,
+2. route to `Error Search / Bug Reasoning` when a bug, incident, regression, repeated technical failure, or multi-error pool dominates,
 3. route to `5-SOL` when the step is explicitly about choosing between bounded alternatives.
 
 ## Minimal Runtime Rules
@@ -60,7 +60,7 @@ When deeper semantics are required, read:
 4. `overlay.step-thinking-protocol.md#section-mar`
 5. `overlay.step-thinking-protocol.md#section-5-solutions`
 6. `overlay.step-thinking-protocol.md#section-meta-analysis`
-7. `overlay.step-thinking-protocol.md#section-bug-reasoning`
+7. `overlay.step-thinking-protocol.md#section-bug-reasoning` (`Error Search / Bug Reasoning`)
 8. `overlay.step-thinking-protocol.md#section-web-search`
 9. `overlay.step-thinking-protocol.md#section-reasoning-modules`
 

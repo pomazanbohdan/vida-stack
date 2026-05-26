@@ -194,10 +194,17 @@ BLOCK_REGISTRY:
     ENS-04: "divergence_repair_loop -> rerun_targets, updated_confidence"
     ENS-05: "final_synthesis -> final_decision, residual_risks"
   bug:
-    BUG-01: "detect_classify -> bug_class, severity, route_hint"
-    BUG-02: "trace_root_cause -> trace_graph, root_cause_receipt"
-    BUG-03: "hypothesis_gate -> falsifiable_hypothesis, test_design"
-    BUG-04: "resolve_route -> STC|PR-CoT|MAR|5-SOL|META"
+    BUG-00: "trigger_scope -> defect_boundary, evidence_scope, stop_rule"
+    BUG-01: "evidence_freeze -> reproduction_packet, observed_vs_expected, timing_packet"
+    BUG-02: "symptom_cluster -> shared_invariant, independent_slices, dependent_blockers"
+    BUG-03: "authority_map -> source_of_truth_order, contradiction_set"
+    BUG-04: "root_cause_trace -> trace_graph, transition_point, root_cause_receipt"
+    BUG-05: "delta_minimize -> minimal_repro_or_change_tuple"
+    BUG-06: "hypothesis_gate -> falsifiable_hypothesis, prediction, test_design"
+    BUG-07: "fix_locus_decide -> patch_layer, blast_radius, rollback_plan"
+    BUG-08: "proof_matrix -> focused_tests, integration_checks, regression_guard"
+    BUG-09: "post_fix_learning -> diagnostic_note, follow_up_task, route_update"
+    BUG-10: "resolve_route -> STC|PR-CoT|MAR|5-SOL|META"
   reporting:
     REP-01: "evidence_pack -> concise_execution_receipt"
     REP-02: "impact_analysis -> normalized_impact_section"
@@ -213,7 +220,7 @@ FLOW_TEMPLATES:
   MAR: [SEL-01, SEL-02, SEL-03, RFX-01, RFX-02, RFX-03, ITR-04, REP-01, REP-02]
   5-SOL: [SEL-01, SEL-02, SEL-03, CTX-01?, CTX-02?, OPT-01, OPT-02, OPT-03, OPT-04, OPT-05, REP-01, REP-02]
   META: [SEL-01, SEL-02, SEL-03, CTX-01, CTX-02, CTX-03, CTX-04?, CTX-05?, selected_block_families, ENS-00?, ENS-01, ENS-02, ENS-03, ENS-04?, ENS-05, REP-01, REP-02, REP-03]
-  Error Search: [BUG-01, BUG-02, BUG-03, BUG-04]
+  Error Search: [BUG-00, BUG-01, BUG-02, BUG-03, BUG-04, BUG-05?, BUG-06, BUG-07, BUG-08, BUG-09?, BUG-10]
 ```
 
 ## Section: stc
@@ -1264,7 +1271,7 @@ STEP_0:
       validation_or_assumption_risk: [CRT-01, CRT-02, CRT-03]
       candidate_needs_refinement: [RFX-01, RFX-02, RFX-03]
       multiple_viable_options: [OPT-01, OPT-02, OPT-03, OPT-04, OPT-05]
-      bug_or_regression_centered: [BUG-01, BUG-02, BUG-03, BUG-04]
+      bug_or_regression_centered: [BUG-00, BUG-01, BUG-02, BUG-03, BUG-04, BUG-06, BUG-07, BUG-08, BUG-10]
       active_family_divergence: [ENS-04]
 
   shortcut_rule:
@@ -1555,7 +1562,7 @@ PROOF_REQUIRED:
     critique: "CRT-01/02/03 -> issues: {...} OR not selected"
     refinement: "RFX-01/02/03 -> score: {...} OR not selected"
     options: "OPT-01/02/03/04/05 -> final option: {...}, legality: {...} OR not selected"
-    bug: "BUG-01/02/03/04 -> root_cause_receipt: {...} OR not selected"
+    bug: "BUG-00..10 -> evidence_freeze: {...}, root_cause_receipt: {...}, proof_matrix: {...} OR not selected"
 
   admissibility_gate:
     evidence: "ENS-01 => pass/fail. Blocking findings: {...}"
@@ -1587,9 +1594,9 @@ VALID_EXAMPLE: |
 
 ## Section: bug-reasoning
 
-# Error Search
+# Error Search / Bug Reasoning
 
-> **MANDATORY.** Detect → Classify → Trace → Hypothesize → Resolve errors.
+> **MANDATORY.** Scope -> Freeze evidence -> Cluster -> Map authority -> Trace -> Hypothesize -> Fix locus -> Prove -> Learn.
 > **Iron Law:** NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.
 
 ---
@@ -1597,12 +1604,14 @@ VALID_EXAMPLE: |
 ## Pipeline Overview
 
 ```
-Phase 0: DETECT    → Layer, type, is_regression?
-Phase 1: CLASSIFY  → Severity, blast radius, technique triggers
-Phase 2: TRACE     → 5 Whys + Git Bisect + dependency tracing
-Phase 3: HYPOTHESIZE → 3 gates, self-correction
-Phase 3.5: LLM BLOCK (if >50 LOC)
-Phase 4: RESOLVE   → Algorithm selection, fix
+Phase 0: TRIGGER + SCOPE -> defect boundary, evidence scope, stop rule
+Phase 1: EVIDENCE FREEZE -> reproduction packet, observed/expected, timings
+Phase 2: CLUSTER + AUTHORITY -> shared invariant, source-of-truth order, contradictions
+Phase 3: TRACE + MINIMIZE -> root-cause trace, transition point, minimal repro/change tuple
+Phase 4: HYPOTHESIZE -> falsifiable hypothesis, prediction, one-variable test design
+Phase 5: FIX LOCUS -> patch layer, blast radius, rollback plan
+Phase 6: PROOF MATRIX -> focused tests, integration checks, regression guard
+Phase 7: LEARN + ROUTE -> diagnostic learning, follow-up task, next algorithm route
 ```
 
 ---
@@ -1610,10 +1619,103 @@ Phase 4: RESOLVE   → Algorithm selection, fix
 ## Block Assembly
 
 ```yaml
-BLOCKS: [BUG-01, BUG-02, BUG-03, BUG-04]
+BLOCKS: [BUG-00, BUG-01, BUG-02, BUG-03, BUG-04, BUG-05?, BUG-06, BUG-07, BUG-08, BUG-09?, BUG-10]
 QUALITY_GATE:
-  - root_cause_receipt exists before Phase 4
+  - evidence_freeze exists before root-cause claims
+  - root_cause_receipt exists before fix locus selection
+  - hypothesis is falsifiable before any write-producing fix
+  - proof matrix covers the claimed blast radius
   - route is chosen from one canonical severity map
+```
+
+## Generic Evidence-First Flow
+
+```yaml
+ES_00_TRIGGER_SCOPE:
+  output:
+    - defect_boundary
+    - affected_surface
+    - evidence_scope
+    - stop_rule
+  rule: "Do not widen the repair until the current defect boundary is explicit."
+
+ES_01_EVIDENCE_FREEZE:
+  output:
+    - exact_command_or_user_action
+    - observed_result
+    - expected_result
+    - environment_or_config_snapshot
+    - timing_or_frequency_when_available
+  rule: "Evidence must be strong enough that another operator can reproduce or falsify the claim."
+
+ES_02_SYMPTOM_CLUSTER:
+  output:
+    - shared_invariant_candidate
+    - independent_slices
+    - dependent_blockers
+  rule: "When more than two defects are present, cluster first and repair by shared invariant rather than isolated symptoms."
+
+ES_03_AUTHORITY_MAP:
+  output:
+    - source_of_truth_order
+    - stale_or_derived_surfaces
+    - contradiction_set
+  rule: "A derived view cannot override the authoritative state source unless the local project law explicitly says so."
+
+ES_04_TRACE_AND_RECEIPT:
+  output:
+    - trace_graph
+    - transition_point
+    - confirmed_root_cause
+    - remaining_unknowns
+  rule: "A root-cause receipt is required before selecting the fix locus."
+
+ES_05_DELTA_MINIMIZE:
+  output:
+    - minimal_repro
+    - minimal_input_or_state_tuple
+    - minimal_change_set_when_available
+  skip_if:
+    - "issue is already minimized by a single deterministic failing check"
+    - "minimization would be more expensive than a bounded proof matrix"
+
+ES_06_HYPOTHESIS_GATE:
+  output:
+    - falsifiable_hypothesis
+    - prediction
+    - one_variable_test_design
+    - failure_branch
+  rule: "If the hypothesis cannot be proven wrong, return to evidence gathering."
+
+ES_07_FIX_LOCUS:
+  output:
+    - patch_layer
+    - behavioral_contract_impact
+    - rollback_plan
+    - regression_risk
+  rule: "Fix the first wrong transition point, not the last visible symptom."
+
+ES_08_PROOF_MATRIX:
+  output:
+    - focused_red_green_check
+    - adjacent_contract_checks
+    - integration_or_runtime_probe
+    - expensive_gate_batch_plan
+  rule: "Run the smallest proof that covers the blast radius, then batch expensive gates."
+
+ES_09_POST_FIX_LEARNING:
+  output:
+    - regression_guard_added
+    - diagnostic_note_or_follow_up
+    - timing_or_process_issue_if_observed
+  rule: "A repeated defect without a regression guard or follow-up is not fully learned."
+
+ES_10_ROUTE_OR_ESCALATE:
+  output:
+    - continue
+    - route_to_STC_PR_CoT_MAR_5_SOL_or_META
+    - ask_user_or_block
+  rule: "Escalate to META for governance, safety, ownership, protocol, or authority ambiguity."
 ```
 
 ---

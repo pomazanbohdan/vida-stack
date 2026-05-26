@@ -19,6 +19,7 @@ Owner law remains in:
 4. `docs/process/project-start-readiness-runtime-capsule.md`
 5. `docs/process/project-packet-rendering-runtime-capsule.md`
 6. `docs/process/command-timing-and-gate-optimization-protocol.md`
+7. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
 
 Consult those owner surfaces when an edge case, launch-readiness conflict, or routing ambiguity is not settled by this bundle.
 
@@ -30,7 +31,8 @@ Treat this bundle as the compact project `always_on_core` startup set for routin
 2. packet and delegated-lane defaults from `project-packet-and-lane-runtime-capsule.md`,
 3. startup readiness and skill gating from `project-start-readiness-runtime-capsule.md`,
 4. packet rendering and prompt-stack interpretation from `project-packet-rendering-runtime-capsule.md`,
-5. command timing, slow-gate classification, and script/gate optimization defaults from `command-timing-and-gate-optimization-protocol.md`.
+5. command timing, slow-gate classification, and script/gate optimization defaults from `command-timing-and-gate-optimization-protocol.md`,
+6. runtime-defect Error Search routing defaults from `project-error-search-runtime-diagnostics-protocol.md`.
 
 ## Runtime Summary
 
@@ -42,7 +44,8 @@ After reading this bundle, the orchestrator should be able to answer:
 4. which proof target closes the next packet,
 5. whether startup readiness and skill activation are already explicit,
 6. whether a command or gate timing must create optimization work,
-7. whether a full owner protocol read is required for an edge case.
+7. whether a full owner protocol read is required for an edge case,
+8. whether a runtime defect must use `META(Error Search)` because authority, ownership, receipt, proof, or routing law is involved.
 
 ## Expansion Rule
 
@@ -55,7 +58,8 @@ Expand beyond it only when:
 3. delegated-lane closure or exception-path law is ambiguous,
 4. packet-template or prompt-stack edge cases are not settled by the rendering capsule,
 5. command timing, slow-gate, or script optimization decisions are not settled by the timing protocol summary,
-6. the user explicitly asks for the deeper owner protocol.
+6. the user explicitly asks for the deeper owner protocol,
+7. a runtime defect or multi-defect pool requires the full project Error Search overlay.
 
 ## Routing
 
@@ -64,7 +68,8 @@ Expand beyond it only when:
 3. for packet/lane defaults, read `docs/process/project-packet-and-lane-runtime-capsule.md`,
 4. for startup readiness and skill gating, read `docs/process/project-start-readiness-runtime-capsule.md`,
 5. for packet rendering and prompt-stack law, read `docs/process/project-packet-rendering-runtime-capsule.md`,
-6. for timing evidence, slow-gate classification, and script/gate optimization, read `docs/process/command-timing-and-gate-optimization-protocol.md`.
+6. for timing evidence, slow-gate classification, and script/gate optimization, read `docs/process/command-timing-and-gate-optimization-protocol.md`,
+7. for runtime blockers, multi-defect pools, ownership conflicts, receipt/proof contradictions, routing blockers, or CI defect clusters, read `docs/process/project-error-search-runtime-diagnostics-protocol.md`.
 
 -----
 artifact_path: process/project-orchestrator-startup-bundle

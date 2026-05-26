@@ -36,7 +36,9 @@ Purpose: provide the project-level agent instruction overlay for the repository 
    - `docs/process/agent-extensions/README.md`
 11. Command timing and gate optimization protocol:
    - `docs/process/command-timing-and-gate-optimization-protocol.md`
-12. Project-local TaskFlow runtime state and operator surfaces:
+12. Project Error Search runtime diagnostics protocol:
+   - `docs/process/project-error-search-runtime-diagnostics-protocol.md`
+13. Project-local TaskFlow runtime state and operator surfaces:
    - `.vida/data/state/`
    - `vida taskflow help`
 ## Bootstrap Read Path
@@ -58,25 +60,26 @@ Purpose: provide the project-level agent instruction overlay for the repository 
 10. For runtime-layering, runtime-readiness, or runtime-architecture questions, continue to `docs/product/spec/canonical-runtime-layer-matrix.md`.
 11. For project role/skill/profile/flow extension questions, continue to `docs/process/agent-extensions/README.md`.
 12. For command timing, slow gates, script optimization, CI/local proof latency, or operator-friction diagnostics, continue to `docs/process/command-timing-and-gate-optimization-protocol.md`.
-13. For project-local TaskFlow DB-first execution/bootstrap questions, prefer `vida status --json`, `vida taskflow help`, and the project-owned `.vida/data/state/` runtime store path rather than installed shim or flat task-artifact fallback paths.
-14. After bootstrap, prefer the default `vida taskflow ...` shell path with project-local runtime resolution; do not reintroduce installed shim roots that point outside this repository.
-15. For project task-shaping, development-team, or delegated execution questions, continue early to `docs/process/team-development-and-orchestration-protocol.md`.
-16. For cheaper orchestrator-first project execution, continue early to `docs/process/project-orchestrator-operating-protocol.md`.
-17. For repeatable development-session startup, prefer the compact startup bundle:
+13. For runtime defects, multi-defect pools, TaskFlow/DocFlow contradictions, run-graph/recovery/lane/dispatch/receipt blockers, session/worktree ownership conflicts, provider/model/carrier routing blockers, or CI failure clusters, continue to `docs/process/project-error-search-runtime-diagnostics-protocol.md`.
+14. For project-local TaskFlow DB-first execution/bootstrap questions, prefer `vida status --json`, `vida taskflow help`, and the project-owned `.vida/data/state/` runtime store path rather than installed shim or flat task-artifact fallback paths.
+15. After bootstrap, prefer the default `vida taskflow ...` shell path with project-local runtime resolution; do not reintroduce installed shim roots that point outside this repository.
+16. For project task-shaping, development-team, or delegated execution questions, continue early to `docs/process/team-development-and-orchestration-protocol.md`.
+17. For cheaper orchestrator-first project execution, continue early to `docs/process/project-orchestrator-operating-protocol.md`.
+18. For repeatable development-session startup, prefer the compact startup bundle:
    - `docs/process/project-orchestrator-startup-bundle.md`
-18. Expand to the full session-start protocol and reusable prompt only when the bundle does not settle the startup question:
+19. Expand to the full session-start protocol and reusable prompt only when the bundle does not settle the startup question:
    - `docs/process/project-orchestrator-session-start-protocol.md`
    - `docs/process/project-orchestrator-reusable-prompt.md`
-19. If startup readiness, skill gating, packet rendering, or packet/lane defaults remain unclear after the bundle, expand only the needed compact project runtime capsules:
+20. If startup readiness, skill gating, packet rendering, or packet/lane defaults remain unclear after the bundle, expand only the needed compact project runtime capsules:
    - `docs/process/project-start-readiness-runtime-capsule.md`
    - `docs/process/project-packet-rendering-runtime-capsule.md`
    - `docs/process/project-packet-and-lane-runtime-capsule.md`
-20. Open deeper owner docs only when those compact project surfaces still leave an edge case unresolved:
+21. Open deeper owner docs only when those compact project surfaces still leave an edge case unresolved:
    - `docs/process/project-skill-initialization-and-activation-protocol.md`
    - `docs/process/project-development-packet-template-protocol.md`
    - `docs/process/project-agent-prompt-stack-protocol.md`
    - `docs/process/project-boot-readiness-validation-protocol.md`
-21. This path set is mandatory bootstrap context, not an optional later lookup.
+22. This path set is mandatory bootstrap context, not an optional later lookup.
 
 Project-routing rule:
 
