@@ -18,6 +18,7 @@ Owner law remains in:
 3. `docs/process/project-packet-and-lane-runtime-capsule.md`
 4. `docs/process/project-start-readiness-runtime-capsule.md`
 5. `docs/process/project-packet-rendering-runtime-capsule.md`
+6. `docs/process/command-timing-and-gate-optimization-protocol.md`
 
 Consult those owner surfaces when an edge case, launch-readiness conflict, or routing ambiguity is not settled by this bundle.
 
@@ -28,7 +29,8 @@ Treat this bundle as the compact project `always_on_core` startup set for routin
 1. top-level project routing and anti-stop narrowing from `project-orchestrator-operating-protocol.md`,
 2. packet and delegated-lane defaults from `project-packet-and-lane-runtime-capsule.md`,
 3. startup readiness and skill gating from `project-start-readiness-runtime-capsule.md`,
-4. packet rendering and prompt-stack interpretation from `project-packet-rendering-runtime-capsule.md`.
+4. packet rendering and prompt-stack interpretation from `project-packet-rendering-runtime-capsule.md`,
+5. command timing, slow-gate classification, and script/gate optimization defaults from `command-timing-and-gate-optimization-protocol.md`.
 
 ## Runtime Summary
 
@@ -39,7 +41,8 @@ After reading this bundle, the orchestrator should be able to answer:
 3. whether the next move is shape, delegate, verify, or escalate,
 4. which proof target closes the next packet,
 5. whether startup readiness and skill activation are already explicit,
-6. whether a full owner protocol read is required for an edge case.
+6. whether a command or gate timing must create optimization work,
+7. whether a full owner protocol read is required for an edge case.
 
 ## Expansion Rule
 
@@ -51,7 +54,8 @@ Expand beyond it only when:
 2. launch readiness is blocked on an owner-level validation conflict,
 3. delegated-lane closure or exception-path law is ambiguous,
 4. packet-template or prompt-stack edge cases are not settled by the rendering capsule,
-5. the user explicitly asks for the deeper owner protocol.
+5. command timing, slow-gate, or script optimization decisions are not settled by the timing protocol summary,
+6. the user explicitly asks for the deeper owner protocol.
 
 ## Routing
 
@@ -59,16 +63,17 @@ Expand beyond it only when:
 2. for top-level routing and project anti-stop narrowing, read `docs/process/project-orchestrator-operating-protocol.md`,
 3. for packet/lane defaults, read `docs/process/project-packet-and-lane-runtime-capsule.md`,
 4. for startup readiness and skill gating, read `docs/process/project-start-readiness-runtime-capsule.md`,
-5. for packet rendering and prompt-stack law, read `docs/process/project-packet-rendering-runtime-capsule.md`.
+5. for packet rendering and prompt-stack law, read `docs/process/project-packet-rendering-runtime-capsule.md`,
+6. for timing evidence, slow-gate classification, and script/gate optimization, read `docs/process/command-timing-and-gate-optimization-protocol.md`.
 
 -----
 artifact_path: process/project-orchestrator-startup-bundle
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-13'
+artifact_revision: '2026-05-26'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-startup-bundle.md
 created_at: '2026-03-13T18:05:15+02:00'
-updated_at: '2026-03-13T18:05:15+02:00'
+updated_at: 2026-05-26T00:00:00+03:00
 changelog_ref: project-orchestrator-startup-bundle.changelog.jsonl
