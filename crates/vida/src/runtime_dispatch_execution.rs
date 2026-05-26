@@ -678,30 +678,6 @@ fn configured_internal_host_dispatch_no_output_timeout_seconds(
         .filter(|seconds| *seconds > 0)
 }
 
-fn configured_dispatch_packet_route_runtime_window_seconds(
-    project_root: &Path,
-    dispatch_packet_path: &str,
-) -> Option<u64> {
-    let packet = std::fs::read_to_string(dispatch_packet_path)
-        .ok()
-        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())?;
-    let route_key = packet
-        .pointer("/delivery_task_packet/handoff_task_class")
-        .or_else(|| packet.pointer("/runtime_assignment/task_class"))
-        .or_else(|| packet.pointer("/carrier_runtime_assignment/task_class"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let overlay =
-        crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root).ok()?;
-    yaml_lookup(
-        &overlay,
-        &["agent_system", "routing", route_key, "max_runtime_seconds"],
-    )
-    .and_then(serde_yaml::Value::as_u64)
-    .filter(|seconds| *seconds > 0)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandTimeoutWrapper {
     timeout_seconds: u64,
@@ -2735,16 +2711,11 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         refresh_execution_truth(body, role_selection, receipt, Some(backend_id), "missing");
         return Ok(Some(result));
     }
-    let wall_timeout_seconds = Some(
-        configured_dispatch_packet_route_runtime_window_seconds(project_root, dispatch_packet_path)
-            .unwrap_or_else(|| {
-                configured_internal_host_dispatch_wall_timeout_seconds(
-                    project_root,
-                    role_selection,
-                    receipt,
-                )
-            }),
-    );
+    let wall_timeout_seconds = Some(configured_internal_host_dispatch_wall_timeout_seconds(
+        project_root,
+        role_selection,
+        receipt,
+    ));
     let no_output_timeout_seconds =
         configured_internal_host_dispatch_no_output_timeout_seconds(selected_cli_entry.as_ref());
     let wrapped_command = wrap_command_with_optional_timeouts(
@@ -3629,8 +3600,7 @@ mod tests {
     #[cfg(any(unix, windows))]
     use super::execute_wrapped_command;
     use super::{
-        agent_lane_dispatch_result, configured_dispatch_packet_route_runtime_window_seconds,
-        configured_external_dispatch_output_mode,
+        agent_lane_dispatch_result, configured_external_dispatch_output_mode,
         configured_external_dispatch_wall_timeout_seconds,
         configured_internal_host_activation_parts,
         configured_internal_host_dispatch_no_output_timeout_seconds,
@@ -5964,9 +5934,9 @@ dispatch:
     }
 
     #[test]
-    fn dispatch_packet_handoff_task_class_selects_route_runtime_window() {
+    fn internal_host_dispatch_wall_timeout_uses_receipt_target_not_packet_handoff_class() {
         let project_root = std::env::temp_dir().join(format!(
-            "vida-packet-route-window-{}-{}",
+            "vida-receipt-route-window-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -5979,6 +5949,8 @@ dispatch:
             r#"
 agent_system:
   routing:
+    analysis:
+      max_runtime_seconds: 60
     implementation:
       max_runtime_seconds: 420
 "#,
@@ -5990,13 +5962,29 @@ agent_system:
             r#"{"delivery_task_packet":{"handoff_task_class":"implementation"}}"#,
         )
         .expect("write packet");
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "development_flow": {
+                "analysis": {
+                    "executor_backend": "internal_subagents",
+                    "max_runtime_seconds": 60
+                },
+                "implementation": {
+                    "executor_backend": "internal_subagents",
+                    "max_runtime_seconds": 420
+                }
+            }
+        }));
+        let receipt = internal_codex_fallback_receipt(
+            packet_path.to_str().expect("packet path should render"),
+        );
 
         assert_eq!(
-            configured_dispatch_packet_route_runtime_window_seconds(
+            configured_internal_host_dispatch_wall_timeout_seconds(
                 &project_root,
-                packet_path.to_str().expect("packet path should render")
+                &role_selection,
+                &receipt,
             ),
-            Some(420)
+            60
         );
 
         let _ = std::fs::remove_dir_all(project_root);

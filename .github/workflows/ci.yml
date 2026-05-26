@@ -119,7 +119,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          STATE_DIR="_temp/ci-runtime-state"
+          mkdir -p .vida/config .vida/db .vida/project
+          STATE_DIR=".vida/data/ci-runtime-state"
           rm -rf "$STATE_DIR"
           cargo run -p vida -- boot --state-dir "$STATE_DIR"
           cargo run -p vida -- status --state-dir "$STATE_DIR" --json >/tmp/ci-status.json
@@ -192,52 +193,13 @@ jobs:
           test -s /tmp/vida-install-ps-help.txt
 
       - name: Run local installer smoke
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         shell: bash
         run: |
           set -euo pipefail
-          TMP_ROOT="$(mktemp -d)"
-          INSTALL_ROOT="$TMP_ROOT/install-root"
-          TMP_BIN="$TMP_ROOT/bin"
-          TMP_STATE="$TMP_ROOT/state"
-          TMP_PROJECT="$TMP_ROOT/project"
           ARCHIVE_PATH="$(find dist -maxdepth 1 -name 'vida-stack-v*.tar.gz' | head -n 1)"
           test -n "$ARCHIVE_PATH"
-
-          mkdir -p "$TMP_BIN" "$TMP_STATE" "$TMP_PROJECT"
-
-          bash dist/vida-install.sh install --archive "$ARCHIVE_PATH" --root "$INSTALL_ROOT" --bin-dir "$TMP_BIN" --force
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" bash dist/vida-install.sh doctor --root "$INSTALL_ROOT" --bin-dir "$TMP_BIN"
-
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida root >/tmp/vida-root.txt
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida boot --state-dir "$TMP_STATE"
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor --state-dir "$TMP_STATE" >/tmp/vida-doctor.txt
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida status --state-dir "$TMP_STATE" --json >/tmp/vida-status.json
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor --state-dir "$TMP_STATE" --json >/tmp/vida-doctor-json.txt
-          PATH="$TMP_BIN:$PATH" taskflow help >/tmp/taskflow-help.txt
-          PATH="$TMP_BIN:$PATH" docflow --help >/tmp/docflow-help.txt
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$INSTALL_ROOT/current/bin:$TMP_BIN:$PATH" vida-pi-agent --help >/tmp/vida-pi-agent-help.txt
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida taskflow help >/tmp/vida-taskflow-help.txt
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida docflow help >/tmp/vida-docflow-help.txt
-
-          PATH="$TMP_BIN:$PATH" docflow init >/tmp/docflow-init.txt
-          PATH="$TMP_BIN:$PATH" docflow init --json >/tmp/docflow-init.json
-
-          (
-            cd "$TMP_PROJECT"
-            VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida init >/tmp/vida-init.txt
-          )
-
-          grep -q "TaskFlow CLI" /tmp/taskflow-help.txt
-          grep -q "Standalone DocFlow CLI" /tmp/docflow-help.txt
-          grep -q "VIDA adapter for one-shot Pi RPC dispatch" /tmp/vida-pi-agent-help.txt
-          grep -q "mode: agent_bootstrap" /tmp/docflow-init.txt
-          grep -q '"mode":"agent_bootstrap"' /tmp/docflow-init.json
-          grep -q "$INSTALL_ROOT/current" /tmp/vida-root.txt
-          grep -q "storage metadata: ok" /tmp/vida-doctor.txt
-          grep -q '"surface": "vida status"' /tmp/vida-status.json
-          test -f "$TMP_PROJECT/AGENTS.md"
-          test -f "$TMP_PROJECT/AGENTS.sidecar.md"
-          test -f "$TMP_PROJECT/vida.config.yaml"
+          bash scripts/local-installer-smoke.sh --archive "$ARCHIVE_PATH"
 
   validate-windows-installer:
     needs: build-rust

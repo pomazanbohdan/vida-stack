@@ -236,21 +236,6 @@ fn dispatch_backend_from_assignment(
     .iter()
     .filter_map(|key| json_string(assignment.get(*key)))
     .find(|backend_id| execution_plan_backend_metadata_present(execution_plan, backend_id))
-    .or_else(|| {
-        let has_model_selector = [
-            "selected_model_profile_id",
-            "selected_model_ref",
-            "model_profile_id",
-            "model_ref",
-        ]
-        .iter()
-        .any(|key| json_string(assignment.get(*key)).is_some());
-        let has_legacy_tier_activation = json_string(assignment.get("selected_tier")).is_some()
-            && json_string(assignment.get("activation_agent_type")).is_some();
-        (has_model_selector || has_legacy_tier_activation)
-            .then(|| carrier_backend_from_assignment(assignment))
-            .flatten()
-    })
 }
 
 pub(crate) fn activation_backend_from_route(route: &serde_json::Value) -> Option<String> {
@@ -545,8 +530,19 @@ pub(crate) fn route_explain_payload(
         .map(fanout_executor_backends_from_route)
         .unwrap_or_default();
     let activation_agent_type = route.and_then(activation_backend_from_route);
-    let selected_backend =
-        route.and_then(|route| selected_backend_from_execution_plan_route(execution_plan, route));
+    let selected_backend = route
+        .and_then(|route| {
+            crate::runtime_dispatch_state::admissible_selected_backend_for_dispatch_target(
+                execution_plan,
+                dispatch_target,
+                activation_backend_from_route(route).as_deref(),
+                runtime_assignment_backend.as_deref(),
+            )
+        })
+        .or_else(|| {
+            route
+                .and_then(|route| selected_backend_from_execution_plan_route(execution_plan, route))
+        });
     let non_behavioral_route_fields = route.map(route_non_behavioral_fields).unwrap_or_default();
     let diagnostic_only_route_fields = route.map(route_diagnostic_only_fields).unwrap_or_default();
     let route_field_truth = route

@@ -962,13 +962,27 @@ mod tests {
         let overlay_json =
             serde_json::to_value(overlay).expect("yaml config should convert to json");
         let agent_system = &overlay_json["agent_system"];
+        let configured_executor = |route_id: &str| {
+            agent_system["routing"][route_id]["executor_backend"]
+                .as_str()
+                .expect("route should declare executor_backend")
+        };
+        let configured_fanout = |route_id: &str| {
+            agent_system["routing"][route_id]["fanout_executor_backends"]
+                .as_array()
+                .expect("route should declare fanout_executor_backends")
+                .clone()
+        };
 
         let analysis =
             summarize_agent_route_from_snapshot(&serde_json::Value::Null, agent_system, "analysis");
-        assert_eq!(analysis["executor_backend"], "internal_subagents");
+        assert_eq!(
+            analysis["executor_backend"].as_str(),
+            Some(configured_executor("analysis"))
+        );
         assert_eq!(
             analysis["fanout_executor_backends"],
-            serde_json::json!(["internal_subagents"])
+            serde_json::Value::Array(configured_fanout("analysis"))
         );
         assert_eq!(
             analysis["fanout_executor_backends"]
@@ -980,20 +994,26 @@ mod tests {
 
         let coach =
             summarize_agent_route_from_snapshot(&serde_json::Value::Null, agent_system, "coach");
-        assert_eq!(coach["executor_backend"], "internal_subagents");
+        assert_eq!(
+            coach["executor_backend"].as_str(),
+            Some(configured_executor("coach"))
+        );
         let coach_fanout = coach["fanout_executor_backends"]
             .as_array()
             .expect("coach fanout should be an array");
         assert!(coach_fanout
             .iter()
-            .any(|value| value == "internal_subagents"));
+            .any(|value| { value.as_str() == Some(configured_executor("coach")) }));
 
         let verification = summarize_agent_route_from_snapshot(
             &serde_json::Value::Null,
             agent_system,
             "verification",
         );
-        assert_eq!(verification["executor_backend"], "internal_subagents");
+        assert_eq!(
+            verification["executor_backend"].as_str(),
+            Some(configured_executor("verification"))
+        );
 
         let review_ensemble = summarize_agent_route_from_snapshot(
             &serde_json::Value::Null,
@@ -1005,7 +1025,7 @@ mod tests {
             .expect("review ensemble fanout should be an array");
         assert!(review_ensemble_fanout
             .iter()
-            .any(|value| value == "internal_subagents"));
+            .any(|value| { value.as_str() == Some(configured_executor("review_ensemble")) }));
     }
 
     #[test]

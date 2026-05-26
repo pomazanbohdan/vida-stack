@@ -3093,13 +3093,19 @@ fn build_taskflow_next_decision(
         .is_some_and(|(status, run_id)| status.run_id == run_id)
         && !explicit_next_task_binding
         && !latest_run_graph_task_no_longer_active;
+    let closed_task_terminal_continue_ready_head = latest_run_graph_status
+        .zip(terminal_consume_continue_run_id)
+        .zip(ready_head.as_ref())
+        .is_some_and(|((status, run_id), _task)| status.run_id == run_id)
+        && latest_runtime_consumption_kind == Some("final")
+        && latest_run_graph_task_no_longer_active;
     let latest_run_graph_status_blocks_admission = latest_run_graph_status_blocked
         && !active_exception_takeover_evidence
         && !terminal_consume_continue_without_next_unit;
     let completed_without_explicit_next_unit =
         terminal_completed_without_next_unit(latest_run_graph_status)
             && !explicit_next_task_binding
-            && !latest_run_graph_task_no_longer_active;
+            && !closed_task_terminal_continue_ready_head;
 
     // Check for foreign claim conflicts (multi-session admission rule #3)
     // A blocked task owned by session A must not stop session B when session B is working on
@@ -9143,7 +9149,7 @@ mod tests {
     }
 
     #[test]
-    fn route_payload_blocks_runtime_selected_carrier_without_matrix_row() {
+    fn route_payload_uses_admissible_fallback_when_runtime_selected_carrier_has_no_matrix_row() {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -9177,14 +9183,14 @@ mod tests {
 
         let payload = super::route_payload_for_dispatch_target(&execution_plan, "implementation");
 
-        assert_eq!(payload["selected_backend"].as_str(), Some("junior"));
         assert_eq!(
-            payload["selected_backend_admissible"].as_bool(),
-            Some(false)
+            payload["selected_backend"].as_str(),
+            Some("internal_subagents")
         );
+        assert_eq!(payload["selected_backend_admissible"].as_bool(), Some(true));
         assert_eq!(payload["status"].as_str(), Some("blocked"));
         assert!(payload["blocker_codes"].as_array().is_some_and(|codes| {
-            codes.contains(&serde_json::json!(
+            !codes.contains(&serde_json::json!(
                 "selected_backend_not_admissible_for_dispatch_target"
             ))
         }));
