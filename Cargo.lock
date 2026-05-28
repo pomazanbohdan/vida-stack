@@ -5704,6 +5704,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vida-contracts"
+version = "0.9.7"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "vida-pi-agent"
 version = "0.9.7"
 dependencies = [

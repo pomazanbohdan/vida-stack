@@ -1,0 +1,33 @@
+{
+  "request_id": "request-02",
+  "status": "blocked",
+  "error": {
+    "problem_type": "urn:vida:problem:capability-denied",
+    "title": "Capability denied",
+    "detail": "The client cannot apply this wizard plan.",
+    "code": "capability_denied",
+    "severity": "error",
+    "retryable": false,
+    "blockers": [
+      {
+        "code": "wizard_apply_scope_required",
+        "scope": "wizard_apply",
+        "next_actions": [
+          "Request a plan/apply token before retrying."
+        ]
+      }
+    ],
+    "remediation": [
+      "Run wizard.session.validate and wizard.session.diff first."
+    ]
+  },
+  "blockers": [
+    {
+      "code": "wizard_apply_scope_required",
+      "scope": "wizard_apply",
+      "next_actions": [
+        "Request a plan/apply token before retrying."
+      ]
+    }
+  ]
+}

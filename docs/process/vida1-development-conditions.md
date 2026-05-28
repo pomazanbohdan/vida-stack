@@ -375,7 +375,7 @@ The current user-facing launcher surface is:
 1. `vida taskflow <args...>`
 2. `vida docflow <args...>`
 3. `vida doctor`
-4. `vida root`
+4. `vida --help`
 
 The current Rust `vida` binary also exposes proven runtime-family help routing.
 

@@ -5,6 +5,9 @@ use crate::{
     AgentSelectArgs,
 };
 
+const AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
+    std::time::Duration::from_secs(300);
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct AgentDispatchLaneSelectionTruth {
     selected_carrier: String,
@@ -1164,6 +1167,41 @@ fn apply_continuation_dispatch_gate_to_preview(
     }
 }
 
+fn safe_agent_dispatch_projection_component(value: &str) -> String {
+    let mut safe = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    safe.truncate(120);
+    if safe.is_empty() {
+        "none".to_string()
+    } else {
+        safe
+    }
+}
+
+fn agent_dispatch_next_projection_name(command: &AgentDispatchNextArgs) -> String {
+    format!(
+        "agent-dispatch-next-mode-{}-lanes-{}-scope-{}-current-{}-latest",
+        if command.dev_team {
+            "dev-team"
+        } else {
+            "scheduler"
+        },
+        command.lanes,
+        safe_agent_dispatch_projection_component(command.scope.as_deref().unwrap_or("default")),
+        safe_agent_dispatch_projection_component(
+            command.current_task_id.as_deref().unwrap_or("default")
+        ),
+    )
+}
+
 pub(crate) async fn run_agent(args: AgentArgs) -> ExitCode {
     match args.command {
         AgentCommand::DispatchNext(command) => run_agent_dispatch_next(command).await,
@@ -1245,6 +1283,50 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
         .clone()
         .unwrap_or_else(state_store::default_state_dir);
     let explicit_state_dir = command.state_dir.as_deref();
+    let projection_name = agent_dispatch_next_projection_name(&command);
+    if command.json {
+        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+            &state_dir,
+            &projection_name,
+        ) {
+            println!("{cached}");
+            return ExitCode::SUCCESS;
+        }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
+                &state_dir,
+                &projection_name,
+                AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE,
+            )
+        {
+            println!("{cached}");
+            return ExitCode::SUCCESS;
+        }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                &state_dir,
+                &projection_name,
+                AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE,
+            )
+        {
+            if let Some(overlay) =
+                crate::operator_projection_cache::read_runtime_continuation_binding_overlay(
+                    &state_dir,
+                )
+            {
+                if let Some(rendered) =
+                    crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload(
+                        &state_dir,
+                        &cached,
+                        &overlay,
+                    )
+                {
+                    println!("{rendered}");
+                    return ExitCode::SUCCESS;
+                }
+            }
+        }
+    }
     match StateStore::open_existing_read_only(state_dir.clone()).await {
         Ok(store) => {
             let mut activation_bundle =
@@ -1260,19 +1342,45 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
             let preview = if command.dev_team {
                 let configured_max_parallel_agents =
                     configured_max_parallel_agents_from_activation_bundle(&activation_bundle);
-                let projection = match store
-                    .scheduling_projection_scoped(
-                        command.scope.as_deref(),
-                        command.current_task_id.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(projection) => projection,
-                    Err(error) => {
-                        eprintln!("Failed to compute agent dispatch preview: {error}");
-                        return ExitCode::from(1);
-                    }
-                };
+                let projection =
+                    match StateStore::read_fresh_tasks_from_jsonl_snapshot(store.root()) {
+                        Ok(rows) => {
+                            let critical_path_ids = match StateStore::critical_path_from_rows(&rows)
+                            {
+                                Ok(path) => path
+                                    .nodes
+                                    .into_iter()
+                                    .map(|node| node.id)
+                                    .collect::<std::collections::BTreeSet<_>>(),
+                                Err(_) => std::collections::BTreeSet::new(),
+                            };
+                            match StateStore::scheduling_projection_scoped_from_rows(
+                                &rows,
+                                command.scope.as_deref(),
+                                command.current_task_id.as_deref(),
+                                &critical_path_ids,
+                            ) {
+                                Ok(projection) => projection,
+                                Err(error) => {
+                                    eprintln!("Failed to compute agent dispatch preview: {error}");
+                                    return ExitCode::from(1);
+                                }
+                            }
+                        }
+                        Err(_) => match store
+                            .scheduling_projection_scoped(
+                                command.scope.as_deref(),
+                                command.current_task_id.as_deref(),
+                            )
+                            .await
+                        {
+                            Ok(projection) => projection,
+                            Err(error) => {
+                                eprintln!("Failed to compute agent dispatch preview: {error}");
+                                return ExitCode::from(1);
+                            }
+                        },
+                    };
                 let readiness = crate::taskflow_consume_bundle::build_dev_team_readiness(
                     "vida.config.yaml",
                     &activation_bundle,
@@ -1350,6 +1458,11 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                 let payload = serde_json::to_value(&preview)
                     .expect("agent dispatch-next preview should serialize");
                 crate::print_json_pretty(&payload);
+                crate::operator_projection_cache::write_json_projection(
+                    &state_dir,
+                    &projection_name,
+                    &payload,
+                );
             } else {
                 println!("agent dispatch-next: {}", preview.status);
                 println!("lanes selected: {}", preview.lanes_selected);
@@ -1398,6 +1511,98 @@ mod tests {
     use crate::test_cli_support::{cli, EnvVarGuard};
     use crate::AgentDispatchNextArgs;
     use std::process::ExitCode;
+
+    trait StateStoreFixtureTaskExt {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        >;
+    }
+
+    impl StateStoreFixtureTaskExt for crate::StateStore {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id,
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                } = request;
+                let generated_parent_id = (issue_type != "epic" && parent_id.is_none())
+                    .then(|| format!("{task_id}-fixture-parent"));
+                if let Some(parent_task_id) = generated_parent_id.as_deref() {
+                    let parent_labels: Vec<String> = Vec::new();
+                    let parent_status = if matches!(status.trim(), "closed" | "completed") {
+                        "closed"
+                    } else {
+                        "open"
+                    };
+                    self.create_task(crate::state_store::CreateTaskRequest {
+                        task_id: parent_task_id,
+                        title: "Fixture parent epic",
+                        display_id: None,
+                        description: "Test-only parent epic for strict task hierarchy fixtures",
+                        issue_type: "epic",
+                        status: parent_status,
+                        priority,
+                        parent_id: None,
+                        labels: &parent_labels,
+                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                        created_by,
+                        source_repo,
+                    })
+                    .await?;
+                }
+                self.create_task(crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id: parent_id.or(generated_parent_id.as_deref()),
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                })
+                .await
+            })
+        }
+    }
 
     fn task_with_labels(id: &str, title: &str, labels: &[&str]) -> TaskRecord {
         TaskRecord {
@@ -1473,9 +1678,9 @@ mod tests {
                         "quality_tier": "medium",
                         "write_scope": "scoped_only",
                         "model_profiles": {
-                            "gpt-5.4-low": {
-                                "profile_id": "gpt-5.4-low",
-                                "model_ref": "gpt-5.4",
+                            "gpt-5.5-low": {
+                                "profile_id": "gpt-5.5-low",
+                                "model_ref": "gpt-5.5",
                                 "provider": "openai",
                                 "reasoning_effort": "low",
                                 "quality_tier": "medium",
@@ -1560,7 +1765,7 @@ mod tests {
                         "model_profiles": {
                             "developer": {
                                 "profile_id": "developer-profile",
-                                "model_ref": "gpt-5.4",
+                                "model_ref": "gpt-5.5",
                                 "provider": "openai",
                                 "reasoning_effort": "low",
                                 "quality_tier": "medium",
@@ -1586,7 +1791,7 @@ mod tests {
                         "model_profiles": {
                             "coach": {
                                 "profile_id": "coach-profile",
-                                "model_ref": "gpt-5.4-coach",
+                                "model_ref": "gpt-5.5-coach",
                                 "provider": "openai",
                                 "reasoning_effort": "low",
                                 "quality_tier": "medium",
@@ -1679,7 +1884,7 @@ mod tests {
                         "model_profiles": {
                             "developer": {
                                 "profile_id": "developer-profile",
-                                "model_ref": "gpt-5.4",
+                                "model_ref": "gpt-5.5",
                                 "provider": "openai",
                                 "reasoning_effort": "low",
                                 "quality_tier": "medium",
@@ -1791,7 +1996,7 @@ mod tests {
                         "model_profiles": {
                             "developer": {
                                 "profile_id": "developer-profile",
-                                "model_ref": "gpt-5.4",
+                                "model_ref": "gpt-5.5",
                                 "provider": "openai",
                                 "reasoning_effort": "low",
                                 "quality_tier": "medium",
@@ -1846,7 +2051,7 @@ mod tests {
                         "model_profiles": {
                             "developer": {
                                 "profile_id": "developer-profile",
-                                "model_ref": "gpt-5.4",
+                                "model_ref": "gpt-5.5",
                                 "provider": "openai",
                                 "reasoning_effort": "low",
                                 "quality_tier": "medium",
@@ -1935,7 +2140,7 @@ mod tests {
         );
         assert_eq!(
             preview.selected_lanes[0].selection_truth.selected_model_ref,
-            "gpt-5.4"
+            "gpt-5.5"
         );
         assert_eq!(preview.selected_lanes[0].selection_truth.rate, 1);
         assert!(preview.selected_lanes[0]
@@ -2223,7 +2428,7 @@ mod tests {
         );
         assert_eq!(
             preview.selected_lanes[1].selection_truth.selected_model_ref,
-            "gpt-5.4"
+            "gpt-5.5"
         );
         assert_eq!(preview.selected_lanes[1].selection_truth.rate, 2);
         assert_eq!(
@@ -2238,7 +2443,7 @@ mod tests {
         );
         assert_eq!(
             preview.selected_lanes[2].selection_truth.selected_model_ref,
-            "gpt-5.4-coach"
+            "gpt-5.5-coach"
         );
         assert_eq!(preview.selected_lanes[2].selection_truth.rate, 3);
         assert_eq!(
@@ -2529,7 +2734,7 @@ mod tests {
                 .await
                 .expect("state store should open");
             store
-                .create_task(CreateTaskRequest {
+                .create_task_with_fixture_parent(CreateTaskRequest {
                     task_id: "task-ready",
                     title: "Ready task",
                     display_id: None,

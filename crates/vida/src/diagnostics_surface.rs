@@ -401,8 +401,8 @@ mod tests {
     fn diagnostics_post_commit_compacts_heavy_operator_evidence() {
         let payload = serde_json::json!({
             "agents": {
-                "analyst": {"model": "gpt-5.4"},
-                "coach": {"model": "gpt-5.4"}
+                "analyst": {"model": "gpt-5.5"},
+                "coach": {"model": "gpt-5.5"}
             },
             "subagent_backends": [
                 {"backend": "codex"},

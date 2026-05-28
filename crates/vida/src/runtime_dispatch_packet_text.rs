@@ -1,5 +1,27 @@
 use crate::{build_design_first_tracked_flow_bootstrap, RuntimeConsumptionLaneSelection};
 
+fn delegated_lane_prompt_guidance(
+    dispatch_target: &str,
+    handoff_runtime_role: &str,
+) -> &'static str {
+    let dispatch_target = dispatch_target.trim();
+    let handoff_runtime_role = handoff_runtime_role.trim();
+    let is_review_or_proof_lane = matches!(handoff_runtime_role, "coach" | "verifier" | "prover")
+        || matches!(
+            dispatch_target,
+            "coach" | "review" | "verification" | "verifier" | "prover"
+        )
+        || dispatch_target.contains("coach")
+        || dispatch_target.contains("review")
+        || dispatch_target.contains("verification");
+
+    if is_review_or_proof_lane {
+        "Review/proof lane contract: do not edit files, do not create commits, and do not keep exploring after the decision is supported.\nInspect only packet-provided read-only paths, dispatch result artifacts, and focused proof evidence when needed.\nReturn one bounded handoff result with: decision=approve|rework|blocker, checked_evidence, findings, risks, next_required_action.\nKeep the handoff concise and receipt-oriented."
+    } else {
+        "First substantive response: publish a concise plan before edits or implementation."
+    }
+}
+
 pub(crate) fn runtime_tracked_flow_packet(
     role_selection: &RuntimeConsumptionLaneSelection,
     run_id: &str,
@@ -59,13 +81,19 @@ pub(crate) fn runtime_packet_prompt(
         .filter_map(serde_json::Value::as_str)
         .collect::<Vec<_>>()
         .join(", ");
-    let scope_guidance = if matches!(handoff_runtime_role, "orchestrator" | "root") {
+    let is_orchestrator_lane = matches!(handoff_runtime_role, "orchestrator" | "root");
+    let lane_guidance = if is_orchestrator_lane {
+        "First substantive response: publish a concise plan before edits or implementation."
+    } else {
+        delegated_lane_prompt_guidance(dispatch_target, handoff_runtime_role)
+    };
+    let scope_guidance = if is_orchestrator_lane {
         "Local orchestrator coding is forbidden without an explicit exception path.\nBefore any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`.\nAfter any compact, continuity drop, or uncertainty about the active slice, re-read `AGENTS.md` and `AGENTS.sidecar.md`, rerun `vida orchestrator-init --json`, and restate `active_bounded_unit`, `why_this_unit`, and sequential-vs-parallel posture before continuing.\nCommentary, status output, and intermediate reports are visibility only; they never count as lawful pause boundaries by themselves.\nIf closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting.\nAfter any bounded result, green test, successful build, successful proof, runtime handoff, or delegated handoff/result, immediately bind and continue the already-evidenced next lawful continuation item in the same cycle instead of pausing at a summary.\nDo not self-select `ready_head[0]`, the first ready backlog item, or an adjacent sibling slice unless runtime evidence explicitly binds that bounded unit.\nIf continued-development intent is active but `vida status --json` or `vida orchestrator-init --json` does not expose explicit `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, fail closed to ambiguity instead of continuing implementation.\nFinding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session fallback; wait, reroute, or record the exception path first.\nAgent/thread limits, stale lane handles, or `not_found` carrier failures require saturation recovery first: inspect active lanes, synthesize completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is considered."
     } else {
         "This delegated lane does not hold root-session orchestration authority.\nYou are already inside the delegated lane activation; do not call `vida agent-init` again from this lane.\nDo not run root-only orchestration commands from this lane; leave status/recovery/continue surfaces to the orchestrator/root session.\nDo not treat commentary, status output, or an intermediate report from this lane as a completion boundary; keep working until the bounded handoff result or blocker is ready.\nDo not bind the next continuation item from this delegated lane; return bounded evidence so the orchestrator/root session can resume routing.\nIf you hit a bridge blocker, runtime timeout, or patch-location ambiguity, report the bounded blocker and wait for orchestrator reroute rather than reclaiming root-session fallback."
     };
     format!(
-        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nThis packet activation view is not an execution receipt and does not transfer root-session write authority.\nIf the selected host/backend returns only this activation view without execution evidence, treat that as a bridge blocker, not as delegated work completion.\nIf a bounded read-only diagnostic path still exists, continue diagnosis to a code-level blocker or next bounded fix before asking the user to choose a route.\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nHost-local shell/edit capability is not a write-authority receipt.\nFirst substantive response: publish a concise plan before edits or implementation.\nIf the user explicitly ordered agent-first or parallel-agent execution, keep that routing sticky and do not silently substitute root-session implementation.\nUnder continued-development intent, stay in commentary/progress mode; final closure wording is forbidden unless the user explicitly asks to stop.\nDo not treat commentary, status output, an intermediate report, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\nWhen recording task notes from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n{scope_guidance}\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
+        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nThis packet activation view is not an execution receipt and does not transfer root-session write authority.\nIf the selected host/backend returns only this activation view without execution evidence, treat that as a bridge blocker, not as delegated work completion.\nIf a bounded read-only diagnostic path still exists, continue diagnosis to a code-level blocker or next bounded fix before asking the user to choose a route.\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nHost-local shell/edit capability is not a write-authority receipt.\n{lane_guidance}\nIf the user explicitly ordered agent-first or parallel-agent execution, keep that routing sticky and do not silently substitute root-session implementation.\nUnder continued-development intent, stay in commentary/progress mode; final closure wording is forbidden unless the user explicitly asks to stop.\nDo not treat commentary, status output, an intermediate report, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\nWhen recording task notes from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n{scope_guidance}\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
     )
 }
 
@@ -98,8 +126,33 @@ mod tests {
         assert!(prompt.contains(
             "Do not treat commentary, status output, or an intermediate report from this lane as a completion boundary"
         ));
+        assert!(prompt.contains("Review/proof lane contract: do not edit files"));
+        assert!(prompt.contains("decision=approve|rework|blocker"));
+        assert!(!prompt.contains(
+            "First substantive response: publish a concise plan before edits or implementation."
+        ));
         assert!(!prompt.contains("Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`."));
         assert!(!prompt.contains("If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting."));
+    }
+
+    #[test]
+    fn implementation_delegated_lane_keeps_bounded_plan_guidance() {
+        let prompt = runtime_packet_prompt(
+            "run-1",
+            "implementer",
+            "worker",
+            "continue the bounded implementation",
+            &json!({
+                "replanning": {
+                    "checkpoints": ["after proof", "before close"]
+                }
+            }),
+        );
+
+        assert!(prompt.contains(
+            "First substantive response: publish a concise plan before edits or implementation."
+        ));
+        assert!(!prompt.contains("decision=approve|rework|blocker"));
     }
 
     #[test]

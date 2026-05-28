@@ -27,6 +27,8 @@ mod docflow_proxy;
 mod docflow_runtime_verdict;
 mod docs_surface;
 mod doctor_surface;
+mod external_provider_health;
+mod hook_template_registry_projection;
 mod host_agent_state;
 mod host_runtime_materialization;
 mod host_runtime_registry;
@@ -69,6 +71,8 @@ mod runtime_dispatch_receipt_helpers;
 mod runtime_dispatch_state;
 mod runtime_dispatch_status;
 mod runtime_lane_summary;
+mod semantic_route_cache;
+mod semantic_routing_features;
 mod shell_runtime_helpers;
 mod state_store;
 mod status_surface;
@@ -145,6 +149,7 @@ pub(crate) use development_request_analysis::{
 pub(crate) use docflow_runtime_verdict::{
     blocking_docflow_activation, build_docflow_runtime_verdict,
 };
+use hook_template_registry_projection::build_hook_template_registry_projection;
 pub(crate) use host_agent_state::{
     append_host_agent_observability_event, host_agent_observability_state_path,
     load_or_initialize_host_agent_observability_state, load_or_initialize_worker_scorecards,

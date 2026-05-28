@@ -584,6 +584,10 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
             1,
         );
     }
+    crate::operator_projection_cache::write_runtime_continuation_binding_overlay(
+        store.root(),
+        &binding,
+    );
 
     if as_json {
         crate::print_json_pretty(&continuation_bind_success_payload(&run_id, &binding));

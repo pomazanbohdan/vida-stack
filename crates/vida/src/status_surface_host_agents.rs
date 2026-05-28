@@ -324,7 +324,7 @@ mod tests {
         assert!(summary["agents"]["junior"]["default_model_profile"]
             .as_str()
             .is_some());
-        assert_eq!(summary["agents"]["senior"]["model"], "gpt-5.4");
+        assert_eq!(summary["agents"]["senior"]["model"], "gpt-5.5");
         assert_eq!(
             summary["subagent_backends"]["internal_subagents"]["default_model_profile"],
             "codex_gpt55_low_write"
@@ -382,12 +382,21 @@ mod tests {
                         .and_then(serde_yaml::Value::as_str)
                         .unwrap_or_default();
                     if enabled && backend_class == "external_cli" {
-                        Some(backend_id.to_string())
+                        let write_scope = crate::yaml_lookup(entry, &["write_scope"])
+                            .and_then(serde_yaml::Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        Some((backend_id.to_string(), write_scope))
                     } else {
                         None
                     }
                 })
                 .collect::<Vec<_>>();
-        assert_eq!(enabled_external_backends, vec!["pi_cli"]);
+        assert!(
+            enabled_external_backends
+                .iter()
+                .all(|(_, write_scope)| write_scope == "none"),
+            "enabled external CLI backends must be advisory/read-only unless explicitly selected through guarded config"
+        );
     }
 }

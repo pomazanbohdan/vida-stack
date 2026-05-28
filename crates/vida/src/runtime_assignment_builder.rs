@@ -1,3 +1,7 @@
+use crate::semantic_routing_features::{
+    extract_semantic_routing_features, score_semantic_route, SemanticRoutingFeatureInput,
+    SemanticScoreInputs,
+};
 use crate::{
     carrier_runtime_section, infer_execution_runtime_role, infer_runtime_task_class, json_lookup,
     json_u64, role_supports_task_class, runtime_role_for_task_class, task_complexity_multiplier,
@@ -18,6 +22,129 @@ fn selection_strategy_supported(selection_strategy: &str) -> bool {
         selection_strategy,
         "balanced_cost_quality" | "quality_first" | "risk_aware" | "free_first_with_quality_floor"
     )
+}
+
+fn semantic_routing_enabled(compiled_bundle: &serde_json::Value) -> bool {
+    json_lookup(
+        &compiled_bundle["agent_system"]["semantic_routing"],
+        &["enabled"],
+    )
+    .and_then(serde_json::Value::as_bool)
+    .unwrap_or(false)
+}
+
+fn tier_score(raw: &str) -> f64 {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "minimal" => 15.0,
+        "low" => 35.0,
+        "medium" => 60.0,
+        "high" => 82.0,
+        "xhigh" | "very_high" => 95.0,
+        _ => 50.0,
+    }
+}
+
+fn speed_score(raw: &str) -> f64 {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "instant" => 95.0,
+        "fast" => 82.0,
+        "medium" => 60.0,
+        "slow" => 35.0,
+        _ => 50.0,
+    }
+}
+
+fn insert_semantic_routing_diagnostics(
+    assignment: &mut serde_json::Value,
+    request_text: &str,
+    task_class: &str,
+    runtime_role: &str,
+    route_key: &str,
+) {
+    if assignment["enabled"].as_bool() != Some(true) {
+        return;
+    }
+    let feature_vector = extract_semantic_routing_features(&SemanticRoutingFeatureInput {
+        request_text,
+        task_title: None,
+        task_description: None,
+        runtime_role: Some(runtime_role),
+        task_class: Some(task_class),
+        route_key: Some(route_key),
+        max_text_chars: 12_000,
+    });
+    let selected_quality_tier = assignment["selected_quality_tier"]
+        .as_str()
+        .unwrap_or_default();
+    let selected_reasoning_effort = assignment["selected_reasoning_effort"]
+        .as_str()
+        .unwrap_or_default();
+    let selected_speed_tier = assignment["selected_speed_tier"]
+        .as_str()
+        .unwrap_or_default();
+    let selected_over_budget = assignment["selected_over_budget"]
+        .as_bool()
+        .unwrap_or(false);
+    let selected_readiness = assignment["selected_model_profile_readiness_status"]
+        .as_str()
+        .unwrap_or_default();
+    let score_breakdown = score_semantic_route(
+        &feature_vector,
+        SemanticScoreInputs {
+            quality: tier_score(selected_quality_tier),
+            reasoning: tier_score(selected_reasoning_effort),
+            reliability: assignment["effective_score"].as_u64().unwrap_or(50) as f64,
+            speed: speed_score(selected_speed_tier),
+            cost: assignment["normalized_cost_units"].as_u64().unwrap_or(0) as f64,
+            domain_fit: if feature_vector.detected_domain == task_class {
+                85.0
+            } else if feature_vector
+                .matched_terms
+                .domain
+                .iter()
+                .any(|term| task_class.contains(term))
+            {
+                60.0
+            } else {
+                25.0
+            },
+            complexity_mismatch_penalty: 0.0,
+            lifecycle_penalty: 0.0,
+            over_budget_penalty: if selected_over_budget { 25.0 } else { 0.0 },
+            readiness_penalty: if selected_readiness == "blocked" {
+                25.0
+            } else {
+                0.0
+            },
+        },
+    );
+
+    if let Some(map) = assignment.as_object_mut() {
+        map.insert(
+            "semantic_routing".to_string(),
+            serde_json::json!({
+                "enabled": true,
+                "mode": "deterministic_rules",
+                "feature_source": feature_vector.feature_source,
+                "complexity_score": feature_vector.complexity_score,
+                "complexity_band": feature_vector.complexity_band,
+                "detected_domain": feature_vector.detected_domain,
+                "feature_vector": serde_json::to_value(&feature_vector).unwrap_or(serde_json::Value::Null),
+                "score_applied": true,
+                "strategy": "semantic_balanced_cost_quality",
+                "config_source_path": "agent_system.semantic_routing",
+                "advisory_only": true
+            }),
+        );
+        map.insert(
+            "semantic_route_score".to_string(),
+            serde_json::json!(score_breakdown.semantic_route_score),
+        );
+        map.insert(
+            "semantic_score_breakdown".to_string(),
+            serde_json::to_value(score_breakdown).unwrap_or(serde_json::Value::Null),
+        );
+    }
 }
 
 fn model_selection_enabled(
@@ -634,23 +761,92 @@ fn external_cli_readiness_verdict_for_candidate(
     role: &serde_json::Value,
     profile: &serde_json::Value,
 ) -> Option<serde_json::Value> {
-    if role["backend_class"].as_str().map(str::trim) != Some("external_cli") {
-        return None;
-    }
-    let backend_id = role["role_id"].as_str()?.trim();
-    if backend_id.is_empty() {
-        return None;
-    }
-    let backend_entry = json_lookup(&compiled_bundle["agent_system"], &["subagents", backend_id])?;
-    let backend_entry = serde_yaml::to_value(backend_entry).ok()?;
+    let (backend_id, backend_entry) =
+        configured_external_cli_backend_entry_for_role(compiled_bundle, role)?;
     let profile_id = profile["profile_id"].as_str().map(str::trim);
+    if let Some(blocker_reason) =
+        crate::runtime_dispatch_state::configured_external_backend_dispatch_blocker(
+            &backend_id,
+            &backend_entry,
+        )
+    {
+        let selected_model_profile = profile_id
+            .map(|profile_id| serde_json::Value::String(profile_id.to_string()))
+            .unwrap_or(serde_json::Value::Null);
+        return Some(serde_json::json!({
+            "backend_id": backend_id,
+            "status": "external_backend_dispatch_blocked",
+            "blocked": true,
+            "blocker_code": "configured_backend_dispatch_failed",
+            "blocker_reason": blocker_reason,
+            "selected_model_profile": selected_model_profile,
+            "next_actions": [
+                format!("Enable and repair external backend `{backend_id}` in `vida.config.yaml`, or reroute this lane to a receipt-backed backend before dispatch.")
+            ],
+        }));
+    }
     Some(
         crate::status_surface_external_cli::external_cli_backend_readiness_verdict_for_profile(
-            backend_id,
+            &backend_id,
             &backend_entry,
             profile_id,
         ),
     )
+}
+
+fn configured_external_cli_backend_entry_for_role(
+    compiled_bundle: &serde_json::Value,
+    role: &serde_json::Value,
+) -> Option<(String, serde_yaml::Value)> {
+    let backend_id = role["role_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let backend_entry_json =
+        json_lookup(&compiled_bundle["agent_system"], &["subagents", backend_id])?;
+    let backend_entry = serde_yaml::to_value(backend_entry_json).ok()?;
+    let backend_class = role["backend_class"]
+        .as_str()
+        .or_else(|| role["subagent_backend_class"].as_str())
+        .or_else(|| backend_entry_json["subagent_backend_class"].as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
+    if backend_class != "external_cli" {
+        return None;
+    }
+    Some((backend_id.to_string(), backend_entry))
+}
+
+fn external_cli_dispatch_blocker_verdict_for_candidate(
+    compiled_bundle: &serde_json::Value,
+    role: &serde_json::Value,
+    profile: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let (backend_id, backend_entry) =
+        configured_external_cli_backend_entry_for_role(compiled_bundle, role)?;
+    let blocker_reason =
+        crate::runtime_dispatch_state::configured_external_backend_dispatch_blocker(
+            &backend_id,
+            &backend_entry,
+        )?;
+    let selected_model_profile = profile["profile_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|profile_id| !profile_id.is_empty())
+        .map(|profile_id| serde_json::Value::String(profile_id.to_string()))
+        .unwrap_or(serde_json::Value::Null);
+    Some(serde_json::json!({
+        "backend_id": backend_id,
+        "status": "external_backend_dispatch_blocked",
+        "blocked": true,
+        "blocker_code": "configured_backend_dispatch_failed",
+        "blocker_reason": blocker_reason,
+        "selected_model_profile": selected_model_profile,
+        "next_actions": [
+            format!("Enable and repair external backend `{backend_id}` in `vida.config.yaml`, or reroute this lane to a receipt-backed backend before dispatch.")
+        ],
+    }))
 }
 
 fn task_class_requires_write_scope(task_class: &str) -> bool {
@@ -772,6 +968,28 @@ fn load_external_cli_readiness_for_candidate(
         return;
     }
     candidate.external_backend_readiness = external_cli_readiness_verdict_for_candidate(
+        compiled_bundle,
+        &candidate.role,
+        &candidate.profile,
+    );
+    if let Some(status) = candidate
+        .external_backend_readiness
+        .as_ref()
+        .and_then(|verdict| verdict["status"].as_str())
+        .map(str::to_string)
+    {
+        candidate.readiness_status = status;
+    }
+}
+
+fn load_static_external_cli_dispatch_blocker_for_candidate(
+    compiled_bundle: &serde_json::Value,
+    candidate: &mut ProfileCandidate,
+) {
+    if candidate.external_backend_readiness.is_some() {
+        return;
+    }
+    candidate.external_backend_readiness = external_cli_dispatch_blocker_verdict_for_candidate(
         compiled_bundle,
         &candidate.role,
         &candidate.profile,
@@ -1338,6 +1556,7 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             .to_string();
         let live_guard_required = task_class_requires_write_scope(task_class)
             && write_scope_requires_live_guard(&write_scope);
+        load_static_external_cli_dispatch_blocker_for_candidate(compiled_bundle, candidate);
         if reasons.is_empty() && (probe_external_readiness || live_guard_required) {
             load_external_cli_readiness_for_candidate(compiled_bundle, candidate);
         }
@@ -1744,17 +1963,31 @@ pub(crate) fn build_runtime_assignment(
     let task_class = infer_runtime_task_class(selection, requires_design_gate);
     let execution_runtime_role =
         infer_execution_runtime_role(selection, &task_class, requires_design_gate);
-    build_runtime_assignment_from_resolved_constraints(
+    let mut assignment = build_runtime_assignment_from_resolved_constraints(
         compiled_bundle,
         &selection.selected_role,
         &task_class,
         &execution_runtime_role,
-    )
+    );
+    if semantic_routing_enabled(compiled_bundle) {
+        insert_semantic_routing_diagnostics(
+            &mut assignment,
+            &selection.request,
+            &task_class,
+            &execution_runtime_role,
+            &selection.selected_role,
+        );
+    }
+    assignment
 }
 
 #[cfg(test)]
 mod tests {
-    use super::build_runtime_assignment_from_resolved_constraints;
+    use super::{
+        build_runtime_assignment, build_runtime_assignment_from_resolved_constraints,
+        build_runtime_assignment_preview_from_resolved_constraints,
+    };
+    use crate::RuntimeConsumptionLaneSelection;
 
     fn compiled_bundle_with_roles(roles: Vec<serde_json::Value>) -> serde_json::Value {
         let worker_agents = roles
@@ -1804,6 +2037,81 @@ mod tests {
     }
 
     #[test]
+    fn enabled_semantic_routing_adds_advisory_assignment_diagnostics() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "worker",
+            "tier": "middle",
+            "rate": 6,
+            "normalized_cost_units": 6,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "reasoning_band": "medium",
+            "default_model_profile": "developer",
+            "model_profiles": {
+                "developer": {
+                    "profile_id": "developer",
+                    "model_ref": "gpt-5.5",
+                    "provider": "openai",
+                    "reasoning_effort": "medium",
+                    "plan_mode_reasoning_effort": "high",
+                    "sandbox_mode": "workspace-write",
+                    "normalized_cost_units": 6,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+        compiled_bundle.as_object_mut().unwrap().insert(
+            "agent_system".to_string(),
+            serde_json::json!({
+                "semantic_routing": {
+                    "enabled": true,
+                    "mode": "deterministic_rules"
+                }
+            }),
+        );
+        let selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "worker".to_string(),
+            request: "Implement deterministic routing feature extraction with receipt-aware scoring helpers.".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "test".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: compiled_bundle.clone(),
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+
+        let assignment = build_runtime_assignment(&compiled_bundle, &selection, false);
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["task_class"], "implementation");
+        assert_eq!(assignment["semantic_routing"]["enabled"], true);
+        assert_eq!(
+            assignment["semantic_routing"]["feature_source"],
+            "vida_native_deterministic_rules"
+        );
+        assert_eq!(assignment["semantic_routing"]["score_applied"], true);
+        assert_eq!(assignment["semantic_routing"]["advisory_only"], true);
+        assert_eq!(
+            assignment["semantic_score_breakdown"]["advisory_only"],
+            true
+        );
+        assert!(assignment["semantic_route_score"].as_f64().is_some());
+    }
+
+    #[test]
     fn free_external_model_profile_with_cost_zero_is_not_dropped() {
         let compiled_bundle = compiled_bundle_with_roles(vec![
             serde_json::json!({
@@ -1819,7 +2127,7 @@ mod tests {
                 "model_profiles": {
                     "codex_gpt54_medium_write": {
                         "profile_id": "codex_gpt54_medium_write",
-                        "model_ref": "gpt-5.4",
+                        "model_ref": "gpt-5.5",
                         "provider": "openai",
                         "reasoning_effort": "medium",
                         "plan_mode_reasoning_effort": "high",
@@ -1954,7 +2262,7 @@ mod tests {
             "model_profiles": {
                 "developer": {
                     "profile_id": "",
-                    "model_ref": "gpt-5.4",
+                    "model_ref": "gpt-5.5",
                     "provider": "openai",
                     "reasoning_effort": "low",
                     "normalized_cost_units": 4,
@@ -2003,7 +2311,7 @@ mod tests {
             "model_profiles": {
                 "developer": {
                     "profile_id": "developer",
-                    "model_ref": "gpt-5.4",
+                    "model_ref": "gpt-5.5",
                     "provider": "openai",
                     "reasoning_effort": "low",
                     "speed_tier": "fast",
@@ -2052,7 +2360,7 @@ mod tests {
             "model_profiles": {
                 "developer": {
                     "profile_id": "developer",
-                    "model_ref": "gpt-5.4",
+                    "model_ref": "gpt-5.5",
                     "provider": "openai",
                     "reasoning_effort": "low",
                     "normalized_cost_units": 4,
@@ -2127,7 +2435,7 @@ mod tests {
             "model_profiles": {
                 "developer": {
                     "profile_id": "developer",
-                    "model_ref": "gpt-5.4",
+                    "model_ref": "gpt-5.5",
                     "provider": "openai",
                     "reasoning_effort": "low",
                     "normalized_cost_units": 4,
@@ -2193,7 +2501,7 @@ mod tests {
                 "model_profiles": {
                     "codex_gpt54_low_write": {
                         "profile_id": "codex_gpt54_low_write",
-                        "model_ref": "gpt-5.4",
+                        "model_ref": "gpt-5.5",
                         "provider": "openai",
                         "reasoning_effort": "low",
                         "plan_mode_reasoning_effort": "medium",
@@ -2221,7 +2529,7 @@ mod tests {
                 "model_profiles": {
                     "codex_gpt54_high_write": {
                         "profile_id": "codex_gpt54_high_write",
-                        "model_ref": "gpt-5.4",
+                        "model_ref": "gpt-5.5",
                         "provider": "openai",
                         "reasoning_effort": "high",
                         "plan_mode_reasoning_effort": "high",
@@ -2294,7 +2602,7 @@ mod tests {
             "model_profiles": {
                 "codex_gpt54_low_write": {
                     "profile_id": "codex_gpt54_low_write",
-                    "model_ref": "gpt-5.4",
+                    "model_ref": "gpt-5.5",
                     "provider": "openai",
                     "reasoning_effort": "low",
                     "normalized_cost_units": 4,
@@ -2443,7 +2751,7 @@ mod tests {
                 "model_profiles": {
                     "codex_gpt54_low_write": {
                         "profile_id": "codex_gpt54_low_write",
-                        "model_ref": "gpt-5.4",
+                        "model_ref": "gpt-5.5",
                         "provider": "openai",
                         "reasoning_effort": "low",
                         "plan_mode_reasoning_effort": "medium",
@@ -2471,7 +2779,7 @@ mod tests {
                 "model_profiles": {
                     "codex_gpt54_high_write": {
                         "profile_id": "codex_gpt54_high_write",
-                        "model_ref": "gpt-5.4",
+                        "model_ref": "gpt-5.5",
                         "provider": "openai",
                         "reasoning_effort": "high",
                         "plan_mode_reasoning_effort": "high",
@@ -2572,7 +2880,7 @@ mod tests {
                 "model_profiles": {
                     "codex_gpt54_low_write": {
                         "profile_id": "codex_gpt54_low_write",
-                        "model_ref": "gpt-5.4",
+                        "model_ref": "gpt-5.5",
                         "provider": "openai",
                         "reasoning_effort": "low",
                         "plan_mode_reasoning_effort": "medium",
@@ -2660,7 +2968,7 @@ mod tests {
                 "model_profiles": {
                     "codex_gpt54_low_write": {
                         "profile_id": "codex_gpt54_low_write",
-                        "model_ref": "gpt-5.4",
+                        "model_ref": "gpt-5.5",
                         "provider": "openai",
                         "reasoning_effort": "low",
                         "normalized_cost_units": 1,
@@ -2748,7 +3056,7 @@ mod tests {
                 "model_profiles": {
                     "codex_gpt54_low_write": {
                         "profile_id": "codex_gpt54_low_write",
-                        "model_ref": "gpt-5.4",
+                        "model_ref": "gpt-5.5",
                         "provider": "openai",
                         "reasoning_effort": "low",
                         "normalized_cost_units": 4,
@@ -2889,7 +3197,7 @@ mod tests {
                 "model_profiles": {
                     "codex_gpt54_medium_review": {
                         "profile_id": "codex_gpt54_medium_review",
-                        "model_ref": "gpt-5.4",
+                        "model_ref": "gpt-5.5",
                         "provider": "openai",
                         "reasoning_effort": "medium",
                         "normalized_cost_units": 4,
@@ -3001,7 +3309,7 @@ mod tests {
                 "model_profiles": {
                     "codex_gpt54_medium_review": {
                         "profile_id": "codex_gpt54_medium_review",
-                        "model_ref": "gpt-5.4",
+                        "model_ref": "gpt-5.5",
                         "provider": "openai",
                         "reasoning_effort": "medium",
                         "normalized_cost_units": 4,
@@ -3095,6 +3403,113 @@ mod tests {
     }
 
     #[test]
+    fn disabled_configured_external_backend_is_rejected_before_preview_selection() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "internal_support",
+                "tier": "middle",
+                "rate": 4,
+                "normalized_cost_units": 4,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "default_model_profile": "internal_review",
+                "model_profiles": {
+                    "internal_review": {
+                        "profile_id": "internal_review",
+                        "model_ref": "gpt-5.5",
+                        "provider": "openai",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 4,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "read_or_review",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "external_bridge",
+                "tier": "external_free",
+                "rate": 0,
+                "normalized_cost_units": 0,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "default_model_profile": "external_review",
+                "model_profiles": {
+                    "external_review": {
+                        "profile_id": "external_review",
+                        "model_ref": "provider/free-review",
+                        "provider": "provider",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 0,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "none",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "subagents": {
+                "external_bridge": {
+                    "enabled": false,
+                    "subagent_backend_class": "external_cli",
+                    "default_model_profile": "external_review",
+                    "model_profiles": {
+                        "external_review": {
+                            "profile_id": "external_review",
+                            "model_ref": "provider/free-review",
+                            "provider": "provider",
+                            "reasoning_effort": "medium",
+                            "normalized_cost_units": 0,
+                            "speed_tier": "fast",
+                            "quality_tier": "medium",
+                            "write_scope": "none",
+                            "runtime_roles": ["coach"],
+                            "task_classes": ["review"],
+                            "readiness": { "required": true, "ready": true }
+                        }
+                    }
+                }
+            }
+        });
+
+        let assignment = build_runtime_assignment_preview_from_resolved_constraints(
+            &compiled_bundle,
+            "coach",
+            "review",
+            "coach",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "internal_support");
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates should render")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "external_bridge"
+                    && row["reasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|reason| reason.as_str() == Some("external_backend_not_ready"))
+                    && row["external_backend_readiness"]["blocked"] == true
+                    && row["external_backend_readiness"]["blocker_code"]
+                        == "configured_backend_dispatch_failed"
+            }));
+    }
+
+    #[test]
     fn external_cli_readiness_override_remains_admissible() {
         let mut compiled_bundle = compiled_bundle_with_roles(vec![
             serde_json::json!({
@@ -3110,7 +3525,7 @@ mod tests {
                 "model_profiles": {
                     "codex_gpt54_medium_review": {
                         "profile_id": "codex_gpt54_medium_review",
-                        "model_ref": "gpt-5.4",
+                        "model_ref": "gpt-5.5",
                         "provider": "openai",
                         "reasoning_effort": "medium",
                         "normalized_cost_units": 4,
@@ -3321,7 +3736,7 @@ mod tests {
             "model_profiles": {
                 "codex_gpt54_medium_write": {
                     "profile_id": "codex_gpt54_medium_write",
-                    "model_ref": "gpt-5.4",
+                    "model_ref": "gpt-5.5",
                     "provider": "openai",
                     "reasoning_effort": "medium",
                     "normalized_cost_units": 4,
@@ -3373,7 +3788,7 @@ mod tests {
             "model_profiles": {
                 "codex_gpt54_medium_write": {
                     "profile_id": "codex_gpt54_medium_write",
-                    "model_ref": "gpt-5.4",
+                    "model_ref": "gpt-5.5",
                     "provider": "openai",
                     "reasoning_effort": "medium",
                     "normalized_cost_units": 4,
@@ -3425,7 +3840,7 @@ mod tests {
             "model_profiles": {
                 "codex_gpt54_medium_write": {
                     "profile_id": "codex_gpt54_medium_write",
-                    "model_ref": "gpt-5.4",
+                    "model_ref": "gpt-5.5",
                     "provider": "openai",
                     "reasoning_effort": "medium",
                     "normalized_cost_units": 4,

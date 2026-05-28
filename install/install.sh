@@ -119,7 +119,7 @@ EOF
   vida taskflow status --json
 
 Examples:
-  vida root
+  vida --help
   vida taskflow help
 EOF
   else
@@ -171,7 +171,7 @@ print_project_init_summary() {
 Next steps:
   cd "${project_root}"
   vida doctor
-  vida root
+  vida --help
   rg --files vida/config/instructions | head
 
 Project usage examples:

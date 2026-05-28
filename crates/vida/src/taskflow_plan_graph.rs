@@ -2103,6 +2103,98 @@ fn stable_hash_hex(value: &str) -> String {
 mod tests {
     use super::*;
 
+    trait StateStoreFixtureTaskExt {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        >;
+    }
+
+    impl StateStoreFixtureTaskExt for crate::StateStore {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id,
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                } = request;
+                let generated_parent_id = (issue_type != "epic" && parent_id.is_none())
+                    .then(|| format!("{task_id}-fixture-parent"));
+                if let Some(parent_task_id) = generated_parent_id.as_deref() {
+                    let parent_labels: Vec<String> = Vec::new();
+                    let parent_status = if matches!(status.trim(), "closed" | "completed") {
+                        "closed"
+                    } else {
+                        "open"
+                    };
+                    self.create_task(crate::state_store::CreateTaskRequest {
+                        task_id: parent_task_id,
+                        title: "Fixture parent epic",
+                        display_id: None,
+                        description: "Test-only parent epic for strict task hierarchy fixtures",
+                        issue_type: "epic",
+                        status: parent_status,
+                        priority,
+                        parent_id: None,
+                        labels: &parent_labels,
+                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                        created_by,
+                        source_repo,
+                    })
+                    .await?;
+                }
+                self.create_task(crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id: parent_id.or(generated_parent_id.as_deref()),
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                })
+                .await
+            })
+        }
+    }
+
     #[test]
     fn plan_help_text_surfaces_context_requirement_flags() {
         let help = plan_help_text();
@@ -2636,6 +2728,25 @@ mod tests {
         let store = StateStore::open(state_dir.clone())
             .await
             .expect("state store should open");
+        let empty_labels = Vec::<String>::new();
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: "parent-a",
+                title: "parent-a",
+                display_id: None,
+                description: "parent-a",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &empty_labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "vida-stack",
+            })
+            .await
+            .expect("parent should create");
         let draft = generate_plan_graph_draft(&PlanGenerateOptions {
             source_file: None,
             source_text: Some("Implement planner".to_string()),
@@ -2644,14 +2755,14 @@ mod tests {
             context_refs: Vec::new(),
             require_context: false,
             task_prefix: Some("feature-planner".to_string()),
-            parent_id: None,
+            parent_id: Some("parent-a".to_string()),
             output: None,
             json: true,
         })
         .expect("draft should generate");
         let existing_node = &draft.nodes[0];
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: &existing_node.task_id,
                 title: &existing_node.title,
                 display_id: None,
@@ -2659,7 +2770,7 @@ mod tests {
                 issue_type: &existing_node.issue_type,
                 status: &existing_node.status,
                 priority: existing_node.priority,
-                parent_id: None,
+                parent_id: Some("parent-a"),
                 labels: &existing_node.labels,
                 execution_semantics: existing_node.execution_semantics.clone(),
                 planner_metadata: planner_metadata_from_node(existing_node),
@@ -2709,7 +2820,7 @@ mod tests {
         let empty_labels = Vec::<String>::new();
         for parent_id in ["parent-a", "parent-b"] {
             store
-                .create_task(CreateTaskRequest {
+                .create_task_with_fixture_parent(CreateTaskRequest {
                     task_id: parent_id,
                     title: parent_id,
                     display_id: None,
@@ -2742,7 +2853,7 @@ mod tests {
         .expect("draft should generate");
         let existing_node = &draft.nodes[0];
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: &existing_node.task_id,
                 title: &existing_node.title,
                 display_id: None,
@@ -2806,7 +2917,7 @@ mod tests {
         let legacy_description = task_description_with_plan_metadata(existing_node);
 
         store
-            .create_task(CreateTaskRequest {
+            .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: &existing_node.task_id,
                 title: &existing_node.title,
                 display_id: None,

@@ -460,6 +460,40 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
     };
 
     if let Some(status) = latest_run_graph_status {
+        if latest_run_graph_task_closed && run_graph_status_is_blocked(&status.status) {
+            return serde_json::json!({
+                "status": "ambiguous",
+                "continuation_allowed": false,
+                "continuation_required_now": false,
+                "active_bounded_unit": serde_json::Value::Null,
+                "binding_source": serde_json::Value::Null,
+                "why_this_unit": serde_json::Value::Null,
+                "primary_path": "diagnosis_path",
+                "sequential_vs_parallel_posture": "unknown_until_run_graph_blocker_resolved",
+                "pause_boundary_gate": "forbidden_while_run_graph_status_blocked",
+                "ambiguity_reason": "latest_run_graph_task_closed",
+                "blocked_run_graph_status": {
+                    "task_id": status.task_id,
+                    "run_id": status.run_id,
+                    "active_node": status.active_node,
+                    "status": status.status,
+                    "lifecycle_stage": status.lifecycle_stage,
+                },
+                "next_actions": ({
+                    let mut next_actions = vec![
+                        "Do not continue normal delivery while the latest run-graph status points at a closed TaskFlow task."
+                            .to_string(),
+                    ];
+                    next_actions.extend(crate::status_surface_signals::blocked_run_graph_status_next_actions(
+                        Some(status.run_id.as_str()),
+                        Some(status.task_id.as_str()),
+                        true,
+                    ));
+                    next_actions
+                })
+            });
+        }
+
         if evidence_ambiguous {
             if let Some(binding) = explicit_binding {
                 if active_exception_takeover_binding_matches_status(
@@ -1529,6 +1563,46 @@ mod tests {
                     value.contains("vida taskflow recovery status run-blocked --json")
                 }))
             ));
+    }
+
+    #[test]
+    fn blocked_exception_takeover_status_for_closed_task_is_retire_actionable() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "closed-exception-task",
+            "closed-exception-task",
+            "test_author",
+        );
+        status.run_id = "run-blocked-exception".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "test_author_blocked".to_string();
+        let mut dispatch = exception_takeover_dispatch("run-blocked-exception");
+        dispatch.exception_path_receipt_id = Some("exception-receipt".to_string());
+        dispatch.supersedes_receipt_id = Some("supersede-receipt".to_string());
+
+        let summary = super::build_continuation_binding_summary_with_task_authority(
+            None,
+            Some(&status),
+            None,
+            Some(&dispatch),
+            None,
+            true,
+            false,
+            true,
+            false,
+        );
+
+        assert_eq!(summary["status"], "ambiguous");
+        assert_eq!(summary["continuation_allowed"], false);
+        assert_eq!(summary["active_bounded_unit"], serde_json::Value::Null);
+        assert_eq!(summary["ambiguity_reason"], "latest_run_graph_task_closed");
+        assert!(summary["next_actions"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row.as_str().is_some_and(|value| {
+                value.contains("closed-exception-task")
+                    && value.contains(
+                        "vida lane retire run-blocked-exception --receipt-id <concrete-receipt-id> --reason <reason> --json",
+                    )
+            }))));
     }
 
     #[test]
