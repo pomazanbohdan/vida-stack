@@ -3327,9 +3327,9 @@ pub(crate) fn configured_external_activation_parts(
         .ok_or_else(|| {
             "Configured external backend is missing non-empty `dispatch.command`".to_string()
         })?;
-    if !external_dispatch_command_is_config_safe(&command) {
+    if !external_dispatch_command_is_config_safe(&command, backend_entry) {
         return Err(format!(
-            "Configured external backend `{backend_id}` uses unsafe `dispatch.command` `{command}`; external dispatch commands must be config-owned command tokens, not shell snippets or path-like invocations"
+            "Configured external backend `{backend_id}` uses unsafe `dispatch.command` `{command}`; external dispatch commands must be config-owned command tokens that match backend trust metadata, not shell snippets, path-like invocations, or unrelated local binaries"
         ));
     }
     let mut args = yaml_string_list(yaml_lookup(dispatch, &["static_args"]));
@@ -3424,7 +3424,10 @@ pub(crate) fn configured_external_backend_dispatch_blocker(
     external_backend_dispatch_blocker(backend_id, backend_entry)
 }
 
-fn external_dispatch_command_is_config_safe(command: &str) -> bool {
+fn external_dispatch_command_is_config_safe(
+    command: &str,
+    backend_entry: &serde_yaml::Value,
+) -> bool {
     let trimmed = command.trim();
     if trimmed.is_empty()
         || trimmed.contains(std::path::MAIN_SEPARATOR)
@@ -3434,9 +3437,39 @@ fn external_dispatch_command_is_config_safe(command: &str) -> bool {
         return false;
     }
 
-    trimmed
+    let token_safe = trimmed
         .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'));
+    if !token_safe {
+        return false;
+    }
+
+    let backend_class = yaml_string(yaml_lookup(backend_entry, &["subagent_backend_class"]))
+        .map(|value| value.trim().to_ascii_lowercase());
+    let trusted_tokens = [
+        yaml_string(yaml_lookup(backend_entry, &["detect_command"])),
+        yaml_string(yaml_lookup(
+            backend_entry,
+            &["readiness", "adapter", "command"],
+        )),
+        yaml_string(yaml_lookup(backend_entry, &["dispatch", "trusted_command"])),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .filter(|value| {
+        value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    })
+    .collect::<Vec<_>>();
+
+    if trusted_tokens.is_empty() {
+        return backend_class.as_deref() != Some("external_cli");
+    }
+
+    trusted_tokens.iter().any(|token| token == trimmed)
 }
 
 pub(crate) fn render_command_display(command: &str, args: &[String]) -> String {
@@ -3602,9 +3635,11 @@ dispatch:
     }
 
     #[test]
-    fn configured_external_activation_parts_accepts_configured_command_without_binary_hardcode() {
+    fn configured_external_activation_parts_accepts_config_derived_command_token() {
         let backend_entry: serde_yaml::Value = serde_yaml::from_str(
             r#"
+subagent_backend_class: external_cli
+detect_command: newly-configured-carrier
 dispatch:
   command: newly-configured-carrier
   static_args: ["run"]
@@ -3620,9 +3655,66 @@ dispatch:
             "/tmp/project/.vida/dispatch.json",
             None,
         )
-        .expect("config-owned command token should be accepted without a binary-name allowlist");
+        .expect("command token matching backend trust metadata should be accepted");
         assert_eq!(command, "newly-configured-carrier");
         assert_eq!(args[0], "run");
+    }
+
+    #[test]
+    fn configured_external_activation_parts_rejects_command_mismatched_from_trust_metadata() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+subagent_backend_class: external_cli
+detect_command: trusted-carrier
+dispatch:
+  command: python
+  prompt_mode: positional
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let error = configured_external_activation_parts(
+            "external_fixture",
+            &backend_entry,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            None,
+        )
+        .expect_err("external CLI command must match backend trust metadata");
+
+        assert!(error.contains("unsafe"));
+        assert!(error.contains("python"));
+    }
+
+    #[test]
+    fn configured_external_activation_parts_rejects_raw_provider_when_adapter_is_trusted() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+subagent_backend_class: external_cli
+detect_command: vida-pi-agent
+provider_command: pi
+dispatch:
+  command: pi
+  raw_provider_dispatch_forbidden: true
+  prompt_mode: stdin
+readiness:
+  adapter:
+    command: vida-pi-agent
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let error = configured_external_activation_parts(
+            "pi_cli",
+            &backend_entry,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            None,
+        )
+        .expect_err("raw provider command must not replace the trusted adapter command");
+
+        assert!(error.contains("unsafe"));
+        assert!(error.contains("pi"));
     }
 
     #[test]
@@ -3654,6 +3746,8 @@ dispatch:
     ) {
         let backend_entry: serde_yaml::Value = serde_yaml::from_str(
             r#"
+subagent_backend_class: external_cli
+detect_command: configured-adapter
 dispatch:
   command: configured-adapter
   static_args: ["--mode", "rpc"]
@@ -3669,12 +3763,14 @@ dispatch:
             "/tmp/project/.vida/dispatch.json",
             None,
         )
-        .expect("configured adapter command should be trusted by config");
+        .expect("configured adapter command should be trusted");
         assert_eq!(command, "configured-adapter");
         assert_eq!(args, vec!["--mode".to_string(), "rpc".to_string()]);
 
         let path_like: serde_yaml::Value = serde_yaml::from_str(
             r#"
+subagent_backend_class: external_cli
+detect_command: configured-adapter
 dispatch:
   command: ./configured-adapter
   prompt_mode: stdin
@@ -7800,6 +7896,7 @@ host_environment:
             "  detect_command: cargo\n",
             "  dispatch:\n",
             "    command: qwen\n",
+            "    trusted_command: qwen\n",
             "    static_args:\n",
             "      - -y\n",
             "      - -o\n",
@@ -7814,6 +7911,7 @@ host_environment:
             "  detect_command: hermes\n",
             "  dispatch:\n",
             "    command: hermes\n",
+            "    trusted_command: hermes\n",
             "    static_args:\n",
             "      - chat\n",
             "      - -Q\n",
@@ -7911,6 +8009,10 @@ host_environment:
             .expect("test subagent dispatch should exist");
         dispatch.insert(
             serde_yaml::Value::String("command".to_string()),
+            serde_yaml::Value::String(command.to_string()),
+        );
+        dispatch.insert(
+            serde_yaml::Value::String("trusted_command".to_string()),
             serde_yaml::Value::String(command.to_string()),
         );
         dispatch.insert(
@@ -17414,6 +17516,7 @@ agent_system:
       subagent_backend_class: external_cli
       dispatch:
         command: sh
+        trusted_command: sh
         static_args: ["-lc", "printf '{\"type\":\"result\",\"is_error\":false,\"result\":\"ok\"}'"]
         prompt_mode: positional
 "#,
@@ -18340,6 +18443,8 @@ agent_system:
       enabled: true
       subagent_backend_class: external_cli
       dispatch:
+        command: hermes
+        trusted_command: hermes
         no_output_timeout_seconds: 8
 "#,
         )
@@ -19235,6 +19340,8 @@ agent_system:
       subagent_backend_class: external_cli
       max_runtime_seconds: 37
       dispatch:
+        command: hermes
+        trusted_command: hermes
         no_output_timeout_seconds: 37
 "#,
         )
