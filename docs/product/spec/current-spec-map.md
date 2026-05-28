@@ -131,8 +131,11 @@ Companion rule:
    Config families: test-first runtime defect repair, cross-surface scenario contracts, operator actionability proof, paused defect reparenting, and one-bounded-defect-at-a-time remediation across TaskFlow runtime-family surfaces
    Registered path: `docs/product/spec/test-first-runtime-defect-remediation-design.md`
 30. [agent-mode-test-first-delivery-flow-design.md](agent-mode-test-first-delivery-flow-design.md)
-   Config families: config-derived agent-mode delivery, middle-tier test authoring, orchestrator-only root posture, continuous TaskFlow actualization, cost/effectiveness telemetry, and sequential/parallel lane gating
-   Registered path: `docs/product/spec/agent-mode-test-first-delivery-flow-design.md`
+    Config families: config-derived agent-mode delivery, middle-tier test authoring, orchestrator-only root posture, continuous TaskFlow actualization, cost/effectiveness telemetry, and sequential/parallel lane gating
+    Registered path: `docs/product/spec/agent-mode-test-first-delivery-flow-design.md`
+31. [vida-service-tui-wizard-execution-spec.md](vida-service-tui-wizard-execution-spec.md)
+    Config families: service/TUI/wizard command envelope, `vida-contracts`, operation catalog, project registry, wizard state machine, service-home coordination state, fixture/in-process client proof, and staged TUI/transport rollout
+    Registered path: `docs/product/spec/vida-service-tui-wizard-execution-spec.md`
 
 ### Project And Packaging
 

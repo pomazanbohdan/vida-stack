@@ -342,6 +342,119 @@ fn build_recovery_latest_json_payload(
     )
 }
 
+async fn render_latest_recovery_json_payload(surface: &'static str) -> ExitCode {
+    let state_dir = proxy_state_dir();
+    match StateStore::open_existing_read_only(state_dir).await {
+        Ok(store) => match latest_recovery_summary_for_operator_surface(&store).await {
+            Ok(summary) => {
+                let summary = match summary {
+                    Some(summary) => {
+                        let status = match store.run_graph_status(&summary.run_id).await {
+                            Ok(status) => status,
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to read run-graph status for release-admission stale recovery check: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
+                        match store
+                            .run_graph_status_is_stale_after_release_admission_complete(&status)
+                            .await
+                        {
+                            Ok(true) => None,
+                            Ok(false) => Some(summary),
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to classify release-admitted stale recovery: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        }
+                    }
+                    None => None,
+                };
+                let projection_truth = match summary.as_ref() {
+                    Some(summary) => match store.run_graph_status(&summary.run_id).await {
+                        Ok(status) => match run_graph_projection_truth(&store, &status).await {
+                            Ok(truth) => Some(truth),
+                            Err(error) => {
+                                eprintln!("Failed to build recovery projection truth: {error}");
+                                return ExitCode::from(1);
+                            }
+                        },
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to read run-graph status for projection truth: {error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    },
+                    None => None,
+                };
+                let contract = summary.as_ref().zip(projection_truth.as_ref()).map(
+                    |(summary, projection_truth)| {
+                        recovery_surface_contract(summary, projection_truth)
+                    },
+                );
+                let payload = match (summary.as_ref(), projection_truth.as_ref(), contract) {
+                    (Some(summary), Some(projection_truth), Some(contract)) => {
+                        build_recovery_json_payload(
+                            surface,
+                            summary,
+                            projection_truth,
+                            contract.0,
+                            contract.1,
+                            contract.2,
+                            contract.3,
+                            contract.4,
+                        )
+                    }
+                    _ => Ok(serde_json::json!({
+                        "surface": surface,
+                        "status": null,
+                    })),
+                };
+                match payload {
+                    Ok(payload) => {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&payload)
+                                .expect("latest recovery summary should render as json")
+                        );
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to render normalized recovery latest payload: {error}");
+                        ExitCode::from(1)
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("Failed to read latest recovery status: {error}");
+                ExitCode::from(1)
+            }
+        },
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+async fn latest_recovery_summary_for_operator_surface(
+    store: &StateStore,
+) -> Result<Option<crate::state_store::RunGraphRecoverySummary>, crate::state_store::StateStoreError>
+{
+    match store
+        .latest_run_graph_recovery_summary_for_current_session()
+        .await?
+    {
+        Some(summary) => Ok(Some(summary)),
+        None => store.latest_run_graph_recovery_summary().await,
+    }
+}
+
 fn build_run_graph_diagnosis_json_payload(
     diagnosis: &RunGraphDiagnosis,
 ) -> Result<serde_json::Value, String> {
@@ -625,6 +738,12 @@ fn next_lawful_operator_action_for_dispatch_resolution(
             .or_else(|| Some(format!("vida lane show {} --json", status.run_id)));
     }
     let _reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
+    if receipt.blocker_code.as_deref() == Some("internal_dispatch_timeout_without_receipt") {
+        return Some(format!(
+            "vida task show {} --json",
+            shell_quote(&status.task_id)
+        ));
+    }
     if let Some(receipt_id) = receipt
         .exception_path_receipt_id
         .as_deref()
@@ -785,6 +904,9 @@ fn recommended_surface_for_command(command: &str) -> String {
     if command.starts_with("vida taskflow run-graph status") {
         return "vida taskflow run-graph status".to_string();
     }
+    if command.starts_with("vida task show") {
+        return "vida task show".to_string();
+    }
     if command.starts_with("vida taskflow continuation bind") {
         return "vida taskflow continuation bind".to_string();
     }
@@ -826,6 +948,9 @@ fn recovery_next_action_reason(
     }
     if command.starts_with("vida lane show") {
         return "inspect the lane envelope for the dispatch blocker, then record structured exception-takeover evidence and supersession before any local recovery work".to_string();
+    }
+    if command.starts_with("vida task show") {
+        return "inspect the active task owned paths before recording structured exception-takeover evidence for the terminal dispatch blocker".to_string();
     }
     if command.starts_with("vida taskflow consume continue")
         && projection_truth
@@ -872,7 +997,13 @@ fn recovery_surface_contract(
             .map(|value| vec![value.to_string()])
             .unwrap_or_default()
     };
-    blocker_codes.extend(projection_truth_blocker_codes(projection_truth));
+    blocker_codes.extend(projection_truth_blocker_codes_for_ready_handoff(
+        &summary.active_node,
+        &summary.resume_status,
+        summary.recovery_ready,
+        &summary.resume_target,
+        projection_truth,
+    ));
     let blocker_codes = normalize_run_graph_blocker_codes(&blocker_codes, false);
 
     let next_action = projection_truth
@@ -941,10 +1072,9 @@ fn recovery_projection_resolves_persisted_open_cycle(
     if summary.delegation_gate.blocker_code.as_deref() != Some("open_delegated_cycle") {
         return false;
     }
-    if projection_truth.projection_vs_receipt_parity != "reconciled_from_receipt" {
-        return false;
-    }
-    if !projection_truth_blocker_codes(projection_truth).is_empty() {
+    if projection_truth.projection_vs_receipt_parity != "reconciled_from_receipt"
+        && projection_truth.projection_vs_receipt_parity != "aligned"
+    {
         return false;
     }
     projection_truth
@@ -956,17 +1086,14 @@ fn recovery_projection_resolves_persisted_open_cycle(
                     .downstream_dispatch_status
                     .as_deref()
                     .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"));
-            let clean_resolved_receipt = receipt.dispatch_status == "executed"
-                && (receipt.lane_status == "lane_completed"
-                    || (receipt.lane_status == "lane_running" && ready_downstream_handoff))
-                && receipt.blocker_code.is_none()
-                && receipt.downstream_dispatch_blockers.is_empty();
-            let downstream_has_no_blocking_state = !receipt.downstream_dispatch_ready
-                || receipt
-                    .downstream_dispatch_status
-                    .as_deref()
-                    .is_some_and(|status| status.eq_ignore_ascii_case("packet_ready"));
-            clean_resolved_receipt && downstream_has_no_blocking_state
+            let upstream_lane_completed = receipt.dispatch_status == "executed"
+                && receipt.lane_status == "lane_completed"
+                && receipt.blocker_code.is_none();
+            let ready_running_handoff = receipt.dispatch_status == "executed"
+                && receipt.lane_status == "lane_running"
+                && ready_downstream_handoff
+                && receipt.blocker_code.is_none();
+            upstream_lane_completed || ready_running_handoff
         })
 }
 
@@ -975,6 +1102,7 @@ fn recovery_ready_handoff_resolves_open_cycle(
 ) -> bool {
     summary.delegation_gate.delegated_cycle_open
         && summary.delegation_gate.delegated_cycle_state == "handoff_pending"
+        && summary.delegation_gate.blocker_code.is_none()
         && summary.recovery_ready
         && summary.resume_status == "ready"
         && summary.resume_target.starts_with("dispatch.")
@@ -1426,14 +1554,81 @@ fn projection_truth_blocker_codes(projection_truth: &RunGraphProjectionTruth) ->
     normalize_run_graph_blocker_codes(&blocker_codes, blocked_evidence_present)
 }
 
+fn exception_takeover_receipt_is_behind_ready_handoff(
+    active_node: &str,
+    status: &str,
+    recovery_ready: bool,
+    resume_target: &str,
+    receipt: &RunGraphDispatchReceipt,
+) -> bool {
+    receipt.lane_status == "lane_exception_takeover"
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && status == "ready"
+        && recovery_ready
+        && resume_target.starts_with("dispatch.")
+        && active_node != receipt.dispatch_target
+}
+
+fn projection_truth_blocker_codes_for_ready_handoff(
+    active_node: &str,
+    status: &str,
+    recovery_ready: bool,
+    resume_target: &str,
+    projection_truth: &RunGraphProjectionTruth,
+) -> Vec<String> {
+    if projection_truth
+        .dispatch_receipt
+        .as_ref()
+        .is_some_and(|receipt| {
+            exception_takeover_receipt_is_behind_ready_handoff(
+                active_node,
+                status,
+                recovery_ready,
+                resume_target,
+                receipt,
+            )
+        })
+    {
+        return normalize_run_graph_blocker_codes(&[], projection_truth.stale_state_suspected);
+    }
+    projection_truth_blocker_codes(projection_truth)
+}
+
 fn run_graph_status_surface_blocker_codes(
     status: &RunGraphStatus,
     projection_truth: &RunGraphProjectionTruth,
 ) -> Vec<String> {
     let mut blocked_evidence_present =
         blocked_status_signal(&status.status) || blocked_status_signal(&status.lifecycle_stage);
-    let mut blocker_codes = projection_truth_blocker_codes(projection_truth);
-    if let Some(receipt) = projection_truth.dispatch_receipt.as_ref() {
+    let mut blocker_codes = projection_truth_blocker_codes_for_ready_handoff(
+        &status.active_node,
+        &status.status,
+        status.recovery_ready,
+        &status.resume_target,
+        projection_truth,
+    );
+    if let Some(receipt) = projection_truth
+        .dispatch_receipt
+        .as_ref()
+        .filter(|receipt| {
+            !exception_takeover_receipt_is_behind_ready_handoff(
+                &status.active_node,
+                &status.status,
+                status.recovery_ready,
+                &status.resume_target,
+                receipt,
+            )
+        })
+    {
         blocker_codes.extend(dispatch_receipt_blocker_codes(
             receipt,
             &mut blocked_evidence_present,
@@ -1502,7 +1697,13 @@ fn projection_truth_from_status_surface(
     let blocker_codes = if recovery.is_some_and(|summary| {
         recovery_projection_resolves_persisted_open_cycle(summary, &projection_truth)
     }) {
-        projection_truth_blocker_codes(&projection_truth)
+        projection_truth_blocker_codes_for_ready_handoff(
+            &status.active_node,
+            &status.status,
+            status.recovery_ready,
+            &status.resume_target,
+            &projection_truth,
+        )
     } else {
         dispatch_blocker_codes_from_status_surface(recovery, receipt)
     };
@@ -1539,7 +1740,9 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
     let (recommended_command, recommended_surface) = if let Some(summary) = recovery {
         let (_codes, _why_not_now, _next_action, command, surface) =
             recovery_surface_contract(summary, &projection_truth);
-        if recovery_projection_resolves_persisted_open_cycle(summary, &projection_truth) {
+        if recovery_projection_resolves_persisted_open_cycle(summary, &projection_truth)
+            && blocker_codes.is_empty()
+        {
             (None, None)
         } else {
             (
@@ -2085,7 +2288,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         [head, subcommand] if head == "recovery" && subcommand == "latest" => {
             let state_dir = proxy_state_dir();
             match StateStore::open_existing_read_only(state_dir).await {
-                Ok(store) => match store.latest_run_graph_recovery_summary().await {
+                Ok(store) => match latest_recovery_summary_for_operator_surface(&store).await {
                     Ok(Some(summary)) => {
                         let projection_truth = match store.run_graph_status(&summary.run_id).await {
                             Ok(status) => match run_graph_projection_truth(&store, &status).await {
@@ -2163,111 +2366,12 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         [head, subcommand, flag]
             if head == "recovery" && subcommand == "latest" && flag == "--json" =>
         {
-            let state_dir = proxy_state_dir();
-            match StateStore::open_existing_read_only(state_dir).await {
-                Ok(store) => match store.latest_run_graph_recovery_summary().await {
-                    Ok(summary) => {
-                        let summary = match summary {
-                            Some(summary) => {
-                                let status = match store.run_graph_status(&summary.run_id).await {
-                                    Ok(status) => status,
-                                    Err(error) => {
-                                        eprintln!(
-                                            "Failed to read run-graph status for release-admission stale recovery check: {error}"
-                                        );
-                                        return ExitCode::from(1);
-                                    }
-                                };
-                                match store
-                                    .run_graph_status_is_stale_after_release_admission_complete(
-                                        &status,
-                                    )
-                                    .await
-                                {
-                                    Ok(true) => None,
-                                    Ok(false) => Some(summary),
-                                    Err(error) => {
-                                        eprintln!(
-                                            "Failed to classify release-admitted stale recovery: {error}"
-                                        );
-                                        return ExitCode::from(1);
-                                    }
-                                }
-                            }
-                            None => None,
-                        };
-                        let projection_truth = match summary.as_ref() {
-                            Some(summary) => match store.run_graph_status(&summary.run_id).await {
-                                Ok(status) => {
-                                    match run_graph_projection_truth(&store, &status).await {
-                                        Ok(truth) => Some(truth),
-                                        Err(error) => {
-                                            eprintln!(
-                                                "Failed to build recovery projection truth: {error}"
-                                            );
-                                            return ExitCode::from(1);
-                                        }
-                                    }
-                                }
-                                Err(error) => {
-                                    eprintln!(
-                                        "Failed to read run-graph status for projection truth: {error}"
-                                    );
-                                    return ExitCode::from(1);
-                                }
-                            },
-                            None => None,
-                        };
-                        let contract = summary.as_ref().zip(projection_truth.as_ref()).map(
-                            |(summary, projection_truth)| {
-                                recovery_surface_contract(summary, projection_truth)
-                            },
-                        );
-                        let payload = match (summary.as_ref(), projection_truth.as_ref(), contract)
-                        {
-                            (Some(summary), Some(projection_truth), Some(contract)) => {
-                                build_recovery_latest_json_payload(
-                                    summary,
-                                    projection_truth,
-                                    contract.0,
-                                    contract.1,
-                                    contract.2,
-                                    contract.3,
-                                    contract.4,
-                                )
-                            }
-                            _ => Ok(serde_json::json!({
-                                "surface": "vida taskflow recovery latest",
-                                "status": null,
-                            })),
-                        };
-                        match payload {
-                            Ok(payload) => {
-                                println!(
-                                    "{}",
-                                    serde_json::to_string_pretty(&payload)
-                                        .expect("latest recovery summary should render as json")
-                                );
-                                ExitCode::SUCCESS
-                            }
-                            Err(error) => {
-                                eprintln!(
-                                    "Failed to render normalized recovery latest payload: {error}"
-                                );
-                                ExitCode::from(1)
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        eprintln!("Failed to read latest recovery status: {error}");
-                        ExitCode::from(1)
-                    }
-                },
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
-            }
+            render_latest_recovery_json_payload("vida taskflow recovery latest").await
+        }
+        [head, subcommand, flag]
+            if head == "recovery" && subcommand == "status" && flag == "--json" =>
+        {
+            render_latest_recovery_json_payload("vida taskflow recovery status").await
         }
         [head, subcommand, run_id] if head == "recovery" && subcommand == "status" => {
             let state_dir = proxy_state_dir();
@@ -4482,6 +4586,127 @@ fn dispatch_init_route_targets(execution_plan: &serde_json::Value) -> Vec<String
         .collect()
 }
 
+const ACTUATABLE_SELECTED_BACKEND_KEYS: &[&str] = &[
+    "selected_backend",
+    "selected_backend_id",
+    "selected_carrier_id",
+    "selected_carrier_agent_id",
+    "selected_agent_id",
+    "activation_agent_type",
+    "selected_tier",
+];
+
+fn disabled_external_backend_ref_from_overlay(
+    overlay: &serde_yaml::Value,
+    backend_id: &str,
+    source: &str,
+) -> Option<serde_json::Value> {
+    let backend_id = backend_id.trim();
+    if backend_id.is_empty() {
+        return None;
+    }
+    let backend_entry = crate::yaml_lookup(overlay, &["agent_system", "subagents", backend_id])?;
+    let backend_class = crate::yaml_lookup(backend_entry, &["subagent_backend_class"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if backend_class != "external_cli" {
+        return None;
+    }
+    let blocker_reason =
+        crate::runtime_dispatch_state::configured_external_backend_dispatch_blocker(
+            backend_id,
+            backend_entry,
+        )?;
+    Some(serde_json::json!({
+        "source": source,
+        "backend_id": backend_id,
+        "blocking": true,
+        "readiness": {
+            "backend_id": backend_id,
+            "status": "external_backend_dispatch_blocked",
+            "blocked": true,
+            "blocker_code": "configured_backend_dispatch_failed",
+            "blocker_reason": blocker_reason,
+        },
+    }))
+}
+
+fn collect_disabled_external_backend_refs_from_value(
+    overlay: &serde_yaml::Value,
+    value: &serde_json::Value,
+    path: &str,
+    refs: &mut Vec<serde_json::Value>,
+    seen: &mut BTreeSet<String>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map {
+                let child_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                if ACTUATABLE_SELECTED_BACKEND_KEYS.contains(&key.as_str()) {
+                    if let Some(backend_id) = child.as_str().map(str::trim) {
+                        let seen_key = format!("{child_path}\u{1f}{backend_id}");
+                        if seen.insert(seen_key) {
+                            if let Some(reference) = disabled_external_backend_ref_from_overlay(
+                                overlay,
+                                backend_id,
+                                &child_path,
+                            ) {
+                                refs.push(reference);
+                            }
+                        }
+                    }
+                }
+                collect_disabled_external_backend_refs_from_value(
+                    overlay,
+                    child,
+                    &child_path,
+                    refs,
+                    seen,
+                );
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for (index, child) in values.iter().enumerate() {
+                let child_path = format!("{path}[{index}]");
+                collect_disabled_external_backend_refs_from_value(
+                    overlay,
+                    child,
+                    &child_path,
+                    refs,
+                    seen,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn disabled_external_backend_refs_payload_for_value_from_overlay(
+    overlay: &serde_yaml::Value,
+    value: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let mut refs = Vec::new();
+    let mut seen = BTreeSet::new();
+    collect_disabled_external_backend_refs_from_value(overlay, value, "", &mut refs, &mut seen);
+    if refs.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "status": "blocked",
+        "blocking": true,
+        "refs": refs,
+        "next_actions": [
+            "reseed the route assignment from the current carrier config before trusting persisted dispatch artifacts",
+            "remove disabled external backends from actuatable selected-backend fields or enable the backend with receipt-backed readiness evidence",
+        ],
+    }))
+}
+
 fn dispatch_context_route_assignment_catalog_drift(
     state_root: &std::path::Path,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -4491,8 +4716,23 @@ fn dispatch_context_route_assignment_catalog_drift(
     let catalog = crate::runtime_dispatch_state::current_project_model_profile_catalog_for_root(
         project_root.as_ref(),
     );
-    if catalog.is_empty() {
-        return None;
+    let overlay =
+        crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root.as_ref())
+            .ok();
+    if let Some(overlay) = overlay.as_ref() {
+        if let Some(drift) = disabled_external_backend_refs_payload_for_value_from_overlay(
+            overlay,
+            &role_selection.execution_plan,
+        ) {
+            return Some(serde_json::json!({
+                "dispatch_target": "execution_plan",
+                "drift": {
+                    "kind": "disabled_external_backend_ref",
+                    "status": "blocked",
+                    "route_disabled_external_backend_refs": drift,
+                },
+            }));
+        }
     }
     for target in dispatch_init_route_targets(&role_selection.execution_plan) {
         let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
@@ -4504,16 +4744,59 @@ fn dispatch_context_route_assignment_catalog_drift(
             &target,
             route,
         );
-        if let Some(drift) = crate::runtime_dispatch_state::route_assignment_catalog_drift_payload(
-            &payload, &catalog,
-        ) {
-            return Some(serde_json::json!({
-                "dispatch_target": target,
-                "drift": drift,
-            }));
+        if !catalog.is_empty() {
+            if let Some(drift) =
+                crate::runtime_dispatch_state::route_assignment_catalog_drift_payload(
+                    &payload, &catalog,
+                )
+            {
+                return Some(serde_json::json!({
+                    "dispatch_target": target,
+                    "drift": drift,
+                }));
+            }
+        }
+        if let Some(overlay) = overlay.as_ref() {
+            if let Some(drift) =
+                crate::taskflow_proxy::disabled_external_backend_refs_payload_from_overlay(
+                    overlay, &payload,
+                )
+                .filter(|drift| drift["blocking"].as_bool() == Some(true))
+            {
+                return Some(serde_json::json!({
+                    "dispatch_target": target,
+                    "drift": {
+                        "kind": "disabled_external_backend_ref",
+                        "status": "blocked",
+                        "route_disabled_external_backend_refs": drift,
+                    },
+                }));
+            }
         }
     }
     None
+}
+
+fn dispatch_receipt_disabled_external_backend_drift(
+    state_root: &std::path::Path,
+    receipt: &RunGraphDispatchReceipt,
+) -> Option<serde_json::Value> {
+    let project_root =
+        crate::runtime_dispatch_state::runtime_dispatch_project_root_from_state_root(state_root);
+    let overlay =
+        crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root.as_ref())
+            .ok()?;
+    let receipt_payload = serde_json::to_value(receipt).ok()?;
+    let drift =
+        disabled_external_backend_refs_payload_for_value_from_overlay(&overlay, &receipt_payload)?;
+    Some(serde_json::json!({
+        "dispatch_target": receipt.dispatch_target,
+        "drift": {
+            "kind": "disabled_external_backend_ref",
+            "status": "blocked",
+            "route_disabled_external_backend_refs": drift,
+        },
+    }))
 }
 
 async fn reseed_dispatch_context_after_route_assignment_drift(
@@ -4644,6 +4927,7 @@ fn current_dispatch_init_cache_config_digest(state_root: &std::path::Path) -> Op
 }
 
 fn dispatch_init_fast_cache_payload_is_reusable(
+    state_root: &std::path::Path,
     payload: &serde_json::Value,
     requested_run_id: &str,
     current_config_digest: Option<&str>,
@@ -4671,6 +4955,17 @@ fn dispatch_init_fast_cache_payload_is_reusable(
     if payload["dispatch_receipt"]["dispatch_status"].as_str() != Some("routed") {
         return false;
     }
+    let project_root =
+        crate::runtime_dispatch_state::runtime_dispatch_project_root_from_state_root(state_root);
+    if let Ok(overlay) =
+        crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root.as_ref())
+    {
+        if disabled_external_backend_refs_payload_for_value_from_overlay(&overlay, payload)
+            .is_some()
+        {
+            return false;
+        }
+    }
     if !payload["dispatch_receipt"]["dispatch_command"]
         .as_str()
         .map(str::trim)
@@ -4693,6 +4988,7 @@ pub(crate) fn read_run_graph_dispatch_init_fast_cache(
     let payload = serde_json::from_str::<serde_json::Value>(&body).ok()?;
     let current_config_digest = current_dispatch_init_cache_config_digest(state_root);
     dispatch_init_fast_cache_payload_is_reusable(
+        state_root,
         &payload,
         requested_run_id,
         current_config_digest.as_deref(),
@@ -4816,6 +5112,9 @@ async fn existing_routed_dispatch_init_artifacts(
     else {
         return Ok(None);
     };
+    if dispatch_receipt_disabled_external_backend_drift(store.root(), &dispatch_receipt).is_some() {
+        return Ok(None);
+    }
     let Some(dispatch_packet_path) = reusable_routed_dispatch_receipt(&dispatch_receipt) else {
         return Ok(None);
     };
@@ -4884,7 +5183,8 @@ async fn reseed_explicit_task_graph_binding_for_dispatch_init(
     if bound_task_id == requested_run_id {
         return Ok(None);
     }
-    if let Ok(task) = store.show_task(bound_task_id).await {
+    let bound_task = store.show_task(bound_task_id).await.ok();
+    if let Some(task) = bound_task.as_ref() {
         if taskflow_task_status_is_terminal_for_dispatch_init(&task.status) {
             return Err(format!(
                 "Run `{requested_run_id}` has explicit continuation binding to terminal task_graph_task `{bound_task_id}` with status `{}`; bind a non-terminal bounded unit before dispatch-init.",
@@ -4893,7 +5193,9 @@ async fn reseed_explicit_task_graph_binding_for_dispatch_init(
         }
     }
 
-    let request_text = if let Some(request_text) = binding
+    let request_text = if let Some(task) = bound_task.as_ref() {
+        task_record_dispatch_seed_request_text(task)
+    } else if let Some(request_text) = binding
         .request_text
         .as_deref()
         .map(str::trim)
@@ -5306,6 +5608,9 @@ async fn preview_run_graph_dispatch_init_artifacts(
             .run_graph_dispatch_receipt(&effective_run_id)
             .await
             .map_err(|error| format!("Failed to read existing dispatch receipt: {error}"))?
+            .filter(|receipt| {
+                dispatch_receipt_disabled_external_backend_drift(store.root(), receipt).is_none()
+            })
     } else {
         None
     };
@@ -5744,9 +6049,11 @@ pub(crate) async fn derive_advanced_run_graph_status(
         });
     }
 
+    let writer_node = implementation_writer_node(&implementation);
+    let direct_writer_entry = compiled_control.first_execution_lane.clone();
     if existing.task_class == "implementation"
         && existing.route_task_class == "implementation"
-        && existing.active_node == implementation_writer_node(&implementation)
+        && (existing.active_node == writer_node || existing.active_node == direct_writer_entry)
     {
         if implementation.is_null() {
             return Err(
@@ -6608,6 +6915,98 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 mod tests {
     use super::*;
 
+    trait StateStoreFixtureTaskExt {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        >;
+    }
+
+    impl StateStoreFixtureTaskExt for crate::StateStore {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id,
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                } = request;
+                let generated_parent_id = (issue_type != "epic" && parent_id.is_none())
+                    .then(|| format!("{task_id}-fixture-parent"));
+                if let Some(parent_task_id) = generated_parent_id.as_deref() {
+                    let parent_labels: Vec<String> = Vec::new();
+                    let parent_status = if matches!(status.trim(), "closed" | "completed") {
+                        "closed"
+                    } else {
+                        "open"
+                    };
+                    self.create_task(crate::state_store::CreateTaskRequest {
+                        task_id: parent_task_id,
+                        title: "Fixture parent epic",
+                        display_id: None,
+                        description: "Test-only parent epic for strict task hierarchy fixtures",
+                        issue_type: "epic",
+                        status: parent_status,
+                        priority,
+                        parent_id: None,
+                        labels: &parent_labels,
+                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                        created_by,
+                        source_repo,
+                    })
+                    .await?;
+                }
+                self.create_task(crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id: parent_id.or(generated_parent_id.as_deref()),
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                })
+                .await
+            })
+        }
+    }
+
     fn clean_ready_downstream_dispatch_receipt(run_id: &str) -> RunGraphDispatchReceipt {
         RunGraphDispatchReceipt {
             run_id: run_id.to_string(),
@@ -6871,6 +7270,122 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[tokio::test]
+    async fn recovery_latest_prefers_current_session_run_over_global_stale_run() {
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-current-recovery-latest");
+        }
+        let root = std::env::temp_dir().join(format!(
+            "vida-recovery-current-session-latest-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        for task_id in ["run-current-recovery", "run-global-stale"] {
+            store
+                .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title: "Recovery latest task",
+                    display_id: None,
+                    description: "test task",
+                    issue_type: "task",
+                    status: "in_progress",
+                    priority: 0,
+                    parent_id: None,
+                    labels: &labels,
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "test",
+                })
+                .await
+                .expect("create task");
+        }
+
+        let mut current_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-current-recovery",
+            "run-current-recovery",
+            "analysis",
+        );
+        current_status.status = "blocked".to_string();
+        current_status.lifecycle_stage = "analysis_blocked".to_string();
+        current_status.policy_gate = "review_findings".to_string();
+        current_status.recovery_ready = false;
+        store
+            .record_run_graph_status(&current_status)
+            .await
+            .expect("persist current status");
+        store
+            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
+                claim_id: "current-recovery-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-current-recovery-latest".to_string(),
+                process_id: None,
+                task_id: Some("run-current-recovery".to_string()),
+                run_id: Some("run-current-recovery".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("runtime-delegated-cycle".to_string()),
+                owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: crate::state_store::LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("claim current run");
+
+        let mut stale_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-global-stale",
+            "run-global-stale",
+            "planning",
+        );
+        stale_status.status = "ready".to_string();
+        stale_status.lifecycle_stage = "implementation_dispatch_ready".to_string();
+        stale_status.next_node = Some("analysis".to_string());
+        stale_status.policy_gate = "validation_report_required".to_string();
+        stale_status.handoff_state = "awaiting_analysis".to_string();
+        stale_status.resume_target = "dispatch.analysis_lane".to_string();
+        stale_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&stale_status)
+            .await
+            .expect("persist newer global status");
+
+        assert_eq!(
+            store
+                .latest_run_graph_recovery_summary()
+                .await
+                .expect("read global recovery")
+                .expect("global recovery present")
+                .run_id,
+            "run-global-stale"
+        );
+        assert_eq!(
+            latest_recovery_summary_for_operator_surface(&store)
+                .await
+                .expect("read operator recovery")
+                .expect("operator recovery present")
+                .run_id,
+            "run-current-recovery"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        match saved_session_id {
+            Some(value) => unsafe {
+                std::env::set_var("VIDA_SESSION_ID", value);
+            },
+            None => unsafe {
+                std::env::remove_var("VIDA_SESSION_ID");
+            },
+        }
+    }
+
     #[test]
     fn dispatch_init_timeout_window_covers_live_activation_snapshot_seed() {
         assert!(
@@ -7095,6 +7610,21 @@ mod tests {
     use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
     use std::path::Path;
+
+    struct ProxyStateDirOverrideGuard;
+
+    impl ProxyStateDirOverrideGuard {
+        fn install(path: std::path::PathBuf) -> Self {
+            crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(path));
+            Self
+        }
+    }
+
+    impl Drop for ProxyStateDirOverrideGuard {
+        fn drop(&mut self) {
+            crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        }
+    }
 
     #[tokio::test]
     async fn projection_truth_recommends_retire_for_missing_task_stale_blocked_run() {
@@ -7522,6 +8052,41 @@ mod tests {
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
+    #[tokio::test]
+    async fn recovery_status_json_without_run_id_uses_latest_recovery_summary() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _proxy_state = ProxyStateDirOverrideGuard::install(harness.path().to_path_buf());
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        let mut status = default_run_graph_status(
+            "task-recovery-status-json-latest",
+            "implementation",
+            "implementation",
+        );
+        status.run_id = "run-recovery-status-json-latest".to_string();
+        status.active_node = "analysis".to_string();
+        status.lifecycle_stage = "analysis_active".to_string();
+        status.next_node = Some("writer".to_string());
+        status.policy_gate = "targeted_verification".to_string();
+        status.handoff_state = "awaiting_writer".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.writer_lane".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("record latest run status");
+        drop(store);
+
+        let args = vec![
+            "recovery".to_string(),
+            "status".to_string(),
+            "--json".to_string(),
+        ];
+        assert_eq!(run_taskflow_recovery(&args).await, ExitCode::SUCCESS);
+    }
+
     #[test]
     fn recovery_status_action_for_configured_backend_failure_points_to_lane_show() {
         let status = RunGraphStatus {
@@ -7663,6 +8228,32 @@ mod tests {
         assert_eq!(
             command.as_deref(),
             Some("vida lane show run-internal-codex-carrier --json")
+        );
+    }
+
+    #[test]
+    fn recovery_status_action_for_internal_timeout_with_running_lane_points_to_task_show() {
+        let mut status = packet_gate_status("run-internal-timeout");
+        status.task_id = "task-internal-timeout".to_string();
+        status.status = "blocked".to_string();
+        status.recovery_ready = false;
+        status.resume_target = "none".to_string();
+        status.active_node = "test_author".to_string();
+        status.lifecycle_stage = "test_author_blocked".to_string();
+
+        let mut receipt = packet_gate_receipt("run-internal-timeout");
+        receipt.dispatch_target = "test_author".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some("internal_dispatch_timeout_without_receipt".to_string());
+        receipt.selected_backend = Some("internal_subagents".to_string());
+
+        let command =
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
+
+        assert_eq!(
+            command.as_deref(),
+            Some("vida task show task-internal-timeout --json")
         );
     }
 
@@ -8225,7 +8816,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_status_action_for_internal_timeout_points_to_lane_show() {
+    fn recovery_status_action_for_internal_timeout_points_to_task_show() {
         let mut status = default_run_graph_status("run-timeout", "implementation", "coach");
         status.status = "blocked".to_string();
         status.lifecycle_stage = "implementer_blocked".to_string();
@@ -8243,7 +8834,7 @@ mod tests {
         assert_eq!(
             next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
                 .as_deref(),
-            Some("vida lane show run-timeout --json")
+            Some("vida task show run-timeout --json")
         );
     }
 
@@ -8388,6 +8979,90 @@ mod tests {
             .as_array()
             .is_some_and(|actions| !actions.is_empty()));
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn run_graph_status_json_payload_does_not_block_on_stale_exception_receipt_after_handoff() {
+        let status = RunGraphStatus {
+            run_id: "run-advanced-after-exception".to_string(),
+            task_id: "task-advanced-after-exception".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "coach".to_string(),
+            next_node: Some("review_ensemble".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "coach_lane".to_string(),
+            lifecycle_stage: "coach_active".to_string(),
+            policy_gate: "review_findings".to_string(),
+            handoff_state: "awaiting_review_ensemble".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.review_ensemble".to_string(),
+            recovery_ready: true,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "test_author".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("exception-receipt".to_string()),
+            exception_path_receipt_id: Some("exception-receipt".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/test-author-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/test-author-result.json".to_string()),
+            blocker_code: Some("internal_dispatch_timeout_without_receipt".to_string()),
+            downstream_dispatch_target: Some("coach".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![
+                "internal_dispatch_timeout_without_receipt".to_string()
+            ],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("test_author".to_string()),
+            downstream_dispatch_last_target: Some("test_author".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-05-24T00:00:00Z".to_string(),
+        };
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason:
+                "run-graph status was reconciled against persisted dispatch receipt evidence"
+                    .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: true,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(
+                "vida taskflow consume continue --run-id run-advanced-after-exception --json"
+                    .to_string(),
+            ),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let payload = build_run_graph_status_json_payload(
+            "vida taskflow run-graph status",
+            &status,
+            &projection_truth,
+        )
+        .expect("advanced handoff payload should render");
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+        assert_eq!(
+            payload["projection_truth"]["dispatch_receipt"]["blocker_code"],
+            serde_json::json!("internal_dispatch_timeout_without_receipt")
+        );
     }
 
     #[test]
@@ -9036,6 +9711,48 @@ mod tests {
         }
     }
 
+    fn force_selected_backend_assignment(
+        value: &mut serde_json::Value,
+        backend_id: &str,
+        model_profile_id: &str,
+    ) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for key in [
+                    "selected_backend",
+                    "selected_backend_id",
+                    "selected_carrier_id",
+                    "selected_carrier_agent_id",
+                    "selected_agent_id",
+                    "activation_agent_type",
+                    "selected_tier",
+                ] {
+                    if let Some(field) = map.get_mut(key) {
+                        if field.is_string() {
+                            *field = serde_json::Value::String(backend_id.to_string());
+                        }
+                    }
+                }
+                for key in ["selected_model_profile_id", "selected_model_profile"] {
+                    if let Some(field) = map.get_mut(key) {
+                        if field.is_string() {
+                            *field = serde_json::Value::String(model_profile_id.to_string());
+                        }
+                    }
+                }
+                for child in map.values_mut() {
+                    force_selected_backend_assignment(child, backend_id, model_profile_id);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for child in values {
+                    force_selected_backend_assignment(child, backend_id, model_profile_id);
+                }
+            }
+            _ => {}
+        }
+    }
+
     #[tokio::test]
     async fn derive_seeded_run_graph_prefers_worker_for_bound_repair_with_file_scope_terms() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -9089,7 +9806,7 @@ mod tests {
             .await
             .expect("activation snapshot should be written");
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "taskflow-runtime-run-binding-task-missing-actionability",
                 title: "Runtime run binding task missing actionability",
                 display_id: None,
@@ -9100,7 +9817,16 @@ mod tests {
                 parent_id: None,
                 labels: &[],
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
-                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec![
+                        "crates/vida/src/taskflow_run_graph.rs".to_string(),
+                        "crates/vida/src/runtime_dispatch_state.rs".to_string(),
+                    ],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_reseeds_design_backed_explicit_binding_into_implementer_lane -- --nocapture".to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
                 created_by: "test",
                 source_repo: "",
             })
@@ -9170,7 +9896,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "feature-existing-design-route-fix",
                 title: "Existing design route fix",
                 display_id: None,
@@ -9247,7 +9973,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "feature-reconcile-qwen-cli-carrier-drift-across-config-code",
                 title: "Qwen carrier drift remediation",
                 display_id: None,
@@ -9316,7 +10042,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "feature-design-backed-reseed-blocker",
                 title: "Design-backed reseed blocker",
                 display_id: None,
@@ -9386,7 +10112,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "feature-generic-design-scope",
                 title: "Generic design scope",
                 display_id: None,
@@ -9447,7 +10173,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "feature-direct-explicit-implementation-seed",
                 title: "Direct explicit implementation seed",
                 display_id: None,
@@ -9700,7 +10426,7 @@ mod tests {
             "crates/vida/src/runtime_dispatch_downstream_packets.rs".to_string(),
         ];
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-writer-planner-scope",
                 title: "Writer planner scope",
                 display_id: None,
@@ -10117,7 +10843,7 @@ mod tests {
 
         let labels = vec![String::from("runtime-recovery")];
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-closed-bound",
                 title: "Closed bound task",
                 display_id: None,
@@ -10195,7 +10921,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "taskflow-graph-summary-open-cycle-gate",
                 title: "Graph summary must respect open delegated cycle gate",
                 display_id: None,
@@ -10269,7 +10995,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-dispatch-init-read-mostly",
                 title: "Dispatch init should not hold writable store during preparation",
                 display_id: None,
@@ -10338,7 +11064,7 @@ mod tests {
             .expect("stale snapshot should persist");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-dispatch-init-stale-snapshot",
                 title: "Dispatch init should capture stale launcher snapshot read-only",
                 display_id: None,
@@ -10394,7 +11120,7 @@ mod tests {
 
         let labels = vec![String::from("runtime-recovery")];
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-closed-dispatch-init",
                 title: "Closed dispatch init task",
                 display_id: None,
@@ -10430,7 +11156,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-dispatch-context-repair",
                 title: "Repair dispatch-init context gap",
                 display_id: None,
@@ -10501,7 +11227,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-dispatch-context-fast-path",
                 title: "Task record title should not replace seeded context",
                 display_id: None,
@@ -10562,7 +11288,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-dispatch-init-idempotent-fast-path",
                 title: "Dispatch init should reuse an existing routed packet",
                 display_id: None,
@@ -10602,6 +11328,16 @@ mod tests {
             first["dispatch_receipt"]["recorded_at"],
             second["dispatch_receipt"]["recorded_at"]
         );
+        let mut disabled_backend_cache_payload = second.clone();
+        disabled_backend_cache_payload["dispatch_receipt"]["selected_backend"] =
+            serde_json::Value::String("pi_cli".to_string());
+        let current_config_digest = current_dispatch_init_cache_config_digest(store.root());
+        assert!(!dispatch_init_fast_cache_payload_is_reusable(
+            store.root(),
+            &disabled_backend_cache_payload,
+            "task-dispatch-init-idempotent-fast-path",
+            current_config_digest.as_deref()
+        ));
         assert!(read_run_graph_dispatch_init_fast_cache(
             store.root(),
             "task-dispatch-init-idempotent-fast-path"
@@ -10626,6 +11362,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_init_does_not_reuse_routed_receipt_with_disabled_external_backend() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "task-dispatch-init-disabled-receipt-refresh",
+                title: "Dispatch init ignores disabled selected backend receipts",
+                display_id: None,
+                description: "Repeated dispatch-init must not reuse a routed receipt whose selected backend is disabled in current config.",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &["runtime-recovery".to_string()],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_does_not_reuse_routed_receipt_with_disabled_external_backend -- --nocapture"
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create disabled receipt refresh task");
+
+        let first = run_graph_dispatch_init(&store, "task-dispatch-init-disabled-receipt-refresh")
+            .await
+            .expect("first dispatch-init should seed and route");
+        let mut receipt = store
+            .run_graph_dispatch_receipt("task-dispatch-init-disabled-receipt-refresh")
+            .await
+            .expect("receipt lookup should succeed")
+            .expect("receipt should exist");
+        receipt.dispatch_status = "routed".to_string();
+        receipt.dispatch_packet_path = first["dispatch_packet_path"].as_str().map(str::to_string);
+        receipt.selected_backend = Some("pi_cli".to_string());
+        receipt.activation_agent_type = Some("pi_cli".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("stale disabled-backend receipt should persist");
+        assert!(dispatch_receipt_disabled_external_backend_drift(store.root(), &receipt).is_some());
+
+        let second = run_graph_dispatch_init(&store, "task-dispatch-init-disabled-receipt-refresh")
+            .await
+            .expect("second dispatch-init should rebuild disabled-backend receipt");
+        assert_ne!(
+            second["dispatch_receipt"]["selected_backend"].as_str(),
+            Some("pi_cli")
+        );
+    }
+
+    #[tokio::test]
     async fn dispatch_init_refreshes_stale_route_assignment_after_model_catalog_change() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let store = StateStore::open(harness.path().to_path_buf())
@@ -10636,7 +11435,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "task-dispatch-init-route-drift-refresh",
                 title: "Dispatch init refreshes stale route assignment",
                 display_id: None,
@@ -10671,7 +11470,10 @@ mod tests {
             .await
             .expect("context lookup should succeed")
             .expect("dispatch context should exist");
-        force_selected_model_ref(&mut context.role_selection, "gpt-5.5");
+        force_selected_model_ref(
+            &mut context.role_selection,
+            "stale-model-ref-for-catalog-drift-test",
+        );
         store
             .record_run_graph_dispatch_context(&context)
             .await
@@ -10712,7 +11514,116 @@ mod tests {
             "implementation",
             route,
         );
-        assert_ne!(payload["selected_model_ref"], "gpt-5.5");
+        assert_ne!(
+            payload["selected_model_ref"],
+            "stale-model-ref-for-catalog-drift-test"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_refreshes_stale_route_assignment_after_disabled_external_backend_change()
+    {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "task-dispatch-init-disabled-backend-drift-refresh",
+                title: "Dispatch init refreshes disabled backend route drift",
+                display_id: None,
+                description: "Repeated dispatch-init must rebuild stale route assignments that still reference a disabled external backend.",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &["runtime-recovery".to_string()],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_refreshes_stale_route_assignment_after_disabled_external_backend_change -- --nocapture"
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create disabled backend route drift refresh task");
+
+        let first =
+            run_graph_dispatch_init(&store, "task-dispatch-init-disabled-backend-drift-refresh")
+                .await
+                .expect("first dispatch-init should seed and route");
+        assert_eq!(
+            first["run_id"],
+            "task-dispatch-init-disabled-backend-drift-refresh"
+        );
+
+        let mut context = store
+            .run_graph_dispatch_context("task-dispatch-init-disabled-backend-drift-refresh")
+            .await
+            .expect("context lookup should succeed")
+            .expect("dispatch context should exist");
+        force_selected_backend_assignment(
+            &mut context.role_selection,
+            "pi_cli",
+            "pi_gpt55_medium_guarded",
+        );
+        store
+            .record_run_graph_dispatch_context(&context)
+            .await
+            .expect("stale dispatch context should persist");
+        let stale_selection = context
+            .role_selection()
+            .expect("stale role selection should still decode");
+        let drift = dispatch_context_route_assignment_catalog_drift(store.root(), &stale_selection)
+            .expect("disabled external backend route drift should be detected");
+        assert_eq!(drift["drift"]["kind"], "disabled_external_backend_ref");
+        assert_eq!(
+            drift["drift"]["route_disabled_external_backend_refs"]["blocking"],
+            true
+        );
+
+        let second =
+            run_graph_dispatch_init(&store, "task-dispatch-init-disabled-backend-drift-refresh")
+                .await
+                .expect("second dispatch-init should refresh disabled backend route assignment");
+        assert_eq!(
+            second["run_id"],
+            "task-dispatch-init-disabled-backend-drift-refresh"
+        );
+
+        let refreshed_context = store
+            .run_graph_dispatch_context("task-dispatch-init-disabled-backend-drift-refresh")
+            .await
+            .expect("refreshed context lookup should succeed")
+            .expect("refreshed dispatch context should exist");
+        let refreshed_selection = refreshed_context
+            .role_selection()
+            .expect("refreshed role selection should decode");
+        assert!(dispatch_context_route_assignment_catalog_drift(
+            store.root(),
+            &refreshed_selection
+        )
+        .is_none());
+
+        let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
+            &refreshed_selection.execution_plan,
+            "implementation",
+        );
+        let payload = crate::taskflow_routing::route_explain_payload(
+            &refreshed_selection.execution_plan,
+            "implementation",
+            route,
+        );
+        assert_ne!(payload["selected_backend"].as_str(), Some("pi_cli"));
     }
 
     #[tokio::test]
@@ -10772,12 +11683,12 @@ mod tests {
             .expect("persist explicit continuation binding");
 
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: bound_task_id,
-                title: "Design-backed reseed canonicalization qwen blocker",
+                title: "Implement design-backed reseed canonicalization qwen blocker",
                 display_id: None,
                 description:
-                    "Bounded audit-remediation blocker for design-backed reseed canonicalization.",
+                    "Implement the bounded audit-remediation blocker for design-backed reseed canonicalization.",
                 issue_type: "task",
                 status: "in_progress",
                 priority: 1,
@@ -11016,6 +11927,48 @@ mod tests {
         assert_eq!(payload.status.lifecycle_stage, "writer_active");
         assert_eq!(payload.status.next_node.as_deref(), Some("coach"));
         assert_eq!(payload.status.handoff_state, "awaiting_coach");
+    }
+
+    #[tokio::test]
+    async fn seeded_worker_test_author_lane_can_advance_to_coach() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let existing = RunGraphStatus {
+            run_id: "task-test-author-to-coach".to_string(),
+            task_id: "task-test-author-to-coach".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "test_author".to_string(),
+            next_node: Some("coach".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "test_author_lane".to_string(),
+            lifecycle_stage: "writer_active".to_string(),
+            policy_gate: "review_findings".to_string(),
+            handoff_state: "awaiting_coach".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach".to_string(),
+            recovery_ready: true,
+        };
+        store
+            .record_run_graph_status(&existing)
+            .await
+            .expect("record run status");
+
+        let payload = derive_advanced_run_graph_status(&store, existing)
+            .await
+            .expect("test-author lane should advance to coach");
+
+        assert_eq!(payload.status.active_node, "coach");
+        assert_eq!(payload.status.lifecycle_stage, "coach_active");
+        assert_eq!(payload.status.next_node.as_deref(), Some("review_ensemble"));
+        assert_eq!(payload.status.handoff_state, "awaiting_review_ensemble");
     }
 
     #[test]

@@ -35,7 +35,10 @@ pub fn bounded_binary_command(binary_path: impl AsRef<OsStr>) -> Command {
     }
     #[cfg(unix)]
     {
-        bounded_command(binary_path, DEFAULT_TIMEOUT_ARGS)
+        let mut command = Command::new(timeout_program());
+        command.args(DEFAULT_TIMEOUT_ARGS);
+        command.arg(binary_path);
+        command
     }
 }
 
@@ -44,10 +47,19 @@ pub fn bounded_command(
     program: impl AsRef<OsStr>,
     timeout_args: impl IntoIterator<Item = &'static str>,
 ) -> Command {
-    let mut command = Command::new("timeout");
+    let mut command = Command::new(timeout_program());
     command.args(timeout_args);
     command.arg(program);
     command
+}
+
+#[cfg(unix)]
+fn timeout_program() -> OsString {
+    ["/usr/bin/timeout", "/bin/timeout"]
+        .iter()
+        .map(OsString::from)
+        .find(|path| Path::new(path).is_file())
+        .unwrap_or_else(|| OsString::from("timeout"))
 }
 
 #[cfg(windows)]

@@ -1,0 +1,13 @@
+{
+  "registry_entry_id": "registry-01",
+  "project_id": "project-01",
+  "worktree_environment_id": "worktree-main",
+  "root_path": "C:/project/vida-stack",
+  "registry_status": "connected",
+  "activation_status": "activated",
+  "service_binding_status": "bound_current_service",
+  "health": {
+    "status": "pass",
+    "blocker_codes": []
+  }
+}

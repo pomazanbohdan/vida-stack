@@ -159,7 +159,7 @@ fn seed_model_profile_readiness_dispatch_context(state_dir: &str) {
             "selected_backend_id": "internal_subagents",
             "selected_carrier_id": "internal_subagents",
             "selected_model_profile_id": "codex_gpt55_low_write",
-            "selected_model_ref": "gpt-5.4",
+            "selected_model_ref": "gpt-5.5",
             "selected_model_provider": "openai",
             "selected_reasoning_effort": "low",
             "selected_reasoning_control_mode": "fixed",
@@ -197,6 +197,17 @@ fn seed_model_profile_readiness_dispatch_context(state_dir: &str) {
             }
         });
         let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true,
+                        "review": true,
+                        "verification": true
+                    }
+                }
+            ],
             "development_flow": {
                 "dispatch_contract": {
                     "execution_lane_sequence": ["implementation"],
@@ -944,6 +955,8 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
     assert_eq!(summary_task_a["parent_id"], "vida-root");
     assert_eq!(summary_task_a["parent_edge"]["parent_id"], "vida-root");
     assert_eq!(summary_task_a["parent_edge"]["edge_type"], "parent-child");
+    assert_eq!(summary_task_a["parent_edge"]["metadata"], Value::Null);
+    assert_eq!(summary_task_a["parent_edge"]["thread_id"], Value::Null);
 
     let ready_stdout = run_and_assert_success(&["task", "ready", "--json"], &state_dir);
     assert!(
@@ -1392,7 +1405,7 @@ fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
     );
     let close_parent_stderr = String::from_utf8_lossy(&close_parent.stderr);
     assert!(
-        close_parent_stderr.contains("open child tasks exist")
+        close_parent_stderr.contains("non-closed child tasks exist")
             && close_parent_stderr.contains("sandbox-child"),
         "{close_parent_stderr}"
     );
@@ -1949,7 +1962,7 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
         "root close must fail while defect and child lanes are open"
     );
     let rejected_stderr = String::from_utf8_lossy(&rejected_parent_close.stderr);
-    assert!(rejected_stderr.contains("open child tasks exist"));
+    assert!(rejected_stderr.contains("non-closed child tasks exist"));
     assert!(rejected_stderr.contains(defect_task_id));
 
     let closed = run_command_json(
@@ -2609,7 +2622,7 @@ fn taskflow_factual_sandbox_h12_h16_invariant_matrix() {
     let rejected_create_parent_close_stderr =
         String::from_utf8_lossy(&rejected_create_parent_close.stderr);
     assert!(
-        rejected_create_parent_close_stderr.contains("open child tasks exist")
+        rejected_create_parent_close_stderr.contains("non-closed child tasks exist")
             && rejected_create_parent_close_stderr.contains("sandbox-h13-open-defect"),
         "{rejected_create_parent_close_stderr}"
     );
@@ -2699,7 +2712,7 @@ fn taskflow_factual_sandbox_h12_h16_invariant_matrix() {
     let rejected_update_parent_close_stderr =
         String::from_utf8_lossy(&rejected_update_parent_close.stderr);
     assert!(
-        rejected_update_parent_close_stderr.contains("open child tasks exist")
+        rejected_update_parent_close_stderr.contains("non-closed child tasks exist")
             && rejected_update_parent_close_stderr.contains("sandbox-h14-child"),
         "{rejected_update_parent_close_stderr}"
     );
@@ -2876,7 +2889,7 @@ fn taskflow_defect_loop_routes_repair_and_gates_parent_closure() {
     );
     let rejected_parent_close_stderr = String::from_utf8_lossy(&rejected_parent_close.stderr);
     assert!(
-        rejected_parent_close_stderr.contains("open child tasks exist")
+        rejected_parent_close_stderr.contains("non-closed child tasks exist")
             && rejected_parent_close_stderr.contains(defect_task_id),
         "{rejected_parent_close_stderr}"
     );
@@ -4454,7 +4467,7 @@ fn agent_init_execute_dispatch_missing_packet_json_is_operator_envelope() {
 }
 
 #[test]
-fn doctor_summary_json_uses_cached_projection_before_store_open() {
+fn doctor_summary_json_does_not_trust_cached_projection_before_store_open() {
     let state_dir = unique_state_dir();
     let projection_dir = format!("{state_dir}/operator-projections");
     fs::create_dir_all(&projection_dir).expect("create doctor projection dir");
@@ -4472,23 +4485,17 @@ fn doctor_summary_json_uses_cached_projection_before_store_open() {
 
     let output = run_command_capture(&["doctor", "--summary", "--json"], &state_dir);
     assert!(
-        output.status.success(),
-        "cached doctor summary should not require datastore open: stdout={} stderr={}",
+        !output.status.success(),
+        "doctor should fail closed when authoritative store is unavailable: stdout={} stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let payload: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-        panic!(
-            "cached doctor summary should render json: {error}; stdout={} stderr={}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    });
-
-    assert_eq!(payload["surface"], "vida doctor");
-    assert_eq!(payload["view"], "summary");
-    assert_eq!(payload["status"], "pass");
-    assert_eq!(payload["cache_probe"], "doctor-summary-fast-path");
+    assert!(
+        output.stdout.is_empty(),
+        "doctor should not render forged cached payload when store open fails: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let _ = fs::remove_dir_all(&state_dir);
 }

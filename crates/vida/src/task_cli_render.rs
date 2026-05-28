@@ -8,7 +8,7 @@ use crate::state_store::{
 };
 use crate::{print_surface_header, print_surface_line, RenderMode};
 
-fn task_read_metadata_value(
+pub(crate) fn task_read_metadata_value(
     metadata: Option<&crate::task_surface::TaskReadMetadata>,
 ) -> serde_json::Value {
     metadata.map_or_else(
@@ -169,25 +169,32 @@ fn task_list_output_policy(summary_only: bool, explicit_full: bool) -> serde_jso
     })
 }
 
-fn task_parent_edge_value(task: &TaskRecord) -> serde_json::Value {
+fn task_parent_edge_value(task: &TaskRecord, full: bool) -> serde_json::Value {
     task.dependencies
         .iter()
         .find(|dependency| dependency.edge_type == "parent-child")
         .map(|dependency| {
-            serde_json::json!({
-                "parent_id": dependency.depends_on_id,
-                "edge_type": dependency.edge_type,
-                "metadata": dependency.metadata,
-                "thread_id": dependency.thread_id,
-                "created_at": dependency.created_at,
-                "created_by": dependency.created_by,
-            })
+            if full {
+                serde_json::json!({
+                    "parent_id": dependency.depends_on_id,
+                    "edge_type": dependency.edge_type,
+                    "metadata": dependency.metadata,
+                    "thread_id": dependency.thread_id,
+                    "created_at": dependency.created_at,
+                    "created_by": dependency.created_by,
+                })
+            } else {
+                serde_json::json!({
+                    "parent_id": dependency.depends_on_id,
+                    "edge_type": dependency.edge_type,
+                })
+            }
         })
         .unwrap_or(serde_json::Value::Null)
 }
 
 fn task_list_row_value(task: &TaskRecord, full: bool) -> serde_json::Value {
-    let parent_edge = task_parent_edge_value(task);
+    let parent_edge = task_parent_edge_value(task, full);
     let parent_id = parent_edge
         .get("parent_id")
         .cloned()
@@ -268,15 +275,7 @@ pub(crate) fn print_task_ready(
     as_json: bool,
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
 ) {
-    let payload = build_pass_operator_surface_payload(
-        "vida task ready",
-        serde_json::json!({
-            "state_access": task_read_metadata_value(read_metadata),
-            "scope_task_id": scope_task_id,
-            "ready_count": tasks.len(),
-            "tasks": tasks,
-        }),
-    );
+    let payload = task_ready_payload(scope_task_id, tasks, read_metadata);
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -301,20 +300,43 @@ pub(crate) fn print_task_ready(
     }
 }
 
-pub(crate) fn print_task_show(
-    render: RenderMode,
-    task: &TaskRecord,
-    as_json: bool,
+pub(crate) fn task_ready_payload(
+    scope_task_id: Option<&str>,
+    tasks: &[TaskRecord],
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
-) {
-    let payload = build_pass_operator_surface_payload(
+) -> serde_json::Value {
+    build_pass_operator_surface_payload(
+        "vida task ready",
+        serde_json::json!({
+            "state_access": task_read_metadata_value(read_metadata),
+            "scope_task_id": scope_task_id,
+            "ready_count": tasks.len(),
+            "tasks": tasks,
+        }),
+    )
+}
+
+pub(crate) fn task_show_payload(
+    task: &TaskRecord,
+    read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
+) -> serde_json::Value {
+    build_pass_operator_surface_payload(
         "vida task show",
         serde_json::json!({
             "state_access": task_read_metadata_value(read_metadata),
             "task_id": task.id,
             "task": task,
         }),
-    );
+    )
+}
+
+pub(crate) fn print_task_show(
+    render: RenderMode,
+    task: &TaskRecord,
+    as_json: bool,
+    read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
+) {
+    let payload = task_show_payload(task, read_metadata);
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,

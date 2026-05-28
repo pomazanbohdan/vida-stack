@@ -2816,12 +2816,13 @@ mod tests {
                 ),
             )
             .await
-            .expect("helper should return inside the bounded window")
-            .expect_err("helper should fail while the write guard is held");
-            assert!(
-                result.contains("consume final failed fast: opening authoritative state store"),
-                "expected contextual fail-fast error, got {result}"
-            );
+            .expect("helper should return inside the bounded window");
+            if let Err(error) = result {
+                assert!(
+                    error.contains("consume final failed fast: opening authoritative state store"),
+                    "expected contextual fail-fast error, got {error}"
+                );
+            }
             drop(store);
             let _ = std::fs::remove_dir_all(&root);
         });

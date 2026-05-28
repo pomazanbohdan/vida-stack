@@ -35,8 +35,26 @@ fn runtime_delivery_source_packet_id(run_id: &str, dispatch_target: &str) -> Str
     runtime_delivery_packet_id(run_id, dispatch_target)
 }
 
-fn runtime_implementer_delivery_source_packet_id(run_id: &str) -> String {
-    runtime_delivery_source_packet_id(run_id, "implementer")
+fn runtime_review_source_target<'a>(
+    dispatch_target: &'a str,
+    source_dispatch_target: Option<&'a str>,
+) -> &'a str {
+    let source_dispatch_target = source_dispatch_target
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| *value != dispatch_target);
+    if let Some(source_dispatch_target) = source_dispatch_target {
+        return source_dispatch_target;
+    }
+    if matches!(dispatch_target, "coach" | "review") || dispatch_target.contains("coach") {
+        "implementer"
+    } else if matches!(dispatch_target, "verification" | "verifier" | "prover")
+        || dispatch_target.contains("verification")
+    {
+        "coach"
+    } else {
+        dispatch_target
+    }
 }
 
 fn trim_owned_scope_path_candidate(segment: &str) -> String {
@@ -387,12 +405,17 @@ pub(crate) fn runtime_execution_block_packet(
 pub(crate) fn runtime_coach_review_packet(
     run_id: &str,
     dispatch_target: &str,
+    source_dispatch_target: Option<&str>,
     proof_target: &str,
 ) -> serde_json::Value {
+    let reviewed_dispatch_target =
+        runtime_review_source_target(dispatch_target, source_dispatch_target);
     serde_json::json!({
         "packet_id": runtime_coach_review_packet_id(run_id, dispatch_target),
-        "source_packet_id": runtime_implementer_delivery_source_packet_id(run_id),
-        "review_goal": format!("Judge whether `{dispatch_target}` remains aligned with the approved bounded packet, acceptance criteria, and definition of done"),
+        "source_packet_id": runtime_delivery_source_packet_id(run_id, reviewed_dispatch_target),
+        "reviewed_dispatch_target": reviewed_dispatch_target,
+        "review_subject": format!("bounded `{reviewed_dispatch_target}` delivery/result"),
+        "review_goal": format!("Judge whether bounded `{reviewed_dispatch_target}` delivery/result remains aligned with the approved packet, acceptance criteria, and definition of done"),
         "owned_paths": [],
         "read_only_paths": [
             ".vida/data/state/runtime-consumption",
@@ -409,7 +432,14 @@ pub(crate) fn runtime_coach_review_packet(
             "acceptance_criteria_alignment",
             "bounded_scope_drift"
         ],
-        "blocking_question": format!("Does `{dispatch_target}` match the approved bounded contract cleanly enough to proceed?"),
+        "expected_output": [
+            "decision=approve|rework|blocker",
+            "checked_evidence",
+            "findings",
+            "risks",
+            "next_required_action"
+        ],
+        "blocking_question": format!("Does bounded `{reviewed_dispatch_target}` delivery/result match the approved bounded contract cleanly enough to proceed?"),
         "handoff_runtime_role": RUNTIME_ROLE_COACH,
         "handoff_task_class": TASK_CLASS_COACH,
         "handoff_selection": "runtime_selected_tier",
@@ -423,7 +453,7 @@ pub(crate) fn runtime_verifier_proof_packet(
 ) -> serde_json::Value {
     serde_json::json!({
         "packet_id": runtime_verifier_proof_packet_id(run_id, dispatch_target),
-        "source_packet_id": runtime_implementer_delivery_source_packet_id(run_id),
+        "source_packet_id": runtime_delivery_source_packet_id(run_id, "coach"),
         "proof_goal": format!("Independently verify bounded closure readiness for `{dispatch_target}`"),
         "verification_command": format!("vida taskflow consume continue --run-id {run_id} --json"),
         "proof_target": proof_target,
@@ -472,7 +502,7 @@ pub(crate) fn runtime_escalation_packet(run_id: &str, dispatch_target: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        delivery_packet_owned_paths, tracked_design_doc_owned_paths,
+        delivery_packet_owned_paths, runtime_coach_review_packet, tracked_design_doc_owned_paths,
         RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH,
     };
 
@@ -505,5 +535,31 @@ mod tests {
             ),
             vec!["crates/vida/src/runtime_dispatch_packets.rs".to_string()]
         );
+    }
+
+    #[test]
+    fn coach_review_packet_reviews_source_delivery_not_coach_itself() {
+        let packet = runtime_coach_review_packet(
+            "run-1",
+            "coach",
+            Some("implementer"),
+            "bounded implementation result versus approved spec",
+        );
+
+        assert_eq!(packet["reviewed_dispatch_target"], "implementer");
+        assert_eq!(packet["source_packet_id"], "run-1::implementer::delivery");
+        assert!(packet["review_goal"]
+            .as_str()
+            .expect("review goal")
+            .contains("bounded `implementer` delivery/result"));
+        assert!(packet["blocking_question"]
+            .as_str()
+            .expect("blocking question")
+            .contains("bounded `implementer` delivery/result"));
+        assert!(packet["expected_output"]
+            .as_array()
+            .expect("expected output")
+            .iter()
+            .any(|value| value.as_str() == Some("decision=approve|rework|blocker")));
     }
 }

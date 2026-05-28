@@ -517,23 +517,6 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
-    if as_json {
-        if let Some(cached) = doctor_cached_json_projection(&state_dir, summary_only) {
-            println!("{cached}");
-            return doctor_cached_json_projection_exit_code(&cached);
-        }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &state_dir,
-                doctor_json_projection_name(summary_only),
-                DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
-            )
-        {
-            println!("{cached}");
-            return doctor_cached_json_projection_exit_code(&cached);
-        }
-    }
-
     match super::StateStore::open_existing_read_only_with_timeout(
         state_dir.clone(),
         DOCTOR_SURFACE_LOCK_TIMEOUT,
@@ -1280,22 +1263,6 @@ fn doctor_cached_json_projection(state_dir: &Path, summary_only: bool) -> Option
     )
 }
 
-fn doctor_cached_json_projection_exit_code(cached: &str) -> ExitCode {
-    let status = serde_json::from_str::<serde_json::Value>(cached)
-        .ok()
-        .and_then(|payload| {
-            payload
-                .get("status")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        });
-    if status.as_deref() == Some("pass") {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(1)
-    }
-}
-
 fn doctor_cached_json_projection_with_dependency_marker(
     state_dir: &Path,
     summary_only: bool,
@@ -1317,19 +1284,6 @@ fn doctor_cached_json_projection_with_dependency_marker(
         DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
         dependency_modified,
     )
-    .or_else(|| {
-        crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
-            state_dir,
-            projection_name,
-            DOCTOR_SURFACE_RECENT_PROJECTION_MAX_AGE,
-        )
-    })
-    .or_else(|| {
-        crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
-            state_dir,
-            projection_name,
-        )
-    })
 }
 
 async fn doctor_dependency_graph_issues(
@@ -1390,7 +1344,7 @@ mod tests {
     }
 
     #[test]
-    fn doctor_summary_cache_accepts_launcher_marker_stale_state_fresh_projection() {
+    fn doctor_summary_cache_rejects_launcher_marker_stale_projection() {
         let root = std::env::temp_dir().join(format!(
             "vida-doctor-summary-launcher-cache-{}-{}",
             std::process::id(),
@@ -1416,13 +1370,10 @@ mod tests {
             &root,
             true,
             Some(dependency_modified),
-        )
-        .expect("launcher-stale but state-fresh doctor projection should remain admissible");
-        let cached: serde_json::Value =
-            serde_json::from_str(&cached).expect("annotated doctor cache should parse");
-        assert_eq!(
-            cached["projection_cache"]["status"],
-            "launcher_stale_recent_projection"
+        );
+        assert!(
+            cached.is_none(),
+            "doctor projection cache must reject launcher-stale projections"
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -1446,7 +1397,7 @@ mod tests {
                 title: "Authoritative root",
                 display_id: None,
                 description: "",
-                issue_type: "task",
+                issue_type: "epic",
                 status: "open",
                 priority: 1,
                 parent_id: None,

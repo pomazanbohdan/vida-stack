@@ -36,6 +36,10 @@ This map does not cover extracted secondary bundles by default.
    - project-owned agent role/skill/profile/flow extension map
 11. `docs/process/github-issues-triage-guide.md`
    - project-owned GitHub Issues triage, label taxonomy, and diagnostic publication guide
+12. `docs/process/command-timing-and-gate-optimization-protocol.md`
+    - project-owned timing, slow-gate, script optimization, and operator-friction diagnostic protocol
+13. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
+    - project-owned VIDA runtime application of generic `Error Search / Bug Reasoning`
 
 ## Activation Triggers
 
@@ -72,6 +76,10 @@ Do not use this map as the default route for extracted bundles unless the task e
    - continue to `docs/process/agent-extensions/README.md`
 10. GitHub Issues triage / label / issue workflow questions:
    - continue to `docs/process/github-issues-triage-guide.md`
+11. Command timing / slow gate / script optimization questions:
+    - continue to `docs/process/command-timing-and-gate-optimization-protocol.md`
+12. Runtime defects / multi-defect pools / TaskFlow, DocFlow, run-graph, lane, dispatch, receipt, ownership, routing, or CI failure clusters:
+    - continue to `docs/process/project-error-search-runtime-diagnostics-protocol.md`
 
 ## Boundary Rule
 
@@ -83,10 +91,10 @@ Do not use this map as the default route for extracted bundles unless the task e
 artifact_path: project/root-map
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-05-06'
+artifact_revision: '2026-05-26'
 schema_version: '1'
 status: canonical
 source_path: docs/project-root-map.md
 created_at: '2026-03-10T08:45:00+02:00'
-updated_at: 2026-05-06T11:52:00+03:00
+updated_at: 2026-05-26T00:00:00+03:00
 changelog_ref: project-root-map.changelog.jsonl

@@ -8,6 +8,8 @@ pub(crate) const DEFAULT_AGENT_EXTENSION_FLOWS_YAML: &str =
     include_str!("../../../docs/process/agent-extensions/flows.yaml");
 pub(crate) const DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_YAML: &str =
     include_str!("../../../docs/process/agent-extensions/dispatch-aliases.yaml");
+pub(crate) const DEFAULT_AGENT_EXTENSION_HOOK_TEMPLATES_YAML: &str =
+    include_str!("../../../docs/product/spec/hook-templates.yaml");
 pub(crate) const DEFAULT_RUNTIME_AGENT_EXTENSIONS_README: &str = r#"# Runtime Agent Extensions
 
 This directory holds the active runtime-owned agent-extension projections for the project.
@@ -25,6 +27,8 @@ pub(crate) const DEFAULT_AGENT_EXTENSION_PROFILES_SIDECAR_YAML: &str = "version:
 pub(crate) const DEFAULT_AGENT_EXTENSION_FLOWS_SIDECAR_YAML: &str = "version: 1\nflow_sets: []\n";
 pub(crate) const DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_SIDECAR_YAML: &str =
     "version: 1\ndispatch_aliases: []\n";
+pub(crate) const DEFAULT_AGENT_EXTENSION_HOOK_TEMPLATES_SIDECAR_YAML: &str =
+    "version: 1\nhook_templates: []\n";
 
 pub(crate) const PROJECT_ID_PLACEHOLDER: &str = "__PROJECT_ID__";
 pub(crate) const DOCS_ROOT_PLACEHOLDER: &str = "__DOCS_ROOT__";

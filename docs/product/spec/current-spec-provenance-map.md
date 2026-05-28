@@ -117,6 +117,8 @@ Companion rule:
    Sources: `docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md`, `docs/product/spec/release-1-operator-surface-contract.md`, `docs/product/spec/release-1-error-and-exception-taxonomy.md`, current lane-surface/write-guard code in `crates/vida/src/{lane_surface,status_surface_write_guard,release1_contracts,taskflow_layer4}.rs`, and the active A2 runtime work to split recorded exception evidence from explicit supersession-backed takeover authority
 25. [implementation-backend-admissibility-and-selection-truth-design.md](implementation-backend-admissibility-and-selection-truth-design.md)
    Sources: `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`, current backend-admissibility code in `crates/vida/src/{runtime_lane_summary,runtime_dispatch_execution,runtime_dispatch_state,state_store_run_graph_summary}.rs`, and the active A3 runtime work to stop implementation-lane operator surfaces from projecting inadmissible raw backend drift as canonical selected-backend truth
+26. [vida-service-tui-wizard-execution-spec.md](vida-service-tui-wizard-execution-spec.md)
+   Sources: `docs/product/research/vida-service-tui-wizard-architecture-research.md` approved operator clarification Sets 1-22, `docs/product/spec/project-activation-and-configurator-model.md`, `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`, `docs/process/agent-extensions/README.md`, and TaskFlow item `vida-service-tui-wizard-spec-pack`
 
 ### Project And Packaging
 

@@ -21,6 +21,25 @@ const TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
     std::time::Duration::from_secs(300);
 const TASKFLOW_NEXT_PROJECTION_NAME: &str = "taskflow-next-latest";
 const TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME: &str = "taskflow-graph-summary-latest";
+
+fn safe_taskflow_projection_component(value: &str) -> String {
+    let mut safe = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    safe.truncate(120);
+    if safe.is_empty() {
+        "none".to_string()
+    } else {
+        safe
+    }
+}
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct GraphSummaryTaskRef {
     pub(crate) id: String,
@@ -1305,7 +1324,7 @@ fn continuation_dispatch_gate_from_decision(
 ) -> Option<TaskflowContinuationDispatchGate> {
     let continuation_binding_ambiguous =
         continuation_binding_summary["status"].as_str() == Some("ambiguous");
-    if decision.candidate_task_context.admissible_now && !continuation_binding_ambiguous {
+    if decision.candidate_task_context.admissible_now {
         return None;
     }
 
@@ -3032,7 +3051,7 @@ fn build_taskflow_next_decision(
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
     latest_run_graph_task_closed: bool,
-    _latest_run_graph_task_missing: bool,
+    latest_run_graph_task_missing: bool,
     latest_run_graph_legacy_ownerless: bool,
     explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     terminal_consume_continue_run_id: Option<&str>,
@@ -3067,16 +3086,26 @@ fn build_taskflow_next_decision(
     let latest_run_graph_status_blocked =
         latest_run_graph_status_is_blocked && !legacy_ownerless_latest_run_nonblocking;
     let recovery_holds_current_active_bound_run = recovery_holds_active_bound_run;
+    let latest_run_graph_task_no_longer_active =
+        latest_run_graph_task_closed || latest_run_graph_task_missing;
     let terminal_consume_continue_without_next_unit = latest_run_graph_status
         .zip(terminal_consume_continue_run_id)
         .is_some_and(|(status, run_id)| status.run_id == run_id)
-        && !explicit_next_task_binding;
+        && !explicit_next_task_binding
+        && !latest_run_graph_task_no_longer_active;
+    let closed_task_terminal_continue_ready_head = latest_run_graph_status
+        .zip(terminal_consume_continue_run_id)
+        .zip(ready_head.as_ref())
+        .is_some_and(|((status, run_id), _task)| status.run_id == run_id)
+        && latest_runtime_consumption_kind == Some("final")
+        && latest_run_graph_task_no_longer_active;
     let latest_run_graph_status_blocks_admission = latest_run_graph_status_blocked
         && !active_exception_takeover_evidence
         && !terminal_consume_continue_without_next_unit;
     let completed_without_explicit_next_unit =
         terminal_completed_without_next_unit(latest_run_graph_status)
-            && !explicit_next_task_binding;
+            && !explicit_next_task_binding
+            && !closed_task_terminal_continue_ready_head;
 
     // Check for foreign claim conflicts (multi-session admission rule #3)
     // A blocked task owned by session A must not stop session B when session B is working on
@@ -3986,6 +4015,11 @@ fn cached_taskflow_next_open_delegated_cycle_projection(cached: &str) -> bool {
 async fn graph_summary_task_rows(
     state_dir: &Path,
 ) -> Result<Vec<crate::state_store::TaskRecord>, crate::state_store::StateStoreError> {
+    if let Ok(rows) =
+        crate::state_store::StateStore::read_fresh_tasks_from_jsonl_snapshot(state_dir)
+    {
+        return Ok(rows);
+    }
     match crate::state_store::StateStore::open_existing_read_only(state_dir.to_path_buf()).await {
         Ok(store) => store.list_tasks(None, true).await,
         Err(error @ crate::state_store::StateStoreError::MissingStateDir(_)) => {
@@ -4410,32 +4444,26 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             println!("{rendered}");
             return cached_operator_projection_exit_code(&rendered);
         }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
-                &proxy_state_root,
-                TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME,
-            )
-        {
-            let rendered =
-                compact_cached_taskflow_graph_summary_projection(&cached).unwrap_or(cached);
-            println!("{rendered}");
-            return cached_operator_projection_exit_code(&rendered);
-        }
+        // Graph summary is structural: candidate admission, blocker codes, and
+        // dispatch gates must be recomputed together with continuation binding.
+        // A live binding overlay on a stale graph-summary payload can make the
+        // top-level binding look fresh while leaving stale blockers in place.
     }
 
-    let all_tasks = match graph_summary_task_rows(&proxy_state_root).await {
+    let store =
+        match crate::state_store::StateStore::open_existing_read_only(proxy_state_root.clone())
+            .await
+        {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("Failed to open authoritative state store: {error}");
+                return ExitCode::from(1);
+            }
+        };
+    let all_tasks = match store.list_tasks(None, true).await {
         Ok(tasks) => tasks,
         Err(error) => {
             eprintln!("Failed to list tasks for wave summary: {error}");
-            return ExitCode::from(1);
-        }
-    };
-
-    let store = match crate::state_store::StateStore::open_existing(proxy_state_root.clone()).await
-    {
-        Ok(store) => store,
-        Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
             return ExitCode::from(1);
         }
     };
@@ -4569,14 +4597,43 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let operator_session_projection =
-        match crate::operator_session_projection::build_operator_session_projection(&store).await {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("Failed to build operator session projection: {error}");
-                return ExitCode::from(1);
-            }
-        };
+    // Get current session ID and foreign claims for multi-session admission rule #3.
+    // Keep this read cluster shared with the operator-session projection so the
+    // cold graph-summary path does not reopen or requery the same state rows.
+    let owner_evidence = match crate::orchestrator_session_surface::build_runtime_owner_evidence(
+        &proxy_state_root,
+        false,
+    ) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            eprintln!("Failed to build runtime owner evidence: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let current_session_id = owner_evidence["current_session"]["session_id"]
+        .as_str()
+        .unwrap_or_default();
+    let active_claims = match store.active_orchestrator_claims().await {
+        Ok(claims) => claims,
+        Err(error) => {
+            eprintln!("Failed to read active orchestrator claims: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let operator_session_projection = match crate::operator_session_projection::build_operator_session_projection_from_rows_and_claims(
+        &store,
+        &owner_evidence,
+        &all_tasks,
+        &active_claims,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("Failed to build operator session projection: {error}");
+            return ExitCode::from(1);
+        }
+    };
     let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
         match latest_run_graph.as_ref() {
             Some(status) => match all_tasks.iter().find(|task| task.id == status.task_id) {
@@ -4600,27 +4657,6 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             .ok()
             .flatten();
 
-    // Get current session ID and foreign claims for multi-session admission rule #3
-    let owner_evidence = match crate::orchestrator_session_surface::build_runtime_owner_evidence(
-        &proxy_state_root,
-        false,
-    ) {
-        Ok(evidence) => evidence,
-        Err(error) => {
-            eprintln!("Failed to build runtime owner evidence: {error}");
-            return ExitCode::from(1);
-        }
-    };
-    let current_session_id = owner_evidence["current_session"]["session_id"]
-        .as_str()
-        .unwrap_or_default();
-    let active_claims = match store.active_orchestrator_claims().await {
-        Ok(claims) => claims,
-        Err(error) => {
-            eprintln!("Failed to read active orchestrator claims: {error}");
-            return ExitCode::from(1);
-        }
-    };
     let active_foreign_claims: Vec<_> = active_claims
         .into_iter()
         .filter(|claim| claim.orchestrator_session_id != current_session_id)
@@ -5639,6 +5675,17 @@ enum RouteDiagnosticMode {
     ConfigActuationCensus,
 }
 
+impl RouteDiagnosticMode {
+    fn projection_component(self) -> &'static str {
+        match self {
+            RouteDiagnosticMode::Explain => "explain",
+            RouteDiagnosticMode::ModelProfileReadinessAudit => "model-profile-readiness",
+            RouteDiagnosticMode::ValidateRouting => "validate-routing",
+            RouteDiagnosticMode::ConfigActuationCensus => "config-actuation-census",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TaskflowRouteDiagnosticArgs {
     mode: RouteDiagnosticMode,
@@ -5919,6 +5966,195 @@ fn route_assignment_reseed_next_actions(run_id: &str, task_id: &str) -> Vec<Stri
     ]
 }
 
+fn push_backend_ref(
+    refs: &mut Vec<serde_json::Value>,
+    seen: &mut BTreeSet<String>,
+    source: &str,
+    backend_id: Option<&str>,
+    profile_id: Option<&str>,
+    blocking: bool,
+) {
+    let Some(backend_id) = backend_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let profile_id = profile_id.map(str::trim).filter(|value| !value.is_empty());
+    let seen_key = format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        source,
+        backend_id,
+        profile_id.unwrap_or_default(),
+        blocking
+    );
+    if !seen.insert(seen_key) {
+        return;
+    }
+    refs.push(serde_json::json!({
+        "source": source,
+        "backend_id": backend_id,
+        "selected_model_profile": profile_id,
+        "blocking": blocking,
+    }));
+}
+
+fn route_backend_refs_for_current_config_validation(
+    route: &serde_json::Value,
+) -> Vec<serde_json::Value> {
+    let selected_backend = route["selected_backend"].as_str();
+    let selected_profile = route["selected_model_profile_id"].as_str();
+    let mut refs = Vec::new();
+    let mut seen = BTreeSet::new();
+    push_backend_ref(
+        &mut refs,
+        &mut seen,
+        "selected_backend",
+        selected_backend,
+        selected_profile,
+        true,
+    );
+    push_backend_ref(
+        &mut refs,
+        &mut seen,
+        "runtime_assignment_backend",
+        route["runtime_assignment_backend"].as_str(),
+        selected_profile,
+        true,
+    );
+    push_backend_ref(
+        &mut refs,
+        &mut seen,
+        "route_primary_backend",
+        route["route_primary_backend"].as_str(),
+        None,
+        true,
+    );
+    push_backend_ref(
+        &mut refs,
+        &mut seen,
+        "fallback_backend",
+        route["fallback_backend"].as_str(),
+        None,
+        true,
+    );
+    for backend in string_array_from_payload(&route["fanout_backends"]) {
+        push_backend_ref(
+            &mut refs,
+            &mut seen,
+            "fanout_backends",
+            Some(&backend),
+            None,
+            true,
+        );
+    }
+    for candidate in route["candidate_pool"].as_array().into_iter().flatten() {
+        let status = candidate["status"].as_str().unwrap_or_default();
+        let carrier_id = candidate["carrier_id"].as_str();
+        let profile_id = candidate["model_profile_id"].as_str();
+        let candidate_is_selected = status == "selected" || carrier_id == selected_backend;
+        push_backend_ref(
+            &mut refs,
+            &mut seen,
+            "candidate_pool",
+            carrier_id,
+            profile_id,
+            candidate_is_selected,
+        );
+    }
+    refs
+}
+
+fn disabled_external_backend_refs_from_overlay(
+    overlay: &serde_yaml::Value,
+    route: &serde_json::Value,
+) -> Vec<serde_json::Value> {
+    route_backend_refs_for_current_config_validation(route)
+        .into_iter()
+        .filter_map(|reference| {
+            let backend_id = reference["backend_id"].as_str()?;
+            let profile_id = reference["selected_model_profile"].as_str();
+            let readiness =
+                selected_backend_readiness_payload_from_overlay(overlay, backend_id, profile_id)?;
+            if readiness["blocked"].as_bool() != Some(true)
+                || readiness["blocker_code"].as_str() != Some("configured_backend_dispatch_failed")
+            {
+                return None;
+            }
+            Some(serde_json::json!({
+                "source": reference["source"].clone(),
+                "backend_id": backend_id,
+                "selected_model_profile": reference["selected_model_profile"].clone(),
+                "blocking": reference["blocking"].clone(),
+                "readiness": readiness,
+            }))
+        })
+        .collect()
+}
+
+pub(crate) fn disabled_external_backend_refs_payload_from_overlay(
+    overlay: &serde_yaml::Value,
+    route: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let refs = disabled_external_backend_refs_from_overlay(overlay, route);
+    if refs.is_empty() {
+        return None;
+    }
+    let blocking = refs
+        .iter()
+        .any(|reference| reference["blocking"].as_bool() == Some(true));
+    Some(serde_json::json!({
+        "status": if blocking { "blocked" } else { "diagnostic" },
+        "blocking": blocking,
+        "refs": refs,
+        "next_actions": [
+            "reseed the route assignment from the current carrier config before trusting persisted route diagnostics",
+            "remove disabled external backends from actuatable route fields or enable the backend with receipt-backed readiness evidence",
+        ],
+    }))
+}
+
+fn apply_disabled_external_backend_refs_from_overlay(
+    payload: &mut serde_json::Value,
+    overlay: &serde_yaml::Value,
+) {
+    let Some(drift) = disabled_external_backend_refs_payload_from_overlay(overlay, payload) else {
+        return;
+    };
+    let blocking = drift["blocking"].as_bool() == Some(true);
+    let next_actions = drift["next_actions"].clone();
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "route_disabled_external_backend_refs".to_string(),
+            drift.clone(),
+        );
+        if blocking {
+            let mut blocker_codes = string_array_from_payload(&object["blocker_codes"]);
+            blocker_codes.push("route_blocked".to_string());
+            blocker_codes.push("route_references_disabled_external_backend".to_string());
+            blocker_codes.sort();
+            blocker_codes.dedup();
+            object.insert(
+                "status".to_string(),
+                serde_json::Value::String("blocked".to_string()),
+            );
+            object.insert(
+                "blocker_codes".to_string(),
+                serde_json::to_value(blocker_codes)
+                    .expect("route disabled backend blockers should serialize"),
+            );
+            object.insert("next_actions".to_string(), next_actions);
+        }
+    }
+}
+
+fn apply_disabled_external_backend_refs(payload: &mut serde_json::Value) {
+    let project_root = crate::state_store::repo_root();
+    let Ok(overlay) =
+        crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(&project_root)
+    else {
+        return;
+    };
+    apply_disabled_external_backend_refs_from_overlay(payload, &overlay);
+}
+
 fn route_payload_for_dispatch_target(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
@@ -5997,6 +6233,7 @@ fn route_payload_for_dispatch_target(
             );
         }
     }
+    apply_disabled_external_backend_refs(&mut payload);
     payload
 }
 
@@ -6022,6 +6259,103 @@ fn route_validate_targets(execution_plan: &serde_json::Value) -> Vec<String> {
         .filter(|target| !target.trim().is_empty())
         .filter(|target| unique.insert(target.clone()))
         .collect()
+}
+
+fn validate_routing_route_field_truth_rows(
+    routes: &[serde_json::Value],
+    expected_knob_class: &str,
+) -> Vec<serde_json::Value> {
+    routes
+        .iter()
+        .flat_map(|route| {
+            let dispatch_target = route["dispatch_target"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
+            route["route_field_truth"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(move |truth| {
+                    if truth["knob_class"].as_str() != Some(expected_knob_class) {
+                        return None;
+                    }
+                    Some(serde_json::json!({
+                        "dispatch_target": dispatch_target,
+                        "field": truth["field"],
+                        "truth": truth["truth"],
+                        "knob_class": truth["knob_class"],
+                        "effect": truth["effect"],
+                        "operator_surface": "vida taskflow validate-routing",
+                    }))
+                })
+        })
+        .collect()
+}
+
+fn build_validate_routing_payload(
+    context: &crate::state_store::RunGraphDispatchContext,
+    execution_plan: &serde_json::Value,
+) -> serde_json::Value {
+    let routes = route_validate_targets(execution_plan)
+        .into_iter()
+        .map(|target| route_payload_for_dispatch_target(execution_plan, &target))
+        .collect::<Vec<_>>();
+    let blocker_codes = routes
+        .iter()
+        .flat_map(|route| {
+            route["blocker_codes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let next_actions = routes
+        .iter()
+        .flat_map(|route| {
+            route["next_actions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let next_actions = if blocker_codes.iter().any(|code| code == "model_not_pinned") {
+        route_assignment_reseed_next_actions(&context.run_id, &context.task_id)
+    } else {
+        next_actions
+    };
+    let unsupported_non_behavioral_knobs =
+        validate_routing_route_field_truth_rows(&routes, "unsupported_non_behavioral");
+    let diagnostic_only_knobs = validate_routing_route_field_truth_rows(&routes, "diagnostic_only");
+    let status = if blocker_codes.is_empty() {
+        "pass"
+    } else {
+        "blocked"
+    };
+    serde_json::json!({
+        "surface": "vida taskflow validate-routing",
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "run_id": context.run_id,
+        "task_id": context.task_id,
+        "route_count": routes.len(),
+        "unsupported_non_behavioral_knob_count": unsupported_non_behavioral_knobs.len(),
+        "unsupported_non_behavioral_knobs": unsupported_non_behavioral_knobs,
+        "diagnostic_only_knob_count": diagnostic_only_knobs.len(),
+        "diagnostic_only_knobs": diagnostic_only_knobs,
+        "routes": routes,
+        "next_actions": next_actions,
+    })
 }
 
 fn value_configured(value: &serde_json::Value) -> bool {
@@ -6314,13 +6648,31 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let store = match crate::state_store::StateStore::open_existing(proxy_state_dir()).await {
-        Ok(store) => store,
-        Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            return ExitCode::from(1);
+    let state_dir = proxy_state_dir();
+    let projection_name = format!(
+        "taskflow-route-{}-run-{}-target-{}-role-{}-latest",
+        parsed.mode.projection_component(),
+        safe_taskflow_projection_component(parsed.run_id.as_deref().unwrap_or("latest")),
+        safe_taskflow_projection_component(parsed.dispatch_target.as_deref().unwrap_or("default")),
+        safe_taskflow_projection_component(parsed.runtime_role.as_deref().unwrap_or("default")),
+    );
+    if parsed.as_json {
+        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+            &state_dir,
+            &projection_name,
+        ) {
+            println!("{cached}");
+            return cached_operator_projection_exit_code(&cached);
         }
-    };
+    }
+    let store =
+        match crate::state_store::StateStore::open_existing_read_only(state_dir.clone()).await {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("Failed to open authoritative state store: {error}");
+                return ExitCode::from(1);
+            }
+        };
     let context = match latest_or_requested_dispatch_context(&store, parsed.run_id.as_deref()).await
     {
         Ok(Some(context)) => context,
@@ -6441,58 +6793,7 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
             audit
         }
         RouteDiagnosticMode::ValidateRouting => {
-            let routes = route_validate_targets(execution_plan)
-                .into_iter()
-                .map(|target| route_payload_for_dispatch_target(execution_plan, &target))
-                .collect::<Vec<_>>();
-            let blocker_codes = routes
-                .iter()
-                .flat_map(|route| {
-                    route["blocker_codes"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
-                })
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            let next_actions = routes
-                .iter()
-                .flat_map(|route| {
-                    route["next_actions"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
-                })
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            let next_actions = if blocker_codes.iter().any(|code| code == "model_not_pinned") {
-                route_assignment_reseed_next_actions(&context.run_id, &context.task_id)
-            } else {
-                next_actions
-            };
-            let status = if blocker_codes.is_empty() {
-                "pass"
-            } else {
-                "blocked"
-            };
-            serde_json::json!({
-                "surface": "vida taskflow validate-routing",
-                "status": status,
-                "blocker_codes": blocker_codes,
-                "run_id": context.run_id,
-                "task_id": context.task_id,
-                "route_count": routes.len(),
-                "routes": routes,
-                "next_actions": next_actions,
-            })
+            build_validate_routing_payload(&context, execution_plan)
         }
         RouteDiagnosticMode::ConfigActuationCensus => {
             build_config_actuation_census_payload(&context, execution_plan)
@@ -6513,6 +6814,11 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
 
     if parsed.as_json {
         crate::print_json_pretty(&payload);
+        crate::operator_projection_cache::write_json_projection(
+            &state_dir,
+            &projection_name,
+            &payload,
+        );
     } else {
         let surface = payload["surface"].as_str().unwrap_or("vida taskflow route");
         print_surface_header(RenderMode::Plain, surface);
@@ -6581,6 +6887,98 @@ mod tests {
     use std::fs;
     use std::process::ExitCode;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    trait StateStoreFixtureTaskExt {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        >;
+    }
+
+    impl StateStoreFixtureTaskExt for crate::StateStore {
+        fn create_task_with_fixture_parent<'a>(
+            &'a self,
+            request: crate::state_store::CreateTaskRequest<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::state_store::TaskRecord,
+                            crate::state_store::StateStoreError,
+                        >,
+                    > + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id,
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                } = request;
+                let generated_parent_id = (issue_type != "epic" && parent_id.is_none())
+                    .then(|| format!("{task_id}-fixture-parent"));
+                if let Some(parent_task_id) = generated_parent_id.as_deref() {
+                    let parent_labels: Vec<String> = Vec::new();
+                    let parent_status = if matches!(status.trim(), "closed" | "completed") {
+                        "closed"
+                    } else {
+                        "open"
+                    };
+                    self.create_task(crate::state_store::CreateTaskRequest {
+                        task_id: parent_task_id,
+                        title: "Fixture parent epic",
+                        display_id: None,
+                        description: "Test-only parent epic for strict task hierarchy fixtures",
+                        issue_type: "epic",
+                        status: parent_status,
+                        priority,
+                        parent_id: None,
+                        labels: &parent_labels,
+                        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                        planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                        created_by,
+                        source_repo,
+                    })
+                    .await?;
+                }
+                self.create_task(crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id,
+                    description,
+                    issue_type,
+                    status,
+                    priority,
+                    parent_id: parent_id.or(generated_parent_id.as_deref()),
+                    labels,
+                    execution_semantics,
+                    planner_metadata,
+                    created_by,
+                    source_repo,
+                })
+                .await
+            })
+        }
+    }
 
     #[test]
     fn multi_session_paths_intersect_on_segment_boundaries_only() {
@@ -6877,7 +7275,7 @@ mod tests {
             .await
             .expect("open store");
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "snapshot-ready",
                 title: "Snapshot ready",
                 display_id: None,
@@ -6907,8 +7305,7 @@ mod tests {
             .await
             .expect("authoritative rows should load");
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, "snapshot-ready");
+        assert!(rows.iter().any(|row| row.id == "snapshot-ready"));
     }
 
     #[tokio::test]
@@ -6926,7 +7323,7 @@ mod tests {
             .await
             .expect("open store");
         store
-            .create_task(crate::state_store::CreateTaskRequest {
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
                 task_id: "authoritative-ready",
                 title: "Authoritative ready",
                 display_id: None,
@@ -6955,8 +7352,7 @@ mod tests {
             .await
             .expect("authoritative rows should load");
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, "authoritative-ready");
+        assert!(rows.iter().any(|row| row.id == "authoritative-ready"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -7098,6 +7494,20 @@ mod tests {
         let store = crate::state_store::StateStore::open(root.clone())
             .await
             .expect("open store");
+        let mut foreign_task = task(
+            "foreign-blocked-task",
+            "task",
+            "in_progress",
+            1,
+            &[],
+            Vec::new(),
+        );
+        foreign_task.planner_metadata.owned_paths = vec!["crates/vida/src/foreign.rs".to_string()];
+        foreign_task.execution_semantics.conflict_domain = Some("foreign-domain".to_string());
+        store
+            .persist_task_record(foreign_task)
+            .await
+            .expect("persist foreign blocked task");
         let foreign = store
             .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
                 claim_id: "foreign-blocked-claim".to_string(),
@@ -8739,7 +9149,7 @@ mod tests {
     }
 
     #[test]
-    fn route_payload_blocks_runtime_selected_carrier_without_matrix_row() {
+    fn route_payload_uses_admissible_fallback_when_runtime_selected_carrier_has_no_matrix_row() {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -8773,14 +9183,14 @@ mod tests {
 
         let payload = super::route_payload_for_dispatch_target(&execution_plan, "implementation");
 
-        assert_eq!(payload["selected_backend"].as_str(), Some("junior"));
         assert_eq!(
-            payload["selected_backend_admissible"].as_bool(),
-            Some(false)
+            payload["selected_backend"].as_str(),
+            Some("internal_subagents")
         );
+        assert_eq!(payload["selected_backend_admissible"].as_bool(), Some(true));
         assert_eq!(payload["status"].as_str(), Some("blocked"));
         assert!(payload["blocker_codes"].as_array().is_some_and(|codes| {
-            codes.contains(&serde_json::json!(
+            !codes.contains(&serde_json::json!(
                 "selected_backend_not_admissible_for_dispatch_target"
             ))
         }));
@@ -8844,6 +9254,124 @@ agent_system:
             "blocked"
         );
         assert!(blocker_codes.contains(&"selected_backend_not_ready".to_string()));
+    }
+
+    #[test]
+    fn route_diagnostics_block_actuatable_disabled_external_backend_refs() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    external_bridge:
+      enabled: false
+      subagent_backend_class: external_cli
+      default_model_profile: external_review
+      dispatch:
+        command: disabled-agent
+"#,
+        )
+        .expect("overlay should parse");
+        let mut payload = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "route_present": true,
+            "selected_backend": "internal_support",
+            "runtime_assignment_backend": "internal_support",
+            "route_primary_backend": "internal_support",
+            "fallback_backend": "external_bridge",
+            "fanout_backends": [],
+            "selected_model_profile_id": "internal_review",
+            "candidate_pool": [
+                {
+                    "carrier_id": "internal_support",
+                    "model_profile_id": "internal_review",
+                    "status": "selected"
+                },
+                {
+                    "carrier_id": "external_bridge",
+                    "model_profile_id": "external_review",
+                    "status": "rejected"
+                }
+            ]
+        });
+
+        super::apply_disabled_external_backend_refs_from_overlay(&mut payload, &overlay);
+
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"].as_array().is_some_and(|codes| {
+            codes.contains(&serde_json::json!(
+                "route_references_disabled_external_backend"
+            ))
+        }));
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| { codes.contains(&serde_json::json!("route_blocked")) }));
+        let refs = payload["route_disabled_external_backend_refs"]["refs"]
+            .as_array()
+            .expect("disabled backend refs should render");
+        assert!(refs.iter().any(|row| {
+            row["source"] == "fallback_backend"
+                && row["backend_id"] == "external_bridge"
+                && row["blocking"] == true
+        }));
+        assert!(refs.iter().any(|row| {
+            row["source"] == "candidate_pool"
+                && row["backend_id"] == "external_bridge"
+                && row["blocking"] == false
+        }));
+    }
+
+    #[test]
+    fn route_diagnostics_keep_rejected_only_disabled_external_backend_refs_diagnostic() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    external_bridge:
+      enabled: false
+      subagent_backend_class: external_cli
+      default_model_profile: external_review
+      dispatch:
+        command: disabled-agent
+"#,
+        )
+        .expect("overlay should parse");
+        let mut payload = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "route_present": true,
+            "selected_backend": "internal_support",
+            "runtime_assignment_backend": "internal_support",
+            "route_primary_backend": "internal_support",
+            "fallback_backend": "internal_support",
+            "fanout_backends": [],
+            "selected_model_profile_id": "internal_review",
+            "candidate_pool": [
+                {
+                    "carrier_id": "internal_support",
+                    "model_profile_id": "internal_review",
+                    "status": "selected"
+                },
+                {
+                    "carrier_id": "external_bridge",
+                    "model_profile_id": "external_review",
+                    "status": "rejected"
+                }
+            ]
+        });
+
+        super::apply_disabled_external_backend_refs_from_overlay(&mut payload, &overlay);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(
+            payload["route_disabled_external_backend_refs"]["status"],
+            "diagnostic"
+        );
+        assert!(!payload["blocker_codes"].as_array().is_some_and(|codes| {
+            codes.contains(&serde_json::json!(
+                "route_references_disabled_external_backend"
+            ))
+        }));
     }
 
     #[test]
@@ -9149,6 +9677,80 @@ agent_system:
 
         let targets = super::route_validate_targets(&execution_plan);
         assert_eq!(targets, vec!["implementation", "coach", "architecture"]);
+    }
+
+    #[test]
+    fn validate_routing_exposes_unsupported_nonbehavioral_knobs() {
+        let context = crate::state_store::RunGraphDispatchContext {
+            run_id: "run-validate-routing-knobs".to_string(),
+            task_id: "task-validate-routing-knobs".to_string(),
+            request_text: "validate route knobs".to_string(),
+            role_selection: serde_json::json!({}),
+            recorded_at: "0".to_string(),
+        };
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "execution_lane_sequence": ["implementation"],
+                    "lane_catalog": {
+                        "implementation": {
+                            "executor_backend": "internal_subagents",
+                            "carrier_runtime_assignment": {
+                                "enabled": true,
+                                "model_selection_enabled": true,
+                                "candidate_scope": "unified_carrier_model_profiles",
+                                "selected_backend_id": "internal_subagents"
+                            },
+                            "semantic_cache_embedding_provider": "remote",
+                            "gateway_proxy_adapter": "future-only",
+                            "workflow_learning_enabled": true,
+                            "semantic_route_cache": {
+                                "validity_scope": {
+                                    "diagnostic_only": true,
+                                    "not_runtime_authority": true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let payload = super::build_validate_routing_payload(&context, &execution_plan);
+        let unsupported = payload["unsupported_non_behavioral_knobs"]
+            .as_array()
+            .expect("validate-routing should expose unsupported knobs");
+        let diagnostic = payload["diagnostic_only_knobs"]
+            .as_array()
+            .expect("validate-routing should expose diagnostic-only knobs");
+
+        assert_eq!(payload["surface"], "vida taskflow validate-routing");
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blockers should render")
+            .iter()
+            .any(|code| code == "route_fields_not_behavioral"));
+        assert!(unsupported.iter().any(|row| {
+            row["dispatch_target"] == "implementation"
+                && row["field"] == "semantic_cache_embedding_provider"
+                && row["knob_class"] == "unsupported_non_behavioral"
+        }));
+        assert!(unsupported.iter().any(|row| {
+            row["dispatch_target"] == "implementation"
+                && row["field"] == "gateway_proxy_adapter"
+                && row["truth"] == "rejected_no_runtime_consumer"
+        }));
+        assert!(unsupported.iter().any(|row| {
+            row["dispatch_target"] == "implementation"
+                && row["field"] == "workflow_learning_enabled"
+                && row["operator_surface"] == "vida taskflow validate-routing"
+        }));
+        assert!(diagnostic.iter().any(|row| {
+            row["dispatch_target"] == "implementation"
+                && row["field"] == "semantic_route_cache"
+                && row["knob_class"] == "diagnostic_only"
+        }));
     }
 
     #[test]
@@ -10249,6 +10851,88 @@ agent_system:
             .blocker_codes
             .iter()
             .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit"));
+    }
+
+    #[test]
+    fn terminal_continue_snapshot_for_closed_task_allows_ready_head_without_explicit_binding() {
+        let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
+            "closed-run",
+            "closed-task",
+            "analysis",
+        );
+        latest_status.status = "completed".to_string();
+        latest_status.lifecycle_stage = "closure_complete".to_string();
+        latest_status.active_node = "closure".to_string();
+        latest_status.next_node = None;
+        latest_status.handoff_state = "none".to_string();
+        latest_status.resume_target = "none".to_string();
+        latest_status.recovery_ready = false;
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("ready-head")),
+            false,
+            true,
+            Some("final"),
+            None,
+            None,
+            Some(&latest_status),
+            true,
+            false,
+            false,
+            None,
+            Some("closed-run"),
+            "test-session",
+            &[],
+        );
+
+        assert_eq!(decision.status, "pass");
+        assert!(decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "ready_now"
+        );
+        assert_eq!(
+            decision
+                .primary_ready_task
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("ready-head")
+        );
+        assert!(!decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit"));
+    }
+
+    #[test]
+    fn admissible_ready_head_suppresses_stale_ambiguous_continuation_gate() {
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("ready-head")),
+            false,
+            true,
+            Some("final"),
+            None,
+            None,
+            None,
+            false,
+            false,
+            false,
+            None,
+            None,
+            "test-session",
+            &[],
+        );
+        let continuation_summary = serde_json::json!({
+            "status": "ambiguous",
+            "ambiguity_reason": "completed_without_explicit_next_bounded_unit",
+            "next_actions": ["stale terminal summary"]
+        });
+
+        assert!(decision.candidate_task_context.admissible_now);
+        assert!(
+            super::continuation_dispatch_gate_from_decision(&decision, &continuation_summary)
+                .is_none()
+        );
     }
 
     #[test]

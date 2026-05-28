@@ -30,14 +30,14 @@ host_environment:
         tier: junior
         rate: 1
         reasoning_band: low
-        model: gpt-5.4
+        model: gpt-5.5
         model_reasoning_effort: low
         sandbox_mode: workspace-write
         default_model_profile: codex_gpt55_low_write
         model_profiles:
           codex_gpt55_low_write:
             provider: openai
-            model_ref: gpt-5.4
+            model_ref: gpt-5.5
             reasoning_effort: low
             plan_mode_reasoning_effort: medium
             sandbox_mode: workspace-write
@@ -76,14 +76,14 @@ host_environment:
         tier: middle
         rate: 4
         reasoning_band: medium
-        model: gpt-5.4
+        model: gpt-5.5
         model_reasoning_effort: medium
         sandbox_mode: workspace-write
         default_model_profile: codex_gpt55_medium_write
         model_profiles:
           codex_gpt55_medium_write:
             provider: openai
-            model_ref: gpt-5.4
+            model_ref: gpt-5.5
             reasoning_effort: medium
             plan_mode_reasoning_effort: high
             sandbox_mode: workspace-write
@@ -119,14 +119,14 @@ host_environment:
         tier: senior
         rate: 16
         reasoning_band: high
-        model: gpt-5.4
+        model: gpt-5.5
         model_reasoning_effort: high
         sandbox_mode: read-only
         default_model_profile: codex_gpt55_high_readonly
         model_profiles:
           codex_gpt55_high_readonly:
             provider: openai
-            model_ref: gpt-5.4
+            model_ref: gpt-5.5
             reasoning_effort: high
             plan_mode_reasoning_effort: high
             sandbox_mode: read-only
@@ -158,14 +158,14 @@ host_environment:
         tier: architect
         rate: 48
         reasoning_band: xhigh
-        model: gpt-5.4
+        model: gpt-5.5
         model_reasoning_effort: xhigh
         sandbox_mode: read-only
         default_model_profile: codex_gpt55_xhigh_arch
         model_profiles:
           codex_gpt55_high_arch:
             provider: openai
-            model_ref: gpt-5.4
+            model_ref: gpt-5.5
             reasoning_effort: high
             plan_mode_reasoning_effort: high
             sandbox_mode: read-only
@@ -185,7 +185,7 @@ host_environment:
               required: true
           codex_gpt55_xhigh_arch:
             provider: openai
-            model_ref: gpt-5.4
+            model_ref: gpt-5.5
             reasoning_effort: xhigh
             plan_mode_reasoning_effort: xhigh
             sandbox_mode: read-only
@@ -242,6 +242,7 @@ host_environment:
       dispatch:
         command: codex
         receipt_backed_completion_supported: true
+        no_output_timeout_seconds: 2
         static_args:
           - exec
           - --json
@@ -251,6 +252,7 @@ host_environment:
         workdir_flag: -C
         sandbox_flag: -s
         model_flag: -m
+        model_arg_transform: provider_local_name
         reasoning_effort_flag: -c
         reasoning_effort_value_template: 'model_reasoning_effort="{value}"'
         prompt_mode: stdin
@@ -370,6 +372,7 @@ agent_extensions:
     profiles: .vida/project/agent-extensions/profiles.yaml
     flows: .vida/project/agent-extensions/flows.yaml
     dispatch_aliases: .vida/project/agent-extensions/dispatch-aliases.yaml
+    hook_templates: .vida/project/agent-extensions/hook-templates.yaml
   enabled_framework_roles:
     - orchestrator
     - worker
@@ -385,6 +388,7 @@ agent_extensions:
   enabled_shared_skills: []
   enabled_project_profiles: []
   enabled_project_flows: []
+  enabled_hook_templates: []
   default_flow_set: minimal
   role_selection:
     mode: auto
@@ -432,7 +436,7 @@ dev_team:
         - specification
         - planning
       default_carrier: middle
-      default_model: gpt-5.4
+      default_model: gpt-5.5
       default_model_reasoning_effort: medium
       cost_policy:
         budget_units: 4
@@ -455,7 +459,7 @@ dev_team:
         - delivery_task
         - execution_block
       default_carrier: junior
-      default_model: gpt-5.4
+      default_model: gpt-5.5
       default_model_reasoning_effort: low
       cost_policy:
         budget_units: 1
@@ -476,7 +480,7 @@ dev_team:
         - verification
         - quality_gate
       default_carrier: senior
-      default_model: gpt-5.4
+      default_model: gpt-5.5
       default_model_reasoning_effort: high
       cost_policy:
         budget_units: 16
@@ -505,7 +509,7 @@ dev_team:
         - coach
         - review
       default_carrier: middle
-      default_model: gpt-5.4
+      default_model: gpt-5.5
       default_model_reasoning_effort: medium
       cost_policy:
         budget_units: 4
@@ -525,7 +529,7 @@ dev_team:
         - review
         - quality_gate
       default_carrier: senior
-      default_model: gpt-5.4
+      default_model: gpt-5.5
       default_model_reasoning_effort: high
       cost_policy:
         budget_units: 16
@@ -544,7 +548,7 @@ dev_team:
         - quality_gate
         - release_readiness
       default_carrier: senior
-      default_model: gpt-5.4
+      default_model: gpt-5.5
       default_model_reasoning_effort: high
       cost_policy:
         budget_units: 16
@@ -562,7 +566,7 @@ dev_team:
         - release_readiness
         - quality_gate
       default_carrier: senior
-      default_model: gpt-5.4
+      default_model: gpt-5.5
       default_model_reasoning_effort: high
       cost_policy:
         budget_units: 16
@@ -700,7 +704,7 @@ agent_system:
       model_profiles:
         codex_gpt55_low_write:
           provider: openai
-          model_ref: gpt-5.4
+          model_ref: gpt-5.5
           reasoning_effort: low
           normalized_cost_units: 1
           speed_tier: fast
@@ -718,7 +722,7 @@ agent_system:
             required: true
         codex_gpt55_medium_write:
           provider: openai
-          model_ref: gpt-5.4
+          model_ref: gpt-5.5
           reasoning_effort: medium
           normalized_cost_units: 4
           speed_tier: fast
@@ -740,7 +744,7 @@ agent_system:
             required: true
         codex_gpt55_high_readonly:
           provider: openai
-          model_ref: gpt-5.4
+          model_ref: gpt-5.5
           reasoning_effort: high
           normalized_cost_units: 16
           speed_tier: medium
@@ -760,7 +764,7 @@ agent_system:
             required: true
         codex_gpt55_xhigh_arch:
           provider: openai
-          model_ref: gpt-5.4
+          model_ref: gpt-5.5
           reasoning_effort: xhigh
           normalized_cost_units: 48
           speed_tier: medium
@@ -855,6 +859,9 @@ agent_system:
             - business_analyst
             - coach
           task_classes:
+            - implementation
+            - delivery_task
+            - execution_block
             - implementation_medium
             - specification
             - planning
@@ -1052,26 +1059,28 @@ agent_system:
 #     #   verification_route_task_class, independent_verification_required
 #     #
 #     # Diagnostic-only fields surfaced by route explain summaries:
-#     #   a3m_price_snapshot, dispatch_required, graph_strategy,
+#     #   provider_price_snapshot, dispatch_required, graph_strategy,
 #     #   internal_escalation_trigger, semantic_route_cache,
 #     #   semantic_scoring_order, write_scope
 #     #
 #     # Rejected unsupported knobs:
-#     #   a3m_costs_authoritative, a3m_hot_path_price_fetch,
-#     #   a3m_price_override, coach_executor_backend, deterministic_first,
-#     #   external_first_required, gateway_price_override,
-#     #   imported_price_override, local_execution_allowed,
+#     #   external_costs_authoritative, hot_path_price_fetch,
+#     #   hot_path_price_catalog_fetch, coach_executor_backend,
+#     #   deterministic_first, external_first_required, gateway_price_override,
+#     #   gateway_proxy_adapter, imported_price_override,
+#     #   imported_price_authority_override, local_execution_allowed,
 #     #   local_execution_preferred, max_cli_subagent_calls,
 #     #   max_coach_passes, max_fallback_hops, max_total_runtime_seconds,
 #     #   max_verification_passes, merge_policy, min_output_bytes,
-#     #   semantic_cache_authoritative,
+#     #   price_catalog_provider_fetch, semantic_cache_authoritative,
 #     #   semantic_cache_bypass_hard_filters, semantic_cache_closure_authority,
-#     #   semantic_cache_receipt_authority,
+#     #   semantic_cache_embedding_provider, semantic_cache_receipt_authority,
 #     #   semantic_cache_selected_candidate_authority,
 #     #   semantic_score_bypass_hard_filters,
 #     #   semantic_score_disable_hard_filters,
 #     #   semantic_score_override_authority,
-#     #   semantic_score_resurrect_rejected_candidate, web_search_required
+#     #   semantic_score_resurrect_rejected_candidate, web_search_required,
+#     #   workflow_learning_enabled
 #     #
 #     # Use max_runtime_seconds for route dispatch timeouts. The similarly named
 #     # max_total_runtime_seconds knob is intentionally rejected by
@@ -1083,9 +1092,10 @@ agent_system:
 #     # tries to make semantic cache authoritative is intentionally rejected by
 #     # `vida taskflow validate-routing`.
 #     #
-#     # a3m_price_snapshot is explain-only source evidence until it is imported
-#     # through the VIDA price-catalog lifecycle and backed by an apply receipt.
-#     # Route knobs that try to make imported A3M, gateway, or hot-path fetched
+#     # provider_price_snapshot is explain-only source evidence until it is
+#     # imported through the VIDA price-catalog lifecycle and backed by an apply
+#     # receipt. Route knobs that try to make imported external-reference,
+#     # gateway, or hot-path fetched
 #     # costs override VIDA profile-local normalized cost units are rejected by
 #     # `vida taskflow validate-routing`.
 #     #

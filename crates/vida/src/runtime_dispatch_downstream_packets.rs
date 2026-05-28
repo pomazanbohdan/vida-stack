@@ -199,6 +199,7 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
             runtime_coach_review_packet(
                 &receipt.run_id,
                 downstream_target,
+                Some(&receipt.dispatch_target),
                 "bounded implementation result versus approved spec and definition of done",
             )
         } else {

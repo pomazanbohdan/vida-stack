@@ -28,9 +28,15 @@ pub(crate) fn fallback_runtime_consumption_run_graph_status(
             runtime_assignment_from_execution_plan(&role_selection.execution_plan),
         )
     };
-    let route_backend =
+    let route_backend = if conversational_mode.is_some() {
+        selected_runtime_assignment_carrier(&role_selection.execution_plan)
+    } else {
+        None
+    }
+    .or_else(|| {
         selected_backend_from_execution_plan_route(&role_selection.execution_plan, selected_route)
-            .unwrap_or_else(|| "unknown".to_string());
+    })
+    .unwrap_or_else(|| "unknown".to_string());
     crate::state_store::RunGraphStatus {
         run_id: run_id.to_string(),
         task_id: run_id.to_string(),
@@ -65,6 +71,25 @@ pub(crate) fn fallback_runtime_consumption_run_graph_status(
         resume_target: format!("dispatch.{route_target}"),
         recovery_ready: true,
     }
+}
+
+fn selected_runtime_assignment_carrier(execution_plan: &serde_json::Value) -> Option<String> {
+    let assignment = runtime_assignment_from_execution_plan(execution_plan);
+    [
+        "selected_tier",
+        "activation_agent_type",
+        "selected_carrier_id",
+        "selected_backend",
+    ]
+    .iter()
+    .find_map(|field| {
+        assignment
+            .get(*field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
 }
 
 pub(crate) fn blocking_runtime_consumption_run_graph_status(
