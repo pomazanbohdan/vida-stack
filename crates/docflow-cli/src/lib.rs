@@ -43,9 +43,9 @@ pub enum Command {
     DepsMap(PathArgs),
     ArtifactImpact(ArtifactImpactArgs),
     TaskImpact(TaskImpactArgs),
-    Fastcheck(CheckArgs),
-    ActivationCheck(CheckArgs),
-    ProtocolCoverageCheck(CheckArgs),
+    Fastcheck(CheckLikeArgs),
+    ActivationCheck(CheckLikeArgs),
+    ProtocolCoverageCheck(CheckLikeArgs),
     FinalizeEdit(FinalizeEditArgs),
     #[command(
         about = "initialize missing canonical footer metadata on an existing markdown artifact",
@@ -166,15 +166,21 @@ pub struct TaskSummaryArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct CheckArgs {
+pub struct CheckLikeArgs {
     #[arg(long)]
     pub root: Option<String>,
     #[arg(long, default_value = "")]
     pub profile: String,
-    #[arg(long = "json", default_value_t = false)]
-    pub json: bool,
     #[arg()]
     pub files: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct CheckArgs {
+    #[command(flatten)]
+    pub common: CheckLikeArgs,
+    #[arg(long = "json", default_value_t = false)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -552,10 +558,15 @@ pub fn run(cli: Cli) -> String {
                 args.layer, error
             ),
         },
-        Command::Check(args) => match check_rows(args.root.as_deref(), &args.profile, &args.files) {
+        Command::Check(args) => match check_rows(args.common.root.as_deref(), &args.common.profile, &args.common.files) {
             Ok(rows) => {
                 if args.json {
-                    render_check_json(args.root.as_deref(), &args.profile, &args.files, rows)
+                    render_check_json(
+                    args.common.root.as_deref(),
+                    &args.common.profile,
+                    &args.common.files,
+                    rows,
+                )
                 } else {
                     rows.iter()
                         .map(|row| encode_line(row))
