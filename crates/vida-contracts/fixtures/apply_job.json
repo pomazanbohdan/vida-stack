@@ -1,0 +1,16 @@
+{
+  "job_id": "job-01",
+  "wizard_session_id": "wizard-01",
+  "project_ref": {
+    "kind": "project_id",
+    "project_id": "project-01"
+  },
+  "plan_id": "plan-01",
+  "plan_hash": "sha256:plan",
+  "apply_token": "apply-token-01",
+  "idempotency_key": "idempotency-01",
+  "status": "queued",
+  "current_stage": "created",
+  "receipt_refs": [],
+  "event_cursor": "cursor-0"
+}

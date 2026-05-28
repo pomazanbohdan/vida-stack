@@ -1,7 +1,8 @@
 use super::*;
 use crate::task_cli_render::{
     print_task_bulk_reparent_result, print_task_defect_batch_rehome_result,
-    print_task_direct_children, print_task_update_graph_blocked,
+    print_task_direct_children, print_task_update_graph_blocked, task_ready_payload,
+    task_show_payload,
 };
 use crate::taskflow_proxy::paths_intersect;
 
@@ -31,6 +32,15 @@ impl TaskReadMetadata {
             detail,
         }
     }
+
+    fn fresh_snapshot(path: &std::path::Path) -> Self {
+        Self {
+            mode: "fresh_snapshot",
+            degraded: false,
+            snapshot_path: Some(path.display().to_string()),
+            detail: "served from canonical task snapshot evidence with freshness metadata",
+        }
+    }
 }
 
 fn task_json_success_status() -> &'static str {
@@ -40,6 +50,42 @@ fn task_json_success_status() -> &'static str {
 fn task_next_lawful_projection_name() -> &'static str {
     "task-next-lawful-latest"
 }
+
+fn safe_task_projection_component(value: &str) -> String {
+    let mut safe = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    safe.truncate(160);
+    if safe.is_empty() {
+        "unknown".to_string()
+    } else {
+        safe
+    }
+}
+
+fn task_show_projection_name(task_id: &str) -> String {
+    format!(
+        "task-show-{}-latest",
+        safe_task_projection_component(task_id)
+    )
+}
+
+fn task_ready_projection_name(scope_task_id: Option<&str>) -> String {
+    format!(
+        "task-ready-scope-{}-latest",
+        safe_task_projection_component(scope_task_id.unwrap_or("default"))
+    )
+}
+
+const TASK_READ_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
+    std::time::Duration::from_secs(300);
 
 fn task_update_graph_issue_from_invalid_record_reason(
     reason: &str,
@@ -150,6 +196,9 @@ async fn load_task_snapshot_rows_authoritative_first(
     state_dir: &std::path::Path,
 ) -> Result<(Vec<state_store::TaskRecord>, TaskReadMetadata), state_store::StateStoreError> {
     let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
+    if let Ok(rows) = StateStore::read_fresh_tasks_from_jsonl_snapshot(state_dir) {
+        return Ok((rows, TaskReadMetadata::fresh_snapshot(&snapshot_path)));
+    }
     match open_read_only_task_store(state_dir.to_path_buf()).await {
         Ok(store) => match store.list_tasks(None, true).await {
             Ok(rows) => Ok((rows, TaskReadMetadata::authoritative_live())),
@@ -208,12 +257,12 @@ async fn refresh_task_snapshot_after_mutation(
     store: &StateStore,
     surface: &str,
 ) -> Result<(), ExitCode> {
+    crate::operator_projection_cache::touch_state_mutation_marker(store.root());
+    StateStore::touch_task_snapshot_state_marker(store.root());
     store
         .refresh_task_snapshot()
         .await
-        .map(|_| {
-            crate::operator_projection_cache::touch_state_mutation_marker(store.root());
-        })
+        .map(|_| ())
         .map_err(|error| {
             eprintln!("Failed to refresh canonical task snapshot after {surface}: {error}");
             ExitCode::from(1)
@@ -225,12 +274,12 @@ async fn refresh_task_snapshot_for_task_after_mutation(
     task: &state_store::TaskRecord,
     surface: &str,
 ) -> Result<(), ExitCode> {
+    crate::operator_projection_cache::touch_state_mutation_marker(store.root());
+    StateStore::touch_task_snapshot_state_marker(store.root());
     store
         .refresh_task_snapshot_for_task(task)
         .await
-        .map(|_| {
-            crate::operator_projection_cache::touch_state_mutation_marker(store.root());
-        })
+        .map(|_| ())
         .map_err(|error| {
             eprintln!("Failed to refresh canonical task snapshot after {surface}: {error}");
             ExitCode::from(1)
@@ -3439,6 +3488,18 @@ fn runtime_dispatch_receipt_has_ready_downstream_handoff(
     })
 }
 
+fn runtime_dispatch_receipt_has_completed_lane(
+    expected_run_id: Option<&str>,
+    dispatch: Option<&state_store::RunGraphDispatchReceiptSummary>,
+) -> bool {
+    dispatch.is_some_and(|dispatch| {
+        expected_run_id.is_some_and(|run_id| dispatch.run_id == run_id)
+            && dispatch.dispatch_status == "executed"
+            && dispatch.lane_status == "lane_completed"
+            && dispatch.blocker_code.is_none()
+    })
+}
+
 fn downstream_dispatch_command_for_task_next_lawful(
     dispatch: &state_store::RunGraphDispatchReceiptSummary,
 ) -> Option<String> {
@@ -3455,6 +3516,10 @@ fn runtime_recovery_blocks_task_next_lawful(
                 == "blocked_open_delegated_cycle"
             || recovery.resume_status == "running")
             && !runtime_dispatch_receipt_has_ready_downstream_handoff(
+                Some(recovery.run_id.as_str()),
+                dispatch,
+            )
+            && !runtime_dispatch_receipt_has_completed_lane(
                 Some(recovery.run_id.as_str()),
                 dispatch,
             )
@@ -3543,9 +3608,30 @@ fn pass_ready_downstream_handoff_task_next_lawful_receipt(
             "Latest runtime dispatch records a ready downstream handoff for task `{}`.",
             binding.task_id
         ),
-        &binding.sequential_vs_parallel_posture,
+        "sequential_only_downstream_bound",
         ready_task_candidates,
         next_action,
+    )
+}
+
+fn pass_completed_lane_task_next_lawful_receipt(
+    binding: &state_store::RunGraphContinuationBinding,
+    ready_task_candidates: Vec<TaskContinuationCandidate>,
+) -> TaskNextLawfulReceipt {
+    pass_task_next_lawful_receipt(
+        binding.active_bounded_unit.clone(),
+        Some("latest_run_graph_completed_dispatch_receipt".to_string()),
+        &format!(
+            "Latest dispatch receipt records completed delegated lane evidence for task `{}`.",
+            binding.task_id
+        ),
+        "sequential_only_completed_lane_reconciled",
+        ready_task_candidates,
+        format!(
+            "Continue `{}` after completed delegated lane reconciliation; inspect `vida taskflow run-graph status {} --json` if downstream binding is still expected.",
+            binding.task_id,
+            crate::shell_quote(&binding.run_id)
+        ),
     )
 }
 
@@ -3941,9 +4027,39 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match task_show_authoritative_first(state_dir, &command.task_id).await {
+            if command.json {
+                let projection_name = task_show_projection_name(&command.task_id);
+                if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+                    &state_dir,
+                    &projection_name,
+                ) {
+                    println!("{cached}");
+                    return ExitCode::SUCCESS;
+                }
+                if let Some(cached) =
+                    crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
+                        &state_dir,
+                        &projection_name,
+                        TASK_READ_RECENT_PROJECTION_MAX_AGE,
+                    )
+                {
+                    println!("{cached}");
+                    return ExitCode::SUCCESS;
+                }
+            }
+            match task_show_authoritative_first(state_dir.clone(), &command.task_id).await {
                 Ok((task, metadata)) => {
-                    print_task_show(command.render, &task, command.json, Some(&metadata));
+                    if command.json {
+                        let payload = task_show_payload(&task, Some(&metadata));
+                        crate::print_json_pretty(&payload);
+                        crate::operator_projection_cache::write_json_projection(
+                            &state_dir,
+                            &task_show_projection_name(&command.task_id),
+                            &payload,
+                        );
+                    } else {
+                        print_task_show(command.render, &task, false, Some(&metadata));
+                    }
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
@@ -4172,15 +4288,47 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match task_ready_authoritative_first(state_dir, command.scope.as_deref()).await {
+            if command.json {
+                let projection_name = task_ready_projection_name(command.scope.as_deref());
+                if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+                    &state_dir,
+                    &projection_name,
+                ) {
+                    println!("{cached}");
+                    return ExitCode::SUCCESS;
+                }
+                if let Some(cached) =
+                    crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
+                        &state_dir,
+                        &projection_name,
+                        TASK_READ_RECENT_PROJECTION_MAX_AGE,
+                    )
+                {
+                    println!("{cached}");
+                    return ExitCode::SUCCESS;
+                }
+            }
+            match task_ready_authoritative_first(state_dir.clone(), command.scope.as_deref()).await
+            {
                 Ok((tasks, metadata)) => {
-                    print_task_ready(
-                        command.render,
-                        command.scope.as_deref(),
-                        &tasks,
-                        command.json,
-                        Some(&metadata),
-                    );
+                    if command.json {
+                        let payload =
+                            task_ready_payload(command.scope.as_deref(), &tasks, Some(&metadata));
+                        crate::print_json_pretty(&payload);
+                        crate::operator_projection_cache::write_json_projection(
+                            &state_dir,
+                            &task_ready_projection_name(command.scope.as_deref()),
+                            &payload,
+                        );
+                    } else {
+                        print_task_ready(
+                            command.render,
+                            command.scope.as_deref(),
+                            &tasks,
+                            false,
+                            Some(&metadata),
+                        );
+                    }
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
@@ -4378,6 +4526,17 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             ) =>
                         {
                             pass_exception_takeover_task_next_lawful_receipt(
+                                binding,
+                                ready_task_candidates,
+                            )
+                        }
+                        Some(binding)
+                            if runtime_dispatch_receipt_has_completed_lane(
+                                Some(binding.run_id.as_str()),
+                                latest_dispatch_receipt.as_ref(),
+                            ) =>
+                        {
+                            pass_completed_lane_task_next_lawful_receipt(
                                 binding,
                                 ready_task_candidates,
                             )
@@ -5235,6 +5394,7 @@ mod tests {
         ensure_existing_task_mismatch_reason, load_adaptive_preview_finding_json,
         normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
         parse_label_values, parse_optional_label_value, parse_split_child_specs,
+        pass_completed_lane_task_next_lawful_receipt,
         pass_exception_takeover_task_next_lawful_receipt,
         pass_ready_downstream_handoff_task_next_lawful_receipt,
         persist_task_handoff_accept_receipt, runtime_binding_has_active_exception_takeover,
@@ -6594,6 +6754,89 @@ mod tests {
         assert!(receipt.next_action.as_deref().is_some_and(|action| {
             action.contains("vida taskflow consume continue --run-id running-run --json")
         }));
+    }
+
+    #[test]
+    fn task_next_lawful_allows_completed_lane_despite_stale_open_cycle_gate() {
+        let binding = test_continuation_binding(
+            "running-run",
+            "running-runtime-task",
+            "dispatch_execution_started",
+            "run_graph_task",
+        );
+        let recovery = state_store::RunGraphRecoverySummary {
+            run_id: "running-run".to_string(),
+            task_id: "running-runtime-task".to_string(),
+            active_node: "coach".to_string(),
+            lifecycle_stage: "coach_active".to_string(),
+            resume_node: None,
+            resume_status: "running".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "none".to_string(),
+            recovery_ready: false,
+            delegation_gate: state_store::RunGraphDelegationGateSummary {
+                active_node: "coach".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "delegated_lane_active".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                lifecycle_stage: "coach_active".to_string(),
+            },
+        };
+        let dispatch = state_store::RunGraphDispatchReceiptSummary {
+            run_id: "running-run".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec".to_string()),
+            dispatch_packet_path: Some("packet.json".to_string()),
+            dispatch_result_path: Some("result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("middle".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "2026-05-26T01:00:00Z".to_string(),
+        };
+
+        assert!(!runtime_recovery_blocks_task_next_lawful(
+            Some(&recovery),
+            Some(&dispatch)
+        ));
+        let receipt = pass_completed_lane_task_next_lawful_receipt(&binding, Vec::new());
+
+        assert_eq!(receipt.status, "pass");
+        assert!(receipt.blocker_codes.is_empty());
+        assert_eq!(
+            receipt.binding_source.as_deref(),
+            Some("latest_run_graph_completed_dispatch_receipt")
+        );
+        assert_eq!(
+            receipt.sequential_vs_parallel_posture,
+            "sequential_only_completed_lane_reconciled"
+        );
     }
 
     #[test]

@@ -1,0 +1,16 @@
+{
+  "schema_version": "vida-contracts-v1",
+  "protocol_version": "vida-command-v1",
+  "operation": "vida.wizard.schema.get",
+  "session_id": "session-01",
+  "request_id": "request-01",
+  "client_kind": "tui",
+  "project_ref": {
+    "kind": "project_id",
+    "project_id": "project-01"
+  },
+  "claim_kind": "shared_read",
+  "payload": {
+    "wizard_kind": "project_init"
+  }
+}

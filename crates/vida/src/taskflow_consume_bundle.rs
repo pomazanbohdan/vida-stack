@@ -1636,7 +1636,7 @@ dev_team:
       runtime_role: worker
       task_classes: [implementation, delivery_task]
       default_carrier: junior
-      default_model: gpt-5.4
+      default_model: gpt-5.5
       default_model_reasoning_effort: low
       cost_policy:
         budget_units: 1
@@ -1650,7 +1650,7 @@ dev_team:
       runtime_role: coach
       task_classes: [review]
       default_carrier: middle
-      default_model: gpt-5.4
+      default_model: gpt-5.5
       default_model_reasoning_effort: medium
       cost_policy:
         budget_units: 4
@@ -1675,7 +1675,7 @@ dev_team:
                     "roles": [
                         {
                             "role_id": "junior",
-                            "model": "gpt-5.4",
+                            "model": "gpt-5.5",
                             "model_provider": "openai",
                             "model_reasoning_effort": "low",
                             "normalized_cost_units": 1,
@@ -1685,7 +1685,7 @@ dev_team:
                         },
                         {
                             "role_id": "middle",
-                            "model": "gpt-5.4",
+                            "model": "gpt-5.5",
                             "model_provider": "openai",
                             "model_reasoning_effort": "medium",
                             "normalized_cost_units": 4,
@@ -1756,7 +1756,7 @@ dev_team:
                     "roles": [
                         {
                             "role_id": "junior",
-                            "model": "gpt-5.4",
+                            "model": "gpt-5.5",
                             "model_provider": "openai",
                             "model_reasoning_effort": "low",
                             "normalized_cost_units": 1,
@@ -1766,7 +1766,7 @@ dev_team:
                             "model_profiles": {
                                 "codex_gpt54_low_write": {
                                     "provider": "openai",
-                                    "model_ref": "gpt-5.4",
+                                    "model_ref": "gpt-5.5",
                                     "reasoning_effort": "low",
                                     "normalized_cost_units": 1,
                                     "pricing": {
@@ -1871,7 +1871,7 @@ dev_team:
                     "roles": [
                         {
                             "role_id": "middle",
-                            "model": "gpt-5.4",
+                            "model": "gpt-5.5",
                             "model_provider": "openai",
                             "model_reasoning_effort": "medium",
                             "normalized_cost_units": 4,
@@ -1882,7 +1882,7 @@ dev_team:
                             "model_profiles": {
                                 "codex_gpt55_medium_write": {
                                     "provider": "openai",
-                                    "model_ref": "gpt-5.4",
+                                    "model_ref": "gpt-5.5",
                                     "reasoning_effort": "medium",
                                     "normalized_cost_units": 4
                                 }
@@ -1905,7 +1905,7 @@ dev_team:
         );
         assert_eq!(
             readiness["roles"][0]["selected_model"]["model_ref"],
-            "gpt-5.4"
+            "gpt-5.5"
         );
     }
 
@@ -1945,7 +1945,7 @@ dev_team:
                     "roles": [
                         {
                             "role_id": "junior",
-                            "model": "gpt-5.4",
+                            "model": "gpt-5.5",
                             "model_provider": "openai",
                             "model_reasoning_effort": "low",
                             "normalized_cost_units": 1,
@@ -1955,7 +1955,7 @@ dev_team:
                             "model_profiles": {
                                 "codex_gpt54_low_write": {
                                     "provider": "openai",
-                                    "model_ref": "gpt-5.4",
+                                    "model_ref": "gpt-5.5",
                                     "reasoning_effort": "low",
                                     "normalized_cost_units": 1,
                                     "pricing": {
@@ -2128,7 +2128,7 @@ dev_team:
                         "task_classes": ["specification"],
                         "default_runtime_role": "business_analyst",
                         "reasoning_band": "medium",
-                        "model": "gpt-5.4",
+                        "model": "gpt-5.5",
                         "model_provider": "openai",
                         "model_reasoning_effort": "medium",
                         "plan_mode_reasoning_effort": "high",
@@ -2137,7 +2137,7 @@ dev_team:
                         "model_profiles": {
                             "codex_gpt54_medium_write": {
                                 "profile_id": "codex_gpt54_medium_write",
-                                "model_ref": "gpt-5.4",
+                                "model_ref": "gpt-5.5",
                                 "provider": "openai",
                                 "reasoning_effort": "medium",
                                 "plan_mode_reasoning_effort": "high",

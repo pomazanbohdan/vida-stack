@@ -34,82 +34,76 @@ fn yaml_string_list(value: &serde_yaml::Value) -> Vec<String> {
         .collect()
 }
 
+fn assert_route_backend(config: &serde_yaml::Value, route_id: &str, field: &str, expected: &str) {
+    assert_eq!(
+        yaml_string(&route(config, route_id)[field]),
+        Some(expected),
+        "{route_id}.{field} should follow the active project routing policy",
+    );
+}
+
+fn assert_no_legacy_external_backends(backends: &[String]) {
+    for legacy_backend in ["opencode_cli", "hermes_cli", "qwen_cli"] {
+        assert!(
+            !backends.iter().any(|backend| backend == legacy_backend),
+            "active route fanout must not require legacy external backend {legacy_backend}",
+        );
+    }
+}
+
 #[test]
-fn project_routing_shape_diversifies_primary_external_backends() {
+fn project_routing_shape_uses_internal_defaults_and_configured_vibe_coach() {
     let config = project_config();
 
-    assert_eq!(
-        yaml_string(&route(&config, "default")["executor_backend"]),
-        Some("opencode_cli")
-    );
-    assert_eq!(
-        yaml_string(&route(&config, "analysis")["executor_backend"]),
-        Some("opencode_cli")
-    );
-    assert_eq!(
-        yaml_string(&route(&config, "coach")["executor_backend"]),
-        Some("hermes_cli")
-    );
-    assert_eq!(
-        yaml_string(&route(&config, "review")["executor_backend"]),
-        Some("hermes_cli")
-    );
-    assert_eq!(
-        yaml_string(&route(&config, "ui_review")["executor_backend"]),
-        Some("vibe_cli")
-    );
-    assert_eq!(
-        yaml_string(&route(&config, "verification")["executor_backend"]),
-        Some("opencode_cli")
+    for route_id in ["default", "analysis", "review", "ui_review", "verification"] {
+        assert_route_backend(&config, route_id, "executor_backend", "internal_subagents");
+        if yaml_string(&route(&config, route_id)["fallback_executor_backend"]).is_some() {
+            assert_route_backend(
+                &config,
+                route_id,
+                "fallback_executor_backend",
+                "internal_subagents",
+            );
+        }
+        assert_eq!(
+            yaml_string(&route(&config, route_id)["external_first_required"]),
+            Some("no"),
+            "{route_id} should not require an external-first route",
+        );
+    }
+
+    assert_route_backend(&config, "coach", "executor_backend", "vibe_cli");
+    assert_route_backend(
+        &config,
+        "coach",
+        "fallback_executor_backend",
+        "internal_subagents",
     );
 }
 
 #[test]
-fn project_routing_shape_matches_current_research_and_ensemble_fanout() {
+fn project_routing_shape_matches_current_internal_fanout_policy() {
     let config = project_config();
 
     let research_fanout = yaml_string_list(&route(&config, "research")["fanout_executor_backends"]);
-    assert!(research_fanout
-        .iter()
-        .any(|backend| backend == "hermes_cli"));
-    assert!(research_fanout
-        .iter()
-        .any(|backend| backend == "opencode_cli"));
-    assert!(research_fanout.iter().any(|backend| backend == "kilo_cli"));
-    assert!(research_fanout.iter().any(|backend| backend == "vibe_cli"));
-    assert!(!research_fanout.iter().any(|backend| backend == "qwen_cli"));
+    assert_eq!(research_fanout, vec!["internal_subagents".to_string()]);
+    assert_no_legacy_external_backends(&research_fanout);
 
     let review_ensemble_fanout =
         yaml_string_list(&route(&config, "review_ensemble")["fanout_executor_backends"]);
-    assert_eq!(review_ensemble_fanout.len(), 2);
-    assert!(review_ensemble_fanout
-        .iter()
-        .any(|backend| backend == "hermes_cli"));
-    assert!(review_ensemble_fanout
-        .iter()
-        .any(|backend| backend == "opencode_cli"));
-    assert!(!review_ensemble_fanout
-        .iter()
-        .any(|backend| backend == "qwen_cli"));
+    assert_eq!(
+        review_ensemble_fanout,
+        vec!["internal_subagents".to_string()]
+    );
+    assert_no_legacy_external_backends(&review_ensemble_fanout);
 
     let verification_ensemble_fanout =
         yaml_string_list(&route(&config, "verification_ensemble")["fanout_executor_backends"]);
-    assert!(verification_ensemble_fanout.len() >= 4);
-    assert!(verification_ensemble_fanout
-        .iter()
-        .any(|backend| backend == "opencode_cli"));
-    assert!(verification_ensemble_fanout
-        .iter()
-        .any(|backend| backend == "kilo_cli"));
-    assert!(verification_ensemble_fanout
-        .iter()
-        .any(|backend| backend == "hermes_cli"));
-    assert!(verification_ensemble_fanout
-        .iter()
-        .any(|backend| backend == "vibe_cli"));
-    assert!(!verification_ensemble_fanout
-        .iter()
-        .any(|backend| backend == "qwen_cli"));
+    assert_eq!(
+        verification_ensemble_fanout,
+        vec!["internal_subagents".to_string()]
+    );
+    assert_no_legacy_external_backends(&verification_ensemble_fanout);
 }
 
 #[test]
@@ -130,21 +124,17 @@ fn project_routing_shape_keeps_write_routes_internal_fallback_with_diversified_r
         );
         assert_eq!(
             yaml_string(&route["coach_executor_backend"]),
-            Some("hermes_cli"),
-            "{route_id} should route coach review through hermes",
+            Some("vibe_cli"),
+            "{route_id} should route coach review through the configured coach backend",
         );
     }
 
-    assert_eq!(
-        yaml_string(&route(&config, "small_patch")["analysis_executor_backend"]),
-        Some("opencode_cli")
-    );
-    assert_eq!(
-        yaml_string(&route(&config, "ui_patch")["analysis_executor_backend"]),
-        Some("vibe_cli")
-    );
-    assert_eq!(
-        yaml_string(&route(&config, "implementation")["analysis_executor_backend"]),
-        Some("opencode_cli")
-    );
+    for route_id in ["small_patch", "ui_patch", "implementation"] {
+        assert_route_backend(
+            &config,
+            route_id,
+            "analysis_executor_backend",
+            "internal_subagents",
+        );
+    }
 }

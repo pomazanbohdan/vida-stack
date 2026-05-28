@@ -20,6 +20,18 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
     let dispatch_aliases_path = registry_projection.dispatch_aliases_path;
     let require_profile_resolution = registry_projection.validation.require_profile_resolution;
     let require_flow_resolution = registry_projection.validation.require_flow_resolution;
+    let hook_template_projection = crate::build_hook_template_registry_projection(
+        config,
+        root,
+        registry_projection.validation.require_registry_files,
+    );
+    validation_errors.extend(hook_template_projection.validation_errors);
+    let hook_templates = crate::registry_rows_by_key(
+        &hook_template_projection.hook_templates_registry,
+        "hook_templates",
+        "template_id",
+        &hook_template_projection.enabled_hook_templates,
+    );
     let require_framework_role_compatibility = registry_projection
         .validation
         .require_framework_role_compatibility;
@@ -76,6 +88,15 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
         "project_profile_catalog": project_profile_map,
         "project_flow_catalog": project_flow_map,
         "all_project_flow_catalog": all_project_flow_map,
+        "hook_templates": hook_templates,
+        "hook_template_registry": {
+            "configured_path": hook_template_projection.hook_templates_path,
+            "enabled_template_ids": hook_template_projection.enabled_hook_templates,
+            "source_of_truth": hook_template_projection.hook_templates_path
+                .as_ref()
+                .map(|path| format!("vida.config.yaml -> agent_extensions.registries.hook_templates ({path})"))
+                .unwrap_or_else(|| "vida.config.yaml -> agent_extensions.registries.hook_templates".to_string()),
+        },
         "agent_system": serde_json::to_value(crate::yaml_lookup(config, &["agent_system"]).cloned().unwrap_or(serde_yaml::Value::Null))
             .unwrap_or(serde_json::Value::Null),
         "autonomous_execution": serde_json::to_value(crate::yaml_lookup(config, &["autonomous_execution"]).cloned().unwrap_or(serde_yaml::Value::Null))
@@ -506,5 +527,119 @@ mod tests {
             .expect("dispatch aliases should still be an array");
 
         assert!(dispatch_aliases.is_empty());
+    }
+
+    #[test]
+    fn compiled_agent_extension_bundle_projects_config_selected_hook_templates() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let root = harness.path();
+        fs::create_dir_all(root.join("docs/process/agent-extensions"))
+            .expect("agent extensions dir should exist");
+        fs::write(
+            root.join("vida.config.yaml"),
+            concat!(
+                "agent_extensions:\n",
+                "  enabled: true\n",
+                "  registries:\n",
+                "    roles: docs/process/agent-extensions/roles.yaml\n",
+                "    skills: docs/process/agent-extensions/skills.yaml\n",
+                "    profiles: docs/process/agent-extensions/profiles.yaml\n",
+                "    flows: docs/process/agent-extensions/flows.yaml\n",
+                "    dispatch_aliases: docs/process/agent-extensions/dispatch-aliases.yaml\n",
+                "    hook_templates: docs/process/agent-extensions/hook-templates.yaml\n",
+                "  enabled_framework_roles:\n",
+                "    - orchestrator\n",
+                "  enabled_hook_templates:\n",
+                "    - operation_registry_fixture_closed\n",
+                "  validation:\n",
+                "    require_registry_files: true\n",
+            ),
+        )
+        .expect("overlay should exist");
+        fs::write(
+            root.join("docs/process/agent-extensions/roles.yaml"),
+            "version: 1\nroles: []\n",
+        )
+        .expect("roles registry should exist");
+        fs::write(
+            root.join("docs/process/agent-extensions/skills.yaml"),
+            "version: 1\nskills: []\n",
+        )
+        .expect("skills registry should exist");
+        fs::write(
+            root.join("docs/process/agent-extensions/profiles.yaml"),
+            "version: 1\nprofiles: []\n",
+        )
+        .expect("profiles registry should exist");
+        fs::write(
+            root.join("docs/process/agent-extensions/flows.yaml"),
+            "version: 1\nflow_sets: []\n",
+        )
+        .expect("flows registry should exist");
+        fs::write(
+            root.join("docs/process/agent-extensions/dispatch-aliases.yaml"),
+            "version: 1\ndispatch_aliases: []\n",
+        )
+        .expect("dispatch aliases registry should exist");
+        fs::write(
+            root.join("docs/process/agent-extensions/hook-templates.yaml"),
+            concat!(
+                "version: 1\n",
+                "hook_templates:\n",
+                "  - template_id: operation_registry_fixture_closed\n",
+                "    hook: operation_registry_golden_fixture_closure\n",
+                "    template_path: docs/product/spec/operation-registry-golden-fixture-closure.md\n",
+                "  - template_id: unrelated_template\n",
+                "    hook: unrelated\n",
+                "    template_path: docs/product/spec/unrelated.md\n",
+            ),
+        )
+        .expect("hook templates registry should exist");
+
+        let overlay =
+            read_yaml_file_checked(&root.join("vida.config.yaml")).expect("overlay should parse");
+        let bundle = build_compiled_agent_extension_bundle_for_root(&overlay, root)
+            .expect("bundle should compile");
+
+        assert_eq!(bundle["hook_templates"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            bundle["hook_templates"][0]["template_id"],
+            "operation_registry_fixture_closed"
+        );
+        assert_eq!(
+            bundle["hook_template_registry"]["configured_path"],
+            "docs/process/agent-extensions/hook-templates.yaml"
+        );
+        assert_eq!(
+            bundle["hook_template_registry"]["enabled_template_ids"],
+            serde_json::json!(["operation_registry_fixture_closed"])
+        );
+    }
+
+    #[test]
+    fn compiled_agent_extension_bundle_fails_closed_when_enabled_hook_template_registry_missing() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let root = harness.path();
+        fs::write(
+            root.join("vida.config.yaml"),
+            concat!(
+                "agent_extensions:\n",
+                "  enabled: true\n",
+                "  registries:\n",
+                "    hook_templates: docs/process/agent-extensions/missing-hook-templates.yaml\n",
+                "  enabled_hook_templates:\n",
+                "    - operation_registry_fixture_closed\n",
+                "  validation:\n",
+                "    require_registry_files: true\n",
+            ),
+        )
+        .expect("overlay should exist");
+
+        let overlay =
+            read_yaml_file_checked(&root.join("vida.config.yaml")).expect("overlay should parse");
+        let error = build_compiled_agent_extension_bundle_for_root(&overlay, root)
+            .expect_err("bundle should fail closed");
+
+        assert!(error.contains("missing-hook-templates.yaml"));
     }
 }

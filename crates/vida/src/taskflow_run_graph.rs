@@ -345,7 +345,7 @@ fn build_recovery_latest_json_payload(
 async fn render_latest_recovery_json_payload(surface: &'static str) -> ExitCode {
     let state_dir = proxy_state_dir();
     match StateStore::open_existing_read_only(state_dir).await {
-        Ok(store) => match store.latest_run_graph_recovery_summary().await {
+        Ok(store) => match latest_recovery_summary_for_operator_surface(&store).await {
             Ok(summary) => {
                 let summary = match summary {
                     Some(summary) => {
@@ -439,6 +439,19 @@ async fn render_latest_recovery_json_payload(surface: &'static str) -> ExitCode 
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
         }
+    }
+}
+
+async fn latest_recovery_summary_for_operator_surface(
+    store: &StateStore,
+) -> Result<Option<crate::state_store::RunGraphRecoverySummary>, crate::state_store::StateStoreError>
+{
+    match store
+        .latest_run_graph_recovery_summary_for_current_session()
+        .await?
+    {
+        Some(summary) => Ok(Some(summary)),
+        None => store.latest_run_graph_recovery_summary().await,
     }
 }
 
@@ -725,6 +738,12 @@ fn next_lawful_operator_action_for_dispatch_resolution(
             .or_else(|| Some(format!("vida lane show {} --json", status.run_id)));
     }
     let _reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
+    if receipt.blocker_code.as_deref() == Some("internal_dispatch_timeout_without_receipt") {
+        return Some(format!(
+            "vida task show {} --json",
+            shell_quote(&status.task_id)
+        ));
+    }
     if let Some(receipt_id) = receipt
         .exception_path_receipt_id
         .as_deref()
@@ -885,6 +904,9 @@ fn recommended_surface_for_command(command: &str) -> String {
     if command.starts_with("vida taskflow run-graph status") {
         return "vida taskflow run-graph status".to_string();
     }
+    if command.starts_with("vida task show") {
+        return "vida task show".to_string();
+    }
     if command.starts_with("vida taskflow continuation bind") {
         return "vida taskflow continuation bind".to_string();
     }
@@ -926,6 +948,9 @@ fn recovery_next_action_reason(
     }
     if command.starts_with("vida lane show") {
         return "inspect the lane envelope for the dispatch blocker, then record structured exception-takeover evidence and supersession before any local recovery work".to_string();
+    }
+    if command.starts_with("vida task show") {
+        return "inspect the active task owned paths before recording structured exception-takeover evidence for the terminal dispatch blocker".to_string();
     }
     if command.starts_with("vida taskflow consume continue")
         && projection_truth
@@ -2263,7 +2288,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         [head, subcommand] if head == "recovery" && subcommand == "latest" => {
             let state_dir = proxy_state_dir();
             match StateStore::open_existing_read_only(state_dir).await {
-                Ok(store) => match store.latest_run_graph_recovery_summary().await {
+                Ok(store) => match latest_recovery_summary_for_operator_surface(&store).await {
                     Ok(Some(summary)) => {
                         let projection_truth = match store.run_graph_status(&summary.run_id).await {
                             Ok(status) => match run_graph_projection_truth(&store, &status).await {
@@ -4561,6 +4586,127 @@ fn dispatch_init_route_targets(execution_plan: &serde_json::Value) -> Vec<String
         .collect()
 }
 
+const ACTUATABLE_SELECTED_BACKEND_KEYS: &[&str] = &[
+    "selected_backend",
+    "selected_backend_id",
+    "selected_carrier_id",
+    "selected_carrier_agent_id",
+    "selected_agent_id",
+    "activation_agent_type",
+    "selected_tier",
+];
+
+fn disabled_external_backend_ref_from_overlay(
+    overlay: &serde_yaml::Value,
+    backend_id: &str,
+    source: &str,
+) -> Option<serde_json::Value> {
+    let backend_id = backend_id.trim();
+    if backend_id.is_empty() {
+        return None;
+    }
+    let backend_entry = crate::yaml_lookup(overlay, &["agent_system", "subagents", backend_id])?;
+    let backend_class = crate::yaml_lookup(backend_entry, &["subagent_backend_class"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if backend_class != "external_cli" {
+        return None;
+    }
+    let blocker_reason =
+        crate::runtime_dispatch_state::configured_external_backend_dispatch_blocker(
+            backend_id,
+            backend_entry,
+        )?;
+    Some(serde_json::json!({
+        "source": source,
+        "backend_id": backend_id,
+        "blocking": true,
+        "readiness": {
+            "backend_id": backend_id,
+            "status": "external_backend_dispatch_blocked",
+            "blocked": true,
+            "blocker_code": "configured_backend_dispatch_failed",
+            "blocker_reason": blocker_reason,
+        },
+    }))
+}
+
+fn collect_disabled_external_backend_refs_from_value(
+    overlay: &serde_yaml::Value,
+    value: &serde_json::Value,
+    path: &str,
+    refs: &mut Vec<serde_json::Value>,
+    seen: &mut BTreeSet<String>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map {
+                let child_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                if ACTUATABLE_SELECTED_BACKEND_KEYS.contains(&key.as_str()) {
+                    if let Some(backend_id) = child.as_str().map(str::trim) {
+                        let seen_key = format!("{child_path}\u{1f}{backend_id}");
+                        if seen.insert(seen_key) {
+                            if let Some(reference) = disabled_external_backend_ref_from_overlay(
+                                overlay,
+                                backend_id,
+                                &child_path,
+                            ) {
+                                refs.push(reference);
+                            }
+                        }
+                    }
+                }
+                collect_disabled_external_backend_refs_from_value(
+                    overlay,
+                    child,
+                    &child_path,
+                    refs,
+                    seen,
+                );
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for (index, child) in values.iter().enumerate() {
+                let child_path = format!("{path}[{index}]");
+                collect_disabled_external_backend_refs_from_value(
+                    overlay,
+                    child,
+                    &child_path,
+                    refs,
+                    seen,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn disabled_external_backend_refs_payload_for_value_from_overlay(
+    overlay: &serde_yaml::Value,
+    value: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let mut refs = Vec::new();
+    let mut seen = BTreeSet::new();
+    collect_disabled_external_backend_refs_from_value(overlay, value, "", &mut refs, &mut seen);
+    if refs.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "status": "blocked",
+        "blocking": true,
+        "refs": refs,
+        "next_actions": [
+            "reseed the route assignment from the current carrier config before trusting persisted dispatch artifacts",
+            "remove disabled external backends from actuatable selected-backend fields or enable the backend with receipt-backed readiness evidence",
+        ],
+    }))
+}
+
 fn dispatch_context_route_assignment_catalog_drift(
     state_root: &std::path::Path,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -4570,8 +4716,23 @@ fn dispatch_context_route_assignment_catalog_drift(
     let catalog = crate::runtime_dispatch_state::current_project_model_profile_catalog_for_root(
         project_root.as_ref(),
     );
-    if catalog.is_empty() {
-        return None;
+    let overlay =
+        crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root.as_ref())
+            .ok();
+    if let Some(overlay) = overlay.as_ref() {
+        if let Some(drift) = disabled_external_backend_refs_payload_for_value_from_overlay(
+            overlay,
+            &role_selection.execution_plan,
+        ) {
+            return Some(serde_json::json!({
+                "dispatch_target": "execution_plan",
+                "drift": {
+                    "kind": "disabled_external_backend_ref",
+                    "status": "blocked",
+                    "route_disabled_external_backend_refs": drift,
+                },
+            }));
+        }
     }
     for target in dispatch_init_route_targets(&role_selection.execution_plan) {
         let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
@@ -4583,16 +4744,59 @@ fn dispatch_context_route_assignment_catalog_drift(
             &target,
             route,
         );
-        if let Some(drift) = crate::runtime_dispatch_state::route_assignment_catalog_drift_payload(
-            &payload, &catalog,
-        ) {
-            return Some(serde_json::json!({
-                "dispatch_target": target,
-                "drift": drift,
-            }));
+        if !catalog.is_empty() {
+            if let Some(drift) =
+                crate::runtime_dispatch_state::route_assignment_catalog_drift_payload(
+                    &payload, &catalog,
+                )
+            {
+                return Some(serde_json::json!({
+                    "dispatch_target": target,
+                    "drift": drift,
+                }));
+            }
+        }
+        if let Some(overlay) = overlay.as_ref() {
+            if let Some(drift) =
+                crate::taskflow_proxy::disabled_external_backend_refs_payload_from_overlay(
+                    overlay, &payload,
+                )
+                .filter(|drift| drift["blocking"].as_bool() == Some(true))
+            {
+                return Some(serde_json::json!({
+                    "dispatch_target": target,
+                    "drift": {
+                        "kind": "disabled_external_backend_ref",
+                        "status": "blocked",
+                        "route_disabled_external_backend_refs": drift,
+                    },
+                }));
+            }
         }
     }
     None
+}
+
+fn dispatch_receipt_disabled_external_backend_drift(
+    state_root: &std::path::Path,
+    receipt: &RunGraphDispatchReceipt,
+) -> Option<serde_json::Value> {
+    let project_root =
+        crate::runtime_dispatch_state::runtime_dispatch_project_root_from_state_root(state_root);
+    let overlay =
+        crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root.as_ref())
+            .ok()?;
+    let receipt_payload = serde_json::to_value(receipt).ok()?;
+    let drift =
+        disabled_external_backend_refs_payload_for_value_from_overlay(&overlay, &receipt_payload)?;
+    Some(serde_json::json!({
+        "dispatch_target": receipt.dispatch_target,
+        "drift": {
+            "kind": "disabled_external_backend_ref",
+            "status": "blocked",
+            "route_disabled_external_backend_refs": drift,
+        },
+    }))
 }
 
 async fn reseed_dispatch_context_after_route_assignment_drift(
@@ -4723,6 +4927,7 @@ fn current_dispatch_init_cache_config_digest(state_root: &std::path::Path) -> Op
 }
 
 fn dispatch_init_fast_cache_payload_is_reusable(
+    state_root: &std::path::Path,
     payload: &serde_json::Value,
     requested_run_id: &str,
     current_config_digest: Option<&str>,
@@ -4750,6 +4955,17 @@ fn dispatch_init_fast_cache_payload_is_reusable(
     if payload["dispatch_receipt"]["dispatch_status"].as_str() != Some("routed") {
         return false;
     }
+    let project_root =
+        crate::runtime_dispatch_state::runtime_dispatch_project_root_from_state_root(state_root);
+    if let Ok(overlay) =
+        crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root.as_ref())
+    {
+        if disabled_external_backend_refs_payload_for_value_from_overlay(&overlay, payload)
+            .is_some()
+        {
+            return false;
+        }
+    }
     if !payload["dispatch_receipt"]["dispatch_command"]
         .as_str()
         .map(str::trim)
@@ -4772,6 +4988,7 @@ pub(crate) fn read_run_graph_dispatch_init_fast_cache(
     let payload = serde_json::from_str::<serde_json::Value>(&body).ok()?;
     let current_config_digest = current_dispatch_init_cache_config_digest(state_root);
     dispatch_init_fast_cache_payload_is_reusable(
+        state_root,
         &payload,
         requested_run_id,
         current_config_digest.as_deref(),
@@ -4895,6 +5112,9 @@ async fn existing_routed_dispatch_init_artifacts(
     else {
         return Ok(None);
     };
+    if dispatch_receipt_disabled_external_backend_drift(store.root(), &dispatch_receipt).is_some() {
+        return Ok(None);
+    }
     let Some(dispatch_packet_path) = reusable_routed_dispatch_receipt(&dispatch_receipt) else {
         return Ok(None);
     };
@@ -5388,6 +5608,9 @@ async fn preview_run_graph_dispatch_init_artifacts(
             .run_graph_dispatch_receipt(&effective_run_id)
             .await
             .map_err(|error| format!("Failed to read existing dispatch receipt: {error}"))?
+            .filter(|receipt| {
+                dispatch_receipt_disabled_external_backend_drift(store.root(), receipt).is_none()
+            })
     } else {
         None
     };
@@ -7047,6 +7270,122 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[tokio::test]
+    async fn recovery_latest_prefers_current_session_run_over_global_stale_run() {
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-current-recovery-latest");
+        }
+        let root = std::env::temp_dir().join(format!(
+            "vida-recovery-current-session-latest-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        for task_id in ["run-current-recovery", "run-global-stale"] {
+            store
+                .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title: "Recovery latest task",
+                    display_id: None,
+                    description: "test task",
+                    issue_type: "task",
+                    status: "in_progress",
+                    priority: 0,
+                    parent_id: None,
+                    labels: &labels,
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "test",
+                })
+                .await
+                .expect("create task");
+        }
+
+        let mut current_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-current-recovery",
+            "run-current-recovery",
+            "analysis",
+        );
+        current_status.status = "blocked".to_string();
+        current_status.lifecycle_stage = "analysis_blocked".to_string();
+        current_status.policy_gate = "review_findings".to_string();
+        current_status.recovery_ready = false;
+        store
+            .record_run_graph_status(&current_status)
+            .await
+            .expect("persist current status");
+        store
+            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
+                claim_id: "current-recovery-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-current-recovery-latest".to_string(),
+                process_id: None,
+                task_id: Some("run-current-recovery".to_string()),
+                run_id: Some("run-current-recovery".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("runtime-delegated-cycle".to_string()),
+                owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: crate::state_store::LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("claim current run");
+
+        let mut stale_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-global-stale",
+            "run-global-stale",
+            "planning",
+        );
+        stale_status.status = "ready".to_string();
+        stale_status.lifecycle_stage = "implementation_dispatch_ready".to_string();
+        stale_status.next_node = Some("analysis".to_string());
+        stale_status.policy_gate = "validation_report_required".to_string();
+        stale_status.handoff_state = "awaiting_analysis".to_string();
+        stale_status.resume_target = "dispatch.analysis_lane".to_string();
+        stale_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&stale_status)
+            .await
+            .expect("persist newer global status");
+
+        assert_eq!(
+            store
+                .latest_run_graph_recovery_summary()
+                .await
+                .expect("read global recovery")
+                .expect("global recovery present")
+                .run_id,
+            "run-global-stale"
+        );
+        assert_eq!(
+            latest_recovery_summary_for_operator_surface(&store)
+                .await
+                .expect("read operator recovery")
+                .expect("operator recovery present")
+                .run_id,
+            "run-current-recovery"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        match saved_session_id {
+            Some(value) => unsafe {
+                std::env::set_var("VIDA_SESSION_ID", value);
+            },
+            None => unsafe {
+                std::env::remove_var("VIDA_SESSION_ID");
+            },
+        }
+    }
+
     #[test]
     fn dispatch_init_timeout_window_covers_live_activation_snapshot_seed() {
         assert!(
@@ -7893,6 +8232,32 @@ mod tests {
     }
 
     #[test]
+    fn recovery_status_action_for_internal_timeout_with_running_lane_points_to_task_show() {
+        let mut status = packet_gate_status("run-internal-timeout");
+        status.task_id = "task-internal-timeout".to_string();
+        status.status = "blocked".to_string();
+        status.recovery_ready = false;
+        status.resume_target = "none".to_string();
+        status.active_node = "test_author".to_string();
+        status.lifecycle_stage = "test_author_blocked".to_string();
+
+        let mut receipt = packet_gate_receipt("run-internal-timeout");
+        receipt.dispatch_target = "test_author".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some("internal_dispatch_timeout_without_receipt".to_string());
+        receipt.selected_backend = Some("internal_subagents".to_string());
+
+        let command =
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
+
+        assert_eq!(
+            command.as_deref(),
+            Some("vida task show task-internal-timeout --json")
+        );
+    }
+
+    #[test]
     fn recovery_status_action_for_downstream_missing_owned_scope_points_to_packet_render() {
         let status = RunGraphStatus {
             run_id: "run-missing-owned-scope".to_string(),
@@ -8451,7 +8816,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_status_action_for_internal_timeout_points_to_lane_show() {
+    fn recovery_status_action_for_internal_timeout_points_to_task_show() {
         let mut status = default_run_graph_status("run-timeout", "implementation", "coach");
         status.status = "blocked".to_string();
         status.lifecycle_stage = "implementer_blocked".to_string();
@@ -8469,7 +8834,7 @@ mod tests {
         assert_eq!(
             next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
                 .as_deref(),
-            Some("vida lane show run-timeout --json")
+            Some("vida task show run-timeout --json")
         );
     }
 
@@ -9340,6 +9705,48 @@ mod tests {
             serde_json::Value::Array(values) => {
                 for child in values {
                     force_selected_model_ref(child, model_ref);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn force_selected_backend_assignment(
+        value: &mut serde_json::Value,
+        backend_id: &str,
+        model_profile_id: &str,
+    ) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for key in [
+                    "selected_backend",
+                    "selected_backend_id",
+                    "selected_carrier_id",
+                    "selected_carrier_agent_id",
+                    "selected_agent_id",
+                    "activation_agent_type",
+                    "selected_tier",
+                ] {
+                    if let Some(field) = map.get_mut(key) {
+                        if field.is_string() {
+                            *field = serde_json::Value::String(backend_id.to_string());
+                        }
+                    }
+                }
+                for key in ["selected_model_profile_id", "selected_model_profile"] {
+                    if let Some(field) = map.get_mut(key) {
+                        if field.is_string() {
+                            *field = serde_json::Value::String(model_profile_id.to_string());
+                        }
+                    }
+                }
+                for child in map.values_mut() {
+                    force_selected_backend_assignment(child, backend_id, model_profile_id);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for child in values {
+                    force_selected_backend_assignment(child, backend_id, model_profile_id);
                 }
             }
             _ => {}
@@ -10921,6 +11328,16 @@ mod tests {
             first["dispatch_receipt"]["recorded_at"],
             second["dispatch_receipt"]["recorded_at"]
         );
+        let mut disabled_backend_cache_payload = second.clone();
+        disabled_backend_cache_payload["dispatch_receipt"]["selected_backend"] =
+            serde_json::Value::String("pi_cli".to_string());
+        let current_config_digest = current_dispatch_init_cache_config_digest(store.root());
+        assert!(!dispatch_init_fast_cache_payload_is_reusable(
+            store.root(),
+            &disabled_backend_cache_payload,
+            "task-dispatch-init-idempotent-fast-path",
+            current_config_digest.as_deref()
+        ));
         assert!(read_run_graph_dispatch_init_fast_cache(
             store.root(),
             "task-dispatch-init-idempotent-fast-path"
@@ -10942,6 +11359,69 @@ mod tests {
             "task-dispatch-init-idempotent-fast-path"
         )
         .is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_does_not_reuse_routed_receipt_with_disabled_external_backend() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "task-dispatch-init-disabled-receipt-refresh",
+                title: "Dispatch init ignores disabled selected backend receipts",
+                display_id: None,
+                description: "Repeated dispatch-init must not reuse a routed receipt whose selected backend is disabled in current config.",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &["runtime-recovery".to_string()],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_does_not_reuse_routed_receipt_with_disabled_external_backend -- --nocapture"
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create disabled receipt refresh task");
+
+        let first = run_graph_dispatch_init(&store, "task-dispatch-init-disabled-receipt-refresh")
+            .await
+            .expect("first dispatch-init should seed and route");
+        let mut receipt = store
+            .run_graph_dispatch_receipt("task-dispatch-init-disabled-receipt-refresh")
+            .await
+            .expect("receipt lookup should succeed")
+            .expect("receipt should exist");
+        receipt.dispatch_status = "routed".to_string();
+        receipt.dispatch_packet_path = first["dispatch_packet_path"].as_str().map(str::to_string);
+        receipt.selected_backend = Some("pi_cli".to_string());
+        receipt.activation_agent_type = Some("pi_cli".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("stale disabled-backend receipt should persist");
+        assert!(dispatch_receipt_disabled_external_backend_drift(store.root(), &receipt).is_some());
+
+        let second = run_graph_dispatch_init(&store, "task-dispatch-init-disabled-receipt-refresh")
+            .await
+            .expect("second dispatch-init should rebuild disabled-backend receipt");
+        assert_ne!(
+            second["dispatch_receipt"]["selected_backend"].as_str(),
+            Some("pi_cli")
+        );
     }
 
     #[tokio::test]
@@ -10990,7 +11470,10 @@ mod tests {
             .await
             .expect("context lookup should succeed")
             .expect("dispatch context should exist");
-        force_selected_model_ref(&mut context.role_selection, "gpt-5.5");
+        force_selected_model_ref(
+            &mut context.role_selection,
+            "stale-model-ref-for-catalog-drift-test",
+        );
         store
             .record_run_graph_dispatch_context(&context)
             .await
@@ -11031,7 +11514,116 @@ mod tests {
             "implementation",
             route,
         );
-        assert_ne!(payload["selected_model_ref"], "gpt-5.5");
+        assert_ne!(
+            payload["selected_model_ref"],
+            "stale-model-ref-for-catalog-drift-test"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_refreshes_stale_route_assignment_after_disabled_external_backend_change()
+    {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "task-dispatch-init-disabled-backend-drift-refresh",
+                title: "Dispatch init refreshes disabled backend route drift",
+                display_id: None,
+                description: "Repeated dispatch-init must rebuild stale route assignments that still reference a disabled external backend.",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &["runtime-recovery".to_string()],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_refreshes_stale_route_assignment_after_disabled_external_backend_change -- --nocapture"
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create disabled backend route drift refresh task");
+
+        let first =
+            run_graph_dispatch_init(&store, "task-dispatch-init-disabled-backend-drift-refresh")
+                .await
+                .expect("first dispatch-init should seed and route");
+        assert_eq!(
+            first["run_id"],
+            "task-dispatch-init-disabled-backend-drift-refresh"
+        );
+
+        let mut context = store
+            .run_graph_dispatch_context("task-dispatch-init-disabled-backend-drift-refresh")
+            .await
+            .expect("context lookup should succeed")
+            .expect("dispatch context should exist");
+        force_selected_backend_assignment(
+            &mut context.role_selection,
+            "pi_cli",
+            "pi_gpt55_medium_guarded",
+        );
+        store
+            .record_run_graph_dispatch_context(&context)
+            .await
+            .expect("stale dispatch context should persist");
+        let stale_selection = context
+            .role_selection()
+            .expect("stale role selection should still decode");
+        let drift = dispatch_context_route_assignment_catalog_drift(store.root(), &stale_selection)
+            .expect("disabled external backend route drift should be detected");
+        assert_eq!(drift["drift"]["kind"], "disabled_external_backend_ref");
+        assert_eq!(
+            drift["drift"]["route_disabled_external_backend_refs"]["blocking"],
+            true
+        );
+
+        let second =
+            run_graph_dispatch_init(&store, "task-dispatch-init-disabled-backend-drift-refresh")
+                .await
+                .expect("second dispatch-init should refresh disabled backend route assignment");
+        assert_eq!(
+            second["run_id"],
+            "task-dispatch-init-disabled-backend-drift-refresh"
+        );
+
+        let refreshed_context = store
+            .run_graph_dispatch_context("task-dispatch-init-disabled-backend-drift-refresh")
+            .await
+            .expect("refreshed context lookup should succeed")
+            .expect("refreshed dispatch context should exist");
+        let refreshed_selection = refreshed_context
+            .role_selection()
+            .expect("refreshed role selection should decode");
+        assert!(dispatch_context_route_assignment_catalog_drift(
+            store.root(),
+            &refreshed_selection
+        )
+        .is_none());
+
+        let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
+            &refreshed_selection.execution_plan,
+            "implementation",
+        );
+        let payload = crate::taskflow_routing::route_explain_payload(
+            &refreshed_selection.execution_plan,
+            "implementation",
+            route,
+        );
+        assert_ne!(payload["selected_backend"].as_str(), Some("pi_cli"));
     }
 
     #[tokio::test]

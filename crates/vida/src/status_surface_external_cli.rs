@@ -1,7 +1,7 @@
 fn expand_user_path(raw: &str) -> String {
     let trimmed = raw.trim();
     if let Some(remainder) = trimmed.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
+        if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
             return format!("{home}/{remainder}");
         }
     }
@@ -97,7 +97,7 @@ fn readiness_command<'a>(
         })
 }
 
-fn external_cli_probe_command_is_allowlisted(command: &str) -> bool {
+fn external_cli_probe_command_is_config_safe(command: &str) -> bool {
     let trimmed = command.trim();
     #[cfg(test)]
     if std::path::Path::new(trimmed).is_file() {
@@ -106,22 +106,9 @@ fn external_cli_probe_command_is_allowlisted(command: &str) -> bool {
     if trimmed.is_empty() || command_contains_path_separator(trimmed) {
         return false;
     }
-    let normalized = trimmed.to_ascii_lowercase();
-    matches!(
-        normalized.as_str(),
-        "codex"
-            | "qwen"
-            | "claude"
-            | "gemini"
-            | "aider"
-            | "cursor-agent"
-            | "opencode"
-            | "hermes"
-            | "kilo"
-            | "vibe"
-            | "vida-pi-agent"
-            | "pi"
-    ) || (cfg!(test) && normalized == "sh")
+    trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
 }
 
 fn profile_write_scope_requires_guard(profile: &serde_json::Value) -> bool {
@@ -583,10 +570,10 @@ fn pi_style_external_cli_carrier_readiness(
             )],
         );
     }
-    if !external_cli_probe_command_is_allowlisted(adapter_command) {
+    if !external_cli_probe_command_is_config_safe(adapter_command) {
         return pi_style_readiness_payload(
             backend_id,
-            "pi_adapter_command_not_allowlisted",
+            "pi_adapter_command_not_config_safe",
             true,
             serde_json::Value::String(
                 crate::release1_contracts::blocker_code_str(
@@ -598,7 +585,7 @@ fn pi_style_external_cli_carrier_readiness(
             selected_profile,
             expected_model_ref,
             serde_json::json!({
-                "status": "command_not_allowlisted",
+                "status": "command_not_config_safe",
                 "source": adapter_source,
                 "command": adapter_command,
             }),
@@ -606,7 +593,7 @@ fn pi_style_external_cli_carrier_readiness(
             serde_json::json!({"status":"not_checked"}),
             serde_json::json!({"status":"not_checked"}),
             vec![format!(
-                "Use an allowlisted command for Pi adapter readiness probes; `{adapter_command}` is not allowed."
+                "Use a config-owned command token for Pi adapter readiness probes; `{adapter_command}` is not safe."
             )],
         );
     }
@@ -652,10 +639,10 @@ fn pi_style_external_cli_carrier_readiness(
             vec![format!("Install or expose Pi provider command `{provider_command}` on PATH before dispatch.")],
         );
     }
-    if !external_cli_probe_command_is_allowlisted(provider_command) {
+    if !external_cli_probe_command_is_config_safe(provider_command) {
         return pi_style_readiness_payload(
             backend_id,
-            "pi_provider_command_not_allowlisted",
+            "pi_provider_command_not_config_safe",
             true,
             serde_json::Value::String(
                 crate::release1_contracts::blocker_code_str(
@@ -668,14 +655,14 @@ fn pi_style_external_cli_carrier_readiness(
             expected_model_ref,
             adapter_status,
             serde_json::json!({
-                "status": "command_not_allowlisted",
+                "status": "command_not_config_safe",
                 "source": provider_source,
                 "command": provider_command,
             }),
             serde_json::json!({"status":"not_checked"}),
             serde_json::json!({"status":"not_checked"}),
             vec![format!(
-                "Use an allowlisted command for Pi provider readiness probes; `{provider_command}` is not allowed."
+                "Use a config-owned command token for Pi provider readiness probes; `{provider_command}` is not safe."
             )],
         );
     }
@@ -1722,7 +1709,7 @@ mod tests {
     use super::{
         adapter_prewrite_guard_capabilities, external_cli_backend_readiness_verdict_for_profile,
         external_cli_preflight_summary, external_cli_preflight_summary_with_probe_override,
-        external_cli_probe_command_is_allowlisted,
+        external_cli_probe_command_is_config_safe,
     };
     use std::fs;
 
@@ -1735,12 +1722,19 @@ mod tests {
     }
 
     #[test]
-    fn external_cli_probe_allowlist_rejects_path_like_commands_but_keeps_pi_provider() {
-        assert!(external_cli_probe_command_is_allowlisted("pi"));
-        assert!(external_cli_probe_command_is_allowlisted("vida-pi-agent"));
-        assert!(!external_cli_probe_command_is_allowlisted("./pi"));
-        assert!(!external_cli_probe_command_is_allowlisted("tools\\pi.exe"));
-        assert!(!external_cli_probe_command_is_allowlisted("not-a-carrier"));
+    fn external_cli_probe_config_safety_rejects_path_like_commands_without_binary_hardcode() {
+        assert!(external_cli_probe_command_is_config_safe(
+            "newly-configured-carrier"
+        ));
+        assert!(external_cli_probe_command_is_config_safe("provider.cmd"));
+        assert!(!external_cli_probe_command_is_config_safe("./provider"));
+        assert!(!external_cli_probe_command_is_config_safe(
+            "tools\\provider.exe"
+        ));
+        assert!(!external_cli_probe_command_is_config_safe(
+            "provider --flag"
+        ));
+        assert!(!external_cli_probe_command_is_config_safe("provider|other"));
     }
 
     fn current_exe_command() -> String {

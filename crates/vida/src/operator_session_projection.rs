@@ -8,21 +8,41 @@ pub(crate) async fn build_operator_session_projection(
                     reason: format!("runtime owner evidence unavailable: {reason}"),
                 },
             )?;
+    let tasks = store.list_tasks(None, true).await?;
+    let active_claims = store.active_orchestrator_claims().await?;
+    build_operator_session_projection_from_rows_and_claims(
+        store,
+        &owner_evidence,
+        &tasks,
+        &active_claims,
+    )
+    .await
+}
+
+pub(crate) async fn build_operator_session_projection_from_rows_and_claims(
+    store: &crate::state_store::StateStore,
+    owner_evidence: &serde_json::Value,
+    tasks: &[crate::state_store::TaskRecord],
+    active_claims: &[crate::state_store::OrchestratorClaim],
+) -> Result<serde_json::Value, crate::state_store::StateStoreError> {
     let current_session = owner_evidence["current_session"].clone();
     let current_session_id = current_session["session_id"].as_str().unwrap_or_default();
     let stale_session_ids =
         crate::orchestrator_session_surface::stale_orchestrator_session_ids_from_evidence(
-            &owner_evidence,
+            owner_evidence,
         );
-    let auto_claim_summary =
-        ensure_current_session_claims_for_active_tasks(store, &current_session).await?;
-    let tasks = store.list_tasks(None, true).await?;
+    let auto_claim_summary = ensure_current_session_claims_for_active_task_rows(
+        store,
+        &current_session,
+        tasks,
+        active_claims,
+    )
+    .await?;
     let active_task_ids = tasks
         .iter()
         .filter(|task| task.status == "in_progress" && task.issue_type != "epic")
         .map(|task| task.id.clone())
         .collect::<std::collections::BTreeSet<_>>();
-    let active_claims = store.active_orchestrator_claims().await?;
     let is_active_task_claim = |claim: &crate::state_store::OrchestratorClaim| {
         claim
             .task_id
@@ -48,7 +68,7 @@ pub(crate) async fn build_operator_session_projection(
             })
         })
         .collect::<Vec<_>>();
-    let current_session_task_claims = active_claims
+    let mut current_session_task_claims = active_claims
         .iter()
         .filter(|claim| claim.orchestrator_session_id == current_session_id)
         .filter(|claim| is_active_task_claim(claim))
@@ -71,6 +91,33 @@ pub(crate) async fn build_operator_session_projection(
             })
         })
         .collect::<Vec<_>>();
+    if let Some(auto_claimed) = auto_claim_summary["auto_claimed_active_tasks"].as_array() {
+        for claim in auto_claimed {
+            let Some(task_id) = claim["task_id"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            if current_session_task_claims
+                .iter()
+                .any(|existing| existing["task_id"].as_str() == Some(task_id))
+            {
+                continue;
+            }
+            current_session_task_claims.push(serde_json::json!({
+                "claim_id": claim["claim_id"].clone(),
+                "task_id": task_id,
+                "run_id": null,
+                "lane_id": null,
+                "conflict_domain": null,
+                "lease_mode": "observe",
+                "status": claim["status"].clone(),
+                "lease_expires_at": null,
+            }));
+        }
+    }
     let project_foreign_claims = active_claims
         .iter()
         .filter(|claim| claim.orchestrator_session_id != current_session_id)
@@ -228,9 +275,11 @@ pub(crate) fn degraded_operator_session_projection(
     })
 }
 
-async fn ensure_current_session_claims_for_active_tasks(
+async fn ensure_current_session_claims_for_active_task_rows(
     store: &crate::state_store::StateStore,
     current_session: &serde_json::Value,
+    tasks: &[crate::state_store::TaskRecord],
+    existing_claims: &[crate::state_store::OrchestratorClaim],
 ) -> Result<serde_json::Value, crate::state_store::StateStoreError> {
     let current_session_id = current_session["session_id"]
         .as_str()
@@ -243,8 +292,6 @@ async fn ensure_current_session_claims_for_active_tasks(
         .filter(|value| !value.is_empty())
         .unwrap_or("unknown-worktree");
     let state_root_id = store.root().display().to_string();
-    let existing_claims = store.active_orchestrator_claims().await?;
-    let tasks = store.list_tasks(None, true).await?;
     let active_tasks = tasks
         .iter()
         .filter(|task| task.status == "in_progress" && task.issue_type != "epic")

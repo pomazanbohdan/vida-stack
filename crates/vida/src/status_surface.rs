@@ -115,6 +115,48 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             );
             return ExitCode::SUCCESS;
         }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
+                &state_dir,
+                status_json_projection_name(summary_only),
+                STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
+            )
+            .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
+        {
+            println!(
+                "{}",
+                render_cached_status_projection_for_operator(summary_only, &cached)
+            );
+            return ExitCode::SUCCESS;
+        }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                &state_dir,
+                status_json_projection_name(summary_only),
+                STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
+            )
+            .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
+        {
+            if let Some(overlay) =
+                crate::operator_projection_cache::read_runtime_continuation_binding_overlay(
+                    &state_dir,
+                )
+            {
+                if let Some(rendered) =
+                    crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload(
+                        &state_dir,
+                        &cached,
+                        &overlay,
+                    )
+                {
+                    println!(
+                        "{}",
+                        render_cached_status_projection_for_operator(summary_only, &rendered)
+                    );
+                    return ExitCode::SUCCESS;
+                }
+            }
+        }
     }
 
     match StateStore::open_existing_read_only_with_timeout(
@@ -340,12 +382,18 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-                let all_tasks = match store.list_tasks(None, true).await {
+                let all_tasks = match StateStore::read_fresh_tasks_from_jsonl_snapshot(store.root())
+                {
                     Ok(tasks) => tasks,
-                    Err(error) => {
-                        eprintln!("Failed to read tasks for TaskFlow active work truth: {error}");
-                        return ExitCode::from(1);
-                    }
+                    Err(_) => match store.list_tasks(None, true).await {
+                        Ok(tasks) => tasks,
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to read tasks for TaskFlow active work truth: {error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    },
                 };
                 let (latest_run_graph_task_closed, latest_run_graph_task_missing) =
                     match latest_run_graph_status.as_ref() {

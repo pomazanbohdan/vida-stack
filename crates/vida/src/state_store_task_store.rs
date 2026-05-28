@@ -3,6 +3,18 @@ use serde_json::Deserializer;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
+const TASK_SNAPSHOT_META_SCHEMA_VERSION: &str = "task-snapshot-meta-v1";
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct TaskSnapshotMeta {
+    schema_version: String,
+    snapshot_path: String,
+    byte_len: u64,
+    content_hash_blake3: String,
+    task_count: usize,
+    generated_at_unix_nanos: String,
+}
+
 impl StateStore {
     pub(crate) fn task_status_is_closed_like(status: &str) -> bool {
         matches!(status, "closed" | "completed")
@@ -262,10 +274,138 @@ impl StateStore {
         state_root.join("exports/tasks.snapshot.jsonl")
     }
 
+    pub(crate) fn canonical_task_snapshot_meta_path_for_state_root(state_root: &Path) -> PathBuf {
+        Self::task_snapshot_meta_path_for_snapshot_path(
+            &Self::canonical_task_snapshot_path_for_state_root(state_root),
+        )
+    }
+
+    pub(crate) fn canonical_task_snapshot_marker_path_for_state_root(state_root: &Path) -> PathBuf {
+        state_root.join(".task-snapshot-state-marker")
+    }
+
+    pub(crate) fn touch_task_snapshot_state_marker(state_root: &Path) {
+        let marker_path = Self::canonical_task_snapshot_marker_path_for_state_root(state_root);
+        if Self::path_is_symlink(&marker_path) {
+            return;
+        }
+        if let Some(parent) = marker_path.parent() {
+            if fs::create_dir_all(parent).is_err() {
+                return;
+            }
+        }
+        let body = unix_timestamp_nanos().to_string();
+        let _ = Self::write_jsonl_export_file(&marker_path, body.as_bytes());
+    }
+
+    fn task_snapshot_meta_path_for_snapshot_path(snapshot_path: &Path) -> PathBuf {
+        snapshot_path.with_file_name("tasks.snapshot.meta.json")
+    }
+
+    fn path_is_symlink(path: &Path) -> bool {
+        fs::symlink_metadata(path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+    }
+
+    fn invalid_task_snapshot_reason(reason: impl Into<String>) -> StateStoreError {
+        StateStoreError::InvalidTaskRecord {
+            reason: reason.into(),
+        }
+    }
+
+    pub(crate) fn read_fresh_tasks_from_jsonl_snapshot(
+        state_root: &Path,
+    ) -> Result<Vec<TaskRecord>, StateStoreError> {
+        let snapshot_path = Self::canonical_task_snapshot_path_for_state_root(state_root);
+        let meta_path = Self::canonical_task_snapshot_meta_path_for_state_root(state_root);
+        if Self::path_is_symlink(&snapshot_path) || Self::path_is_symlink(&meta_path) {
+            return Err(Self::invalid_task_snapshot_reason(
+                "refusing to read task snapshot through symlink path",
+            ));
+        }
+        let meta_raw = fs::read_to_string(&meta_path)?;
+        let meta: TaskSnapshotMeta = serde_json::from_str(&meta_raw).map_err(|error| {
+            Self::invalid_task_snapshot_reason(format!(
+                "task snapshot metadata is invalid: {error}"
+            ))
+        })?;
+        if meta.schema_version != TASK_SNAPSHOT_META_SCHEMA_VERSION {
+            return Err(Self::invalid_task_snapshot_reason(format!(
+                "unsupported task snapshot metadata schema_version `{}`",
+                meta.schema_version
+            )));
+        }
+        if meta.snapshot_path != snapshot_path.display().to_string() {
+            return Err(Self::invalid_task_snapshot_reason(
+                "task snapshot metadata path does not match canonical snapshot path",
+            ));
+        }
+
+        let raw = fs::read_to_string(&snapshot_path)?;
+        if meta.byte_len != raw.as_bytes().len() as u64 {
+            return Err(Self::invalid_task_snapshot_reason(
+                "task snapshot metadata byte_len does not match snapshot body",
+            ));
+        }
+        let hash = blake3::hash(raw.as_bytes()).to_hex().to_string();
+        if meta.content_hash_blake3 != hash {
+            return Err(Self::invalid_task_snapshot_reason(
+                "task snapshot metadata hash does not match snapshot body",
+            ));
+        }
+        if let Some(marker_nanos) = Self::task_snapshot_state_marker_nanos(state_root) {
+            let meta_nanos = meta
+                .generated_at_unix_nanos
+                .parse::<u128>()
+                .map_err(|error| {
+                    Self::invalid_task_snapshot_reason(format!(
+                        "task snapshot metadata generated_at_unix_nanos is invalid: {error}"
+                    ))
+                })?;
+            if meta_nanos < marker_nanos {
+                return Err(Self::invalid_task_snapshot_reason(
+                    "task snapshot metadata is older than latest state mutation marker",
+                ));
+            }
+        } else {
+            let marker_path = Self::canonical_task_snapshot_marker_path_for_state_root(state_root);
+            if marker_path.exists() {
+                let marker_modified = fs::metadata(&marker_path)?.modified()?;
+                let meta_modified = fs::metadata(&meta_path)?.modified()?;
+                if meta_modified < marker_modified {
+                    return Err(Self::invalid_task_snapshot_reason(
+                        "task snapshot metadata mtime is older than latest state mutation marker",
+                    ));
+                }
+            }
+        }
+
+        let rows = Self::tasks_from_jsonl_snapshot_body(&raw)?;
+        if rows.len() != meta.task_count {
+            return Err(Self::invalid_task_snapshot_reason(
+                "task snapshot metadata task_count does not match snapshot body",
+            ));
+        }
+        Ok(rows)
+    }
+
+    fn task_snapshot_state_marker_nanos(state_root: &Path) -> Option<u128> {
+        fs::read_to_string(Self::canonical_task_snapshot_marker_path_for_state_root(
+            state_root,
+        ))
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u128>().ok())
+    }
+
     pub(crate) fn read_tasks_from_jsonl_snapshot(
         source_path: &Path,
     ) -> Result<Vec<TaskRecord>, StateStoreError> {
         let raw = fs::read_to_string(source_path)?;
+        Self::tasks_from_jsonl_snapshot_body(&raw)
+    }
+
+    fn tasks_from_jsonl_snapshot_body(raw: &str) -> Result<Vec<TaskRecord>, StateStoreError> {
         let mut rows = Vec::new();
 
         for (index, record) in Deserializer::from_str(&raw)
@@ -315,6 +455,7 @@ impl StateStore {
                 .cmp(&right.priority)
                 .then_with(|| left.id.cmp(&right.id))
         });
+        let task_count = tasks.len();
         let mut body = String::new();
         for task in tasks {
             body.push_str(&serde_json::to_string(&task).map_err(|error| {
@@ -327,7 +468,7 @@ impl StateStore {
         if let Some(parent) = snapshot_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        Self::write_jsonl_export_file(&snapshot_path, body.as_bytes())?;
+        Self::write_jsonl_export_file_with_meta(&snapshot_path, body.as_bytes(), task_count)?;
         Ok(snapshot_path)
     }
 
@@ -753,8 +894,42 @@ impl StateStore {
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        Self::write_jsonl_export_file(target_path, body.as_bytes())?;
+        Self::write_jsonl_export_file_with_meta(target_path, body.as_bytes(), task_count)?;
         Ok(task_count)
+    }
+
+    fn write_jsonl_export_file_with_meta(
+        target_path: &Path,
+        body: &[u8],
+        task_count: usize,
+    ) -> Result<(), StateStoreError> {
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        Self::write_jsonl_export_file(target_path, body)?;
+        Self::write_task_snapshot_meta_file(target_path, body, task_count)
+    }
+
+    fn write_task_snapshot_meta_file(
+        target_path: &Path,
+        body: &[u8],
+        task_count: usize,
+    ) -> Result<(), StateStoreError> {
+        let meta_path = Self::task_snapshot_meta_path_for_snapshot_path(target_path);
+        let meta = TaskSnapshotMeta {
+            schema_version: TASK_SNAPSHOT_META_SCHEMA_VERSION.to_string(),
+            snapshot_path: target_path.display().to_string(),
+            byte_len: body.len() as u64,
+            content_hash_blake3: blake3::hash(body).to_hex().to_string(),
+            task_count,
+            generated_at_unix_nanos: unix_timestamp_nanos().to_string(),
+        };
+        let body = serde_json::to_vec_pretty(&meta).map_err(|error| {
+            StateStoreError::InvalidTaskRecord {
+                reason: format!("failed to serialize task snapshot metadata: {error}"),
+            }
+        })?;
+        Self::write_jsonl_export_file(&meta_path, &body)
     }
 
     fn write_jsonl_export_file(target_path: &Path, body: &[u8]) -> Result<(), StateStoreError> {
@@ -2064,6 +2239,99 @@ mod tests {
             project_root
                 .join(".vida")
                 .join("exports/tasks.snapshot.jsonl")
+        );
+    }
+
+    fn sample_snapshot_body() -> String {
+        concat!(
+            "{\"id\":\"vida-root\",\"title\":\"Root epic\",\"description\":\"root\",",
+            "\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",",
+            "\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",",
+            "\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",",
+            "\"compaction_level\":0,\"original_size\":0,\"labels\":[],",
+            "\"dependencies\":[]}\n"
+        )
+        .to_string()
+    }
+
+    #[test]
+    fn fresh_task_snapshot_metadata_validates_hash_count_and_marker() {
+        let state_root = unique_task_store_temp_root("vida-task-snapshot-meta-fresh")
+            .join(".vida")
+            .join("data")
+            .join("state");
+        let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(&state_root);
+        let body = sample_snapshot_body();
+        StateStore::write_jsonl_export_file_with_meta(&snapshot_path, body.as_bytes(), 1)
+            .expect("snapshot and metadata should write");
+
+        let rows = StateStore::read_fresh_tasks_from_jsonl_snapshot(&state_root)
+            .expect("fresh snapshot should validate");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "vida-root");
+        assert!(
+            StateStore::canonical_task_snapshot_meta_path_for_state_root(&state_root).is_file()
+        );
+        let _ = fs::remove_dir_all(
+            state_root
+                .ancestors()
+                .find(|path| path.file_name().and_then(|name| name.to_str()) != Some("state"))
+                .unwrap_or(&state_root),
+        );
+    }
+
+    #[test]
+    fn fresh_task_snapshot_metadata_rejects_hash_drift() {
+        let state_root = unique_task_store_temp_root("vida-task-snapshot-meta-hash")
+            .join(".vida")
+            .join("data")
+            .join("state");
+        let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(&state_root);
+        let body = sample_snapshot_body();
+        StateStore::write_jsonl_export_file_with_meta(&snapshot_path, body.as_bytes(), 1)
+            .expect("snapshot and metadata should write");
+        fs::write(&snapshot_path, "").expect("snapshot should be mutable for test");
+
+        let error = StateStore::read_fresh_tasks_from_jsonl_snapshot(&state_root)
+            .expect_err("hash drift must reject snapshot");
+        assert!(error
+            .to_string()
+            .contains("task snapshot metadata byte_len does not match snapshot body"));
+        let _ = fs::remove_dir_all(
+            state_root
+                .ancestors()
+                .find(|path| path.file_name().and_then(|name| name.to_str()) != Some("state"))
+                .unwrap_or(&state_root),
+        );
+    }
+
+    #[test]
+    fn fresh_task_snapshot_metadata_rejects_newer_task_marker() {
+        let state_root = unique_task_store_temp_root("vida-task-snapshot-meta-marker")
+            .join(".vida")
+            .join("data")
+            .join("state");
+        let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(&state_root);
+        let body = sample_snapshot_body();
+        StateStore::write_jsonl_export_file_with_meta(&snapshot_path, body.as_bytes(), 1)
+            .expect("snapshot and metadata should write");
+        fs::create_dir_all(&state_root).expect("state root should exist");
+        fs::write(
+            StateStore::canonical_task_snapshot_marker_path_for_state_root(&state_root),
+            "999999999999999999999999999999",
+        )
+        .expect("marker should write");
+
+        let error = StateStore::read_fresh_tasks_from_jsonl_snapshot(&state_root)
+            .expect_err("newer marker must reject snapshot");
+        assert!(error
+            .to_string()
+            .contains("task snapshot metadata is older than latest state mutation marker"));
+        let _ = fs::remove_dir_all(
+            state_root
+                .ancestors()
+                .find(|path| path.file_name().and_then(|name| name.to_str()) != Some("state"))
+                .unwrap_or(&state_root),
         );
     }
 

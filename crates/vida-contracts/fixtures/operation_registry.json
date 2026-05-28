@@ -1,0 +1,230 @@
+[
+  {
+    "operation": "vida.service.hello",
+    "scope": "service",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": false,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "read_status"
+    ]
+  },
+  {
+    "operation": "vida.service.status",
+    "scope": "service",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": false,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "read_status"
+    ]
+  },
+  {
+    "operation": "vida.service.capabilities",
+    "scope": "service",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": false,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "read_status"
+    ]
+  },
+  {
+    "operation": "vida.service.endpoint.status",
+    "scope": "service",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": false,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "read_status"
+    ]
+  },
+  {
+    "operation": "vida.events.since",
+    "scope": "service",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": false,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "read_events"
+    ]
+  },
+  {
+    "operation": "vida.session.resolve",
+    "scope": "service",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": false,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "read_status"
+    ]
+  },
+  {
+    "operation": "vida.project.resolve",
+    "scope": "project",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "read_status"
+    ]
+  },
+  {
+    "operation": "vida.project.status",
+    "scope": "project",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "read_status"
+    ]
+  },
+  {
+    "operation": "vida.project.registry.list",
+    "scope": "service",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": false,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "project_registry_read"
+    ]
+  },
+  {
+    "operation": "vida.project.registry.get",
+    "scope": "service",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": false,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "project_registry_read"
+    ]
+  },
+  {
+    "operation": "vida.project.registry.discover",
+    "scope": "service",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": false,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "project_registry_read"
+    ]
+  },
+  {
+    "operation": "vida.receipts.get",
+    "scope": "project",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "read_receipts"
+    ]
+  },
+  {
+    "operation": "vida.wizard.schema.get",
+    "scope": "project",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "wizard_read"
+    ]
+  },
+  {
+    "operation": "vida.wizard.session.start",
+    "scope": "project",
+    "posture": "plan_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": true,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "wizard_plan"
+    ]
+  },
+  {
+    "operation": "vida.wizard.session.get",
+    "scope": "project",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "wizard_read"
+    ]
+  },
+  {
+    "operation": "vida.wizard.session.update_input",
+    "scope": "project",
+    "posture": "plan_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": true,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "wizard_plan"
+    ]
+  },
+  {
+    "operation": "vida.wizard.session.validate",
+    "scope": "project",
+    "posture": "plan_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "wizard_plan"
+    ]
+  },
+  {
+    "operation": "vida.wizard.session.diff",
+    "scope": "project",
+    "posture": "plan_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": true,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "wizard_plan"
+    ]
+  },
+  {
+    "operation": "vida.jobs.get",
+    "scope": "service",
+    "posture": "read_only",
+    "required_claim": "shared_read",
+    "requires_project_ref": false,
+    "requires_idempotency_key": false,
+    "requires_apply_token": false,
+    "required_capabilities": [
+      "read_events"
+    ]
+  }
+]
