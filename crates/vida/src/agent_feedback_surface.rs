@@ -357,9 +357,6 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         "fixed",
         "proofs:",
         "proof:",
-        "coverage",
-        "validated",
-        "validating",
         "returns",
         "return",
         "preserves",
@@ -1412,6 +1409,7 @@ mod tests {
             "Task remains blocked pending operator evidence.",
             "Blocked: cargo test failed",
             "The lane is blocked pending a verifier receipt.",
+            "Task remains blocked pending coverage.",
         ] {
             let outcome = super::infer_feedback_outcome_from_close_reason(reason);
             let score = super::default_feedback_score(outcome, "verification");
