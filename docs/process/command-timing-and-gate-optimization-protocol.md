@@ -28,7 +28,7 @@ Every significant operation report must include this minimum envelope:
 
 ```text
 operation_id: stable short id or command family
-command_or_surface: exact command, script, CI step, agent lane, or UI validation surface
+command_or_surface: redacted exact command, script, CI step, agent lane, or UI validation surface
 cwd_or_context: repo/worktree/project/CI job/lane context
 started_at: ISO-8601 timestamp when available
 duration_ms: wall-clock duration in milliseconds
@@ -40,6 +40,17 @@ next_decision: keep_blocking | make_fast_proof | diagnostic_only_for_pr | move_t
 ```
 
 If a tool cannot emit this envelope directly, the orchestrator must record it in the TaskFlow note, PR task, diagnostic note, or linked process artifact.
+
+### Secret Redaction Requirement
+
+1. Never persist raw secrets in `command_or_surface`, diagnostic notes, TaskFlow notes, PR tasks, logs, receipts, or linked artifacts.
+2. Before persistence, sanitize commands by replacing secret-bearing values with stable placeholders (for example `<REDACTED_TOKEN>`, `<REDACTED_PASSWORD>`, `<REDACTED_AUTH_HEADER>`, `<REDACTED_URL_CREDENTIAL>`).
+3. Treat as secret-bearing by default:
+   - authorization headers, bearer/basic tokens, API keys, passwords, cookies, session ids, private keys, and one-time codes;
+   - credential-bearing URLs (`https://user:pass@host/...`);
+   - CLI flags or args commonly carrying credentials (for example `--token`, `--password`, `--apikey`, `--auth`, `-H 'Authorization: ...'`).
+4. If exact reproduction is required, store only a redacted command plus a non-secret command family identifier in project artifacts; keep real secret material only in the operator's transient local environment or approved secret manager.
+5. When uncertainty exists, fail closed: redact first, then record.
 
 ## Thresholds
 
