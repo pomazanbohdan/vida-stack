@@ -1832,6 +1832,12 @@ impl StateStore {
             }
             for parent in &closed_parents {
                 self.persist_task_record(parent.clone()).await?;
+                self.refresh_run_graph_continuation_after_task_close(&parent.id)
+                    .await?;
+            }
+            for parent in &closed_parents {
+                self.release_active_task_claims_for_task(&parent.id, "task_closed")
+                    .await?;
             }
         }
 
