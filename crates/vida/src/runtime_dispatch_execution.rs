@@ -2139,24 +2139,22 @@ fn write_host_bridge_request_file(
     }
     let encoded = serde_json::to_string_pretty(request)
         .map_err(|error| format!("Failed to encode host bridge request: {error}"))?;
-    let mut open_options = std::fs::OpenOptions::new();
-    open_options.write(true);
     if replace_existing {
-        open_options.create(true).truncate(true);
-    } else {
-        open_options.create_new(true);
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Failed to remove existing host bridge request `{}` before replacement: {error}",
+                    path.display()
+                ));
+            }
+        }
     }
+    let mut open_options = std::fs::OpenOptions::new();
+    open_options.write(true).create_new(true);
     let mut file = match open_options.open(path) {
         Ok(file) => file,
-        Err(error) if !replace_existing && error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let mut retry_options = std::fs::OpenOptions::new();
-            retry_options.write(true).truncate(true).open(path).map_err(|retry_error| {
-                format!(
-                    "Failed to replace existing host bridge request `{}` after create race: {retry_error}",
-                    path.display()
-                )
-            })?
-        }
         Err(error) => {
             return Err(format!(
                 "Failed to create host bridge request `{}`: {error}",
@@ -4945,6 +4943,44 @@ host_tool_bridge:
             resolved,
             project_root.join(".vida/data/state/host-tool-bridge/results")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn host_tool_bridge_request_create_race_symlink_fails_closed_without_truncating_target() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-race-symlink-{}-{nanos}",
+            std::process::id()
+        ));
+        let request_path = project_root
+            .join(".vida/data/state/host-tool-bridge/requests")
+            .join("race.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        let target_path = project_root.join("outside-state-target.json");
+        std::fs::write(&target_path, "do not clobber").expect("write symlink target");
+        std::os::unix::fs::symlink(&target_path, &request_path).expect("create request symlink");
+
+        let error = super::write_host_bridge_request_file(
+            &request_path,
+            &serde_json::json!({"dispatch_transport":"host_tool_bridge"}),
+            false,
+        )
+        .expect_err("create race symlink should fail closed");
+
+        assert!(
+            error.contains("Failed to create host bridge request"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target_path).expect("read symlink target"),
+            "do not clobber"
+        );
+        let _ = std::fs::remove_dir_all(&project_root);
     }
 
     #[test]
