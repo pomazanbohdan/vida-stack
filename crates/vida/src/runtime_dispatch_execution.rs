@@ -2017,6 +2017,19 @@ fn configured_host_receipt_mode(system_entry: Option<&serde_yaml::Value>) -> Str
         .unwrap_or_else(|| "host_bridge_receipt".to_string())
 }
 
+fn path_has_dot_segment(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
+    })
+}
+
+fn host_tool_bridge_state_root(project_root: &Path) -> PathBuf {
+    project_root.join(".vida/data/state")
+}
+
 fn configured_host_tool_bridge_dir(
     project_root: &Path,
     system_entry: Option<&serde_yaml::Value>,
@@ -2026,12 +2039,82 @@ fn configured_host_tool_bridge_dir(
     let configured = system_entry
         .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["host_tool_bridge", key])))
         .unwrap_or_else(|| fallback.to_string());
+    let state_root = host_tool_bridge_state_root(project_root);
+    let fallback_path = project_root.join(fallback);
     let path = PathBuf::from(configured);
-    if path.is_absolute() {
+    let candidate = if path.is_absolute() {
         path
     } else {
         project_root.join(path)
+    };
+    if !path_has_dot_segment(&candidate) && candidate.starts_with(&state_root) {
+        candidate
+    } else {
+        fallback_path
     }
+}
+
+fn write_host_bridge_request_file(path: &Path, request: &serde_json::Value) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "Host bridge request path `{}` has no parent directory.",
+            path.display()
+        )
+    })?;
+    if path_has_dot_segment(path) {
+        return Err(format!(
+            "Host bridge request path `{}` contains inadmissible dot-segment traversal.",
+            path.display()
+        ));
+    }
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("Failed to create host bridge request directory: {error}"))?;
+    let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
+        format!(
+            "Failed to canonicalize host bridge request directory `{}`: {error}",
+            parent.display()
+        )
+    })?;
+    let Some(state_root) = path
+        .ancestors()
+        .find(|ancestor| ancestor.ends_with(".vida/data/state"))
+        .map(Path::to_path_buf)
+    else {
+        return Err(format!(
+            "Host bridge request path `{}` is not under VIDA state root.",
+            path.display()
+        ));
+    };
+    let canonical_state_root = std::fs::canonicalize(&state_root).map_err(|error| {
+        format!(
+            "Failed to canonicalize VIDA state root `{}`: {error}",
+            state_root.display()
+        )
+    })?;
+    if !canonical_parent.starts_with(canonical_state_root) {
+        return Err(format!(
+            "Host bridge request directory `{}` escapes VIDA state root.",
+            canonical_parent.display()
+        ));
+    }
+    let encoded = serde_json::to_string_pretty(request)
+        .map_err(|error| format!("Failed to encode host bridge request: {error}"))?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            format!(
+                "Failed to create host bridge request `{}`: {error}",
+                path.display()
+            )
+        })?;
+    file.write_all(encoded.as_bytes()).map_err(|error| {
+        format!(
+            "Failed to write host bridge request `{}`: {error}",
+            path.display()
+        )
+    })
 }
 
 fn configured_host_tool_bridge_string(
@@ -2099,7 +2182,7 @@ fn materialize_host_tool_bridge_request(
     carrier_id: &str,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     _role_selection: &RuntimeConsumptionLaneSelection,
-) -> serde_json::Value {
+) -> Result<serde_json::Value, String> {
     let request_id = format!(
         "{}-{}-host-tool-bridge",
         receipt.run_id, receipt.dispatch_target
@@ -2172,15 +2255,15 @@ fn materialize_host_tool_bridge_request(
         "receipt_path": receipt_path.display().to_string(),
     });
     if let Some(parent) = request_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create host bridge request directory: {error}"))?;
     }
-    let _ = std::fs::create_dir_all(&result_dir);
-    let _ = std::fs::create_dir_all(&receipt_dir);
-    let _ = std::fs::write(
-        &request_path,
-        serde_json::to_string_pretty(&request).unwrap_or_else(|_| request.to_string()),
-    );
-    request
+    std::fs::create_dir_all(&result_dir)
+        .map_err(|error| format!("Failed to create host bridge result directory: {error}"))?;
+    std::fs::create_dir_all(&receipt_dir)
+        .map_err(|error| format!("Failed to create host bridge receipt directory: {error}"))?;
+    write_host_bridge_request_file(&request_path, &request)?;
+    Ok(request)
 }
 
 fn configured_internal_host_activation_parts(
@@ -2788,7 +2871,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             carrier_id,
             receipt,
             role_selection,
-        );
+        )?;
         let body = result
             .as_object_mut()
             .expect("internal host bridge dispatch result should serialize to an object");
@@ -3887,7 +3970,8 @@ mod tests {
         agent_lane_dispatch_result, configured_external_dispatch_output_mode,
         configured_external_dispatch_wall_timeout_seconds, configured_host_dispatch_transport,
         configured_host_execution_boundary, configured_host_receipt_mode,
-        configured_host_tool_bridge_string, configured_internal_host_activation_parts,
+        configured_host_tool_bridge_dir, configured_host_tool_bridge_string,
+        configured_internal_host_activation_parts,
         configured_internal_host_dispatch_no_output_timeout_seconds,
         configured_internal_host_dispatch_wall_timeout_seconds,
         configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
@@ -4460,6 +4544,14 @@ dispatch:
 
     #[test]
     fn host_tool_bridge_request_uses_generic_unconfigured_adapter_defaults() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-defaults-{}-{nanos}",
+            std::process::id()
+        ));
         let receipt = crate::state_store::RunGraphDispatchReceipt {
             run_id: "run-host-bridge".to_string(),
             dispatch_target: "implementer".to_string(),
@@ -4492,14 +4584,18 @@ dispatch:
         };
 
         let request = materialize_host_tool_bridge_request(
-            Path::new("/tmp/project"),
+            &project_root,
             None,
-            "/tmp/project/.vida/dispatch.json",
+            &project_root
+                .join(".vida/dispatch.json")
+                .display()
+                .to_string(),
             "internal_subagents",
             "junior",
             &receipt,
             &internal_codex_fallback_role_selection(serde_json::json!({})),
-        );
+        )
+        .expect("host bridge request should materialize");
 
         assert_eq!(request["adapter_kind"], "unconfigured_host_agent_adapter");
         assert_eq!(
@@ -4512,6 +4608,128 @@ dispatch:
         );
         assert!(request.get("spawn_tool").is_none());
         assert!(request["adapter_params"].get("spawn_tool").is_some());
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn configured_host_tool_bridge_dir_accepts_state_root_subdirectories() {
+        let project_root = std::env::temp_dir().join("vida-host-bridge-configured-dir");
+        let configured = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+host_tool_bridge:
+  result_dir: .vida/data/state/custom-agent-bridge/results
+"#,
+        )
+        .expect("parse host bridge config");
+
+        let resolved = configured_host_tool_bridge_dir(
+            &project_root,
+            Some(&configured),
+            "result_dir",
+            ".vida/data/state/host-tool-bridge/results",
+        );
+
+        assert_eq!(
+            resolved,
+            project_root.join(".vida/data/state/custom-agent-bridge/results")
+        );
+    }
+
+    #[test]
+    fn configured_host_tool_bridge_dir_rejects_paths_outside_state_root() {
+        let project_root = std::env::temp_dir().join("vida-host-bridge-dir-guard");
+        let configured = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+host_tool_bridge:
+  result_dir: C:\tmp\vida-host-bridge-escape
+"#,
+        )
+        .expect("parse host bridge config");
+
+        let resolved = configured_host_tool_bridge_dir(
+            &project_root,
+            Some(&configured),
+            "result_dir",
+            ".vida/data/state/host-tool-bridge/results",
+        );
+
+        assert_eq!(
+            resolved,
+            project_root.join(".vida/data/state/host-tool-bridge/results")
+        );
+    }
+
+    #[test]
+    fn host_tool_bridge_request_fails_when_stale_request_file_exists() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-stale-request-{}-{nanos}",
+            std::process::id()
+        ));
+        let stale_request_path = project_root
+            .join(".vida/data/state/host-tool-bridge/requests")
+            .join("run-host-bridge-implementer-host-tool-bridge.json");
+        std::fs::create_dir_all(stale_request_path.parent().expect("stale request parent"))
+            .expect("create stale request parent");
+        std::fs::write(&stale_request_path, "{}").expect("write stale request");
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-host-bridge".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(
+                project_root
+                    .join(".vida/dispatch.json")
+                    .display()
+                    .to_string(),
+            ),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("worker".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-01T00:00:00Z".to_string(),
+        };
+
+        let error = materialize_host_tool_bridge_request(
+            &project_root,
+            None,
+            &project_root
+                .join(".vida/dispatch.json")
+                .display()
+                .to_string(),
+            "internal_subagents",
+            "junior",
+            &receipt,
+            &internal_codex_fallback_role_selection(serde_json::json!({})),
+        )
+        .expect_err("stale request file should fail closed");
+
+        assert!(
+            error.contains("Failed to create host bridge request"),
+            "unexpected error: {error}"
+        );
+        let _ = std::fs::remove_dir_all(&project_root);
     }
 
     #[test]
