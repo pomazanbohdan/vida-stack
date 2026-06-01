@@ -16717,6 +16717,183 @@ host_environment:
     }
 
     #[test]
+    fn existing_executed_dispatch_result_rejects_mismatched_completion_target() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("implementer-packet.json");
+        fs::write(&packet_path, "{}").expect("packet should write");
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: "run-mismatched-completion-target".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("configured_internal".to_string()),
+            dispatch_command: Some("configured dispatch".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT.to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("default".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        write_runtime_lane_completion_result(
+            harness.path(),
+            "run-mismatched-completion-target",
+            "coach",
+            "receipt-mismatched-target",
+            &packet_path.display().to_string(),
+        )
+        .expect("lane completion result should write");
+
+        assert!(
+            !apply_existing_executed_dispatch_result_to_receipt(harness.path(), &mut receipt)
+                .expect("mismatched target result check should not fail")
+        );
+        assert_eq!(receipt.dispatch_status, "blocked");
+        assert_eq!(receipt.lane_status, "lane_blocked");
+        assert_eq!(
+            receipt.blocker_code.as_deref(),
+            Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
+        );
+        assert_eq!(receipt.dispatch_result_path, None);
+    }
+
+    #[test]
+    fn existing_executed_dispatch_result_rejects_completion_without_receipt_id() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("implementer-packet.json");
+        fs::write(&packet_path, "{}").expect("packet should write");
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: "run-missing-completion-receipt".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("configured_internal".to_string()),
+            dispatch_command: Some("configured dispatch".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT.to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("default".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+        let result_path = write_runtime_lane_completion_result(
+            harness.path(),
+            "run-missing-completion-receipt",
+            "implementer",
+            "receipt-missing-before-mutation",
+            &packet_path.display().to_string(),
+        )
+        .expect("lane completion result should write");
+        let mut artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&result_path).expect("result should be readable"),
+        )
+        .expect("result should decode");
+        artifact["completion_receipt_id"] = serde_json::json!("");
+        fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&artifact).expect("artifact should encode"),
+        )
+        .expect("mutated result should write");
+
+        assert!(
+            !apply_existing_executed_dispatch_result_to_receipt(harness.path(), &mut receipt)
+                .expect("missing receipt result check should not fail")
+        );
+        assert_eq!(receipt.dispatch_status, "blocked");
+        assert_eq!(receipt.dispatch_result_path, None);
+    }
+
+    #[test]
+    fn existing_executed_dispatch_result_accepts_state_store_completion_artifact() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("implementer-packet.json");
+        fs::write(&packet_path, "{}").expect("packet should write");
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: "run-state-store-completion".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("taskflow_state_store".to_string()),
+            dispatch_command: Some("state-store completion".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT.to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("default".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+        let result_path = write_runtime_lane_completion_result(
+            harness.path(),
+            "run-state-store-completion",
+            "implementer",
+            "receipt-state-store-completion",
+            &packet_path.display().to_string(),
+        )
+        .expect("lane completion result should write");
+
+        assert!(
+            apply_existing_executed_dispatch_result_to_receipt(harness.path(), &mut receipt)
+                .expect("state-store result reconciliation should not fail")
+        );
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_completed");
+        assert_eq!(receipt.blocker_code, None);
+        assert_eq!(
+            receipt.dispatch_result_path.as_deref(),
+            Some(result_path.as_str())
+        );
+    }
+
+    #[test]
     fn write_runtime_dispatch_result_keeps_blocked_agent_lane_as_dispatch_artifact() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let receipt = RunGraphDispatchReceipt {
@@ -21130,25 +21307,36 @@ fn dispatch_result_matches_receipt(
     if result["run_id"].as_str() != Some(receipt.run_id.as_str()) {
         return false;
     }
-    if let Some(packet_path) = receipt
+    if result["artifact_kind"].as_str() != Some("runtime_lane_completion_result") {
+        return false;
+    }
+    if result["completed_target"].as_str() != Some(receipt.dispatch_target.as_str()) {
+        return false;
+    }
+    let Some(packet_path) = receipt
         .dispatch_packet_path
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
-        if result["source_dispatch_packet_path"]
-            .as_str()
-            .is_some_and(|value| value != packet_path)
-        {
-            return false;
-        }
-    }
-    true
+    else {
+        return false;
+    };
+    result["source_dispatch_packet_path"].as_str() == Some(packet_path)
 }
 
 fn dispatch_result_is_executed_completion(result: &serde_json::Value) -> bool {
-    result["execution_state"].as_str() == Some("executed")
-        && result["status"].as_str().unwrap_or("pass") == "pass"
+    if result["artifact_kind"].as_str() != Some("runtime_lane_completion_result") {
+        return false;
+    }
+    if result["execution_state"].as_str() != Some("executed")
+        || result["status"].as_str() != Some("pass")
+    {
+        return false;
+    }
+    result["completion_receipt_id"]
+        .as_str()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
 }
 
 fn latest_executed_dispatch_result_for_receipt(
