@@ -2460,7 +2460,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_init_execute_dispatch_timeout_materializes_internal_timeout_receipt() {
+    fn agent_init_execute_dispatch_materializes_internal_host_bridge_request() {
         run_on_cli_runtime_stack(
             "agent_init_execute_dispatch_timeout_materializes_internal_timeout_receipt",
             || {
@@ -2701,7 +2701,7 @@ mod tests {
                         "--execute-dispatch",
                         "--json",
                     ]))),
-                    ExitCode::from(1)
+                    ExitCode::SUCCESS
                 );
                 wait_for_state_unlock(harness.path());
 
@@ -2712,16 +2712,13 @@ mod tests {
                     .block_on(store.latest_run_graph_dispatch_receipt())
                     .expect("latest dispatch receipt should load")
                     .expect("latest dispatch receipt should exist");
-                assert_eq!(recorded_receipt.dispatch_status, "blocked");
-                assert_eq!(
-                    recorded_receipt.blocker_code.as_deref(),
-                    Some("internal_dispatch_timeout_without_receipt")
-                );
+                assert_eq!(recorded_receipt.dispatch_status, "bridge_request_pending");
+                assert_eq!(recorded_receipt.blocker_code.as_deref(), None);
                 let recorded_status = runtime
                     .block_on(store.run_graph_status("run-agent-init-timeout"))
                     .expect("run graph status should load after timeout");
-                assert_eq!(recorded_status.status, "blocked");
-                assert_eq!(recorded_status.lifecycle_stage, "implementer_blocked");
+                assert_eq!(recorded_status.status, "running");
+                assert_eq!(recorded_status.lifecycle_stage, "implementer_active");
                 let dispatch_result_path = recorded_receipt
                     .dispatch_result_path
                     .as_deref()
@@ -2731,15 +2728,12 @@ mod tests {
                 let parsed: serde_json::Value =
                     serde_json::from_str(&rendered).expect("execute-dispatch json should parse");
                 assert_eq!(parsed["status"], "blocked");
-                assert_eq!(parsed["execution_state"], "blocked");
-                assert_eq!(
-                    parsed["blocker_code"],
-                    "internal_dispatch_timeout_without_receipt"
-                );
-                assert!(parsed["provider_error"]
+                assert_eq!(parsed["execution_state"], "bridge_request_pending");
+                assert_eq!(parsed["blocker_code"], "host_tool_bridge_adapter_required");
+                assert!(parsed["blocker_reason"]
                     .as_str()
-                    .expect("provider error should render")
-                    .contains("timed out after 1s"));
+                    .expect("blocker reason should render")
+                    .contains("parent host-agent bridge"));
 
                 if let Some(original_path) = original_path {
                     std::env::set_var("PATH", original_path);

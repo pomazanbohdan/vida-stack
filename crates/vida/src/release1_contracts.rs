@@ -1593,6 +1593,7 @@ impl BlockerCode {
 
 const EXTENDED_BLOCKER_CODE_STRINGS: &[&str] = &[
     "ambiguous_unsafe_parallel_candidates",
+    "ambiguous_work_item_flow_selection",
     "candidate_scope_not_supported",
     "configured_dev_team_sequence_required",
     "conflicting_owned_paths",

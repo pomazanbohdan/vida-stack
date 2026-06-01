@@ -355,6 +355,7 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
     let blocker_keywords = ["blocked", "blocker", "approval_wait", "awaiting_approval"];
     let meta_keywords = [
         "fixed",
+        "closed after implementing",
         "proofs:",
         "proof:",
         "returns",

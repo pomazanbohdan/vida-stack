@@ -7047,6 +7047,7 @@ agent_system:
     pi_cli:
       enabled: true
       subagent_backend_class: external_cli
+      detect_command: sh
       dispatch:
         command: sh
         static_args:
@@ -7121,6 +7122,7 @@ agent_system:
     pi_cli:
       enabled: true
       subagent_backend_class: external_cli
+      detect_command: sh
       dispatch:
         command: sh
         static_args:

@@ -7563,6 +7563,13 @@ host_environment:
             .get_mut(serde_yaml::Value::String("codex".to_string()))
             .and_then(serde_yaml::Value::as_mapping_mut)
             .expect("codex system should exist");
+        codex.insert(
+            serde_yaml::Value::String("dispatch_transport".to_string()),
+            serde_yaml::Value::String("codex_cli_exec".to_string()),
+        );
+        codex
+            .entry(serde_yaml::Value::String("dispatch".to_string()))
+            .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
         let dispatch = codex
             .get_mut(serde_yaml::Value::String("dispatch".to_string()))
             .and_then(serde_yaml::Value::as_mapping_mut)

@@ -2464,9 +2464,11 @@ fn derive_required_delivery_owned_paths(packet: &serde_json::Value) -> Option<Ve
         .get("handoff_task_class")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())?;
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| infer_legacy_delivery_handoff_task_class(packet));
     if !crate::runtime_dispatch_packets::delivery_packet_task_class_requires_owned_paths(
-        handoff_task_class,
+        handoff_task_class.as_deref()?,
     ) {
         return None;
     }
@@ -2478,7 +2480,7 @@ fn derive_required_delivery_owned_paths(packet: &serde_json::Value) -> Option<Ve
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let mut owned_paths = crate::runtime_dispatch_packets::delivery_packet_owned_paths(
-        handoff_task_class,
+        handoff_task_class.as_deref()?,
         request_text,
         tracked_design_doc_path,
     );
@@ -2489,6 +2491,16 @@ fn derive_required_delivery_owned_paths(packet: &serde_json::Value) -> Option<Ve
         owned_paths = planner_metadata_owned_paths_from_packet(packet);
     }
     (!owned_paths.is_empty()).then_some(owned_paths)
+}
+
+fn infer_legacy_delivery_handoff_task_class(packet: &serde_json::Value) -> Option<String> {
+    match packet_dispatch_target(packet)? {
+        "implementer" | "implementation" | "writer" => {
+            Some(crate::runtime_contract_vocab::TASK_CLASS_IMPLEMENTATION.to_string())
+        }
+        "test_author" => Some("test_authoring".to_string()),
+        _ => None,
+    }
 }
 
 fn planner_metadata_owned_paths_from_packet(packet: &serde_json::Value) -> Vec<String> {
@@ -6818,6 +6830,7 @@ mod tests {
         .expect("config digest");
         let cache_payload = serde_json::json!({
             "surface": "vida taskflow run-graph dispatch-init",
+            "dispatch_init_fast_cache_schema_version": 2,
             "requested_run_id": "run-cache-parity",
             "run_id": "run-cache-parity",
             "source_config_digest": source_config_digest,

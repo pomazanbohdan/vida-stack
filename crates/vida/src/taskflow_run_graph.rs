@@ -8390,7 +8390,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_status_action_for_internal_timeout_with_running_lane_points_to_consume_continue() {
+    fn recovery_status_action_for_internal_timeout_with_running_lane_points_to_lane_show() {
         let mut status = packet_gate_status("run-internal-timeout");
         status.task_id = "task-internal-timeout".to_string();
         status.status = "blocked".to_string();
@@ -8411,7 +8411,7 @@ mod tests {
 
         assert_eq!(
             command.as_deref(),
-            Some("vida taskflow consume continue --run-id run-internal-timeout --json")
+            Some("vida lane show run-internal-timeout --json")
         );
     }
 
@@ -8974,7 +8974,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_status_action_for_internal_timeout_points_to_consume_continue() {
+    fn recovery_status_action_for_internal_timeout_without_ready_recovery_points_to_lane_show() {
         let mut status = default_run_graph_status("run-timeout", "implementation", "coach");
         status.status = "blocked".to_string();
         status.lifecycle_stage = "implementer_blocked".to_string();
@@ -8992,7 +8992,7 @@ mod tests {
         assert_eq!(
             next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
                 .as_deref(),
-            Some("vida taskflow consume continue --run-id run-timeout --json")
+            Some("vida lane show run-timeout --json")
         );
     }
 
