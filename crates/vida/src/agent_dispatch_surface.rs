@@ -1,5 +1,6 @@
 use std::process::ExitCode;
 
+use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot;
 use crate::{
     state_store, state_store::StateStore, AgentArgs, AgentCommand, AgentDispatchNextArgs,
     AgentSelectArgs,
@@ -675,6 +676,33 @@ fn blocked_candidate(
     }
 }
 
+fn explicit_task_graph_continuation_task_id(
+    binding: Option<&state_store::RunGraphContinuationBinding>,
+) -> Option<&str> {
+    let binding = binding?;
+    if binding.status != "bound" || binding.binding_source != "explicit_continuation_bind_task" {
+        return None;
+    }
+    if binding
+        .active_bounded_unit
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        != Some("task_graph_task")
+    {
+        return None;
+    }
+    binding
+        .active_bounded_unit
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|task_id| !task_id.is_empty())
+        .or_else(|| {
+            let task_id = binding.task_id.trim();
+            (!task_id.is_empty()).then_some(task_id)
+        })
+}
+
 fn build_agent_dispatch_next_preview(
     activation_bundle: &serde_json::Value,
     projection: &state_store::TaskSchedulingProjection,
@@ -921,7 +949,7 @@ fn build_agent_dispatch_next_preview_dev_team(
     let mut next_actions = Vec::new();
     let mut selected_lanes = Vec::new();
     let mut blocked_candidates = Vec::new();
-    let ready_flow_ids = projection
+    let all_ready_flow_ids = projection
         .ready
         .iter()
         .filter(|candidate| candidate.ready_now)
@@ -934,9 +962,33 @@ fn build_agent_dispatch_next_preview_dev_team(
             .map(str::to_string)
         })
         .collect::<std::collections::BTreeSet<_>>();
+    let selected_ready_candidates = if all_ready_flow_ids.len() > 1 {
+        if let Some(current_task_id) = projection.current_task_id.as_deref() {
+            projection
+                .ready
+                .iter()
+                .filter(|candidate| candidate.task.id == current_task_id)
+                .collect::<Vec<_>>()
+        } else {
+            projection.ready.iter().collect::<Vec<_>>()
+        }
+    } else {
+        projection.ready.iter().collect::<Vec<_>>()
+    };
+    let ready_flow_ids = selected_ready_candidates
+        .iter()
+        .filter(|candidate| candidate.ready_now)
+        .filter_map(|candidate| {
+            selected_dev_team_flow_for_work_item(
+                &activation_bundle["dev_team_readiness"],
+                Some(&candidate.task.issue_type),
+            )
+            .and_then(|flow| flow["flow_id"].as_str())
+            .map(str::to_string)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
     let sequence = if ready_flow_ids.len() == 1 {
-        projection
-            .ready
+        selected_ready_candidates
             .iter()
             .find(|candidate| candidate.ready_now)
             .map(|candidate| {
@@ -958,7 +1010,7 @@ fn build_agent_dispatch_next_preview_dev_team(
                 .to_string(),
         );
     }
-    if ready_flow_ids.len() > 1 {
+    if projection.current_task_id.is_none() && ready_flow_ids.len() > 1 {
         blocker_codes.push("ambiguous_work_item_flow_selection".to_string());
         next_actions.push(
             "Ready task candidates map to multiple configured dev_team flows; narrow the task scope or dispatch one flow class at a time."
@@ -1007,6 +1059,15 @@ fn build_agent_dispatch_next_preview_dev_team(
         };
     }
 
+    let current_ready_candidate = (selected_ready_candidates.len() == 1)
+        .then(|| projection.current_task_id.as_deref())
+        .flatten()
+        .and_then(|task_id| {
+            selected_ready_candidates
+                .iter()
+                .copied()
+                .find(|candidate| candidate.task.id == task_id && candidate.ready_now)
+        });
     let mut ready_index = 0;
     for (step_index, step) in steps_to_preview.into_iter().enumerate() {
         if !step.requires_task {
@@ -1024,15 +1085,20 @@ fn build_agent_dispatch_next_preview_dev_team(
                 step.role_label.replace('_', "-")
             ));
         }
-        let Some(candidate) = projection.ready.get(ready_index) else {
-            blocker_codes.push(format!(
-                "dev_team_step_missing_ready_task:position={}:{}",
-                step_index + 1,
-                step.role_label
-            ));
-            break;
+        let candidate = if let Some(candidate) = current_ready_candidate {
+            candidate
+        } else {
+            let Some(candidate) = selected_ready_candidates.get(ready_index).copied() else {
+                blocker_codes.push(format!(
+                    "dev_team_step_missing_ready_task:position={}:{}",
+                    step_index + 1,
+                    step.role_label
+                ));
+                break;
+            };
+            ready_index += 1;
+            candidate
         };
-        ready_index += 1;
         if !candidate.ready_now {
             blocked_candidates.push(blocked_candidate(
                 candidate,
@@ -1095,10 +1161,12 @@ fn build_agent_dispatch_next_preview_dev_team(
     let blocked_ready_parallel = projection
         .ready
         .iter()
-        .enumerate()
-        .filter(|(index, candidate)| *index >= ready_index && !candidate.ready_parallel_safe)
+        .filter(|candidate| {
+            Some(candidate.task.id.as_str()) != projection.current_task_id.as_deref()
+                && !candidate.ready_parallel_safe
+        })
         .collect::<Vec<_>>();
-    for (_index, candidate) in blocked_ready_parallel {
+    for candidate in blocked_ready_parallel {
         blocked_candidates.push(blocked_candidate(
             candidate,
             vec!["parallel_safety_not_established".to_string()],
@@ -1397,6 +1465,50 @@ fn agent_dispatch_next_projection_name(command: &AgentDispatchNextArgs) -> Strin
     )
 }
 
+fn emit_agent_dispatch_next_preview(
+    command: &AgentDispatchNextArgs,
+    state_dir: &std::path::Path,
+    projection_name: &str,
+    preview: AgentDispatchNextPreview,
+) -> ExitCode {
+    if command.json {
+        let payload =
+            serde_json::to_value(&preview).expect("agent dispatch-next preview should serialize");
+        crate::print_json_pretty(&payload);
+        crate::operator_projection_cache::write_json_projection(
+            state_dir,
+            projection_name,
+            &payload,
+        );
+    } else {
+        println!("agent dispatch-next: {}", preview.status);
+        println!("lanes selected: {}", preview.lanes_selected);
+        println!(
+            "preview only: review carrier/model/cost selection truth before launching any `vida agent-init` command"
+        );
+        for lane in &preview.selected_lanes {
+            println!(
+                "lane {} [{}]: {} [{} / {} / rate={} / est_cost={}]",
+                lane.lane_index,
+                lane.role_label,
+                lane.task_id,
+                lane.selection_truth.selected_carrier,
+                lane.selection_truth.selected_model_ref,
+                lane.selection_truth.rate,
+                lane.selection_truth.estimated_task_price_units
+            );
+        }
+        if !preview.blocker_codes.is_empty() {
+            println!("blockers: {}", preview.blocker_codes.join(", "));
+        }
+    }
+    if preview.status == "pass" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 pub(crate) async fn run_agent(args: AgentArgs) -> ExitCode {
     match args.command {
         AgentCommand::DispatchNext(command) => run_agent_dispatch_next(command).await,
@@ -1537,6 +1649,28 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
             let preview = if command.dev_team {
                 let configured_max_parallel_agents =
                     configured_max_parallel_agents_from_activation_bundle(&activation_bundle);
+                let explicit_binding = if command.current_task_id.is_none() {
+                    match store
+                        .latest_explicit_run_graph_continuation_binding_for_current_session()
+                        .await
+                    {
+                        Ok(binding) => binding,
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to read latest explicit continuation binding: {error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    }
+                } else {
+                    None
+                };
+                let explicit_bound_current_task_id =
+                    explicit_task_graph_continuation_task_id(explicit_binding.as_ref());
+                let effective_current_task_id = command
+                    .current_task_id
+                    .as_deref()
+                    .or(explicit_bound_current_task_id);
                 let projection =
                     match StateStore::read_fresh_tasks_from_jsonl_snapshot(store.root()) {
                         Ok(rows) => {
@@ -1552,7 +1686,7 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                             match StateStore::scheduling_projection_scoped_from_rows(
                                 &rows,
                                 command.scope.as_deref(),
-                                command.current_task_id.as_deref(),
+                                effective_current_task_id,
                                 &critical_path_ids,
                             ) {
                                 Ok(projection) => projection,
@@ -1565,7 +1699,7 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                         Err(_) => match store
                             .scheduling_projection_scoped(
                                 command.scope.as_deref(),
-                                command.current_task_id.as_deref(),
+                                effective_current_task_id,
                             )
                             .await
                         {
@@ -1649,46 +1783,86 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                     explicit_state_dir,
                 )
             };
-            if command.json {
-                let payload = serde_json::to_value(&preview)
-                    .expect("agent dispatch-next preview should serialize");
-                crate::print_json_pretty(&payload);
-                crate::operator_projection_cache::write_json_projection(
-                    &state_dir,
-                    &projection_name,
-                    &payload,
-                );
-            } else {
-                println!("agent dispatch-next: {}", preview.status);
-                println!("lanes selected: {}", preview.lanes_selected);
-                println!(
-                    "preview only: review carrier/model/cost selection truth before launching any `vida agent-init` command"
-                );
-                for lane in &preview.selected_lanes {
-                    println!(
-                        "lane {} [{}]: {} [{} / {} / rate={} / est_cost={}]",
-                        lane.lane_index,
-                        lane.role_label,
-                        lane.task_id,
-                        lane.selection_truth.selected_carrier,
-                        lane.selection_truth.selected_model_ref,
-                        lane.selection_truth.rate,
-                        lane.selection_truth.estimated_task_price_units
-                    );
-                }
-                if !preview.blocker_codes.is_empty() {
-                    println!("blockers: {}", preview.blocker_codes.join(", "));
-                }
-            }
-            if preview.status == "pass" {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(1)
-            }
+            emit_agent_dispatch_next_preview(&command, &state_dir, &projection_name, preview)
         }
         Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            ExitCode::from(1)
+            if command.dev_team {
+                let Some(current_task_id) = command.current_task_id.as_deref() else {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    return ExitCode::from(1);
+                };
+                let mut activation_bundle = match capture_launcher_activation_snapshot() {
+                    Ok(snapshot) => snapshot.compiled_bundle,
+                    Err(snapshot_error) => {
+                        eprintln!(
+                            "Failed to load activation bundle for agent dispatch preview: {snapshot_error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                };
+                let rows = match StateStore::read_fresh_tasks_from_jsonl_snapshot(&state_dir) {
+                    Ok(rows) => rows,
+                    Err(fresh_error) => {
+                        let snapshot_path =
+                            StateStore::canonical_task_snapshot_path_for_state_root(&state_dir);
+                        match StateStore::read_tasks_from_jsonl_snapshot(&snapshot_path) {
+                            Ok(rows) => rows,
+                            Err(snapshot_error) => {
+                                eprintln!("Failed to open authoritative state store: {error}");
+                                eprintln!(
+                                    "Failed to read canonical task snapshot after authoritative open failure: {snapshot_error}; fresh snapshot error: {fresh_error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        }
+                    }
+                };
+                let critical_path_ids = match StateStore::critical_path_from_rows(&rows) {
+                    Ok(path) => path
+                        .nodes
+                        .into_iter()
+                        .map(|node| node.id)
+                        .collect::<std::collections::BTreeSet<_>>(),
+                    Err(_) => std::collections::BTreeSet::new(),
+                };
+                let projection = match StateStore::scheduling_projection_scoped_from_rows(
+                    &rows,
+                    command.scope.as_deref(),
+                    Some(current_task_id),
+                    &critical_path_ids,
+                ) {
+                    Ok(projection) => projection,
+                    Err(projection_error) => {
+                        eprintln!("Failed to compute agent dispatch preview: {projection_error}");
+                        return ExitCode::from(1);
+                    }
+                };
+                let readiness = crate::taskflow_consume_bundle::build_dev_team_readiness(
+                    "vida.config.yaml",
+                    &activation_bundle,
+                );
+                if let Some(object) = activation_bundle.as_object_mut() {
+                    object.insert("dev_team_readiness".to_string(), readiness);
+                }
+                let configured_max_parallel_agents =
+                    configured_max_parallel_agents_from_activation_bundle(&activation_bundle);
+                let mut preview = build_agent_dispatch_next_preview(
+                    &activation_bundle,
+                    &projection,
+                    command.lanes,
+                    configured_max_parallel_agents,
+                    explicit_state_dir,
+                    true,
+                );
+                preview.source_surfaces.push(
+                    "StateStore::read_fresh_tasks_from_jsonl_snapshot(authoritative-open-fallback)"
+                        .to_string(),
+                );
+                emit_agent_dispatch_next_preview(&command, &state_dir, &projection_name, preview)
+            } else {
+                eprintln!("Failed to open authoritative state store: {error}");
+                ExitCode::from(1)
+            }
         }
     }
 }
@@ -2345,7 +2519,7 @@ mod tests {
             false,
         );
 
-        assert_eq!(preview.status, "pass");
+        assert_eq!(preview.status, "pass", "{preview:#?}");
         assert_eq!(preview.mode, "preview");
         assert_eq!(preview.lanes_requested, 2);
         assert_eq!(preview.configured_max_parallel_agents, 4);
@@ -2458,7 +2632,7 @@ mod tests {
             false,
         );
 
-        assert_eq!(preview.status, "pass");
+        assert_eq!(preview.status, "pass", "{preview:#?}");
         assert_eq!(preview.lanes_selected, 1);
         assert_eq!(
             preview.selected_lanes[0].dispatch_command_kind,
@@ -2635,7 +2809,7 @@ mod tests {
     }
 
     #[test]
-    fn development_flow_binding_blocks_mixed_ready_flow_classes() {
+    fn development_flow_binding_blocks_mixed_ready_flow_classes_without_current_task() {
         let preview = build_agent_dispatch_next_preview(
             &serde_json::json!({
                 "agent_system": {"max_parallel_agents": 2},
@@ -2667,7 +2841,7 @@ mod tests {
                 }
             }),
             &TaskSchedulingProjection {
-                current_task_id: Some("task-a".to_string()),
+                current_task_id: None,
                 ready: vec![
                     candidate_with_type("task-a", "Task A", true, true, "task"),
                     candidate_with_type("defect-a", "Defect A", true, true, "defect"),
@@ -2685,6 +2859,113 @@ mod tests {
         assert!(preview
             .blocker_codes
             .contains(&"ambiguous_work_item_flow_selection".to_string()));
+    }
+
+    #[test]
+    fn development_flow_binding_uses_current_task_before_mixed_ready_flow_classes() {
+        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "default_delivery",
+            "work_item_flow_bindings": {
+                "task": "default_delivery",
+                "defect": "defect_repair"
+            },
+            "roles": [
+                {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]}
+            ],
+            "sequence": ["developer"],
+            "flows": [
+                {
+                    "flow_id": "default_delivery",
+                    "enabled": true,
+                    "default": true,
+                    "ordered_steps": [{"role_id": "developer"}]
+                },
+                {
+                    "flow_id": "defect_repair",
+                    "enabled": true,
+                    "work_item_bindings": ["defect"],
+                    "ordered_steps": [{"role_id": "tester"}]
+                }
+            ]
+        });
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle,
+            &TaskSchedulingProjection {
+                current_task_id: Some("defect-a".to_string()),
+                ready: vec![
+                    candidate_with_type("task-a", "Task A", true, true, "task"),
+                    candidate_with_type("defect-a", "Defect A", true, true, "defect"),
+                ],
+                blocked: Vec::new(),
+                parallel_candidates_after_current: Vec::new(),
+            },
+            2,
+            2,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "pass", "{preview:#?}");
+        assert_eq!(preview.lanes_selected, 1);
+        assert_eq!(preview.selected_lanes[0].task_id, "defect-a");
+        assert_eq!(preview.selected_lanes[0].role_label, "tester");
+        assert!(!preview
+            .blocker_codes
+            .contains(&"ambiguous_work_item_flow_selection".to_string()));
+    }
+
+    #[test]
+    fn development_flow_binding_reuses_current_task_for_ordered_role_steps() {
+        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "defect_repair",
+            "work_item_flow_bindings": {
+                "defect": "defect_repair"
+            },
+            "roles": [
+                {"role_id": "analyst", "runtime_role": "business_analyst", "task_classes": ["specification"]},
+                {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]}
+            ],
+            "flows": [
+                {
+                    "flow_id": "defect_repair",
+                    "enabled": true,
+                    "default": true,
+                    "work_item_bindings": ["defect"],
+                    "ordered_steps": [
+                        {"role_id": "analyst", "runtime_role": "business_analyst", "task_class": "specification"},
+                        {"role_id": "tester", "runtime_role": "verifier", "task_class": "verification"}
+                    ]
+                }
+            ]
+        });
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle,
+            &TaskSchedulingProjection {
+                current_task_id: Some("defect-a".to_string()),
+                ready: vec![candidate_with_type(
+                    "defect-a", "Defect A", true, false, "defect",
+                )],
+                blocked: Vec::new(),
+                parallel_candidates_after_current: Vec::new(),
+            },
+            2,
+            2,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "pass", "{preview:#?}");
+        assert_eq!(preview.lanes_selected, 2);
+        assert_eq!(preview.selected_lanes[0].task_id, "defect-a");
+        assert_eq!(preview.selected_lanes[0].role_label, "analyst");
+        assert_eq!(preview.selected_lanes[0].task_class, "specification");
+        assert_eq!(preview.selected_lanes[1].task_id, "defect-a");
+        assert_eq!(preview.selected_lanes[1].role_label, "tester");
+        assert_eq!(preview.selected_lanes[1].task_class, "verification");
+        assert!(preview.blocker_codes.is_empty());
     }
 
     #[test]

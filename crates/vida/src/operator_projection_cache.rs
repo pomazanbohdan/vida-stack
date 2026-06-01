@@ -42,7 +42,11 @@ pub(crate) fn read_fresh_json_projection_with_dependency_marker(
     if dependency_modified.is_some_and(|modified| cache_modified <= modified) {
         return None;
     }
-    read_json_without_following_symlinks(&path).ok()
+    let body = read_json_without_following_symlinks(&path).ok()?;
+    if !projection_task_snapshot_marker_matches(state_dir, &body) {
+        return None;
+    }
+    Some(body)
 }
 
 pub(crate) fn read_recent_json_projection(
@@ -95,6 +99,9 @@ pub(crate) fn read_state_fresh_json_projection_for_read_only_operator(
     }
     let cache_age = SystemTime::now().duration_since(cache_modified).ok()?;
     let body = read_json_without_following_symlinks(&path).ok()?;
+    if !projection_task_snapshot_marker_matches(state_dir, &body) {
+        return None;
+    }
     annotate_projection_cache_with_status(
         &body,
         projection_name,
@@ -139,6 +146,9 @@ pub(crate) fn read_recent_json_projection_with_dependency_marker(
         return None;
     }
     let body = read_json_without_following_symlinks(&path).ok()?;
+    if !projection_task_snapshot_marker_matches(state_dir, &body) {
+        return None;
+    }
     annotate_recent_projection(&body, projection_name, cache_age, max_age).or(Some(body))
 }
 
@@ -163,6 +173,9 @@ fn read_recent_json_projection_with_state_freshness_status(
         return None;
     }
     let body = read_json_without_following_symlinks(&path).ok()?;
+    if !projection_task_snapshot_marker_matches(state_dir, &body) {
+        return None;
+    }
     annotate_recent_projection_with_status(
         &body,
         projection_name,
@@ -195,6 +208,9 @@ fn read_recent_json_projection_allowing_state_marker(
     let state_modified = latest_state_mutation_marker(state_dir).ok();
     let state_marker_newer = state_modified.is_some_and(|modified| cache_modified <= modified);
     let body = read_json_without_following_symlinks(&path).ok()?;
+    if !projection_task_snapshot_marker_matches(state_dir, &body) {
+        return None;
+    }
     annotate_recent_projection_with_status(
         &body,
         projection_name,
@@ -538,6 +554,18 @@ fn task_snapshot_marker_value(state_dir: &Path) -> serde_json::Value {
     .ok()
     .map(|value| serde_json::Value::String(value.trim().to_string()))
     .unwrap_or(serde_json::Value::Null)
+}
+
+fn projection_task_snapshot_marker_matches(state_dir: &Path, body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|payload| {
+            payload
+                .get("projection_cache_dependencies")
+                .and_then(|dependencies| dependencies.get("task_snapshot_marker"))
+                .cloned()
+        })
+        == Some(task_snapshot_marker_value(state_dir))
 }
 
 fn path_is_symlink(path: &Path) -> bool {
@@ -980,6 +1008,35 @@ mod tests {
         assert!(
             read_runtime_continuation_binding_overlay(&root).is_none(),
             "task snapshot marker drift must fail closed"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn json_projection_cache_invalidates_when_task_snapshot_marker_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-task-snapshot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let marker =
+            crate::state_store::StateStore::canonical_task_snapshot_marker_path_for_state_root(
+                &root,
+            );
+        fs::write(&marker, "task-marker-1").expect("task marker should write");
+        std::thread::sleep(Duration::from_millis(10));
+        let payload = serde_json::json!({"status": "blocked", "cached": true});
+        write_json_projection(&root, "agent-dispatch-next-latest", &payload);
+        assert!(read_fresh_json_projection(&root, "agent-dispatch-next-latest").is_some());
+
+        fs::write(&marker, "task-marker-2").expect("task marker should update");
+        assert!(
+            read_fresh_json_projection(&root, "agent-dispatch-next-latest").is_none(),
+            "task snapshot marker drift must invalidate structural operator projections"
         );
         let _ = fs::remove_dir_all(root);
     }
