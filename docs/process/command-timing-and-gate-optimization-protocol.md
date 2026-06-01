@@ -76,6 +76,7 @@ If a tool cannot emit this envelope directly, the orchestrator must record it in
 9. If a CI run is superseded by a newer pushed commit, cancel the stale run once the newer run is queued or running so runner capacity and status surfaces reflect the current head.
 10. Windows local proof scripts that invoke Cargo must use deterministic target-dir behavior and report it in timing records. If `CARGO_TARGET_DIR` is already set by the caller, respect that value and record `target_dir_policy=caller_provided`. If the repository is a linked worktree under `.vida/worktrees`, use the owner repository's `.vida/cargo-target` cache and record `target_dir_policy=repo_local_worktree_shared`. Otherwise use the current repository's `.vida/cargo-target` cache and record `target_dir_policy=repo_local_default`.
 11. Debug-runtime smoke commands must resolve the debug binary from `effective_cargo_target_dir`, not from a hardcoded `target/debug` path. This keeps worktree output visible under `.vida/cargo-target` while preventing each linked worktree from cold-building an isolated `target` tree.
+12. Local build/test scripts must be current, reusable proof surfaces. Remove stale scripts when they hardcode carrier names, ambient models, legacy provider lists, or heavy pre-commit builds that are no longer part of the current gate ladder. Replace them with config-derived runtime/status checks, Rust contract tests, or `scripts/vida-dev-gate.ps1` modes.
 
 ## Gate Decision Model
 
@@ -183,6 +184,7 @@ The checklist is required even when build, release, commit, push, or CI proof is
 4. Do not increase timeouts as the primary fix for an operator command that should be fast.
 5. Do not keep stale assertions in CI because they are "only smoke"; stale smoke is still false evidence.
 6. Do not leave a repeated timing finding only in chat; create or update the TaskFlow item.
+7. Do not keep hardcoded external-carrier smoke scripts in the local build/test surface when carrier readiness is owned by `vida.config.yaml`, runtime assignment, and status/preflight projections.
 
 ## Current Known Timing Evidence
 
@@ -197,6 +199,8 @@ As of this protocol slice, the following observations are known from the active 
 7. The 2026-06-01 CI migration proved the fastest reliable test shape is `cargo nextest archive` plus four `slice:m/n` shards, but archived nextest runs do not carry workspace support binaries automatically. Test shards that depend on `CARGO_BIN_EXE_*` helpers must restore a support-binary artifact before execution.
 8. In the same CI window, Linux runtime entrypoint build completed in under one minute, macOS in about six minutes, and Windows in about seven minutes after the gate was narrowed to deliverable runtime entrypoints. Cross-platform build remains a downstream proof gate, not the first defect-discovery gate.
 9. A cold local `scripts/vida-dev-gate.ps1 -Mode quick -Json` run spent about `79758 ms` in `cargo check --locked -p vida`; this is acceptable only as compile-aware source proof. Docs/script-only edits must use `-Mode script-check` first so local proof does not pay a Cargo compile cost unnecessarily.
+10. The 2026-06-02 local script audit retired `scripts/external-cli-carrier-smoke.sh` because it hardcoded a fixed carrier/provider list instead of deriving readiness from project config/runtime truth. The same audit retired `.githooks/pre-commit` and `scripts/precommit-build-json.sh` because the old heavy pre-commit JSON build hook was not the current local proof ladder and could reintroduce slow hidden build work.
+11. The replacement bounded adapter proof `cargo test -p vida-pi-agent --locked` completed locally in about `7438 ms` with 20 tests passing. Treat this as scoped Cargo proof, not as a normal two-second operator surface; it is acceptable in CI smoke and local batch proof when adapter behavior is in scope.
 
 These observations do not prove one root cause. They prove that timing diagnostics must cover both local runtime commands and CI/test gates.
 
@@ -209,5 +213,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/command-timing-and-gate-optimization-protocol.md
 created_at: 2026-05-26T00:00:00+03:00
-updated_at: 2026-06-02T01:15:00+03:00
+updated_at: 2026-06-02T02:30:00+03:00
 changelog_ref: command-timing-and-gate-optimization-protocol.changelog.jsonl

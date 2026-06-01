@@ -110,31 +110,31 @@ Interpret `host_agents.external_cli_preflight` as follows:
 3. Re-check carrier readiness:
    - `vida status --json | jq '.host_agents.external_cli_preflight.carrier_readiness'`
 4. Repair auth or model posture only for the failing carrier. For Pi, verify both adapter and provider layers: `vida-pi-agent --help` for the adapter and `pi --version` plus live/provider auth outside sandbox for Pi itself.
-5. Re-run the repeatable smoke script. Use the Pi-only mode first when repairing `pi_cli`:
-   - `VIDA_EXTERNAL_CLI_SMOKE_ONLY_PI=1 bash scripts/external-cli-carrier-smoke.sh`
-   - `VIDA_EXTERNAL_CLI_SMOKE_ONLY_PI=1 VIDA_PI_LIVE_SMOKE=1 bash scripts/external-cli-carrier-smoke.sh` only when live Pi provider credentials/network are intentionally available
-   - `bash scripts/external-cli-carrier-smoke.sh` for all configured external CLI carriers
+5. Re-run the current bounded adapter/runtime proof. For Pi adapter changes, prefer the Rust adapter contract tests:
+   - `cargo test -p vida-pi-agent --locked`
+   - `cargo build -p vida-pi-agent --bins --locked` only when a local binary is needed for manual operator inspection
+   - optional live provider probes must be explicit, credential-aware operator actions and must not be hidden in a hardcoded smoke script
 6. Re-check:
    - `vida status --json | jq '.host_agents.external_cli_preflight'`
 
 ## Smoke Validation
 
-Use the repeatable bounded smoke surface:
+Use the repeatable bounded proof surfaces:
 
-1. `scripts/external-cli-carrier-smoke.sh`
+1. `cargo test -p vida-pi-agent --locked`
+2. `vida status --json | jq '.host_agents.external_cli_preflight'`
+3. `vida taskflow consume agent-system --json | jq '.snapshot.carriers'`
 
-The script runs one one-shot prompt per enabled carrier using the current project-safe invocation pattern. Missing optional CLIs are skipped rather than treated as project-wide failure.
+Carrier proof must stay config/runtime-derived. Do not add hardcoded one-shot prompt scripts for a fixed list of host CLIs; they drift from `vida.config.yaml`, carrier registries, and provider readiness policy.
 
 Pi-specific smoke modes:
 
 1. Build/run adapter tests when changing the adapter or its contract:
    - `cargo test -p vida-pi-agent`
-2. Run Pi-only fake smoke without live provider credentials:
+2. Build Pi binaries only when local manual inspection needs them:
    - `cargo build -p vida-pi-agent --bins --locked`
-   - `VIDA_EXTERNAL_CLI_SMOKE_ONLY_PI=1 PATH="$PWD/target/debug:$PATH" bash scripts/external-cli-carrier-smoke.sh`
-3. Run optional live Pi smoke only when the operator intentionally enables a credentialed provider probe:
-   - `VIDA_EXTERNAL_CLI_SMOKE_ONLY_PI=1 VIDA_PI_LIVE_SMOKE=1 bash scripts/external-cli-carrier-smoke.sh`
-4. The live smoke may also use `VIDA_PI_COMMAND`, `VIDA_PI_AGENT_BIN`, `VIDA_PI_AGENT_FAKE_PI_BIN`, and `VIDA_PI_LIVE_SMOKE_TIMEOUT_SECONDS` to point at explicit binaries/timeouts.
+3. Run optional live Pi/provider smoke only as an explicit operator action outside the generic CI/local gate, with credentials and network posture intentionally available.
+4. When a live probe is needed, record `VIDA_PI_COMMAND`, adapter path, timeout, prompt, result JSON, and credential posture in the TaskFlow note instead of relying on ambient defaults.
 
 ## Failure Handling
 
@@ -155,17 +155,16 @@ Pi-specific smoke modes:
 1. `docs/process/agent-system.md`
 2. `docs/product/spec/external-cli-carrier-hardening-design.md`
 3. `vida.config.yaml`
-4. `scripts/external-cli-carrier-smoke.sh`
-5. `docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
+4. `docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
 
 -----
 artifact_path: process/external-cli-carrier-operator-procedure
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-04-10
+artifact_revision: 2026-06-02
 schema_version: '1'
 status: canonical
 source_path: docs/process/external-cli-carrier-operator-procedure.md
 created_at: '2026-04-10T11:20:00+03:00'
-updated_at: 2026-04-10T08:13:46.69414148Z
+updated_at: 2026-06-02T00:00:00+03:00
 changelog_ref: external-cli-carrier-operator-procedure.changelog.jsonl

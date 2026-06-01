@@ -114,7 +114,7 @@ Current implementation location:
 2. the TaskFlow runtime-family protocol-binding seed payload as the script-era metadata owner
 3. the deterministic compiled protocol-binding payload as the bridge artifact
 4. the TaskFlow runtime-family helper layer as the DB materialization boundary
-5. `scripts/precommit-build-json.sh` as the thin JSON-artifact build hook
+5. repository-local proof gates through `scripts/vida-dev-gate.ps1`; do not use a heavy pre-commit build hook as the protocol-binding owner
 
 Recommended output artifacts:
 
@@ -318,10 +318,10 @@ Database-first acceptance rule:
 artifact_path: product/spec/taskflow-protocol-runtime-binding-model
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-06-02'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/taskflow-protocol-runtime-binding-model.md
 created_at: '2026-03-12T12:15:00+02:00'
-updated_at: '2026-03-12T19:00:00+02:00'
+updated_at: '2026-06-02T02:30:00+03:00'
 changelog_ref: taskflow-protocol-runtime-binding-model.changelog.jsonl

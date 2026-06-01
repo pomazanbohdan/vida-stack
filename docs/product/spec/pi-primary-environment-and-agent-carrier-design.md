@@ -243,7 +243,7 @@ Will implement / choose:
 - Phase 7: release/package/smoke/docs
   - release/install modules
   - installer/package manifests
-  - `scripts/external-cli-carrier-smoke.sh`
+  - adapter/runtime contract tests
   - operator runbook/process docs
   - CI test definitions if present
 
@@ -323,7 +323,7 @@ Will implement / choose:
 - Task: `feature-vida-pi-agent-smoke-and-ci`
 - Add smoke/CI proof matrix.
 - Proof target:
-  - external CLI smoke includes Pi adapter probe; optional live provider probe is gated.
+  - adapter contract tests cover fake-provider success/failure; optional live provider probe is explicit operator work, not a generic hardcoded smoke script.
 
 ### Phase 12
 - Task: `feature-vida-pi-agent-docs-runbook-and-closure`
@@ -338,7 +338,7 @@ As of the `feature-vida-pi-agent-prewrite-tool-guard` slice, the epic implementa
 - `pi_cli` dispatch uses `vida-pi-agent`, a VIDA-owned one-shot adapter process, rather than raw `pi` output.
 - `host_environment.systems.pi` and `.pi/**` projection support are materialized from VIDA config/runtime truth; Pi-local files are not authority.
 - Release/install packaging includes `vida-pi-agent` beside `vida`, `taskflow`, and `docflow`; generated install templates are refreshed through release flow.
-- Smoke/CI coverage includes adapter tests, Pi-only fake smoke, installed adapter help checks, and optional live Pi smoke gated by `VIDA_PI_LIVE_SMOKE=1`.
+- Smoke/CI coverage includes adapter tests and installed adapter help checks; optional live Pi/provider smoke remains an explicit operator action outside the generic CI/local gate.
 - The bounded write-scope guard now has two layers: a pre-write Pi extension loaded explicitly by `vida-pi-agent` in `guarded-write` mode, plus post-execution touched-path validation/evidence. The extension receives canonical guard data from adapter-owned environment variables, denies `write`/`edit` outside dispatch owned paths before tool execution, blocks `bash`/user bash to prevent shell write bypass, and blocks unknown mutating tools.
 - Profiles requiring `guard_required_owned_paths` are implementation-admissible only when readiness reports the adapter pre-write guard active. Read/review profiles must not write.
 
@@ -349,7 +349,6 @@ Concise proof commands recorded across the implementation slices:
 - `cargo test -p vida guard_required_write_scope -- --nocapture`
 - `cargo test -p vida release_install -- --nocapture`
 - `cargo build -p vida-pi-agent --bins --locked`
-- `VIDA_EXTERNAL_CLI_SMOKE_ONLY_PI=1 PATH="$PWD/target/debug:$PATH" bash scripts/external-cli-carrier-smoke.sh`
 - `vida docflow check-file --path docs/process/external-cli-carrier-operator-procedure.md`
 - `vida docflow check-file --path docs/process/agent-system.md`
 - `vida docflow check-file --path docs/product/spec/pi-primary-environment-and-agent-carrier-design.md`
@@ -449,10 +448,10 @@ Concise proof commands recorded across the implementation slices:
 artifact_path: product/spec/pi-primary-environment-and-agent-carrier-design
 artifact_type: product_spec
 artifact_version: 1
-artifact_revision: 2026-05-19
+artifact_revision: 2026-06-02
 schema_version: 1
 status: canonical
 source_path: docs/product/spec/pi-primary-environment-and-agent-carrier-design.md
 created_at: 2026-05-19T15:27:13.8001375Z
-updated_at: 2026-05-19T15:29:37.4249007Z
+updated_at: 2026-06-02T02:30:00+03:00
 changelog_ref: pi-primary-environment-and-agent-carrier-design.changelog.jsonl

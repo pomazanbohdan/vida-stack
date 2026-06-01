@@ -109,6 +109,7 @@ Companion rule:
     Config families: known versus compiled project protocol admission, project discovery/mapping, executable bundle promotion, and fail-closed protocol binding
 16. [taskflow-protocol-runtime-binding-model.md](taskflow-protocol-runtime-binding-model.md)
     Config families: script-era protocol binding bridge, Rust-native protocol runtime crate, activation resolution, gate enforcement, protocol receipts, binding matrices, and the dedicated TaskFlow protocol-binding subrelease
+    Registered path: `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
 17. [user-facing-runtime-flow-and-operating-loop-model.md](user-facing-runtime-flow-and-operating-loop-model.md)
     Config families: operator-facing install/init/bootstrap flow, project-local runtime onboarding, project activation/config sequencing, intake/planning sequencing, execution/approval/resume sequencing, bounded pre-readiness allowlists, runtime bootstrap posture, and the staged user-facing operating loop across `.vida/**`, installed runtime assets, and DB-first readiness state
 18. [bootstrap-carriers-and-project-activator-model.md](bootstrap-carriers-and-project-activator-model.md)
@@ -401,10 +402,10 @@ Activation rule:
 artifact_path: product/spec/current-spec-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-04-13
+artifact_revision: 2026-06-02
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-05-19T15:29:37.4361134Z
+updated_at: 2026-06-02T02:35:00+03:00
 changelog_ref: current-spec-map.changelog.jsonl

@@ -169,13 +169,11 @@ jobs:
           set -euo pipefail
           cargo test --workspace --doc --locked
 
-      - name: Run external CLI carrier smoke script
+      - name: Run external adapter contract tests
         shell: bash
         run: |
           set -euo pipefail
-          cargo build -p vida-pi-agent --bins --locked
-          bash -n scripts/external-cli-carrier-smoke.sh
-          VIDA_EXTERNAL_CLI_SMOKE_ONLY_PI=1 PATH="$PWD/target/debug:$PATH" bash scripts/external-cli-carrier-smoke.sh
+          cargo test -p vida-pi-agent --locked
 
       - name: Run docflow validation
         shell: bash

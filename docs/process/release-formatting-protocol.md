@@ -86,7 +86,7 @@ For the active release line:
 
 The current thin render helper is:
 
-1. [render-public-release-notes.sh](/home/unnamed/project/vida-stack/scripts/render-public-release-notes.sh)
+1. [render-public-release-notes.sh](../../scripts/render-public-release-notes.sh)
 
 Rules:
 
@@ -111,10 +111,10 @@ For the active release line:
 artifact_path: process/release-formatting-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-15'
+artifact_revision: '2026-06-02'
 schema_version: '1'
 status: canonical
 source_path: docs/process/release-formatting-protocol.md
 created_at: '2026-03-12T16:37:07+02:00'
-updated_at: '2026-03-15T09:29:08+02:00'
+updated_at: '2026-06-02T02:30:00+03:00'
 changelog_ref: release-formatting-protocol.changelog.jsonl
