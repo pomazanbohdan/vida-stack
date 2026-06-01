@@ -151,8 +151,9 @@ The checklist is required even when build, release, commit, push, or CI proof is
 6. For browser/simulator/emulator validation, record launch/setup time separately from user-flow validation time.
 7. For long local gates that may exceed the host-tool timeout, redirect stdout/stderr to a deterministic log file and print that path before starting the gate. A timed-out host tool call without a log artifact is itself an optimization defect because it forces reruns.
 8. For Rust workspace proof during active repair, prefer focused filters and package shards first, then run the workspace-wide gate once the coherent batch is assembled. If the workspace gate exceeds the local tool timeout, rerun it through a log-backed script or background job rather than repeating foreground calls that can lose output.
-9. For VIDA runtime recovery diagnostics, prefer the fastest authoritative inspection surface that exposes the needed evidence. If a timeout/recovery path only needs task metadata or current owned scope, use `vida task show <task-id> --json` before heavier lane or run-graph projections.
-10. If a long test shard or runtime command is killed because it exceeds the local tool timeout, immediately record the command, duration, missing artifact gap, and replacement proof strategy in the post-pool checklist.
+9. Cargo accepts a single test-name filter before `--`; do not pass multiple focused test filters as extra positional arguments. For a focused Rust proof batch, run separate `cargo test` commands, use a script/loop wrapper with timing per filter, or select a broader valid substring/module filter that intentionally covers the batch.
+10. For VIDA runtime recovery diagnostics, prefer the fastest authoritative inspection surface that exposes the needed evidence. If a timeout/recovery path only needs task metadata or current owned scope, use `vida task show <task-id> --json` before heavier lane or run-graph projections.
+11. If a long test shard or runtime command is killed because it exceeds the local tool timeout, immediately record the command, duration, missing artifact gap, and replacement proof strategy in the post-pool checklist.
 
 ## Prohibited Patterns
 

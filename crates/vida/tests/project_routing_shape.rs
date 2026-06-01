@@ -15,6 +15,10 @@ fn route<'a>(config: &'a serde_yaml::Value, route_id: &str) -> &'a serde_yaml::V
     &config["agent_system"]["routing"][route_id]
 }
 
+fn subagent<'a>(config: &'a serde_yaml::Value, backend_id: &str) -> &'a serde_yaml::Value {
+    &config["agent_system"]["subagents"][backend_id]
+}
+
 fn yaml_string(value: &serde_yaml::Value) -> Option<&str> {
     value
         .as_str()
@@ -49,6 +53,66 @@ fn assert_no_legacy_external_backends(backends: &[String]) {
             "active route fanout must not require legacy external backend {legacy_backend}",
         );
     }
+}
+
+#[test]
+fn project_routing_shape_separates_internal_host_agents_from_codex_cli_exec() {
+    let config = project_config();
+    let codex_system = &config["host_environment"]["systems"]["codex"];
+    let internal = subagent(&config, "internal_subagents");
+    let cli_exec = subagent(&config, "codex_cli_exec");
+
+    assert_eq!(
+        yaml_string(&codex_system["execution_class"]),
+        Some("internal")
+    );
+    assert_eq!(
+        yaml_string(&codex_system["execution_boundary"]),
+        Some("parent_host_session")
+    );
+    assert_eq!(
+        yaml_string(&codex_system["dispatch_transport"]),
+        Some("host_tool_bridge")
+    );
+    assert!(
+        codex_system["dispatch"].is_null(),
+        "internal codex host posture must not carry a codex exec dispatch command"
+    );
+
+    assert_eq!(
+        yaml_string(&internal["subagent_backend_class"]),
+        Some("internal")
+    );
+    assert_eq!(
+        yaml_string(&internal["execution_boundary"]),
+        Some("parent_host_session")
+    );
+    assert_eq!(
+        yaml_string(&internal["dispatch_transport"]),
+        Some("host_tool_bridge")
+    );
+    assert_eq!(
+        yaml_string(&internal["receipt_mode"]),
+        Some("host_bridge_receipt")
+    );
+
+    assert_eq!(
+        yaml_string(&cli_exec["subagent_backend_class"]),
+        Some("external_cli")
+    );
+    assert_eq!(
+        yaml_string(&cli_exec["execution_boundary"]),
+        Some("child_process")
+    );
+    assert_eq!(
+        yaml_string(&cli_exec["dispatch_transport"]),
+        Some("codex_cli_exec")
+    );
+    assert_eq!(yaml_string(&cli_exec["dispatch"]["command"]), Some("codex"));
+    assert_eq!(
+        yaml_string_list(&cli_exec["dispatch"]["static_args"]),
+        vec!["exec".to_string(), "--json".to_string()]
+    );
 }
 
 #[test]

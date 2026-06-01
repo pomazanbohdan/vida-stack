@@ -131,10 +131,28 @@ fn configured_internal_host_receipt_backed_completion_supported(
 ) -> Option<bool> {
     let overlay = load_project_overlay_yaml_for_root(project_root).ok()?;
     let (_system_id, system_entry) = selected_host_cli_system_for_runtime_dispatch(&overlay);
-    system_entry.as_ref().and_then(|entry| {
-        yaml_lookup(entry, &["dispatch", "receipt_backed_completion_supported"])
-            .and_then(serde_yaml::Value::as_bool)
-    })
+    let entry = system_entry.as_ref()?;
+    if let Some(explicit) = yaml_lookup(entry, &["dispatch", "receipt_backed_completion_supported"])
+        .and_then(serde_yaml::Value::as_bool)
+    {
+        return Some(explicit);
+    }
+    let dispatch_transport = yaml_lookup(entry, &["dispatch_transport"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim);
+    let receipt_mode = yaml_lookup(entry, &["receipt_mode"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim);
+    let bridge_adapter_required = yaml_lookup(entry, &["host_tool_bridge", "adapter_required"])
+        .and_then(serde_yaml::Value::as_bool)
+        .unwrap_or(false);
+    if dispatch_transport == Some("host_tool_bridge")
+        && receipt_mode == Some("host_bridge_receipt")
+        && bridge_adapter_required
+    {
+        return Some(true);
+    }
+    None
 }
 
 fn configured_external_backend_handoff_timeout_seconds(
@@ -4454,6 +4472,14 @@ host_environment:
         assert_eq!(dispatch.backend_dispatch["backend_class"], "internal");
         assert_eq!(dispatch.backend_dispatch["backend_id"], "junior");
         assert_eq!(
+            dispatch.backend_dispatch["execution_boundary"],
+            "parent_host_session"
+        );
+        assert_eq!(
+            dispatch.backend_dispatch["dispatch_transport"],
+            "host_tool_bridge"
+        );
+        assert_eq!(
             dispatch.backend_dispatch["policy_selected_internal_backend"],
             true
         );
@@ -4552,6 +4578,9 @@ fn runtime_agent_lane_dispatch_from_overlay(
                     "backend_class": "internal",
                     "backend_id": backend_id,
                     "executor_backend": "internal",
+                    "execution_boundary": "parent_host_session",
+                    "dispatch_transport": "host_tool_bridge",
+                    "receipt_mode": "host_bridge_receipt",
                     "selected_model_profile_id": preferred_model_profile_id,
                     "policy_selected_internal_backend": true,
                 }),
@@ -4573,6 +4602,9 @@ fn runtime_agent_lane_dispatch_from_overlay(
                     "selected_execution_class": selected_execution_class,
                     "backend_class": "external_cli",
                     "backend_id": backend_id,
+                    "execution_boundary": "child_process",
+                    "dispatch_transport": "cli_process",
+                    "receipt_mode": "cli_json_result",
                     "selected_model_profile_id": preferred_model_profile_id,
                     "policy_selected_external_backend": true,
                 }),
@@ -4594,6 +4626,9 @@ fn runtime_agent_lane_dispatch_from_overlay(
                     "backend_class": "internal",
                     "backend_id": backend_id,
                     "executor_backend": "internal",
+                    "execution_boundary": "parent_host_session",
+                    "dispatch_transport": "host_tool_bridge",
+                    "receipt_mode": "host_bridge_receipt",
                     "selected_model_profile_id": preferred_model_profile_id,
                     "policy_selected_internal_backend": true,
                 }),
@@ -4617,6 +4652,9 @@ fn runtime_agent_lane_dispatch_from_overlay(
                         "backend_class": backend_class,
                         "backend_id": backend_id,
                         "executor_backend": "internal",
+                        "execution_boundary": "parent_host_session",
+                        "dispatch_transport": "host_tool_bridge",
+                        "receipt_mode": "host_bridge_receipt",
                         "selected_model_profile_id": preferred_model_profile_id,
                         "policy_selected_internal_backend": true,
                     }),
@@ -4654,6 +4692,9 @@ fn runtime_agent_lane_dispatch_from_overlay(
                 "selected_execution_class": selected_execution_class,
                 "backend_class": backend_class,
                 "backend_id": backend_id,
+                "execution_boundary": "child_process",
+                "dispatch_transport": "cli_process",
+                "receipt_mode": "cli_json_result",
                 "selected_model_profile_id": preferred_model_profile_id,
                 "policy_selected_external_backend": true,
             }),
@@ -4677,6 +4718,9 @@ fn runtime_agent_lane_dispatch_from_overlay(
                     "backend_class": backend_class,
                     "backend_id": backend_id,
                     "executor_backend": "internal",
+                    "execution_boundary": "parent_host_session",
+                    "dispatch_transport": "host_tool_bridge",
+                    "receipt_mode": "host_bridge_receipt",
                     "selected_model_profile_id": preferred_model_profile_id,
                     "policy_selected_internal_backend": true,
                 }),
@@ -4697,6 +4741,9 @@ fn runtime_agent_lane_dispatch_from_overlay(
                 "selected_execution_class": selected_execution_class,
                 "backend_class": backend_class,
                 "backend_id": backend_id,
+                "execution_boundary": "child_process",
+                "dispatch_transport": "cli_process",
+                "receipt_mode": "cli_json_result",
                 "selected_model_profile_id": preferred_model_profile_id,
                 "policy_selected_external_backend": true,
             }),
@@ -6388,11 +6435,19 @@ pub(crate) fn planner_metadata_owned_paths_from_role_selection(
 pub(crate) fn implementation_owned_paths_for_role_selection(
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Vec<String> {
-    let derived_paths = delivery_packet_owned_paths(
-        TASK_CLASS_IMPLEMENTATION,
+    owned_paths_for_required_delivery_task_class(role_selection, TASK_CLASS_IMPLEMENTATION)
+}
+
+fn owned_paths_for_required_delivery_task_class(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    handoff_task_class: &str,
+) -> Vec<String> {
+    let mut derived_paths = delivery_packet_owned_paths(
+        handoff_task_class,
         &role_selection.request,
         tracked_design_doc_path(role_selection),
     );
+    derived_paths.retain(|path| !is_runtime_consumption_fallback_owned_path(path));
     if derived_paths.is_empty() {
         planner_metadata_owned_paths_from_role_selection(role_selection)
     } else {
@@ -6956,8 +7011,11 @@ fn build_runtime_dispatch_packet_body(
         &ctx.role_selection.request,
         tracked_design_doc_path(ctx.role_selection),
     );
-    if handoff_task_class == TASK_CLASS_IMPLEMENTATION {
-        let owned_paths = implementation_owned_paths_for_role_selection(ctx.role_selection);
+    if crate::runtime_dispatch_packets::delivery_packet_task_class_requires_owned_paths(
+        handoff_task_class,
+    ) {
+        let owned_paths =
+            owned_paths_for_required_delivery_task_class(ctx.role_selection, handoff_task_class);
         if !apply_owned_paths_if_missing(&mut delivery_task_packet, &owned_paths) {
             clear_runtime_consumption_fallback_owned_paths(&mut delivery_task_packet);
         }
@@ -8583,6 +8641,41 @@ host_environment:
 
     fn agent_lane_test_request() -> &'static str {
         "Implement the bounded fix in crates/vida/src/runtime_dispatch_state.rs with regression tests."
+    }
+
+    #[test]
+    fn implementation_owned_paths_use_planner_metadata_when_request_has_no_concrete_scope() {
+        let mut execution_plan = agent_lane_test_execution_plan("internal_subagents");
+        execution_plan["tracked_flow_bootstrap"]["dev_task"]["planner_metadata"]["owned_paths"] =
+            json!([
+                "crates/vida/src/runtime_dispatch_execution.rs",
+                "docs/product/spec/codex-host-agent-boundary-and-cli-bridge-design.md"
+            ]);
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue the active bounded implementation task".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan,
+            reason: "test".to_string(),
+        };
+
+        assert_eq!(
+            implementation_owned_paths_for_role_selection(&role_selection),
+            vec![
+                "crates/vida/src/runtime_dispatch_execution.rs".to_string(),
+                "docs/product/spec/codex-host-agent-boundary-and-cli-bridge-design.md".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -19052,6 +19145,38 @@ agent_system:
             &role_selection,
             &receipt,
         ));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn internal_host_bridge_receipt_mode_counts_as_receipt_backed_completion_support() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-receipt-mode-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        std::fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      dispatch_transport: host_tool_bridge
+      receipt_mode: host_bridge_receipt
+      host_tool_bridge:
+        adapter_required: true
+"#,
+        )
+        .expect("config");
+
+        assert_eq!(
+            configured_internal_host_receipt_backed_completion_supported(&root),
+            Some(true)
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

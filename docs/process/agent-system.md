@@ -10,7 +10,7 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - canonical runtime outputs are `carrier_runtime` and `runtime_assignment`
 - `codex_multi_agent` and `codex_runtime_assignment` are compatibility aliases only and must not be treated as owner-law canonical fields
 - the canonical executor registry is `vida.config.yaml -> agent_system.subagents`
-- the canonical development-team contract is `vida.config.yaml -> dev_team`, which defines the analyst -> developer -> duplication_reviewer -> coach -> tester -> prover -> release_closure handoff path, role/task-class bindings, and fail-closed validation posture without replacing `agent_extensions`
+- the canonical development-team contract is `vida.config.yaml -> dev_team`, which defines config-selected flow ids, work-item flow bindings, ordered role steps, role/task-class bindings, command templates, lifecycle hooks, proof gates, approval pauses, and fail-closed validation posture without replacing `agent_extensions`
 - dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model
 - route policy is owned by explicit executor fields such as `executor_backend`, `fanout_executor_backends`, and `fallback_executor_backend`
 - legacy `subagents`, `fanout_subagents`, and `bridge_fallback_subagent` fields are compatibility aliases only
@@ -25,7 +25,8 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - project-local agent extensions remain under `.vida/project/agent-extensions/`
 - research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists
 - delegated worker dispatch still materializes through `vida agent-init` until the operator-surface promotion slice closes
-- for the internal Codex host posture, runtime may bridge a bounded delegated packet into non-interactive `codex exec` execution; `vida agent-init` remains the activation/view contract and does not become execution evidence by itself
+- for internal host-agent postures, runtime may emit a host-tool bridge request for the configured parent/app adapter capability; Codex host tools, Claude Code subagents, Pi sub-agent plugins, Vibe Kanban agents, OpenCode subagents, and future adapters are selected by config capability, not by vendor-id hardcoding
+- non-interactive process execution such as `codex exec` is a separate process carrier such as `codex_cli_exec`, not the implementation of `internal_subagents`
 - project "agent-first" development therefore means `vida agent-init`-backed delegated lanes first; host-tool-specific subagent APIs are optional carrier mechanics, not the canonical project execution contract
 - host-local shell/edit capability is an executor affordance only and must not be interpreted as lawful root-session write ownership
 - if the selected host execution class is internal, optional external CLI subagents remain auxiliary carrier details and must not redefine the whole session as externally gated by default

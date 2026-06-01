@@ -250,6 +250,9 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
                 backend_id.to_string(),
                 serde_json::json!({
                     "backend_class": crate::yaml_lookup(entry, &["subagent_backend_class"]).and_then(serde_yaml::Value::as_str).unwrap_or_default(),
+                    "execution_boundary": crate::yaml_lookup(entry, &["execution_boundary"]).and_then(serde_yaml::Value::as_str).unwrap_or_default(),
+                    "dispatch_transport": crate::yaml_lookup(entry, &["dispatch_transport"]).and_then(serde_yaml::Value::as_str).unwrap_or_default(),
+                    "receipt_mode": crate::yaml_lookup(entry, &["receipt_mode"]).and_then(serde_yaml::Value::as_str).unwrap_or_default(),
                     "orchestration_tier": crate::yaml_lookup(entry, &["orchestration_tier"]).and_then(serde_yaml::Value::as_str).unwrap_or_default(),
                     "budget_cost_units": fallback_rate,
                     "write_scope": crate::yaml_lookup(entry, &["write_scope"]).and_then(serde_yaml::Value::as_str).unwrap_or_default(),
@@ -328,6 +331,14 @@ mod tests {
         assert_eq!(
             summary["subagent_backends"]["internal_subagents"]["default_model_profile"],
             "codex_gpt55_low_write"
+        );
+        assert_eq!(
+            summary["subagent_backends"]["internal_subagents"]["execution_boundary"],
+            "parent_host_session"
+        );
+        assert_eq!(
+            summary["subagent_backends"]["internal_subagents"]["dispatch_transport"],
+            "host_tool_bridge"
         );
     }
 

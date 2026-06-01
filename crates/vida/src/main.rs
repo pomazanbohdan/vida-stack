@@ -13,6 +13,7 @@ mod carrier_runtime_metadata;
 mod carrier_runtime_projection;
 mod carrier_runtime_strategy;
 mod cli;
+mod command_lifecycle_hooks;
 mod compiled_agent_extension_bundle;
 mod config_value_utils;
 mod consume_final_operator_surface;

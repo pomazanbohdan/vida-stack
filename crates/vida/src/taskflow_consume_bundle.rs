@@ -895,7 +895,10 @@ pub(crate) fn build_dev_team_readiness(
     let mut blockers = Vec::new();
     let roles = dev_team_roles(dev_team, &carrier_catalog, pricing_catalog, &mut blockers);
     let flows = dev_team_flows(dev_team, &roles, &mut blockers);
-    let sequence = default_dev_team_sequence(&flows);
+    let default_flow_id = crate::yaml_string(crate::yaml_lookup(dev_team, &["default_flow_id"]))
+        .or_else(|| crate::yaml_string(crate::yaml_lookup(dev_team, &["default_flow"])));
+    let work_item_flow_bindings = dev_team_work_item_flow_bindings(dev_team, &flows, &mut blockers);
+    let sequence = default_dev_team_sequence(&flows, default_flow_id.as_deref());
 
     if !enabled {
         blockers.push("dev_team_disabled".to_string());
@@ -919,6 +922,8 @@ pub(crate) fn build_dev_team_readiness(
         "status": status,
         "configured": true,
         "enabled": enabled,
+        "default_flow_id": default_flow_id,
+        "work_item_flow_bindings": work_item_flow_bindings,
         "roles": roles,
         "sequence": sequence,
         "flows": flows,
@@ -1347,6 +1352,8 @@ fn dev_team_flows(
         .iter()
         .filter_map(|row| row["role_id"].as_str())
         .collect::<HashSet<_>>();
+    let default_flow_id = crate::yaml_string(crate::yaml_lookup(dev_team, &["default_flow_id"]))
+        .or_else(|| crate::yaml_string(crate::yaml_lookup(dev_team, &["default_flow"])));
     let Some(flow_map) =
         crate::yaml_lookup(dev_team, &["flows"]).and_then(serde_yaml::Value::as_mapping)
     else {
@@ -1357,25 +1364,36 @@ fn dev_team_flows(
         .iter()
         .filter_map(|(key, value)| key.as_str().map(|id| (id, value)))
     {
-        let steps = crate::yaml_string_list(crate::yaml_lookup(flow_entry, &["steps"]));
+        let ordered_steps =
+            dev_team_flow_ordered_steps(flow_id, flow_entry, &known_roles, blockers);
+        let steps = ordered_steps
+            .iter()
+            .filter_map(|step| step["role_id"].as_str().map(str::to_string))
+            .collect::<Vec<_>>();
         if steps.is_empty() {
             blockers.push(format!("missing_flow_steps:{flow_id}"));
-        }
-        for step in &steps {
-            if !known_roles.contains(step.as_str()) {
-                blockers.push(format!("unknown_flow_step:{flow_id}:{step}"));
-            }
         }
         flows.push(serde_json::json!({
             "flow_id": flow_id,
             "enabled": crate::yaml_bool(crate::yaml_lookup(flow_entry, &["enabled"]), true),
+            "default": default_flow_id.as_deref() == Some(flow_id)
+                || crate::yaml_bool(crate::yaml_lookup(flow_entry, &["default"]), false),
             "description": crate::yaml_string(crate::yaml_lookup(flow_entry, &["description"])),
+            "flow_class": crate::yaml_string(crate::yaml_lookup(flow_entry, &["flow_class"]))
+                .unwrap_or_else(|| "development".to_string()),
+            "work_item_bindings": crate::yaml_string_list(crate::yaml_lookup(flow_entry, &["work_item_bindings"])),
             "sequential": crate::yaml_bool(crate::yaml_lookup(flow_entry, &["sequential"]), false),
             "allow_parallel_handoffs": crate::yaml_bool(
                 crate::yaml_lookup(flow_entry, &["allow_parallel_handoffs"]),
                 false,
             ),
+            "lifecycle_hook_templates": crate::yaml_string_list(crate::yaml_lookup(flow_entry, &["lifecycle_hook_templates"])),
+            "proof_gates": yaml_field_json(flow_entry, "proof_gates"),
+            "resume_transitions": yaml_field_json(flow_entry, "resume_transitions"),
+            "rework_transitions": yaml_field_json(flow_entry, "rework_transitions"),
+            "adapter_projection": yaml_field_json(flow_entry, "adapter_projection"),
             "steps": steps,
+            "ordered_steps": ordered_steps,
         }));
     }
 
@@ -1388,18 +1406,161 @@ fn dev_team_flows(
     flows
 }
 
-fn default_dev_team_sequence(flows: &[serde_json::Value]) -> Vec<String> {
-    flows
+fn dev_team_work_item_flow_bindings(
+    dev_team: &serde_yaml::Value,
+    flows: &[serde_json::Value],
+    blockers: &mut Vec<String>,
+) -> serde_json::Value {
+    let known_flows = flows
         .iter()
-        .find(|flow| {
-            flow["enabled"].as_bool().unwrap_or(false)
-                && flow["flow_id"].as_str() == Some("default_delivery")
+        .filter_map(|flow| flow["flow_id"].as_str())
+        .collect::<HashSet<_>>();
+    let mut bindings = serde_json::Map::new();
+    if let Some(binding_map) = crate::yaml_lookup(dev_team, &["work_item_flow_bindings"])
+        .and_then(serde_yaml::Value::as_mapping)
+    {
+        for (key, value) in binding_map {
+            let Some(work_item_type) = key
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let flow_id = crate::yaml_string(Some(value)).unwrap_or_default();
+            let flow_id = flow_id.trim().to_string();
+            if flow_id.is_empty() {
+                blockers.push(format!("missing_work_item_flow_binding:{work_item_type}"));
+                continue;
+            }
+            if !known_flows.contains(flow_id.as_str()) {
+                blockers.push(format!(
+                    "unknown_work_item_flow_binding:{work_item_type}:{flow_id}"
+                ));
+            }
+            bindings.insert(
+                work_item_type.to_ascii_lowercase(),
+                serde_json::Value::String(flow_id),
+            );
+        }
+    }
+    for flow in flows {
+        let Some(flow_id) = flow["flow_id"].as_str() else {
+            continue;
+        };
+        for work_item_type in crate::json_string_list(flow.get("work_item_bindings")) {
+            bindings
+                .entry(work_item_type.to_ascii_lowercase())
+                .or_insert_with(|| serde_json::Value::String(flow_id.to_string()));
+        }
+    }
+    serde_json::Value::Object(bindings)
+}
+
+fn yaml_field_json(value: &serde_yaml::Value, key: &str) -> serde_json::Value {
+    crate::yaml_lookup(value, &[key])
+        .and_then(|entry| serde_json::to_value(entry).ok())
+        .unwrap_or(serde_json::Value::Null)
+}
+
+fn dev_team_flow_ordered_steps(
+    flow_id: &str,
+    flow_entry: &serde_yaml::Value,
+    known_roles: &HashSet<&str>,
+    blockers: &mut Vec<String>,
+) -> Vec<serde_json::Value> {
+    let Some(steps_value) = crate::yaml_lookup(flow_entry, &["steps"]) else {
+        return Vec::new();
+    };
+    let Some(step_rows) = steps_value.as_sequence() else {
+        blockers.push(format!("invalid_flow_steps:{flow_id}"));
+        return Vec::new();
+    };
+    step_rows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| match step {
+            serde_yaml::Value::String(role_id) => {
+                let role_id = role_id.trim();
+                if role_id.is_empty() {
+                    blockers.push(format!("missing_flow_step_role:{flow_id}:{index}"));
+                    return None;
+                }
+                if !known_roles.contains(role_id) {
+                    blockers.push(format!("unknown_flow_step:{flow_id}:{role_id}"));
+                }
+                Some(serde_json::json!({
+                    "step_id": format!("{flow_id}-{index}"),
+                    "order": index,
+                    "role_id": role_id,
+                    "requires_user_approval": false,
+                }))
+            }
+            serde_yaml::Value::Mapping(_) => {
+                let role_id = crate::yaml_string(crate::yaml_lookup(step, &["role_id"]))
+                    .or_else(|| crate::yaml_string(crate::yaml_lookup(step, &["role"])))
+                    .unwrap_or_default();
+                let role_id = role_id.trim().to_string();
+                if role_id.is_empty() {
+                    blockers.push(format!("missing_flow_step_role:{flow_id}:{index}"));
+                    return None;
+                }
+                if !known_roles.contains(role_id.as_str()) {
+                    blockers.push(format!("unknown_flow_step:{flow_id}:{role_id}"));
+                }
+                Some(serde_json::json!({
+                    "step_id": crate::yaml_string(crate::yaml_lookup(step, &["step_id"]))
+                        .unwrap_or_else(|| format!("{flow_id}-{index}")),
+                    "order": index,
+                    "role_id": role_id,
+                    "runtime_role": crate::yaml_string(crate::yaml_lookup(step, &["runtime_role"])),
+                    "task_class": crate::yaml_string(crate::yaml_lookup(step, &["task_class"])),
+                    "command_template": yaml_field_json(step, "command_template"),
+                    "lifecycle_hook_templates": crate::yaml_string_list(crate::yaml_lookup(step, &["lifecycle_hook_templates"])),
+                    "carrier_constraints": yaml_field_json(step, "carrier_constraints"),
+                    "model_profile_constraints": yaml_field_json(step, "model_profile_constraints"),
+                    "proof_gates": yaml_field_json(step, "proof_gates"),
+                    "resume_transitions": yaml_field_json(step, "resume_transitions"),
+                    "rework_transitions": yaml_field_json(step, "rework_transitions"),
+                    "adapter_projection": yaml_field_json(step, "adapter_projection"),
+                    "approval_policy": yaml_field_json(step, "approval_policy"),
+                    "requires_user_approval": crate::yaml_bool(
+                        crate::yaml_lookup(step, &["requires_user_approval"]),
+                        false,
+                    ),
+                }))
+            }
+            _ => {
+                blockers.push(format!("invalid_flow_step:{flow_id}:{index}"));
+                None
+            }
+        })
+        .collect()
+}
+
+fn default_dev_team_sequence(
+    flows: &[serde_json::Value],
+    configured_default_flow_id: Option<&str>,
+) -> Vec<String> {
+    let selected_flow = configured_default_flow_id
+        .and_then(|flow_id| {
+            flows.iter().find(|flow| {
+                flow["enabled"].as_bool().unwrap_or(false)
+                    && flow["flow_id"].as_str() == Some(flow_id)
+            })
+        })
+        .or_else(|| {
+            flows.iter().find(|flow| {
+                flow["enabled"].as_bool().unwrap_or(false)
+                    && flow["default"].as_bool().unwrap_or(false)
+            })
         })
         .or_else(|| {
             flows
                 .iter()
                 .find(|flow| flow["enabled"].as_bool().unwrap_or(false))
-        })
+        });
+    selected_flow
         .and_then(|flow| flow["steps"].as_array())
         .map(|steps| {
             steps
@@ -1713,6 +1874,181 @@ dev_team:
             readiness["source_paths"][1],
             "docs/process/team-development-and-orchestration-protocol.md"
         );
+        assert_eq!(
+            readiness["flows"][0]["ordered_steps"][0]["role_id"],
+            "developer"
+        );
+        assert_eq!(
+            readiness["flows"][0]["ordered_steps"][0]["requires_user_approval"],
+            false
+        );
+    }
+
+    #[test]
+    fn development_flow_catalog_selects_configured_default_and_projects_step_schema() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config_path = harness.path().join("vida.config.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+dev_team:
+  enabled: true
+  default_flow_id: investigation_flow
+  roles:
+    analyst:
+      runtime_role: business_analyst
+      task_classes: [specification]
+      default_carrier: middle
+      handoff:
+        next_role: developer
+        required_outputs: [brief]
+    developer:
+      runtime_role: worker
+      task_classes: [implementation]
+      default_carrier: junior
+      handoff:
+        next_role: tester
+        required_outputs: [changed_files]
+    tester:
+      runtime_role: verifier
+      task_classes: [verification]
+      default_carrier: senior
+      handoff:
+        next_role: terminal_closure
+        required_outputs: [verification_evidence]
+  flows:
+    quick_fix:
+      enabled: true
+      steps: [developer]
+    investigation_flow:
+      enabled: true
+      flow_class: development
+      work_item_bindings: [epic, defect]
+      sequential: true
+      allow_parallel_handoffs: false
+      lifecycle_hook_templates: [command_timing_summary]
+      proof_gates:
+        required_commands: [cargo test -p vida development_flow_catalog]
+      resume_transitions:
+        blocked: analyst
+      rework_transitions:
+        coach_rework: developer
+      adapter_projection:
+        host_agent_bridge_contract: required
+      steps:
+        - step_id: analysis
+          role_id: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          command_template:
+            command: vida agent-init --role business_analyst {{task_id}} --json
+          lifecycle_hook_templates: [command_timing_summary]
+          carrier_constraints:
+            allowed_carriers: [middle]
+          model_profile_constraints:
+            reasoning_floor: medium
+          proof_gates:
+            required_outputs: [brief]
+          resume_transitions:
+            approved: developer
+          rework_transitions:
+            rework: analyst
+          adapter_projection:
+            adapter_kind: codex_host_tools
+          requires_user_approval: true
+          approval_policy:
+            mode: user_review_required
+        - role_id: developer
+"#,
+        )
+        .expect("config should write");
+
+        let readiness = build_dev_team_readiness(
+            config_path.to_str().expect("config path should be valid"),
+            &serde_json::json!({
+                "carrier_runtime": {
+                    "roles": [
+                        {
+                            "role_id": "junior",
+                            "model": "gpt-5.5",
+                            "model_provider": "openai",
+                            "model_reasoning_effort": "low",
+                            "normalized_cost_units": 1,
+                            "rate": 1,
+                            "runtime_roles": ["worker"],
+                            "task_classes": ["implementation"]
+                        },
+                        {
+                            "role_id": "middle",
+                            "model": "gpt-5.5",
+                            "model_provider": "openai",
+                            "model_reasoning_effort": "medium",
+                            "normalized_cost_units": 4,
+                            "rate": 4,
+                            "runtime_roles": ["business_analyst"],
+                            "task_classes": ["specification"]
+                        },
+                        {
+                            "role_id": "senior",
+                            "model": "gpt-5.5",
+                            "model_provider": "openai",
+                            "model_reasoning_effort": "high",
+                            "normalized_cost_units": 16,
+                            "rate": 16,
+                            "runtime_roles": ["verifier"],
+                            "task_classes": ["verification"]
+                        }
+                    ]
+                }
+            }),
+        );
+
+        assert_eq!(readiness["status"], "ready");
+        assert_eq!(readiness["default_flow_id"], "investigation_flow");
+        assert_eq!(
+            readiness["work_item_flow_bindings"]["defect"],
+            "investigation_flow"
+        );
+        assert_eq!(
+            readiness["sequence"],
+            serde_json::json!(["analyst", "developer"])
+        );
+        let flow = readiness["flows"]
+            .as_array()
+            .expect("flows should project")
+            .iter()
+            .find(|flow| flow["flow_id"] == "investigation_flow")
+            .expect("configured default flow should project");
+        assert_eq!(flow["default"], true);
+        assert_eq!(
+            flow["work_item_bindings"],
+            serde_json::json!(["epic", "defect"])
+        );
+        assert_eq!(
+            flow["lifecycle_hook_templates"],
+            serde_json::json!(["command_timing_summary"])
+        );
+        assert_eq!(
+            flow["proof_gates"]["required_commands"][0],
+            "cargo test -p vida development_flow_catalog"
+        );
+        assert_eq!(
+            flow["adapter_projection"]["host_agent_bridge_contract"],
+            "required"
+        );
+        assert_eq!(flow["ordered_steps"][0]["step_id"], "analysis");
+        assert_eq!(flow["ordered_steps"][0]["runtime_role"], "business_analyst");
+        assert_eq!(flow["ordered_steps"][0]["task_class"], "specification");
+        assert_eq!(flow["ordered_steps"][0]["requires_user_approval"], true);
+        assert_eq!(
+            flow["ordered_steps"][0]["approval_policy"]["mode"],
+            "user_review_required"
+        );
+        assert_eq!(
+            flow["ordered_steps"][0]["adapter_projection"]["adapter_kind"],
+            "codex_host_tools"
+        );
+        assert_eq!(flow["ordered_steps"][1]["role_id"], "developer");
     }
 
     #[test]

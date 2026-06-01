@@ -1,9 +1,15 @@
 version: 1
 flow_sets:
   - flow_id: minimal
+    schema_version: 1
     flow_class: development
     description: Minimal development flow with design-gate specification, optional execution preparation, and bounded implementation.
+    work_item_bindings: task
     role_chain: business_analyst,worker
+    lifecycle_hook_templates: command_timing_summary
+    adapter_projection:
+      host_agent_bridge_contract: required
+      process_carrier_requires_explicit_backend: true
     execution_preparation_policy:
       mode: required_for_code_shaped_work
       task_classes: implementation,execution_preparation,architecture,hard_escalation
@@ -13,6 +19,10 @@ flow_sets:
         dispatch_target: specification
         dispatch_alias: development_specification
         task_class: specification
+        command_template:
+          surface: vida agent-init
+          args: --role business_analyst {{task_id}} --json
+        lifecycle_hook_templates: command_timing_summary
         packet_template_kind: delivery_task_packet
         closure_class: law
         stage: design_gate
@@ -31,15 +41,25 @@ flow_sets:
         dispatch_target: implementer
         dispatch_alias: development_implementer
         task_class: implementation
+        command_template:
+          surface: vida agent-init
+          args: --role worker {{task_id}} --json
+        lifecycle_hook_templates: command_timing_summary
         packet_template_kind: delivery_task_packet
         closure_class: implementation
         stage: execution
         inclusion_rule: always
         completion_blocker: pending_implementation_evidence
   - flow_id: reviewed
+    schema_version: 1
     flow_class: development
     description: Reviewed development flow with design-gate specification, optional execution preparation, implementation, and coach review.
+    work_item_bindings: epic,task
     role_chain: business_analyst,worker,coach
+    lifecycle_hook_templates: command_timing_summary
+    adapter_projection:
+      host_agent_bridge_contract: required
+      process_carrier_requires_explicit_backend: true
     execution_preparation_policy:
       mode: required_for_code_shaped_work
       task_classes: implementation,execution_preparation,architecture,hard_escalation
@@ -82,9 +102,15 @@ flow_sets:
         inclusion_rule: always
         completion_blocker: pending_review_clean_evidence
   - flow_id: verified
+    schema_version: 1
     flow_class: development
     description: Verified test-first development flow with design-gate specification, optional execution preparation, test authoring, coach gates, implementation, and independent verification.
+    work_item_bindings: defect,epic
     role_chain: business_analyst,worker,coach,worker,coach,verifier
+    lifecycle_hook_templates: command_timing_summary
+    adapter_projection:
+      host_agent_bridge_contract: required
+      process_carrier_requires_explicit_backend: true
     execution_preparation_policy:
       mode: required_for_code_shaped_work
       task_classes: implementation,execution_preparation,architecture,hard_escalation

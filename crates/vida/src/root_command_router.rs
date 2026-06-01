@@ -9,6 +9,9 @@ use super::{
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
+    let mut timing =
+        crate::command_lifecycle_hooks::CommandTimingContext::from_env(command_label(&cli.command));
+    let pre_execution_started = std::time::Instant::now();
     let _runtime_state_dir_guard = match prepare_runtime_state_dir(&cli.command) {
         Ok(guard) => guard,
         Err(error) => {
@@ -16,8 +19,13 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    timing.record_phase(
+        crate::command_lifecycle_hooks::CommandPhase::PreExecution,
+        pre_execution_started.elapsed(),
+    );
 
-    match cli.command {
+    let execution_started = std::time::Instant::now();
+    let exit_code = match cli.command {
         None => {
             print_root_help();
             ExitCode::SUCCESS
@@ -66,6 +74,45 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         Some(Command::Taskflow(args)) => run_taskflow_proxy(args).await,
         Some(Command::Docflow(args)) => docflow_proxy::run_docflow_proxy(args),
         Some(Command::External(args)) => run_unknown(&args),
+    };
+    timing.record_phase(
+        crate::command_lifecycle_hooks::CommandPhase::Execution,
+        execution_started.elapsed(),
+    );
+    timing.finalize_and_emit(exit_code);
+    exit_code
+}
+
+fn command_label(command: &Option<Command>) -> String {
+    match command {
+        None => "vida".to_string(),
+        Some(Command::Init(_)) => "vida init".to_string(),
+        Some(Command::Boot(_)) => "vida boot".to_string(),
+        Some(Command::OrchestratorInit(_)) => "vida orchestrator-init".to_string(),
+        Some(Command::AgentInit(_)) => "vida agent-init".to_string(),
+        Some(Command::Agent(_)) => "vida agent".to_string(),
+        Some(Command::Protocol(_)) => "vida protocol".to_string(),
+        Some(Command::ProjectActivator(_)) => "vida project-activator".to_string(),
+        Some(Command::AgentFeedback(_)) => "vida agent-feedback".to_string(),
+        Some(Command::Task(_)) => "vida task".to_string(),
+        Some(Command::Memory(_)) => "vida memory".to_string(),
+        Some(Command::Status(_)) => "vida status".to_string(),
+        Some(Command::Doctor(_)) => "vida doctor".to_string(),
+        Some(Command::Diagnostics(_)) => "vida diagnostics".to_string(),
+        Some(Command::Docs(_)) => "vida docs".to_string(),
+        Some(Command::OrchestratorSession(_)) => "vida orchestrator-session".to_string(),
+        Some(Command::Consume(_)) => "vida consume".to_string(),
+        Some(Command::Lane(_)) => "vida lane".to_string(),
+        Some(Command::Approval(_)) => "vida approval".to_string(),
+        Some(Command::Recovery(_)) => "vida recovery".to_string(),
+        Some(Command::Route(_)) => "vida route".to_string(),
+        Some(Command::Release(_)) => "vida release".to_string(),
+        Some(Command::Taskflow(_)) => "vida taskflow".to_string(),
+        Some(Command::Docflow(_)) => "vida docflow".to_string(),
+        Some(Command::External(args)) => args
+            .first()
+            .map(|name| format!("vida {name}"))
+            .unwrap_or_else(|| "vida external".to_string()),
     }
 }
 

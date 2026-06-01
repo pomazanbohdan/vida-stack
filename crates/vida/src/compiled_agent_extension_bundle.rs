@@ -617,6 +617,60 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_hook_contract_projects_diagnostic_command_timing_template() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let root = harness.path();
+        fs::create_dir_all(root.join("docs/product/spec")).expect("product spec dir should exist");
+        fs::write(
+            root.join("vida.config.yaml"),
+            concat!(
+                "agent_extensions:\n",
+                "  enabled: true\n",
+                "  registries:\n",
+                "    hook_templates: docs/product/spec/hook-templates.yaml\n",
+                "  enabled_hook_templates:\n",
+                "    - command_timing_summary\n",
+                "  validation:\n",
+                "    require_registry_files: true\n",
+            ),
+        )
+        .expect("overlay should exist");
+        fs::write(
+            root.join("docs/product/spec/hook-templates.yaml"),
+            concat!(
+                "version: 1\n",
+                "hook_templates:\n",
+                "  - template_id: command_timing_summary\n",
+                "    hook_class: command_lifecycle\n",
+                "    diagnostic_only: true\n",
+                "    fail_closed_on_hook_error: false\n",
+                "    phases: [pre_execution, execution, post_execution]\n",
+            ),
+        )
+        .expect("hook templates registry should exist");
+
+        let overlay =
+            read_yaml_file_checked(&root.join("vida.config.yaml")).expect("overlay should parse");
+        let bundle = build_compiled_agent_extension_bundle_for_root(&overlay, root)
+            .expect("bundle should compile");
+
+        assert_eq!(bundle["hook_templates"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            bundle["hook_templates"][0]["template_id"],
+            "command_timing_summary"
+        );
+        assert_eq!(
+            bundle["hook_templates"][0]["hook_class"],
+            "command_lifecycle"
+        );
+        assert_eq!(bundle["hook_templates"][0]["diagnostic_only"], true);
+        assert_eq!(
+            bundle["hook_templates"][0]["fail_closed_on_hook_error"],
+            false
+        );
+    }
+
+    #[test]
     fn compiled_agent_extension_bundle_fails_closed_when_enabled_hook_template_registry_missing() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let root = harness.path();

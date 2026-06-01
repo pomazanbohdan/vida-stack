@@ -669,9 +669,6 @@ fn configured_internal_host_dispatch_wall_timeout_seconds(
 fn configured_internal_host_dispatch_no_output_timeout_seconds(
     selected_cli_entry: Option<&serde_yaml::Value>,
 ) -> Option<u64> {
-    if std::env::var_os(crate::init_surfaces::AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV).is_some() {
-        return None;
-    }
     selected_cli_entry
         .and_then(|entry| yaml_lookup(entry, &["dispatch", "no_output_timeout_seconds"]))
         .and_then(serde_yaml::Value::as_u64)
@@ -1983,6 +1980,209 @@ fn configured_internal_host_model_arg(dispatch: &serde_yaml::Value, model: &str)
     }
 }
 
+fn configured_host_execution_boundary(system_entry: Option<&serde_yaml::Value>) -> String {
+    system_entry
+        .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["execution_boundary"])))
+        .unwrap_or_else(|| "parent_host_session".to_string())
+}
+
+fn configured_host_dispatch_transport(system_entry: Option<&serde_yaml::Value>) -> String {
+    if let Some(transport) = system_entry
+        .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["dispatch_transport"])))
+    {
+        return transport;
+    }
+    if system_entry
+        .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["execution_class"])))
+        .as_deref()
+        == Some("internal")
+    {
+        return "host_tool_bridge".to_string();
+    }
+    if system_entry
+        .and_then(|entry| yaml_lookup(entry, &["dispatch", "command"]))
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+    {
+        return "codex_cli_exec".to_string();
+    }
+    "host_tool_bridge".to_string()
+}
+
+fn configured_host_receipt_mode(system_entry: Option<&serde_yaml::Value>) -> String {
+    system_entry
+        .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["receipt_mode"])))
+        .unwrap_or_else(|| "host_bridge_receipt".to_string())
+}
+
+fn configured_host_tool_bridge_dir(
+    project_root: &Path,
+    system_entry: Option<&serde_yaml::Value>,
+    key: &str,
+    fallback: &str,
+) -> PathBuf {
+    let configured = system_entry
+        .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["host_tool_bridge", key])))
+        .unwrap_or_else(|| fallback.to_string());
+    let path = PathBuf::from(configured);
+    if path.is_absolute() {
+        path
+    } else {
+        project_root.join(path)
+    }
+}
+
+fn configured_host_tool_bridge_string(
+    system_entry: Option<&serde_yaml::Value>,
+    key: &str,
+) -> Option<String> {
+    system_entry
+        .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["host_tool_bridge", key])))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn dispatch_packet_string_list(dispatch_packet_path: &str, field: &str) -> Vec<String> {
+    std::fs::read_to_string(dispatch_packet_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|packet| {
+            packet
+                .get(field)
+                .or_else(|| {
+                    packet
+                        .get("delivery_task_packet")
+                        .and_then(|value| value.get(field))
+                })
+                .cloned()
+        })
+        .and_then(|value| {
+            value.as_array().map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn dispatch_packet_string_field(dispatch_packet_path: &str, field: &str) -> Option<String> {
+    std::fs::read_to_string(dispatch_packet_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|packet| {
+            packet
+                .get(field)
+                .or_else(|| {
+                    packet
+                        .get("delivery_task_packet")
+                        .and_then(|value| value.get(field))
+                })
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn materialize_host_tool_bridge_request(
+    project_root: &Path,
+    selected_cli_entry: Option<&serde_yaml::Value>,
+    dispatch_packet_path: &str,
+    backend_id: &str,
+    carrier_id: &str,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    _role_selection: &RuntimeConsumptionLaneSelection,
+) -> serde_json::Value {
+    let request_id = format!(
+        "{}-{}-host-tool-bridge",
+        receipt.run_id, receipt.dispatch_target
+    );
+    let request_dir = configured_host_tool_bridge_dir(
+        project_root,
+        selected_cli_entry,
+        "request_dir",
+        ".vida/data/state/host-tool-bridge/requests",
+    );
+    let result_dir = configured_host_tool_bridge_dir(
+        project_root,
+        selected_cli_entry,
+        "result_dir",
+        ".vida/data/state/host-tool-bridge/results",
+    );
+    let receipt_dir = configured_host_tool_bridge_dir(
+        project_root,
+        selected_cli_entry,
+        "receipt_dir",
+        ".vida/data/state/host-tool-bridge/receipts",
+    );
+    let request_path = request_dir.join(format!("{request_id}.json"));
+    let result_path = result_dir.join(format!("{request_id}.json"));
+    let receipt_path = receipt_dir.join(format!("{request_id}.json"));
+    let adapter_kind = configured_host_tool_bridge_string(selected_cli_entry, "adapter_kind")
+        .unwrap_or_else(|| "unconfigured_host_agent_adapter".to_string());
+    let adapter_capability_id =
+        configured_host_tool_bridge_string(selected_cli_entry, "adapter_capability_id")
+            .unwrap_or_else(|| "unconfigured_host_agent_capability".to_string());
+    let invocation_mode = configured_host_tool_bridge_string(selected_cli_entry, "invocation_mode")
+        .unwrap_or_else(|| "configured_host_capability_required".to_string());
+    let receipt_mode = configured_host_tool_bridge_string(selected_cli_entry, "receipt_mode")
+        .unwrap_or_else(|| configured_host_receipt_mode(selected_cli_entry));
+    let adapter_params = selected_cli_entry
+        .and_then(|entry| yaml_lookup(entry, &["host_tool_bridge", "adapter_params"]))
+        .and_then(|params| serde_json::to_value(params).ok())
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "tool_family": configured_host_tool_bridge_string(selected_cli_entry, "tool_family"),
+                "spawn_tool": configured_host_tool_bridge_string(selected_cli_entry, "spawn_tool"),
+                "wait_tool": configured_host_tool_bridge_string(selected_cli_entry, "wait_tool"),
+                "close_tool": configured_host_tool_bridge_string(selected_cli_entry, "close_tool"),
+            })
+        });
+    let request = serde_json::json!({
+        "schema_version": 1,
+        "status": "pending",
+        "request_id": request_id,
+        "run_id": receipt.run_id,
+        "task_id": receipt.run_id,
+        "dispatch_target": receipt.dispatch_target,
+        "packet_path": dispatch_packet_path,
+        "runtime_role": receipt.activation_runtime_role,
+        "task_class": canonical_dispatch_target_for_admissibility(&receipt.dispatch_target),
+        "backend_id": backend_id,
+        "carrier_id": carrier_id,
+        "execution_boundary": "parent_host_session",
+        "dispatch_transport": "host_tool_bridge",
+        "receipt_mode": receipt_mode,
+        "adapter_kind": adapter_kind,
+        "adapter_capability_id": adapter_capability_id,
+        "invocation_mode": invocation_mode,
+        "adapter_params": adapter_params,
+        "owned_paths": dispatch_packet_string_list(dispatch_packet_path, "owned_paths"),
+        "read_only_paths": dispatch_packet_string_list(dispatch_packet_path, "read_only_paths"),
+        "proof_target": dispatch_packet_string_field(dispatch_packet_path, "proof_target"),
+        "request_path": request_path.display().to_string(),
+        "result_path": result_path.display().to_string(),
+        "receipt_path": receipt_path.display().to_string(),
+    });
+    if let Some(parent) = request_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::create_dir_all(&result_dir);
+    let _ = std::fs::create_dir_all(&receipt_dir);
+    let _ = std::fs::write(
+        &request_path,
+        serde_json::to_string_pretty(&request).unwrap_or_else(|_| request.to_string()),
+    );
+    request
+}
+
 fn configured_internal_host_activation_parts(
     system_entry: Option<&serde_yaml::Value>,
     project_root: &Path,
@@ -2560,6 +2760,90 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
     let carrier_id = carrier["role_id"]
         .as_str()
         .unwrap_or(selected_cli_system.as_str());
+    let execution_boundary = configured_host_execution_boundary(selected_cli_entry.as_ref());
+    let dispatch_transport = configured_host_dispatch_transport(selected_cli_entry.as_ref());
+    let receipt_mode = configured_host_receipt_mode(selected_cli_entry.as_ref());
+    if dispatch_transport == "host_tool_bridge" {
+        let activation_view = bounded_activation_view(
+            state_root,
+            project_root,
+            dispatch_packet_path,
+            receipt,
+            role_selection,
+        )
+        .await;
+        let mut result = agent_lane_dispatch_result(
+            activation_view,
+            dispatch_packet_path,
+            preferred_backend,
+            role_selection,
+            receipt,
+            host_runtime,
+        );
+        let bridge_request = materialize_host_tool_bridge_request(
+            project_root,
+            selected_cli_entry.as_ref(),
+            dispatch_packet_path,
+            backend_id,
+            carrier_id,
+            receipt,
+            role_selection,
+        );
+        let body = result
+            .as_object_mut()
+            .expect("internal host bridge dispatch result should serialize to an object");
+        body.insert("surface".to_string(), serde_json::json!("vida agent-init"));
+        body.insert("status".to_string(), serde_json::json!("blocked"));
+        body.insert(
+            "execution_state".to_string(),
+            serde_json::json!("bridge_request_pending"),
+        );
+        body.insert(
+            "blocker_code".to_string(),
+            serde_json::json!("host_tool_bridge_adapter_required"),
+        );
+        body.insert(
+            "blocker_reason".to_string(),
+            serde_json::json!(
+                "internal_subagents require a configured parent host-agent bridge; vida.exe cannot call parent host adapter tools directly"
+            ),
+        );
+        body.insert(
+            "host_tool_bridge_request".to_string(),
+            bridge_request.clone(),
+        );
+        body.insert(
+            "next_actions".to_string(),
+            serde_json::json!([
+                "A configured parent host-agent adapter must read host_tool_bridge_request.request_path, invoke the configured adapter capability, then submit a receipt-backed result through the host-bridge completion surface.",
+                "Do not fall back to a child-process agent command for internal_subagents; use an explicit process carrier only when route policy selects that backend."
+            ]),
+        );
+        if let Some(dispatch) = body
+            .get_mut("backend_dispatch")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            dispatch.insert("backend_class".to_string(), serde_json::json!("internal"));
+            dispatch.insert("backend_id".to_string(), serde_json::json!(backend_id));
+            dispatch.insert("carrier_id".to_string(), serde_json::json!(carrier_id));
+            dispatch.insert(
+                "execution_boundary".to_string(),
+                serde_json::json!(execution_boundary),
+            );
+            dispatch.insert(
+                "dispatch_transport".to_string(),
+                serde_json::json!(dispatch_transport),
+            );
+            dispatch.insert("receipt_mode".to_string(), serde_json::json!(receipt_mode));
+            dispatch.insert(
+                "activation_view_is_execution_evidence".to_string(),
+                serde_json::json!(false),
+            );
+            dispatch.insert("host_tool_bridge_request".to_string(), bridge_request);
+        }
+        refresh_execution_truth(body, role_selection, receipt, Some(backend_id), "missing");
+        return Ok(Some(result));
+    }
     let (command, args, stdin_payload) = configured_internal_host_activation_parts(
         selected_cli_entry.as_ref(),
         project_root,
@@ -3601,8 +3885,9 @@ mod tests {
     use super::execute_wrapped_command;
     use super::{
         agent_lane_dispatch_result, configured_external_dispatch_output_mode,
-        configured_external_dispatch_wall_timeout_seconds,
-        configured_internal_host_activation_parts,
+        configured_external_dispatch_wall_timeout_seconds, configured_host_dispatch_transport,
+        configured_host_execution_boundary, configured_host_receipt_mode,
+        configured_host_tool_bridge_string, configured_internal_host_activation_parts,
         configured_internal_host_dispatch_no_output_timeout_seconds,
         configured_internal_host_dispatch_wall_timeout_seconds,
         configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
@@ -3613,8 +3898,8 @@ mod tests {
         internal_host_app_bridge_requires_fail_closed,
         internal_host_windows_sandbox_preflight_blocker,
         internal_host_windows_sandbox_recovery_actions, mark_dispatch_result_execution_evidence,
-        parse_external_provider_output, parse_internal_codex_exec_output,
-        ready_external_readiness_fallback_backend,
+        materialize_host_tool_bridge_request, parse_external_provider_output,
+        parse_internal_codex_exec_output, ready_external_readiness_fallback_backend,
         should_render_store_backed_activation_view_for_internal_failure,
         wrap_command_with_optional_timeout, wrap_command_with_optional_timeouts,
         CommandTimeoutWrapper,
@@ -4097,6 +4382,136 @@ dispatch:
             ]
         );
         assert_eq!(stdin_payload, None);
+    }
+
+    #[test]
+    fn internal_host_tool_bridge_transport_does_not_require_codex_exec_dispatch() {
+        let system_entry = serde_yaml::from_str(
+            r#"
+execution_boundary: parent_host_session
+dispatch_transport: host_tool_bridge
+receipt_mode: host_bridge_receipt
+host_tool_bridge:
+  adapter_kind: codex_host_tools
+  adapter_capability_id: codex.multi_agent_v1
+  invocation_mode: parent_host_tool_api
+  spawn_tool: multi_agent_v1.spawn_agent
+"#,
+        )
+        .expect("system entry should parse");
+
+        assert_eq!(
+            configured_host_execution_boundary(Some(&system_entry)),
+            "parent_host_session"
+        );
+        assert_eq!(
+            configured_host_dispatch_transport(Some(&system_entry)),
+            "host_tool_bridge"
+        );
+        assert_eq!(
+            configured_host_receipt_mode(Some(&system_entry)),
+            "host_bridge_receipt"
+        );
+        assert_eq!(
+            configured_host_tool_bridge_string(Some(&system_entry), "adapter_kind"),
+            Some("codex_host_tools".to_string())
+        );
+    }
+
+    #[test]
+    fn internal_host_dispatch_command_defaults_to_host_tool_bridge_without_explicit_process_transport(
+    ) {
+        let system_entry = serde_yaml::from_str(
+            r#"
+execution_class: internal
+dispatch:
+  command: codex
+  static_args: ["exec", "--json"]
+  prompt_mode: stdin
+"#,
+        )
+        .expect("system entry should parse");
+
+        assert_eq!(
+            configured_host_dispatch_transport(Some(&system_entry)),
+            "host_tool_bridge"
+        );
+    }
+
+    #[test]
+    fn explicit_codex_cli_exec_transport_preserves_process_dispatch() {
+        let system_entry = serde_yaml::from_str(
+            r#"
+execution_class: internal
+dispatch_transport: codex_cli_exec
+dispatch:
+  command: codex
+  static_args: ["exec", "--json"]
+  prompt_mode: stdin
+"#,
+        )
+        .expect("system entry should parse");
+
+        assert_eq!(
+            configured_host_dispatch_transport(Some(&system_entry)),
+            "codex_cli_exec"
+        );
+    }
+
+    #[test]
+    fn host_tool_bridge_request_uses_generic_unconfigured_adapter_defaults() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-host-bridge".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some("/tmp/project/.vida/dispatch.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("worker".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-01T00:00:00Z".to_string(),
+        };
+
+        let request = materialize_host_tool_bridge_request(
+            Path::new("/tmp/project"),
+            None,
+            "/tmp/project/.vida/dispatch.json",
+            "internal_subagents",
+            "junior",
+            &receipt,
+            &internal_codex_fallback_role_selection(serde_json::json!({})),
+        );
+
+        assert_eq!(request["adapter_kind"], "unconfigured_host_agent_adapter");
+        assert_eq!(
+            request["adapter_capability_id"],
+            "unconfigured_host_agent_capability"
+        );
+        assert_eq!(
+            request["invocation_mode"],
+            "configured_host_capability_required"
+        );
+        assert!(request.get("spawn_tool").is_none());
+        assert!(request["adapter_params"].get("spawn_tool").is_some());
     }
 
     #[test]
@@ -5046,6 +5461,7 @@ host_environment:
     codex:
       enabled: true
       execution_class: internal
+      dispatch_transport: codex_cli_exec
       dispatch:
         command: codex
         receipt_backed_completion_supported: false
@@ -5074,14 +5490,13 @@ agent_system:
     qwen_cli:
       enabled: true
       subagent_backend_class: external_cli
+      detect_command: cargo
       dispatch:
-        command: sh
+        command: cargo
         static_args:
-          - -lc
-          - |
-            printf '{"type":"result","is_error":false,"result":"external-dispatch:%s"}' "$*"
-          - vida-dispatch
-        prompt_mode: positional
+          - --version
+        prompt_mode: stdin
+        output_mode: stdout
         prompt_template: "FALLBACK_OK"
 "#
     }
@@ -5094,6 +5509,7 @@ host_environment:
     codex:
       enabled: true
       execution_class: internal
+      dispatch_transport: codex_cli_exec
       dispatch:
         command: codex
         static_args: ["exec", "--json"]
@@ -5911,7 +6327,7 @@ dispatch:
     }
 
     #[test]
-    fn internal_host_dispatch_no_output_timeout_is_operator_only_for_worker_process() {
+    fn internal_host_dispatch_no_output_timeout_applies_inside_worker_process() {
         let selected_cli_entry = serde_yaml::from_str(
             r#"
 execution_class: internal
@@ -5930,7 +6346,7 @@ dispatch:
             configured_internal_host_dispatch_no_output_timeout_seconds(Some(&selected_cli_entry));
         std::env::remove_var(crate::init_surfaces::AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV);
 
-        assert_eq!(timeout, None);
+        assert_eq!(timeout, Some(2));
     }
 
     #[test]

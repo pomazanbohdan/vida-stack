@@ -24,6 +24,20 @@ language_policy:
 
 host_environment:
   cli_system: __HOST_CLI_SYSTEM__
+  host_agent_bridge_contract:
+    schema_version: 1
+    selection_mode: configured_host_capability
+    receipt_required: true
+    no_adapter_policy: fail_closed_emit_request
+    process_carrier_requires_explicit_backend: true
+    supported_adapter_kinds:
+      - codex_host_tools
+      - codex_cli_subagents
+      - claude_code_subagents
+      - pi_sub_agent_plugin
+      - vibe_kanban_agents
+      - opencode_subagents
+      - custom_host_agent_adapter
   codex:
     agents: &codex_agent_catalog
       junior:
@@ -214,6 +228,9 @@ host_environment:
     codex:
       enabled: true
       execution_class: internal
+      execution_boundary: parent_host_session
+      dispatch_transport: host_tool_bridge
+      receipt_mode: host_bridge_receipt
       materialization_mode: codex_toml_catalog_render
       template_root: .codex
       runtime_root: .codex
@@ -239,23 +256,23 @@ host_environment:
         enabled: true
         template_path: .codex/templates/codex-cli.config.toml
         multi_agent_feature_required: true
-      dispatch:
-        command: codex
-        receipt_backed_completion_supported: true
-        no_output_timeout_seconds: 2
-        static_args:
-          - exec
-          - --json
-        feature_args:
-          - --enable
-          - multi_agent
-        workdir_flag: -C
-        sandbox_flag: -s
-        model_flag: -m
-        model_arg_transform: provider_local_name
-        reasoning_effort_flag: -c
-        reasoning_effort_value_template: 'model_reasoning_effort="{value}"'
-        prompt_mode: stdin
+      host_tool_bridge:
+        adapter_kind: codex_host_tools
+        adapter_capability_id: codex.multi_agent_v1
+        invocation_mode: parent_host_tool_api
+        dispatch_transport: host_tool_bridge
+        receipt_mode: host_bridge_receipt
+        tool_family: codex_multi_agent
+        spawn_tool: multi_agent_v1.spawn_agent
+        wait_tool: multi_agent_v1.wait_agent
+        close_tool: multi_agent_v1.close_agent
+        adapter_required: true
+        no_adapter_policy: fail_closed_emit_request
+        process_carrier_requires_explicit_backend: true
+        fallback_process_carrier: codex_cli_exec
+        request_dir: .vida/data/state/host-tool-bridge/requests
+        result_dir: .vida/data/state/host-tool-bridge/results
+        receipt_dir: .vida/data/state/host-tool-bridge/receipts
       carriers: *codex_agent_catalog
     qwen:
       enabled: true
@@ -420,6 +437,12 @@ dev_team:
   contract_doc: docs/process/team-development-and-orchestration-protocol.md
   preserve_existing_agent_extensions: true
   preserve_existing_flow_sets: true
+  default_flow_id: default_delivery
+  work_item_flow_bindings:
+    epic: default_delivery
+    defect: defect_repair_verified
+    task: default_delivery
+    debug: debug_fast
   validation:
     require_role_contracts: true
     require_flow_definitions: true
@@ -579,20 +602,167 @@ dev_team:
           - follow_up_actions
         fail_closed_on_missing_handoff: true
   flows:
+    debug_fast:
+      enabled: true
+      description: Short diagnostic flow for read-heavy debug or route validation where implementation is not yet authorized.
+      flow_class: development
+      work_item_bindings:
+        - debug
+      sequential: true
+      allow_parallel_handoffs: false
+      lifecycle_hook_templates:
+        - command_timing_summary
+      adapter_projection:
+        host_agent_bridge_contract: required
+        process_carrier_requires_explicit_backend: true
+      steps:
+        - role_id: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          command_template:
+            surface: vida agent-init
+            args: [--role, business_analyst, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [bounded_problem_statement, explicit_blockers]
+    defect_repair_verified:
+      enabled: true
+      description: Defect-oriented verified flow with analysis, implementation, coach, verifier, and proof closure.
+      flow_class: development
+      work_item_bindings:
+        - defect
+      sequential: true
+      allow_parallel_handoffs: false
+      lifecycle_hook_templates:
+        - command_timing_summary
+      adapter_projection:
+        host_agent_bridge_contract: required
+        process_carrier_requires_explicit_backend: true
+      steps:
+        - role_id: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          command_template:
+            surface: vida agent-init
+            args: [--role, business_analyst, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [bounded_problem_statement, acceptance_contract]
+        - role_id: developer
+          runtime_role: worker
+          task_class: implementation
+          command_template:
+            surface: vida agent-init
+            args: [--role, worker, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [changed_files, verification_notes]
+        - role_id: coach
+          runtime_role: coach
+          task_class: coach
+          command_template:
+            surface: vida agent-init
+            args: [--role, coach, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [spec_conformance_review, rework_or_approve_decision]
+        - role_id: tester
+          runtime_role: verifier
+          task_class: verification
+          command_template:
+            surface: vida agent-init
+            args: [--role, verifier, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [verification_evidence]
     default_delivery:
       enabled: true
       description: System analyst produces the detailed task brief, developer implements on the cheapest write lane, duplication reviewer checks architectural reuse/no duplication, final coach reviews the completed implementation, then tester/prover gates release closure.
+      flow_class: development
+      work_item_bindings:
+        - epic
+        - task
       sequential: true
       allow_parallel_handoffs: false
       fail_closed_on_missing_step_contract: true
+      lifecycle_hook_templates:
+        - command_timing_summary
+      adapter_projection:
+        host_agent_bridge_contract: required
+        process_carrier_requires_explicit_backend: true
       steps:
-        - analyst
-        - developer
-        - duplication_reviewer
-        - coach
-        - tester
-        - prover
-        - release_closure
+        - role_id: analyst
+          runtime_role: business_analyst
+          task_class: specification
+          command_template:
+            surface: vida agent-init
+            args: [--role, business_analyst, "{{task_id}}", --json]
+          proof_gates:
+            required_outputs: [detailed_task_brief, acceptance_contract, owned_write_scope]
+          requires_user_approval: true
+          approval_policy:
+            mode: user_review_required
+            prompt_template: review_analysis_document_before_next_role
+            allowed_decisions: [approved, rework]
+          lifecycle_hook_templates: [command_timing_summary, approval_wait, approval_complete]
+          resume_transitions:
+            approved: developer
+          rework_transitions:
+            rework: analyst
+        - role_id: developer
+          runtime_role: worker
+          task_class: implementation
+          command_template:
+            surface: vida agent-init
+            args: [--role, worker, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [changed_files, verification_notes]
+        - role_id: duplication_reviewer
+          runtime_role: verifier
+          task_class: review
+          command_template:
+            surface: vida agent-init
+            args: [--role, verifier, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [duplication_review_report]
+        - role_id: coach
+          runtime_role: coach
+          task_class: coach
+          command_template:
+            surface: vida agent-init
+            args: [--role, coach, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [spec_conformance_review, rework_or_approve_decision]
+        - role_id: tester
+          runtime_role: verifier
+          task_class: verification
+          command_template:
+            surface: vida agent-init
+            args: [--role, verifier, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [verification_evidence]
+        - role_id: prover
+          runtime_role: prover
+          task_class: quality_gate
+          command_template:
+            surface: vida agent-init
+            args: [--role, prover, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [closure_readiness_decision, proof_summary]
+        - role_id: release_closure
+          runtime_role: prover
+          task_class: release_readiness
+          command_template:
+            surface: vida agent-init
+            args: [--role, prover, "{{task_id}}", --json]
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [release_or_hold_decision, closure_receipt]
 
 autonomous_execution:
   next_task_boundary_analysis: true
@@ -664,6 +834,9 @@ agent_system:
     internal_subagents:
       enabled: true
       subagent_backend_class: internal
+      execution_boundary: parent_host_session
+      dispatch_transport: host_tool_bridge
+      receipt_mode: host_bridge_receipt
       role: senior_internal
       orchestration_tier: senior
       cost_priority: premium
@@ -780,6 +953,78 @@ agent_system:
             mode: codex_profile
             required: true
       specialties: implementation,architecture,integration,review,verification
+    codex_cli_exec:
+      enabled: false
+      subagent_backend_class: external_cli
+      execution_boundary: child_process
+      dispatch_transport: codex_cli_exec
+      receipt_mode: cli_json_result
+      detect_command: codex
+      role: codex_cli_process_bridge
+      orchestration_tier: external_process
+      cost_priority: fallback_only
+      budget_cost_units: 10
+      models_hint: openai-codex/gpt-5.5
+      default_model: openai-codex/gpt-5.5
+      default_model_profile: codex_cli_gpt55_low_write
+      capability_band: implementation_safe,review_safe
+      default_runtime_role: worker
+      write_scope: workspace-write
+      max_runtime_seconds: 420
+      billing_tier: provider_account
+      speed_tier: medium
+      quality_tier: high
+      runtime_roles:
+        - worker
+        - business_analyst
+        - coach
+        - verifier
+      task_classes:
+        - implementation
+        - delivery_task
+        - execution_block
+        - specification
+        - planning
+        - analysis
+        - review
+        - coach
+        - verification
+      model_profiles:
+        codex_cli_gpt55_low_write:
+          provider: openai-codex
+          model_ref: openai-codex/gpt-5.5
+          reasoning_effort: low
+          normalized_cost_units: 10
+          speed_tier: medium
+          quality_tier: high
+          write_scope: workspace-write
+          runtime_roles:
+            - worker
+          task_classes:
+            - implementation
+            - delivery_task
+            - execution_block
+          readiness:
+            mode: external_cli_profile
+            required: true
+      specialties: implementation,review,verification
+      dispatch:
+        command: codex
+        receipt_backed_completion_supported: true
+        no_output_timeout_seconds: 2
+        static_args:
+          - exec
+          - --json
+        feature_args:
+          - --enable
+          - multi_agent
+        workdir_flag: -C
+        sandbox_flag: -s
+        model_flag: -m
+        model_arg_transform: provider_local_name
+        reasoning_effort_flag: -c
+        reasoning_effort_value_template: 'model_reasoning_effort="{value}"'
+        prompt_mode: stdin
     pi_cli:
       enabled: false
       subagent_backend_class: external_cli

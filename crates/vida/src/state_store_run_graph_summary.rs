@@ -1445,6 +1445,8 @@ impl StateStore {
             "stable_local_worktree_session_id"
                 | "generated_local_session_token"
                 | "synthesized_local_session_token"
+                | "CODEX_SESSION_ID"
+                | "CODEX_THREAD_ID"
         ) {
             return false;
         }
@@ -4116,6 +4118,35 @@ mod tests {
             &current_owner_evidence,
             "local-session-other",
             Some("local-worktree-other"),
+        ));
+    }
+
+    #[test]
+    fn owner_evidence_adopts_stale_codex_thread_owner_for_same_worktree() {
+        let prior_owner_evidence = serde_json::json!({
+            "current_session": {
+                "session_id": "019e-old-codex-thread",
+                "identity_source": "CODEX_THREAD_ID",
+                "project_root": "\\\\?\\C:\\project\\vida_mobile",
+                "worktree_environment_id": "\\\\?\\C:\\project\\vida_mobile"
+            }
+        });
+        let current_owner_evidence = serde_json::json!({
+            "mutation_gate": "current_session_allowed",
+            "live_other_sessions": [],
+            "current_session": {
+                "session_id": "019e-new-codex-thread",
+                "identity_source": "CODEX_THREAD_ID",
+                "project_root": "\\\\?\\C:\\project\\vida_mobile",
+                "worktree_environment_id": "\\\\?\\C:\\project\\vida_mobile"
+            }
+        });
+
+        assert!(StateStore::owner_evidence_matches_current_session(
+            &prior_owner_evidence,
+            &current_owner_evidence,
+            "019e-new-codex-thread",
+            None,
         ));
     }
 

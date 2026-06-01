@@ -1,2 +1,18 @@
 version: 1
-hook_templates: []
+hook_templates:
+  - template_id: command_timing_summary
+    hook_class: command_lifecycle
+    description: Record bounded command timing for runtime diagnostics without changing command semantics.
+    phases:
+      - pre_execution
+      - execution
+      - post_execution
+    diagnostic_only: true
+    fail_closed_on_hook_error: false
+    output_contract:
+      record_kind: command_timing_record
+      required_fields:
+        - command
+        - started_at
+        - elapsed_ms
+        - exit_code

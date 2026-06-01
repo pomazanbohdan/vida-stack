@@ -70,6 +70,9 @@ Companion rule:
    Config families: layered runtime capability progression across `vida/config/**`, TaskFlow runtime-family implementation surfaces, runtime ledgers, readiness gates, and future direct runtime consumption
 2. [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md)
    Config families: framework role law, project role/skill/profile/flow activation through `vida.config.yaml`, project-owned agent-extension registries, and runtime validation for the TaskFlow runtime family
+3. [development-flow-catalog-schema-design.md](development-flow-catalog-schema-design.md)
+   Config families: `vida.config.yaml -> dev_team.default_flow_id`, `dev_team.work_item_flow_bindings`, `dev_team.flows.*.ordered_steps`, `docs/process/agent-extensions/flows.yaml`, `docs/product/spec/hook-templates.yaml`, host-agent adapter projection fields, and future approval-gate fields
+   Registered path: `docs/product/spec/development-flow-catalog-schema-design.md`
 3. [agent-lane-selection-and-conversation-mode-model.md](agent-lane-selection-and-conversation-mode-model.md)
    Config families: overlay-driven auto-lane selection, bounded conversational modes, one-task scope/PBI discussion, and lawful handoff into pack/taskflow routing
 4. [party-chat-v2-problem-party-model.md](party-chat-v2-problem-party-model.md)
@@ -78,62 +81,71 @@ Companion rule:
    Config families: `vida.config.yaml`, `vida/config/instructions/**`, TaskFlow routing and autonomous execution behavior
 6. [taskflow-v1-runtime-modernization-plan.md](taskflow-v1-runtime-modernization-plan.md)
    Config families: TaskFlow runtime-family implementation surfaces, `vida/config/instructions/**`, runtime feature registration, shared runtime kernel, provider registry, modular config validation, and the active TaskFlow modernization backlog
-7. [docflow-v1-runtime-modernization-plan.md](docflow-v1-runtime-modernization-plan.md)
+7. [codex-host-agent-boundary-and-cli-bridge-design.md](codex-host-agent-boundary-and-cli-bridge-design.md)
+   Config families: `vida.config.yaml -> host_environment.systems.codex`, `agent_system.subagents.internal_subagents`, `agent_system.subagents.codex_cli_exec`, TaskFlow host-bridge dispatch requests
+   Registered path: `docs/product/spec/codex-host-agent-boundary-and-cli-bridge-design.md`
+8. [host-agent-bridge-adapter-contract-design.md](host-agent-bridge-adapter-contract-design.md)
+   Config families: `vida.config.yaml -> host_environment.host_agent_bridge_contract`, `host_environment.systems.<system>.host_tool_bridge`, TaskFlow host-bridge request/result/receipt adapters for Codex, Claude Code, Pi, Vibe Kanban, OpenCode, and custom host adapters
+   Registered path: `docs/product/spec/host-agent-bridge-adapter-contract-design.md`
+9. [hybrid-host-executor-semantics-host-environment-design.md](hybrid-host-executor-semantics-host-environment-design.md)
+   Config families: `vida.config.yaml -> host_environment`, `agent_system.subagents`, policy-selected internal/external executor semantics, and host posture versus executor backend separation
+   Registered path: `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
+10. [docflow-v1-runtime-modernization-plan.md](docflow-v1-runtime-modernization-plan.md)
    Config families: DocFlow runtime-family implementation surfaces, canonical `vida/config/docflow-*.current.jsonl` artifacts, `vida/config/instructions/**`, documentation tooling operator surfaces, runtime-family migration, and explicit final `taskflow -> docflow` consumption seams
-8. [compiled-autonomous-delivery-runtime-architecture.md](compiled-autonomous-delivery-runtime-architecture.md)
+9. [compiled-autonomous-delivery-runtime-architecture.md](compiled-autonomous-delivery-runtime-architecture.md)
    Config families: `vida/config/instructions/**`, `.vida/config/**`, `.vida/project/**`, `.vida/cache/**`, transitional source-mode bridge surfaces such as root `vida.config.yaml` and `docs/process/agent-extensions/**`, TaskFlow runtime-family implementation surfaces, DocFlow runtime-family implementation surfaces, and future compiled orchestration bundle surfaces
-9. [emerging-architectural-patterns-model.md](emerging-architectural-patterns-model.md)
+10. [emerging-architectural-patterns-model.md](emerging-architectural-patterns-model.md)
    Config families: runtime loop ownership, specialist-agent topology, routing, verifier aggregation, persistent workflow state, production observability, evaluation posture, governance/security expectations, caching strategy, and gateway/proxy control surfaces across `vida/config/instructions/**`, TaskFlow runtime-family implementation surfaces, and future compiled runtime surfaces
-10. [compiled-runtime-bundle-contract.md](compiled-runtime-bundle-contract.md)
+11. [compiled-runtime-bundle-contract.md](compiled-runtime-bundle-contract.md)
     Config families: compiled control bundles with `control_core`, `activation_bundle`, `protocol_binding_registry`, and `cache_delivery_contract`, `.vida/config/**`, `.vida/project/**`, `.vida/db/**`, `.vida/cache/**`, runtime init/boot activation, bundle validation, and future machine-readable orchestration bundle surfaces
-11. [project-activation-and-configurator-model.md](project-activation-and-configurator-model.md)
+12. [project-activation-and-configurator-model.md](project-activation-and-configurator-model.md)
     Config families: DB-first project activation, `.vida/config/**`, `.vida/project/**`, roles/skills/profiles/flows/agents/teams/model/backend policy, sync/reconcile surfaces, and project lifecycle control
-12. [team-coordination-model.md](team-coordination-model.md)
+13. [team-coordination-model.md](team-coordination-model.md)
     Config families: team composition, coordination pattern, activation, shared policy, handoff/context posture, and closure semantics
-13. [status-families-and-query-surface-model.md](status-families-and-query-surface-model.md)
+14. [status-families-and-query-surface-model.md](status-families-and-query-surface-model.md)
     Config families: CLI query/status families, operator-facing render surfaces, bounded runtime snapshots, status-family routing, execution-preparation artifact queries, and routing/model-selection config-actuation census
     Registered path: `docs/product/spec/status-families-and-query-surface-model.md`
-14. [project-protocol-promotion-law.md](project-protocol-promotion-law.md)
+15. [project-protocol-promotion-law.md](project-protocol-promotion-law.md)
     Config families: known versus compiled project protocol admission, project discovery/mapping, executable bundle promotion, and fail-closed protocol binding
-15. [taskflow-protocol-runtime-binding-model.md](taskflow-protocol-runtime-binding-model.md)
+16. [taskflow-protocol-runtime-binding-model.md](taskflow-protocol-runtime-binding-model.md)
     Config families: script-era protocol binding bridge, Rust-native protocol runtime crate, activation resolution, gate enforcement, protocol receipts, binding matrices, and the dedicated TaskFlow protocol-binding subrelease
-16. [user-facing-runtime-flow-and-operating-loop-model.md](user-facing-runtime-flow-and-operating-loop-model.md)
+17. [user-facing-runtime-flow-and-operating-loop-model.md](user-facing-runtime-flow-and-operating-loop-model.md)
     Config families: operator-facing install/init/bootstrap flow, project-local runtime onboarding, project activation/config sequencing, intake/planning sequencing, execution/approval/resume sequencing, bounded pre-readiness allowlists, runtime bootstrap posture, and the staged user-facing operating loop across `.vida/**`, installed runtime assets, and DB-first readiness state
-17. [bootstrap-carriers-and-project-activator-model.md](bootstrap-carriers-and-project-activator-model.md)
+18. [bootstrap-carriers-and-project-activator-model.md](bootstrap-carriers-and-project-activator-model.md)
     Config families: bootstrap carriers, runtime init command split, project activator pipeline, sidecar/project-map enrichment, host-template onboarding, and bounded protocol-load separation between orchestrator and agent lanes
-18. [execution-preparation-and-developer-handoff-model.md](execution-preparation-and-developer-handoff-model.md)
+19. [execution-preparation-and-developer-handoff-model.md](execution-preparation-and-developer-handoff-model.md)
     Config families: `solution_architect`, execution preparation, architecture-preparation reports, developer handoff packets, change-boundary shaping, dependency-impact summaries, artifact registry query surfaces, and fail-closed pre-execution gating for code-shaped work
     Registered path: `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
-19. [operational-state-and-synchronization-model.md](operational-state-and-synchronization-model.md)
+20. [operational-state-and-synchronization-model.md](operational-state-and-synchronization-model.md)
     Config families: DB-first operational state, filesystem projection, Git lineage, synchronization law, conflict handling, and reactive domain routing
-20. [multi-orchestrator-session-ownership-and-claims-design.md](multi-orchestrator-session-ownership-and-claims-design.md)
+21. [multi-orchestrator-session-ownership-and-claims-design.md](multi-orchestrator-session-ownership-and-claims-design.md)
     Config families: orchestrator session identity, worktree-scoped claims, lease/heartbeat ownership, scoped status/continuation admission, foreign blocker visibility, and multi-session TaskFlow scheduling
     Registered path: `docs/product/spec/multi-orchestrator-session-ownership-and-claims-design.md`
-21. [spec-protocol-foundation-session-scoped-orchestr-design.md](spec-protocol-foundation-session-scoped-orchestr-design.md)
+22. [spec-protocol-foundation-session-scoped-orchestr-design.md](spec-protocol-foundation-session-scoped-orchestr-design.md)
     Config families: session-scoped orchestrator protocol foundation, active claim admission, delegated lane ownership, exception takeover state naming, and continuation posture across TaskFlow, lane, status, and self-diagnostic surfaces
     Registered path: `docs/product/spec/spec-protocol-foundation-session-scoped-orchestr-design.md`
-22. [host-agent-layer-status-matrix.md](host-agent-layer-status-matrix.md)
+23. [host-agent-layer-status-matrix.md](host-agent-layer-status-matrix.md)
     Config families: host-agent activation layers, overlay-owned tier ladders, tier selection economics, local score/state surfaces, task-close feedback ingestion, and status/budget observability over `.vida/state/**`
-23. [specification-lane-scope-hardening-design.md](specification-lane-scope-hardening-design.md)
+24. [specification-lane-scope-hardening-design.md](specification-lane-scope-hardening-design.md)
     Config families: runtime dispatch packet scope policy, tracked design-doc write ownership for specification lanes, downstream packet parity, and legacy packet normalization for task-class-aware scope hardening
-24. [repair-fail-closed-resume-closure-truth-design.md](repair-fail-closed-resume-closure-truth-design.md)
+25. [repair-fail-closed-resume-closure-truth-design.md](repair-fail-closed-resume-closure-truth-design.md)
     Config families: fail-closed resume-time packet reconciliation, persisted specification packet repair toward tracked design-doc scope, and active A1 recovery-truth closure for stale dispatch lineage
-25. [lane-supersede-and-shared-truth-envelope-design.md](lane-supersede-and-shared-truth-envelope-design.md)
+26. [lane-supersede-and-shared-truth-envelope-design.md](lane-supersede-and-shared-truth-envelope-design.md)
    Config families: explicit lane supersession mutation, shared lane-envelope truth derivation across `show`/`exception-takeover`/`supersede`, admissible-versus-active takeover posture, and recovery-adjacent lane-command discoverability
-26. [implementation-backend-admissibility-and-selection-truth-design.md](implementation-backend-admissibility-and-selection-truth-design.md)
+27. [implementation-backend-admissibility-and-selection-truth-design.md](implementation-backend-admissibility-and-selection-truth-design.md)
    Config families: implementation-lane backend admissibility truth, canonical selected-backend resolution, route-primary versus effective-backend diagnostic split, and packet/summary/status projection alignment
-27. [coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md](coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md)
+28. [coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md](coach-lane-inherits-internal-fallback-over-explicit-review-route-design.md)
    Config families: coach-lane downstream backend canonicalization, explicit review-route preference over inherited internal fallback, mixed-lane backend lineage, and runtime dispatch receipt/status alignment
-28. [blocked-external-coach-artifact-truth-not-reconciled-design.md](blocked-external-coach-artifact-truth-not-reconciled-design.md)
+29. [blocked-external-coach-artifact-truth-not-reconciled-design.md](blocked-external-coach-artifact-truth-not-reconciled-design.md)
    Config families: blocked dispatch semantic-mismatch detection, run-graph projection stale truth beyond executing-only timeout cases, consume-resume continuation repair for obsolete blocked artifacts, and lane/status operator parity for mismatched blocked evidence
    Registered path: `docs/product/spec/blocked-external-coach-artifact-truth-not-reconciled-design.md`
-29. [test-first-runtime-defect-remediation-design.md](test-first-runtime-defect-remediation-design.md)
+30. [test-first-runtime-defect-remediation-design.md](test-first-runtime-defect-remediation-design.md)
    Config families: test-first runtime defect repair, cross-surface scenario contracts, operator actionability proof, paused defect reparenting, and one-bounded-defect-at-a-time remediation across TaskFlow runtime-family surfaces
    Registered path: `docs/product/spec/test-first-runtime-defect-remediation-design.md`
-30. [agent-mode-test-first-delivery-flow-design.md](agent-mode-test-first-delivery-flow-design.md)
+31. [agent-mode-test-first-delivery-flow-design.md](agent-mode-test-first-delivery-flow-design.md)
     Config families: config-derived agent-mode delivery, middle-tier test authoring, orchestrator-only root posture, continuous TaskFlow actualization, cost/effectiveness telemetry, and sequential/parallel lane gating
     Registered path: `docs/product/spec/agent-mode-test-first-delivery-flow-design.md`
-31. [vida-service-tui-wizard-execution-spec.md](vida-service-tui-wizard-execution-spec.md)
+32. [vida-service-tui-wizard-execution-spec.md](vida-service-tui-wizard-execution-spec.md)
     Config families: service/TUI/wizard command envelope, `vida-contracts`, operation catalog, project registry, wizard state machine, service-home coordination state, fixture/in-process client proof, and staged TUI/transport rollout
     Registered path: `docs/product/spec/vida-service-tui-wizard-execution-spec.md`
 

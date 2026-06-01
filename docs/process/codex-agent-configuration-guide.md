@@ -85,7 +85,9 @@ Project-local Codex configuration should live under:
 12. `vida.config.yaml -> host_environment.systems.codex.legacy_cli`
    - legacy Codex CLI materialization pointer and feature requirements.
 13. `vida.config.yaml -> agent_system.subagents.internal_subagents.model_profiles`
-   - internal Codex App/host-subagent execution profiles for low, medium, high, and xhigh GPT-5.5 lanes.
+    - internal Codex App/host-subagent execution profiles for low, medium, high, and xhigh GPT-5.5 lanes.
+14. `vida.config.yaml -> agent_system.subagents.codex_cli_exec`
+    - process-based non-interactive `codex exec` carrier for explicit fallback/automation use, not the implementation of `internal_subagents`.
 
 Layout rule:
 
@@ -122,6 +124,8 @@ Operational conclusion:
 2. Use `vida agent-init --role <runtime_role> --json` to inspect lane activation posture.
 3. Use Codex App host subagents as executor carriers only after the VIDA packet/runtime layer has selected the carrier and established lawful execution or exception evidence.
 4. Do not treat a visible Codex App subagent as a substitute for VIDA delegated execution evidence.
+5. Treat `codex exec` as a process-based carrier (`codex_cli_exec`) rather than the internal-host implementation of `internal_subagents`.
+6. Keep Codex-specific host tools under the generic host-agent bridge contract; future Claude Code, Pi, Vibe Kanban, OpenCode, or custom adapters must plug into the same request/result/receipt shape rather than creating vendor-specific runtime law.
 
 ## Development Team Target
 

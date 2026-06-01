@@ -38,6 +38,8 @@ struct AgentDispatchLanePreview {
     ready_parallel_safe: bool,
     selection_reason: String,
     selection_truth: AgentDispatchLaneSelectionTruth,
+    requires_user_approval: bool,
+    approval_gate: serde_json::Value,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -258,9 +260,68 @@ struct DevTeamSequenceStep {
     runtime_role: String,
     task_class: String,
     requires_task: bool,
+    requires_user_approval: bool,
+    approval_policy: serde_json::Value,
+    lifecycle_hook_templates: serde_json::Value,
+    resume_transitions: serde_json::Value,
+    rework_transitions: serde_json::Value,
 }
 
-fn dev_team_sequence_from_readiness(readiness: &serde_json::Value) -> Vec<DevTeamSequenceStep> {
+fn flow_matches_work_item_type(flow: &serde_json::Value, work_item_type: &str) -> bool {
+    flow["work_item_bindings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .any(|value| value.eq_ignore_ascii_case(work_item_type))
+}
+
+fn selected_dev_team_flow_for_work_item<'a>(
+    readiness: &'a serde_json::Value,
+    work_item_type: Option<&str>,
+) -> Option<&'a serde_json::Value> {
+    let flows = readiness["flows"].as_array()?;
+    let normalized_type = work_item_type
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase);
+    if let Some(work_item_type) = normalized_type.as_deref() {
+        if let Some(flow_id) = readiness["work_item_flow_bindings"]
+            .get(work_item_type)
+            .and_then(serde_json::Value::as_str)
+        {
+            if let Some(flow) = flows
+                .iter()
+                .find(|flow| flow["flow_id"].as_str() == Some(flow_id))
+            {
+                return Some(flow);
+            }
+        }
+        if let Some(flow) = flows
+            .iter()
+            .find(|flow| flow_matches_work_item_type(flow, work_item_type))
+        {
+            return Some(flow);
+        }
+    }
+    readiness["default_flow_id"]
+        .as_str()
+        .and_then(|flow_id| {
+            flows
+                .iter()
+                .find(|flow| flow["flow_id"].as_str() == Some(flow_id))
+        })
+        .or_else(|| {
+            flows
+                .iter()
+                .find(|flow| flow["default"].as_bool().unwrap_or(false))
+        })
+}
+
+fn dev_team_sequence_from_readiness(
+    readiness: &serde_json::Value,
+    work_item_type: Option<&str>,
+) -> Vec<DevTeamSequenceStep> {
     let roles = readiness["roles"]
         .as_array()
         .into_iter()
@@ -270,6 +331,48 @@ fn dev_team_sequence_from_readiness(readiness: &serde_json::Value) -> Vec<DevTea
             Some((role_id.to_string(), role))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
+    let selected_flow = selected_dev_team_flow_for_work_item(readiness, work_item_type);
+    if let Some(steps) = selected_flow
+        .and_then(|flow| flow["ordered_steps"].as_array())
+        .filter(|steps| !steps.is_empty())
+    {
+        return steps
+            .iter()
+            .filter_map(|step| {
+                let role_id = step["role_id"].as_str()?;
+                let role = roles.get(role_id)?;
+                let runtime_role = step["runtime_role"]
+                    .as_str()
+                    .or_else(|| role["runtime_role"].as_str())
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_string)?;
+                let task_class = step["task_class"]
+                    .as_str()
+                    .or_else(|| {
+                        role["task_classes"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(serde_json::Value::as_str)
+                            .find(|value| !value.trim().is_empty())
+                    })
+                    .map(str::to_string)?;
+                Some(DevTeamSequenceStep {
+                    role_label: role_id.to_string(),
+                    runtime_role,
+                    task_class,
+                    requires_task: role_id != "release_closure" && role_id != "terminal_closure",
+                    requires_user_approval: step["requires_user_approval"]
+                        .as_bool()
+                        .unwrap_or(false),
+                    approval_policy: step["approval_policy"].clone(),
+                    lifecycle_hook_templates: step["lifecycle_hook_templates"].clone(),
+                    resume_transitions: step["resume_transitions"].clone(),
+                    rework_transitions: step["rework_transitions"].clone(),
+                })
+            })
+            .collect();
+    }
     let sequence = readiness["sequence"]
         .as_array()
         .into_iter()
@@ -299,6 +402,11 @@ fn dev_team_sequence_from_readiness(readiness: &serde_json::Value) -> Vec<DevTea
                 runtime_role,
                 task_class,
                 requires_task: role_id != "release_closure" && role_id != "terminal_closure",
+                requires_user_approval: false,
+                approval_policy: serde_json::Value::Null,
+                lifecycle_hook_templates: serde_json::Value::Null,
+                resume_transitions: serde_json::Value::Null,
+                rework_transitions: serde_json::Value::Null,
             })
         })
         .collect()
@@ -341,6 +449,11 @@ fn dev_team_sequence_from_carrier_runtime(
                 runtime_role,
                 task_class,
                 requires_task: true,
+                requires_user_approval: false,
+                approval_policy: serde_json::Value::Null,
+                lifecycle_hook_templates: serde_json::Value::Null,
+                resume_transitions: serde_json::Value::Null,
+                rework_transitions: serde_json::Value::Null,
             })
         })
         .collect()
@@ -348,7 +461,7 @@ fn dev_team_sequence_from_carrier_runtime(
 
 fn dev_team_sequence(activation_bundle: &serde_json::Value) -> Vec<DevTeamSequenceStep> {
     let readiness_sequence =
-        dev_team_sequence_from_readiness(&activation_bundle["dev_team_readiness"]);
+        dev_team_sequence_from_readiness(&activation_bundle["dev_team_readiness"], None);
     if !readiness_sequence.is_empty() {
         return readiness_sequence;
     }
@@ -390,10 +503,30 @@ fn dev_team_sequence(activation_bundle: &serde_json::Value) -> Vec<DevTeamSequen
                 runtime_role,
                 task_class,
                 requires_task: true,
+                requires_user_approval: false,
+                approval_policy: serde_json::Value::Null,
+                lifecycle_hook_templates: serde_json::Value::Null,
+                resume_transitions: serde_json::Value::Null,
+                rework_transitions: serde_json::Value::Null,
             })
         })
         .collect::<Vec<_>>();
     steps
+}
+
+fn dev_team_sequence_for_work_item(
+    activation_bundle: &serde_json::Value,
+    work_item_type: &str,
+) -> Vec<DevTeamSequenceStep> {
+    let readiness_sequence = dev_team_sequence_from_readiness(
+        &activation_bundle["dev_team_readiness"],
+        Some(work_item_type),
+    );
+    if readiness_sequence.is_empty() {
+        dev_team_sequence(activation_bundle)
+    } else {
+        readiness_sequence
+    }
 }
 
 fn configured_max_parallel_agents_from_activation_bundle(
@@ -644,6 +777,8 @@ fn build_agent_dispatch_next_preview_standard(
                 ready_parallel_safe: primary.ready_parallel_safe,
                 selection_reason: "primary_ready_task".to_string(),
                 selection_truth,
+                requires_user_approval: false,
+                approval_gate: serde_json::json!({"required": false, "status": "not_required"}),
             }),
             Err(reason) => blocker_codes.push(format!(
                 "selected_lane_runtime_assignment_truth_missing:task={}:{}",
@@ -676,6 +811,8 @@ fn build_agent_dispatch_next_preview_standard(
                         ready_parallel_safe: candidate.ready_parallel_safe,
                         selection_reason: "parallel_safe_ready_task".to_string(),
                         selection_truth,
+                        requires_user_approval: false,
+                        approval_gate: serde_json::json!({"required": false, "status": "not_required"}),
                     });
                     remaining -= 1;
                 }
@@ -784,7 +921,31 @@ fn build_agent_dispatch_next_preview_dev_team(
     let mut next_actions = Vec::new();
     let mut selected_lanes = Vec::new();
     let mut blocked_candidates = Vec::new();
-    let sequence = dev_team_sequence(activation_bundle);
+    let ready_flow_ids = projection
+        .ready
+        .iter()
+        .filter(|candidate| candidate.ready_now)
+        .filter_map(|candidate| {
+            selected_dev_team_flow_for_work_item(
+                &activation_bundle["dev_team_readiness"],
+                Some(&candidate.task.issue_type),
+            )
+            .and_then(|flow| flow["flow_id"].as_str())
+            .map(str::to_string)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let sequence = if ready_flow_ids.len() == 1 {
+        projection
+            .ready
+            .iter()
+            .find(|candidate| candidate.ready_now)
+            .map(|candidate| {
+                dev_team_sequence_for_work_item(activation_bundle, &candidate.task.issue_type)
+            })
+            .unwrap_or_else(|| dev_team_sequence(activation_bundle))
+    } else {
+        dev_team_sequence(activation_bundle)
+    };
 
     if lanes_requested == 0 {
         blocker_codes.push("invalid_lanes_requested".to_string());
@@ -794,6 +955,13 @@ fn build_agent_dispatch_next_preview_dev_team(
         blocker_codes.push("configured_dev_team_sequence_required".to_string());
         next_actions.push(
             "Configure dev_team_readiness roles/sequence or dispatch_contract lanes before previewing dev-team dispatch."
+                .to_string(),
+        );
+    }
+    if ready_flow_ids.len() > 1 {
+        blocker_codes.push("ambiguous_work_item_flow_selection".to_string());
+        next_actions.push(
+            "Ready task candidates map to multiple configured dev_team flows; narrow the task scope or dispatch one flow class at a time."
                 .to_string(),
         );
     }
@@ -849,6 +1017,13 @@ fn build_agent_dispatch_next_preview_dev_team(
             ));
             continue;
         }
+        if step.requires_user_approval {
+            next_actions.push(format!(
+                "dev-team step [{}] {} will pause after receipt-backed completion for configured user approval before the next role starts.",
+                step_index + 1,
+                step.role_label.replace('_', "-")
+            ));
+        }
         let Some(candidate) = projection.ready.get(ready_index) else {
             blocker_codes.push(format!(
                 "dev_team_step_missing_ready_task:position={}:{}",
@@ -891,6 +1066,24 @@ fn build_agent_dispatch_next_preview_dev_team(
                 ready_parallel_safe: candidate.ready_parallel_safe,
                 selection_reason: format!("dev_team_step_{}:{}", step_index + 1, step.role_label),
                 selection_truth,
+                requires_user_approval: step.requires_user_approval,
+                approval_gate: serde_json::json!({
+                    "required": step.requires_user_approval,
+                    "status": if step.requires_user_approval {
+                        "approval_required_after_step_completion"
+                    } else {
+                        "not_required"
+                    },
+                    "policy": step.approval_policy,
+                    "lifecycle_hook_templates": step.lifecycle_hook_templates,
+                    "resume_transitions": step.resume_transitions,
+                    "rework_transitions": step.rework_transitions,
+                    "prompt_template_source": if step.requires_user_approval {
+                        "dev_team.flows.steps.approval_policy"
+                    } else {
+                        "none"
+                    },
+                }),
             }),
             Err(reason) => blocker_codes.push(format!(
                 "selected_lane_runtime_assignment_truth_missing:task={}:{}",
@@ -1062,6 +1255,8 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
                     "scheduler_parallel_safe_ready_task".to_string()
                 },
                 selection_truth,
+                requires_user_approval: false,
+                approval_gate: serde_json::json!({"required": false, "status": "not_required"}),
             }),
             Err(reason) => blocker_codes.push(format!(
                 "selected_lane_runtime_assignment_truth_missing:task={}:{}",
@@ -1501,7 +1696,8 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview, state_store,
+        apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
+        dev_team_sequence, dev_team_sequence_for_work_item, state_store,
     };
     use crate::state_store::{
         CreateTaskRequest, TaskExecutionSemantics, TaskRecord, TaskSchedulingCandidate,
@@ -1605,6 +1801,15 @@ mod tests {
     }
 
     fn task_with_labels(id: &str, title: &str, labels: &[&str]) -> TaskRecord {
+        task_with_labels_and_type(id, title, labels, "task")
+    }
+
+    fn task_with_labels_and_type(
+        id: &str,
+        title: &str,
+        labels: &[&str],
+        issue_type: &str,
+    ) -> TaskRecord {
         TaskRecord {
             id: id.to_string(),
             display_id: None,
@@ -1612,7 +1817,7 @@ mod tests {
             description: String::new(),
             status: "open".to_string(),
             priority: 2,
-            issue_type: "task".to_string(),
+            issue_type: issue_type.to_string(),
             created_at: "2026-04-24T00:00:00Z".to_string(),
             created_by: "test".to_string(),
             updated_at: "2026-04-24T00:00:00Z".to_string(),
@@ -1661,6 +1866,23 @@ mod tests {
             blocked_by: Vec::new(),
             active_critical_path: false,
             parallel_blockers,
+        }
+    }
+
+    fn candidate_with_type(
+        id: &str,
+        title: &str,
+        ready_now: bool,
+        ready_parallel_safe: bool,
+        issue_type: &str,
+    ) -> TaskSchedulingCandidate {
+        TaskSchedulingCandidate {
+            task: task_with_labels_and_type(id, title, &[], issue_type),
+            ready_now,
+            ready_parallel_safe,
+            blocked_by: Vec::new(),
+            active_critical_path: false,
+            parallel_blockers: Vec::new(),
         }
     }
 
@@ -2317,6 +2539,240 @@ mod tests {
         assert!(preview.blocker_codes.iter().any(|code| {
             code.starts_with("selected_lane_runtime_assignment_truth_missing:task=task-a:")
         }));
+    }
+
+    #[test]
+    fn dev_team_sequence_uses_configured_flow_ordered_step_overrides() {
+        let sequence = dev_team_sequence(&serde_json::json!({
+            "dev_team_readiness": {
+                "default_flow_id": "debug_flow",
+                "roles": [
+                    {
+                        "role_id": "analyst",
+                        "runtime_role": "business_analyst",
+                        "task_classes": ["specification"]
+                    },
+                    {
+                        "role_id": "developer",
+                        "runtime_role": "worker",
+                        "task_classes": ["implementation"]
+                    }
+                ],
+                "sequence": ["developer"],
+                "flows": [
+                    {
+                        "flow_id": "debug_flow",
+                        "enabled": true,
+                        "default": true,
+                        "ordered_steps": [
+                            {
+                                "role_id": "analyst",
+                                "runtime_role": "solution_architect",
+                                "task_class": "architecture"
+                            },
+                            {
+                                "role_id": "developer"
+                            }
+                        ]
+                    }
+                ]
+            }
+        }));
+
+        assert_eq!(sequence.len(), 2);
+        assert_eq!(sequence[0].role_label, "analyst");
+        assert_eq!(sequence[0].runtime_role, "solution_architect");
+        assert_eq!(sequence[0].task_class, "architecture");
+        assert_eq!(sequence[1].role_label, "developer");
+        assert_eq!(sequence[1].runtime_role, "worker");
+        assert_eq!(sequence[1].task_class, "implementation");
+    }
+
+    #[test]
+    fn development_flow_binding_selects_sequence_by_work_item_type() {
+        let sequence = dev_team_sequence_for_work_item(
+            &serde_json::json!({
+                "dev_team_readiness": {
+                    "default_flow_id": "default_delivery",
+                    "work_item_flow_bindings": {
+                        "defect": "defect_repair"
+                    },
+                    "roles": [
+                        {"role_id": "analyst", "runtime_role": "business_analyst", "task_classes": ["specification"]},
+                        {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                        {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]}
+                    ],
+                    "sequence": ["developer"],
+                    "flows": [
+                        {
+                            "flow_id": "default_delivery",
+                            "enabled": true,
+                            "default": true,
+                            "ordered_steps": [
+                                {"role_id": "developer"}
+                            ]
+                        },
+                        {
+                            "flow_id": "defect_repair",
+                            "enabled": true,
+                            "work_item_bindings": ["defect"],
+                            "ordered_steps": [
+                                {"role_id": "analyst", "runtime_role": "business_analyst", "task_class": "specification"},
+                                {"role_id": "tester", "runtime_role": "verifier", "task_class": "verification"}
+                            ]
+                        }
+                    ]
+                }
+            }),
+            "defect",
+        );
+
+        assert_eq!(sequence.len(), 2);
+        assert_eq!(sequence[0].role_label, "analyst");
+        assert_eq!(sequence[0].task_class, "specification");
+        assert_eq!(sequence[1].role_label, "tester");
+        assert_eq!(sequence[1].task_class, "verification");
+    }
+
+    #[test]
+    fn development_flow_binding_blocks_mixed_ready_flow_classes() {
+        let preview = build_agent_dispatch_next_preview(
+            &serde_json::json!({
+                "agent_system": {"max_parallel_agents": 2},
+                "dev_team_readiness": {
+                    "default_flow_id": "default_delivery",
+                    "work_item_flow_bindings": {
+                        "task": "default_delivery",
+                        "defect": "defect_repair"
+                    },
+                    "roles": [
+                        {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                        {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]}
+                    ],
+                    "sequence": ["developer"],
+                    "flows": [
+                        {
+                            "flow_id": "default_delivery",
+                            "enabled": true,
+                            "default": true,
+                            "ordered_steps": [{"role_id": "developer"}]
+                        },
+                        {
+                            "flow_id": "defect_repair",
+                            "enabled": true,
+                            "work_item_bindings": ["defect"],
+                            "ordered_steps": [{"role_id": "tester"}]
+                        }
+                    ]
+                }
+            }),
+            &TaskSchedulingProjection {
+                current_task_id: Some("task-a".to_string()),
+                ready: vec![
+                    candidate_with_type("task-a", "Task A", true, true, "task"),
+                    candidate_with_type("defect-a", "Defect A", true, true, "defect"),
+                ],
+                blocked: Vec::new(),
+                parallel_candidates_after_current: Vec::new(),
+            },
+            2,
+            2,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "blocked");
+        assert!(preview
+            .blocker_codes
+            .contains(&"ambiguous_work_item_flow_selection".to_string()));
+    }
+
+    #[test]
+    fn user_approval_flow_projects_step_gate_and_rework_policy() {
+        let preview = build_agent_dispatch_next_preview(
+            &serde_json::json!({
+                "agent_system": {"max_parallel_agents": 1},
+                "carrier_runtime": {
+                    "roles": [{
+                        "role_id": "middle",
+                        "tier": "middle",
+                        "default_runtime_role": "business_analyst",
+                        "runtime_roles": ["business_analyst"],
+                        "task_classes": ["specification"],
+                        "rate": 4,
+                        "model": "gpt-5.5",
+                        "model_provider": "openai",
+                        "model_reasoning_effort": "medium",
+                        "normalized_cost_units": 4,
+                        "readiness": {"status": "ready"},
+                        "lifecycle": {"state": "ready"}
+                    }]
+                },
+                "dev_team_readiness": {
+                    "default_flow_id": "approval_flow",
+                    "roles": [{
+                        "role_id": "analyst",
+                        "runtime_role": "business_analyst",
+                        "task_classes": ["specification"]
+                    }],
+                    "flows": [{
+                        "flow_id": "approval_flow",
+                        "enabled": true,
+                        "default": true,
+                        "ordered_steps": [{
+                            "role_id": "analyst",
+                            "runtime_role": "business_analyst",
+                            "task_class": "specification",
+                            "requires_user_approval": true,
+                            "approval_policy": {
+                                "mode": "user_review_required",
+                                "prompt_template": "review_document_before_next_role"
+                            },
+                            "lifecycle_hook_templates": ["approval_wait", "approval_complete"],
+                            "resume_transitions": {"approved": "developer"},
+                            "rework_transitions": {"rework": "analyst"}
+                        }]
+                    }]
+                }
+            }),
+            &TaskSchedulingProjection {
+                current_task_id: Some("task-approval".to_string()),
+                ready: vec![candidate_with_type(
+                    "task-approval",
+                    "Approval task",
+                    true,
+                    true,
+                    "task",
+                )],
+                blocked: Vec::new(),
+                parallel_candidates_after_current: Vec::new(),
+            },
+            1,
+            1,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "pass");
+        assert_eq!(preview.selected_lanes.len(), 1);
+        let lane = &preview.selected_lanes[0];
+        assert!(lane.requires_user_approval);
+        assert_eq!(
+            lane.approval_gate["status"],
+            "approval_required_after_step_completion"
+        );
+        assert_eq!(
+            lane.approval_gate["policy"]["prompt_template"],
+            "review_document_before_next_role"
+        );
+        assert_eq!(
+            lane.approval_gate["rework_transitions"]["rework"],
+            "analyst"
+        );
+        assert!(preview
+            .next_actions
+            .iter()
+            .any(|action| action.contains("will pause after receipt-backed completion")));
     }
 
     #[test]

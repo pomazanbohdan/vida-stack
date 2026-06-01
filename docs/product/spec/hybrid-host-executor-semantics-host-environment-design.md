@@ -9,6 +9,7 @@ Use this design to record the hybrid runtime contract now implemented in bounded
 - Core rule: host selection is a posture and materialization choice, not a hard gate on executor backend class.
 - Compatibility rule: `agent_system.subagents` remains the canonical executor registry; legacy route hints stay as compatibility aliases only.
 - Safety rule: `internal_subagents` stays internal-only and does not acquire an external CLI dispatch contract.
+- Boundary rule: internal host-agent backends use a configured parent-host-session `host_tool_bridge` adapter; non-interactive process execution such as `codex exec` is a separate child-process carrier such as `codex_cli_exec`.
 
 ## Current Context
 - Host selection is already config-driven under `host_environment.cli_system` and `host_environment.systems`.
@@ -106,6 +107,11 @@ Will implement / choose:
 - Host posture fields
   - `host_environment.cli_system`
   - `host_environment.systems.<system>.execution_class`
+- Host-agent bridge contract fields
+  - `host_environment.host_agent_bridge_contract`
+  - `host_environment.systems.<system>.host_tool_bridge.adapter_kind`
+  - `host_environment.systems.<system>.host_tool_bridge.adapter_capability_id`
+  - `host_environment.systems.<system>.host_tool_bridge.invocation_mode`
 - Legacy compatibility fields
   - `subagents`
   - `fanout_subagents`
@@ -174,6 +180,7 @@ Will implement / choose:
 - Related specs
   - `docs/product/spec/config-driven-host-system-runtime-keep-design.md`
   - `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
+  - `docs/product/spec/host-agent-bridge-adapter-contract-design.md`
 - Related protocols
   - `docs/process/agent-system.md`
   - `docs/process/environments.md`

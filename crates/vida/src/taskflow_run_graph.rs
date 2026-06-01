@@ -22,6 +22,7 @@ const STALE_PROJECTION_DISPATCH_TIMEOUT_SECONDS: i64 = 10;
 const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS: u64 = 60;
 const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER: &str = "run_graph_dispatch_init_timeout";
 const TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(60 * 60);
+const DISPATCH_INIT_FAST_CACHE_SCHEMA_VERSION: u64 = 2;
 
 fn projection_component(value: &str) -> String {
     value
@@ -739,9 +740,22 @@ fn next_lawful_operator_action_for_dispatch_resolution(
     }
     let _reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
     if receipt.blocker_code.as_deref() == Some("internal_dispatch_timeout_without_receipt") {
+        if status.recovery_ready
+            && status.resume_target != "none"
+            && receipt
+                .dispatch_packet_path
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+        {
+            return Some(format!(
+                "vida taskflow consume continue --run-id {} --json",
+                shell_quote(&status.run_id)
+            ));
+        }
         return Some(format!(
-            "vida task show {} --json",
-            shell_quote(&status.task_id)
+            "vida lane show {} --json",
+            shell_quote(&status.run_id)
         ));
     }
     if let Some(receipt_id) = receipt
@@ -951,6 +965,21 @@ fn recovery_next_action_reason(
     }
     if command.starts_with("vida task show") {
         return "inspect the active task owned paths before recording structured exception-takeover evidence for the terminal dispatch blocker".to_string();
+    }
+    if command.starts_with("vida taskflow consume continue")
+        && projection_truth
+            .dispatch_receipt
+            .as_ref()
+            .is_some_and(|receipt| {
+                receipt.blocker_code.as_deref() == Some("internal_dispatch_timeout_without_receipt")
+                    && receipt
+                        .dispatch_packet_path
+                        .as_deref()
+                        .map(str::trim)
+                        .is_some_and(|value| !value.is_empty())
+            })
+    {
+        return "retry the same bounded agent lane from persisted dispatch packet evidence after a terminal internal timeout without granting root-local product write authority".to_string();
     }
     if command.starts_with("vida taskflow consume continue")
         && projection_truth
@@ -4077,6 +4106,7 @@ async fn try_existing_design_backed_implementation_override(
             selection.reason = "auto_task_metadata_bounded_implementation_request".to_string();
             selection.execution_plan =
                 build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, selection);
+            inject_task_planner_metadata(selection, &task.planner_metadata);
             if let Some(ref path) = design_doc_path {
                 inject_tracked_design_doc_path(&mut selection.execution_plan, path);
             }
@@ -4466,6 +4496,9 @@ async fn derive_seeded_run_graph_status_with_stage(
         set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_task_metadata_execution_plan");
         selection.execution_plan =
             build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, &selection);
+        if let Ok(task) = store.show_task(&bounded_task_id).await {
+            inject_task_planner_metadata(&mut selection, &task.planner_metadata);
+        }
         set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_task_metadata_status");
         let status = seeded_run_graph_status_from_role_selection(
             requested_run_id,
@@ -4939,6 +4972,11 @@ fn dispatch_init_fast_cache_payload_is_reusable(
     {
         return false;
     }
+    if payload["dispatch_init_fast_cache_schema_version"].as_u64()
+        != Some(DISPATCH_INIT_FAST_CACHE_SCHEMA_VERSION)
+    {
+        return false;
+    }
     if let Some(current_config_digest) = current_config_digest {
         if payload["source_config_digest"].as_str() != Some(current_config_digest) {
             return false;
@@ -5020,6 +5058,8 @@ fn write_run_graph_dispatch_init_fast_cache(
     std::fs::create_dir_all(&cache_dir)
         .map_err(|error| format!("Failed to create dispatch-init fast cache dir: {error}"))?;
     let mut payload = payload.clone();
+    payload["dispatch_init_fast_cache_schema_version"] =
+        serde_json::Value::Number(DISPATCH_INIT_FAST_CACHE_SCHEMA_VERSION.into());
     if let Some(digest) = current_dispatch_init_cache_config_digest(state_root) {
         payload["source_config_digest"] = serde_json::Value::String(digest);
     }
@@ -5086,6 +5126,58 @@ fn reusable_routed_dispatch_receipt(
     Some(packet_path.to_string())
 }
 
+fn dispatch_init_packet_selected_backend(packet_path: &str) -> Option<String> {
+    let packet = crate::read_json_file_if_present(std::path::Path::new(packet_path))?;
+    [
+        "/runtime_assignment/selected_backend_id",
+        "/runtime_assignment/selected_carrier_id",
+        "/carrier_runtime_assignment/selected_backend_id",
+        "/carrier_runtime_assignment/selected_carrier_id",
+    ]
+    .into_iter()
+    .find_map(|pointer| {
+        packet
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+async fn existing_dispatch_receipt_matches_current_seed(
+    store: &StateStore,
+    run_id: &str,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    timeout_stage: Option<&std::sync::Arc<std::sync::Mutex<&'static str>>>,
+) -> Result<bool, String> {
+    let Some(packet_path) = receipt
+        .dispatch_packet_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return Ok(true);
+    };
+    let Some(current_seed) =
+        seed_existing_task_payload_for_dispatch_init(store, run_id, timeout_stage).await?
+    else {
+        return Ok(true);
+    };
+    let current_backend =
+        crate::runtime_dispatch_state::admissible_selected_backend_for_dispatch_target(
+            &current_seed.role_selection.execution_plan,
+            &receipt.dispatch_target,
+            receipt.activation_agent_type.as_deref(),
+            None,
+        );
+    let packet_backend = dispatch_init_packet_selected_backend(packet_path);
+    Ok(match (packet_backend, current_backend) {
+        (Some(packet_backend), Some(current_backend)) => packet_backend == current_backend,
+        _ => true,
+    })
+}
+
 async fn existing_routed_dispatch_init_artifacts(
     store: &StateStore,
     requested_run_id: &str,
@@ -5122,6 +5214,11 @@ async fn existing_routed_dispatch_init_artifacts(
         .role_selection()
         .map_err(|error| format!("Failed to decode existing seeded dispatch context: {error}"))?;
     if dispatch_context_route_assignment_catalog_drift(store.root(), &role_selection).is_some() {
+        return Ok(None);
+    }
+    if !existing_dispatch_receipt_matches_current_seed(store, run_id, &dispatch_receipt, None)
+        .await?
+    {
         return Ok(None);
     }
     let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
@@ -5602,7 +5699,7 @@ async fn preview_run_graph_dispatch_init_artifacts(
         role_selection = payload.role_selection.clone();
         seed_payload = Some(payload);
     }
-    let existing_dispatch_receipt = if route_assignment_drift.is_none() {
+    let mut existing_dispatch_receipt = if route_assignment_drift.is_none() {
         set_dispatch_init_timeout_stage(timeout_stage, "read_existing_dispatch_receipt");
         store
             .run_graph_dispatch_receipt(&effective_run_id)
@@ -5614,6 +5711,27 @@ async fn preview_run_graph_dispatch_init_artifacts(
     } else {
         None
     };
+    let stale_seeded_packet = if let Some(receipt) = existing_dispatch_receipt.as_ref() {
+        !existing_dispatch_receipt_matches_current_seed(
+            store,
+            &effective_run_id,
+            receipt,
+            timeout_stage,
+        )
+        .await?
+    } else {
+        false
+    };
+    if stale_seeded_packet {
+        set_dispatch_init_timeout_stage(timeout_stage, "reseed_stale_dispatch_packet");
+        let payload =
+            reseed_dispatch_context_after_route_assignment_drift(store, &status, &context).await?;
+        status = reconcile_dispatch_init_status_for_active_exception(store, payload.status.clone())
+            .await?;
+        role_selection = payload.role_selection.clone();
+        seed_payload = Some(payload);
+        existing_dispatch_receipt = None;
+    }
     if route_assignment_drift.is_none() {
         status = reconcile_dispatch_init_status_for_missing_receipt(
             status,
@@ -7007,6 +7125,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn inject_task_planner_metadata_carries_owned_paths_into_tracked_dev_task() {
+        let mut selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue active bounded task".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let mut planner_metadata = crate::state_store::TaskPlannerMetadata::default();
+        planner_metadata.owned_paths = vec![
+            "crates/vida/src/runtime_dispatch_execution.rs".to_string(),
+            "docs/product/spec/codex-host-agent-boundary-and-cli-bridge-design.md".to_string(),
+        ];
+
+        inject_task_planner_metadata(&mut selection, &planner_metadata);
+
+        assert_eq!(
+            selection.execution_plan["tracked_flow_bootstrap"]["dev_task"]["planner_metadata"]
+                ["owned_paths"],
+            serde_json::json!([
+                "crates/vida/src/runtime_dispatch_execution.rs",
+                "docs/product/spec/codex-host-agent-boundary-and-cli-bridge-design.md"
+            ])
+        );
+        assert!(selection
+            .request
+            .contains("Owned paths: crates/vida/src/runtime_dispatch_execution.rs"));
+    }
+
     fn clean_ready_downstream_dispatch_receipt(run_id: &str) -> RunGraphDispatchReceipt {
         RunGraphDispatchReceipt {
             run_id: run_id.to_string(),
@@ -8232,7 +8390,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_status_action_for_internal_timeout_with_running_lane_points_to_task_show() {
+    fn recovery_status_action_for_internal_timeout_with_running_lane_points_to_consume_continue() {
         let mut status = packet_gate_status("run-internal-timeout");
         status.task_id = "task-internal-timeout".to_string();
         status.status = "blocked".to_string();
@@ -8253,7 +8411,7 @@ mod tests {
 
         assert_eq!(
             command.as_deref(),
-            Some("vida task show task-internal-timeout --json")
+            Some("vida taskflow consume continue --run-id run-internal-timeout --json")
         );
     }
 
@@ -8816,7 +8974,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_status_action_for_internal_timeout_points_to_task_show() {
+    fn recovery_status_action_for_internal_timeout_points_to_consume_continue() {
         let mut status = default_run_graph_status("run-timeout", "implementation", "coach");
         status.status = "blocked".to_string();
         status.lifecycle_stage = "implementer_blocked".to_string();
@@ -8834,7 +8992,7 @@ mod tests {
         assert_eq!(
             next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
                 .as_deref(),
-            Some("vida task show run-timeout --json")
+            Some("vida taskflow consume continue --run-id run-timeout --json")
         );
     }
 
@@ -9128,6 +9286,68 @@ mod tests {
         );
 
         assert_eq!(blocker_codes, vec!["tool_execution_failed".to_string()]);
+    }
+
+    #[test]
+    fn internal_timeout_without_ready_recovery_recommends_lane_inspection_not_continue() {
+        let status = RunGraphStatus {
+            run_id: "run-timeout-not-ready".to_string(),
+            task_id: "task-timeout-not-ready".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "implementation".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "lane-timeout-not-ready".to_string(),
+            lifecycle_stage: "implementation_blocked".to_string(),
+            policy_gate: "agent_init_execute_dispatch_timeout".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "implementation".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some(
+                "vida agent-init --dispatch-packet packet.json --execute-dispatch --json"
+                    .to_string(),
+            ),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
+            blocker_code: Some("internal_dispatch_timeout_without_receipt".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![
+                "internal_dispatch_timeout_without_receipt".to_string()
+            ],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("implementation".to_string()),
+            downstream_dispatch_last_target: Some("implementation".to_string()),
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-01T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            next_lawful_operator_action_for_dispatch_resolution(&status, &receipt, None).as_deref(),
+            Some("vida lane show run-timeout-not-ready --json")
+        );
     }
 
     #[test]
@@ -11343,6 +11563,40 @@ mod tests {
             "task-dispatch-init-idempotent-fast-path"
         )
         .is_some());
+        let cache_path = run_graph_dispatch_init_fast_cache_path(
+            store.root(),
+            "task-dispatch-init-idempotent-fast-path",
+        );
+        let mut legacy_cache_payload: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&cache_path).expect("cache should be readable"),
+        )
+        .expect("cache should decode");
+        legacy_cache_payload
+            .as_object_mut()
+            .expect("cache payload should be object")
+            .remove("dispatch_init_fast_cache_schema_version");
+        std::fs::write(
+            &cache_path,
+            serde_json::to_string_pretty(&legacy_cache_payload).expect("cache should encode"),
+        )
+        .expect("legacy cache payload should write");
+        assert!(read_run_graph_dispatch_init_fast_cache(
+            store.root(),
+            "task-dispatch-init-idempotent-fast-path"
+        )
+        .is_none());
+        write_run_graph_dispatch_init_fast_cache(
+            store.root(),
+            "task-dispatch-init-idempotent-fast-path",
+            "task-dispatch-init-idempotent-fast-path",
+            &second,
+        )
+        .expect("cache should rewrite with current schema");
+        assert!(read_run_graph_dispatch_init_fast_cache(
+            store.root(),
+            "task-dispatch-init-idempotent-fast-path"
+        )
+        .is_some());
 
         let mut receipt = store
             .run_graph_dispatch_receipt("task-dispatch-init-idempotent-fast-path")
@@ -11359,6 +11613,91 @@ mod tests {
             "task-dispatch-init-idempotent-fast-path"
         )
         .is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_rebuilds_routed_packet_with_stale_selected_backend() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "task-dispatch-init-stale-backend-packet",
+                title: "Dispatch init refreshes stale packet backend",
+                display_id: None,
+                description: "Repeated dispatch-init must not reuse a routed packet whose embedded backend no longer matches current config.",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &["runtime-recovery".to_string()],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_rebuilds_routed_packet_with_stale_selected_backend -- --nocapture"
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create stale packet task");
+
+        let first = run_graph_dispatch_init(&store, "task-dispatch-init-stale-backend-packet")
+            .await
+            .expect("first dispatch-init should seed and route");
+        let first_packet_path = first["dispatch_packet_path"]
+            .as_str()
+            .expect("first packet path")
+            .to_string();
+        let mut stale_packet =
+            crate::read_json_file_if_present(std::path::Path::new(&first_packet_path))
+                .expect("stale packet should be readable");
+        stale_packet["runtime_assignment"]["selected_backend_id"] =
+            serde_json::Value::String("legacy_middle".to_string());
+        stale_packet["runtime_assignment"]["selected_carrier_id"] =
+            serde_json::Value::String("legacy_middle".to_string());
+        std::fs::write(
+            &first_packet_path,
+            serde_json::to_string_pretty(&stale_packet).expect("stale packet should encode"),
+        )
+        .expect("stale packet should write");
+        let receipt = store
+            .run_graph_dispatch_receipt("task-dispatch-init-stale-backend-packet")
+            .await
+            .expect("receipt lookup should succeed")
+            .expect("receipt should exist");
+        assert!(!existing_dispatch_receipt_matches_current_seed(
+            &store,
+            "task-dispatch-init-stale-backend-packet",
+            &receipt,
+            None
+        )
+        .await
+        .expect("stale packet check should succeed"));
+
+        let second = run_graph_dispatch_init(&store, "task-dispatch-init-stale-backend-packet")
+            .await
+            .expect("second dispatch-init should rebuild stale routed packet");
+        assert_ne!(
+            first["dispatch_packet_path"],
+            second["dispatch_packet_path"]
+        );
+        let second_packet_path = second["dispatch_packet_path"]
+            .as_str()
+            .expect("second packet path");
+        assert_ne!(
+            dispatch_init_packet_selected_backend(second_packet_path).as_deref(),
+            Some("legacy_middle")
+        );
     }
 
     #[tokio::test]
