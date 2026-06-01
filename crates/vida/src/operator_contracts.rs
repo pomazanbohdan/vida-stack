@@ -27,6 +27,166 @@ pub(crate) struct FinalizedRelease1OperatorTruth {
     pub(crate) operator_contracts: Value,
 }
 
+pub(crate) const VIDA_GATE_RESULT_SCHEMA_VERSION: &str = "vida-gate-result-v1";
+
+pub(crate) fn render_vida_gate_result(
+    gate_id: &str,
+    blocker_codes: Vec<String>,
+    warning_codes: Vec<String>,
+    failure_codes: Vec<String>,
+    issues: Vec<Value>,
+    next_actions: Vec<String>,
+    artifact_refs: Value,
+) -> Value {
+    let blocker_codes = canonical_gate_code_entries(blocker_codes);
+    let warning_codes = canonical_gate_code_entries(warning_codes);
+    let failure_codes = canonical_gate_code_entries(failure_codes);
+    let next_actions =
+        canonical_next_action_entries(&serde_json::json!(next_actions)).unwrap_or_default();
+    let status = if !blocker_codes.is_empty() {
+        RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status
+    } else if !failure_codes.is_empty() {
+        "fail"
+    } else if !warning_codes.is_empty() {
+        "warn"
+    } else {
+        RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status
+    };
+    let operator_status = if blocker_codes.is_empty() && failure_codes.is_empty() {
+        RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status
+    } else {
+        RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status
+    };
+    let operator_next_actions = if operator_status == RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status {
+        Vec::new()
+    } else {
+        next_actions.clone()
+    };
+    let mut operator_blocker_codes = blocker_codes.clone();
+    operator_blocker_codes.extend(failure_codes.iter().cloned());
+    operator_blocker_codes = canonical_gate_code_entries(operator_blocker_codes);
+    let operator_contracts = render_operator_contract_envelope(
+        &RELEASE1_OPERATOR_CONTRACT_SPEC,
+        operator_status,
+        operator_blocker_codes,
+        operator_next_actions,
+        artifact_refs.clone(),
+    );
+    let trace_id = artifact_refs
+        .get("trace_id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let workflow_class = artifact_refs
+        .get("workflow_class")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let risk_tier = artifact_refs
+        .get("risk_tier")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let run_id = artifact_refs
+        .get("run_id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let task_id = artifact_refs
+        .get("task_id")
+        .cloned()
+        .unwrap_or_else(|| run_id.clone());
+    let packet_id = artifact_refs
+        .get("packet_id")
+        .or_else(|| artifact_refs.get("dispatch_packet_path"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let evidence_refs = artifact_refs
+        .get("evidence_refs")
+        .or_else(|| artifact_refs.get("proof_surfaces"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    let affected_paths = artifact_refs
+        .get("affected_paths")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+
+    serde_json::json!({
+        "schema_version": VIDA_GATE_RESULT_SCHEMA_VERSION,
+        "gate_id": gate_id.trim(),
+        "status": status,
+        "ready": matches!(status, "pass" | "warn"),
+        "blocking": matches!(status, "fail" | "blocked"),
+        "trace_id": trace_id,
+        "workflow_class": workflow_class,
+        "risk_tier": risk_tier,
+        "task_id": task_id,
+        "run_id": run_id,
+        "packet_id": packet_id,
+        "evidence_refs": evidence_refs,
+        "affected_paths": affected_paths,
+        "blocker_codes": blocker_codes,
+        "warning_codes": warning_codes,
+        "failure_codes": failure_codes,
+        "issues": issues,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+        "operator_contracts": operator_contracts,
+    })
+}
+
+pub(crate) fn render_vida_gate_result_from_operator_contracts(
+    gate_id: &str,
+    mut operator_contracts: Value,
+    warning_codes: Vec<String>,
+    failure_codes: Vec<String>,
+    issues: Vec<Value>,
+    next_actions: Vec<String>,
+    artifact_refs: Value,
+) -> Value {
+    let blocker_codes = operator_contracts["blocker_codes"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !failure_codes.is_empty()
+        && operator_contracts["status"].as_str()
+            == Some(RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status)
+    {
+        operator_contracts = render_operator_contract_envelope(
+            &RELEASE1_OPERATOR_CONTRACT_SPEC,
+            RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,
+            failure_codes.clone(),
+            next_actions.clone(),
+            artifact_refs.clone(),
+        );
+    }
+    let mut gate_result = render_vida_gate_result(
+        gate_id,
+        blocker_codes,
+        warning_codes,
+        failure_codes,
+        issues,
+        next_actions,
+        artifact_refs,
+    );
+    gate_result["operator_contracts"] = operator_contracts;
+    gate_result["workflow_class"] = gate_result["operator_contracts"]["workflow_class"].clone();
+    gate_result["risk_tier"] = gate_result["operator_contracts"]["risk_tier"].clone();
+    gate_result["trace_id"] = gate_result["operator_contracts"]["trace_id"].clone();
+    gate_result
+}
+
+fn canonical_gate_code_entries(entries: Vec<String>) -> Vec<String> {
+    let mut canonical = entries
+        .into_iter()
+        .map(|entry| entry.trim().to_ascii_lowercase())
+        .filter(|entry| !entry.is_empty())
+        .collect::<Vec<_>>();
+    canonical.sort();
+    canonical.dedup();
+    canonical
+}
+
 pub(crate) fn render_operator_contract_envelope(
     spec: &OperatorContractSpec,
     status: &str,
@@ -378,6 +538,12 @@ pub(crate) fn operator_output_contract_parity_error(
         && status_has_canonical_mirror
         && blocker_codes_has_canonical_mirror
         && next_actions_has_canonical_mirror
+        && has_raw_canonical_blocker_entries(upper_blocker_codes, canonicalize_blockers)
+        && has_raw_canonical_blocker_entries(&shared["blocker_codes"], canonicalize_blockers)
+        && has_raw_canonical_blocker_entries(&contracts["blocker_codes"], canonicalize_blockers)
+        && has_raw_canonical_next_action_entries(upper_next_actions)
+        && has_raw_canonical_next_action_entries(&shared["next_actions"])
+        && has_raw_canonical_next_action_entries(&contracts["next_actions"])
     {
         return None;
     }
@@ -428,6 +594,37 @@ fn shared_operator_has_canonical_next_actions(
         || is_canonical_next_action_entries(&contract["next_actions"])
 }
 
+fn has_raw_canonical_blocker_entries(
+    value: &Value,
+    canonicalize_blockers: fn(&[String]) -> Vec<String>,
+) -> bool {
+    let Some(rows) = value.as_array() else {
+        return false;
+    };
+    let Some(canonical) = canonical_blocker_code_entries(value, canonicalize_blockers) else {
+        return false;
+    };
+    let raw = rows
+        .iter()
+        .filter_map(|row| row.as_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    raw == canonical
+}
+
+fn has_raw_canonical_next_action_entries(value: &Value) -> bool {
+    let Some(rows) = value.as_array() else {
+        return false;
+    };
+    let Some(canonical) = canonical_next_action_entries(value) else {
+        return false;
+    };
+    let raw = rows
+        .iter()
+        .filter_map(|row| row.as_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    raw == canonical
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -436,8 +633,10 @@ mod tests {
         canonical_release1_operator_contract_status, finalize_release1_operator_truth,
         normalize_blocker_codes, operator_contract_status_for_blockers,
         operator_contracts_consistency_error, release1_operator_contracts_consistency_error,
-        render_operator_contract_envelope, shared_operator_output_contract_parity_error,
-        RELEASE1_OPERATOR_CONTRACT_SPEC,
+        render_operator_contract_envelope, render_vida_gate_result,
+        render_vida_gate_result_from_operator_contracts,
+        shared_operator_output_contract_parity_error, RELEASE1_OPERATOR_CONTRACT_SPEC,
+        VIDA_GATE_RESULT_SCHEMA_VERSION,
     };
     use serde_json::json;
 
@@ -479,6 +678,143 @@ mod tests {
         );
         assert_eq!(envelope["schema_version"], json!("release-1-v1"));
         assert_eq!(envelope["status"], json!("pass"));
+    }
+
+    #[test]
+    fn vida_gate_result_keeps_warning_only_gate_pass_without_operator_next_actions() {
+        let gate_result = render_vida_gate_result(
+            "docflow",
+            vec![],
+            vec![" Proof_Warning ".to_string()],
+            vec![],
+            vec![json!({"code": "proof_warning", "severity": "warning"})],
+            vec![" Refresh docflow evidence. ".to_string()],
+            json!({
+                "proof": "present",
+                "evidence_refs": ["docflow-proof"],
+                "affected_paths": ["docs/process/docflow.md"],
+                "task_id": "task-1",
+                "run_id": "run-1",
+                "packet_id": "packet-1",
+                "risk_tier": "low",
+                "workflow_class": "tool_assisted_read"
+            }),
+        );
+
+        assert_eq!(
+            gate_result["schema_version"],
+            json!(VIDA_GATE_RESULT_SCHEMA_VERSION)
+        );
+        assert_eq!(gate_result["status"], json!("warn"));
+        assert_eq!(gate_result["ready"], json!(true));
+        assert_eq!(gate_result["blocking"], json!(false));
+        assert_eq!(gate_result["warning_codes"], json!(["proof_warning"]));
+        assert_eq!(gate_result["task_id"], json!("task-1"));
+        assert_eq!(gate_result["run_id"], json!("run-1"));
+        assert_eq!(gate_result["packet_id"], json!("packet-1"));
+        assert_eq!(gate_result["risk_tier"], json!("low"));
+        assert_eq!(gate_result["workflow_class"], json!("tool_assisted_read"));
+        assert_eq!(gate_result["evidence_refs"], json!(["docflow-proof"]));
+        assert_eq!(
+            gate_result["affected_paths"],
+            json!(["docs/process/docflow.md"])
+        );
+        assert_eq!(
+            gate_result["next_actions"],
+            json!(["refresh docflow evidence."])
+        );
+        assert_eq!(gate_result["operator_contracts"]["status"], json!("pass"));
+        assert_eq!(gate_result["operator_contracts"]["next_actions"], json!([]));
+    }
+
+    #[test]
+    fn vida_gate_result_mirrors_blockers_into_operator_contracts() {
+        let gate_result = render_vida_gate_result(
+            "consume-final",
+            vec![" Migration_Required ".to_string()],
+            vec![],
+            vec![],
+            vec![json!({"code": "migration_required", "severity": "blocker"})],
+            vec![" Resolve migration. ".to_string()],
+            json!({"proof": "present"}),
+        );
+
+        assert_eq!(gate_result["status"], json!("blocked"));
+        assert_eq!(gate_result["ready"], json!(false));
+        assert_eq!(gate_result["blocking"], json!(true));
+        assert_eq!(gate_result["blocker_codes"], json!(["migration_required"]));
+        assert_eq!(
+            gate_result["operator_contracts"]["blocker_codes"],
+            json!(["migration_required"])
+        );
+        assert_eq!(
+            gate_result["operator_contracts"]["next_actions"],
+            json!(["resolve migration."])
+        );
+    }
+
+    #[test]
+    fn vida_gate_result_reports_failure_while_legacy_projection_blocks() {
+        let gate_result = render_vida_gate_result(
+            "consume-final",
+            vec![],
+            vec![],
+            vec![" Failure_Control_Evidence_Present ".to_string()],
+            vec![json!({"code": "failure_control_evidence_present", "severity": "failure"})],
+            vec![" Inspect dispatch receipt. ".to_string()],
+            json!({
+                "run_id": "run-2",
+                "task_id": "task-2",
+                "dispatch_packet_path": "packet.json",
+                "evidence_refs": ["dispatch-result"],
+                "affected_paths": ["crates/vida/src/operator_contracts.rs"]
+            }),
+        );
+
+        assert_eq!(gate_result["status"], json!("fail"));
+        assert_eq!(gate_result["ready"], json!(false));
+        assert_eq!(gate_result["blocking"], json!(true));
+        assert_eq!(
+            gate_result["failure_codes"],
+            json!(["failure_control_evidence_present"])
+        );
+        assert_eq!(gate_result["packet_id"], json!("packet.json"));
+        assert_eq!(
+            gate_result["operator_contracts"]["status"],
+            json!("blocked")
+        );
+        assert_eq!(
+            gate_result["operator_contracts"]["blocker_codes"],
+            json!(["failure_control_evidence_present"])
+        );
+        assert_eq!(
+            gate_result["operator_contracts"]["next_actions"],
+            json!(["inspect dispatch receipt."])
+        );
+    }
+
+    #[test]
+    fn vida_gate_result_from_operator_contracts_preserves_projection() {
+        let operator_contracts = render_operator_contract_envelope(
+            &RELEASE1_OPERATOR_CONTRACT_SPEC,
+            "blocked",
+            vec!["migration_required".to_string()],
+            vec!["resolve migration".to_string()],
+            json!({"proof": "present"}),
+        );
+        let gate_result = render_vida_gate_result_from_operator_contracts(
+            "consume-final",
+            operator_contracts.clone(),
+            vec![],
+            vec![],
+            vec![],
+            vec!["resolve migration".to_string()],
+            operator_contracts["artifact_refs"].clone(),
+        );
+
+        assert_eq!(gate_result["operator_contracts"], operator_contracts);
+        assert_eq!(gate_result["status"], json!("blocked"));
+        assert_eq!(gate_result["ready"], json!(false));
     }
 
     #[test]
@@ -626,6 +962,32 @@ mod tests {
                 "next_actions": ["resolve migration"],
             }
         });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            Some(
+                "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
+            )
+        );
+    }
+
+    #[test]
+    fn shared_parity_rejects_noncanonical_mirror_entries_even_when_normalized_equal() {
+        let summary_json = json!({
+            "status": "blocked",
+            "blocker_codes": ["migration_required"],
+            "next_actions": [" Run proofcheck "],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": ["migration_required"],
+                "next_actions": ["run proofcheck"],
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": ["migration_required"],
+                "next_actions": ["run proofcheck"],
+            }
+        });
+
         assert_eq!(
             shared_operator_output_contract_parity_error(&summary_json),
             Some(

@@ -3545,6 +3545,14 @@ fn taskflow_graph_summary_operator_contracts(
         "recovery_run_id": recovery.map(|summary| summary.run_id.as_str()),
         "dispatch_run_id": dispatch.map(|summary| summary.run_id.as_str()),
     });
+    let next_actions = if status
+        == crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status
+    {
+        Vec::new()
+    } else {
+        crate::operator_contracts::canonical_next_action_entries(&serde_json::json!(next_actions))
+            .unwrap_or_else(|| next_actions.to_vec())
+    };
     let shared_fields = serde_json::json!({
         "status": status,
         "blocker_codes": blocker_codes,
@@ -4762,6 +4770,12 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         "pass"
     } else {
         "blocked"
+    };
+    let next_actions = if status == "pass" {
+        Vec::new()
+    } else {
+        crate::operator_contracts::canonical_next_action_entries(&serde_json::json!(next_actions))
+            .unwrap_or(next_actions)
     };
     let (shared_fields, operator_contracts, artifact_refs) =
         taskflow_graph_summary_operator_contracts(
@@ -11276,7 +11290,7 @@ agent_system:
         latest_status.status = "blocked".to_string();
         let blocker_codes = vec!["open_delegated_cycle".to_string()];
         let next_actions = vec![
-            "Inspect recovery truth with `vida taskflow recovery status run-1 --json`.".to_string(),
+            "inspect recovery truth with `vida taskflow recovery status run-1 --json`.".to_string(),
         ];
 
         let (shared_fields, operator_contracts, artifact_refs) =

@@ -2,6 +2,7 @@ use crate::contract_profile_adapter::{
     blocker_code, canonical_blocker_code_list, operator_contract_status_is_blocked,
     render_operator_contract_envelope, BlockerCode,
 };
+use crate::operator_contracts::render_vida_gate_result_from_operator_contracts;
 
 pub(crate) fn emit_taskflow_consume_final_json(
     store: &crate::StateStore,
@@ -100,6 +101,15 @@ pub(crate) fn emit_taskflow_consume_final_json(
         "failure_control_evidence": failure_control_evidence.clone(),
         "payload": payload_json,
     });
+    let mut vida_gate_result = consume_final_vida_gate_result(
+        &operator_contracts,
+        &consume_final_next_actions,
+        &failure_control_evidence,
+    );
+    let docflow_vida_gate_result =
+        docflow_verdict_vida_gate_result(&payload_json["docflow_verdict"]);
+    snapshot_with_operator_contracts["vida_gate_result"] = vida_gate_result.clone();
+    snapshot_with_operator_contracts["docflow_vida_gate_result"] = docflow_vida_gate_result.clone();
     std::fs::write(
         &snapshot_path,
         serde_json::to_string_pretty(&snapshot_with_operator_contracts)
@@ -147,6 +157,15 @@ pub(crate) fn emit_taskflow_consume_final_json(
     snapshot_with_operator_contracts["shared_fields"] = shared_fields.clone();
     snapshot_with_operator_contracts["operator_contracts"] = operator_contracts.clone();
     snapshot_with_operator_contracts["payload"] = payload_json.clone();
+    vida_gate_result = consume_final_vida_gate_result(
+        &operator_contracts,
+        &consume_final_next_actions,
+        &failure_control_evidence,
+    );
+    let docflow_vida_gate_result =
+        docflow_verdict_vida_gate_result(&payload_json["docflow_verdict"]);
+    snapshot_with_operator_contracts["vida_gate_result"] = vida_gate_result.clone();
+    snapshot_with_operator_contracts["docflow_vida_gate_result"] = docflow_vida_gate_result.clone();
     std::fs::write(
         &snapshot_path,
         serde_json::to_string_pretty(&snapshot_with_operator_contracts)
@@ -166,6 +185,8 @@ pub(crate) fn emit_taskflow_consume_final_json(
             "artifact_refs": operator_contracts["artifact_refs"].clone(),
             "shared_fields": shared_fields,
             "operator_contracts": operator_contracts,
+            "vida_gate_result": vida_gate_result,
+            "docflow_vida_gate_result": docflow_vida_gate_result,
             "failure_control_evidence": failure_control_evidence,
             "payload": payload_json,
             "snapshot_path": snapshot_path,
@@ -182,6 +203,81 @@ pub(crate) fn build_operator_contracts_envelope(
     artifact_refs: serde_json::Value,
 ) -> serde_json::Value {
     render_operator_contract_envelope(status, blocker_codes, next_actions, artifact_refs)
+}
+
+fn consume_final_vida_gate_result(
+    operator_contracts: &serde_json::Value,
+    next_actions: &[String],
+    failure_control_evidence: &serde_json::Value,
+) -> serde_json::Value {
+    let failure_codes = consume_final_failure_codes(failure_control_evidence);
+    let issues = failure_codes
+        .iter()
+        .map(|code| {
+            serde_json::json!({
+                "code": code,
+                "severity": "failure",
+                "source": "failure_control_evidence",
+            })
+        })
+        .collect::<Vec<_>>();
+    render_vida_gate_result_from_operator_contracts(
+        "taskflow.consume_final",
+        operator_contracts.clone(),
+        Vec::new(),
+        failure_codes,
+        issues,
+        next_actions.to_vec(),
+        operator_contracts["artifact_refs"].clone(),
+    )
+}
+
+fn consume_final_failure_codes(failure_control_evidence: &serde_json::Value) -> Vec<String> {
+    if failure_control_evidence.is_null() {
+        Vec::new()
+    } else {
+        vec!["failure_control_evidence_present".to_string()]
+    }
+}
+
+fn docflow_verdict_vida_gate_result(docflow_verdict: &serde_json::Value) -> serde_json::Value {
+    let blockers = docflow_verdict["blockers"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let status_is_blocked = operator_contract_status_is_blocked(&docflow_verdict["status"]);
+    let next_actions = if status_is_blocked {
+        vec!["Run `vida docflow proofcheck --profile active-canon` and clear blockers.".to_string()]
+    } else {
+        Vec::new()
+    };
+    crate::operator_contracts::render_vida_gate_result(
+        "docflow.runtime_verdict",
+        blockers
+            .iter()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<String>>(),
+        Vec::new(),
+        Vec::new(),
+        blockers
+            .iter()
+            .map(|code| {
+                serde_json::json!({
+                    "code": code,
+                    "severity": "blocker",
+                    "source": "docflow_verdict",
+                })
+            })
+            .collect(),
+        next_actions,
+        serde_json::json!({
+            "proof_surfaces": docflow_verdict["proof_surfaces"].clone(),
+        }),
+    )
 }
 
 fn consume_final_operator_blocker_codes(payload: &serde_json::Value) -> Vec<String> {
@@ -301,5 +397,96 @@ mod tests {
         assert!(next_actions
             .iter()
             .any(|action| action.contains("proof_target")));
+    }
+
+    #[test]
+    fn consume_final_gate_result_is_sibling_and_preserves_operator_projection() {
+        let operator_contracts = build_operator_contracts_envelope(
+            "pass",
+            Vec::new(),
+            Vec::new(),
+            serde_json::json!({"snapshot": "present"}),
+        );
+
+        let gate_result =
+            consume_final_vida_gate_result(&operator_contracts, &[], &serde_json::Value::Null);
+
+        assert_eq!(gate_result["gate_id"], "taskflow.consume_final");
+        assert_eq!(gate_result["status"], "pass");
+        assert_eq!(gate_result["ready"], true);
+        assert_eq!(gate_result["operator_contracts"], operator_contracts);
+    }
+
+    #[test]
+    fn consume_final_gate_result_reports_failure_with_blocked_legacy_projection() {
+        let operator_contracts = build_operator_contracts_envelope(
+            "pass",
+            Vec::new(),
+            Vec::new(),
+            serde_json::json!({
+                "run_id": "run-1",
+                "task_id": "task-1",
+                "dispatch_packet_path": "packet.json",
+                "evidence_refs": ["failure-control"],
+                "affected_paths": ["crates/vida/src/consume_final_operator_surface.rs"]
+            }),
+        );
+        let failure_control_evidence = serde_json::json!({
+            "failure_control": "present"
+        });
+
+        let gate_result = consume_final_vida_gate_result(
+            &operator_contracts,
+            &["Inspect failure control evidence.".to_string()],
+            &failure_control_evidence,
+        );
+
+        assert_eq!(gate_result["status"], "fail");
+        assert_eq!(gate_result["blocking"], true);
+        assert_eq!(gate_result["ready"], false);
+        assert_eq!(
+            gate_result["failure_codes"],
+            serde_json::json!(["failure_control_evidence_present"])
+        );
+        assert_eq!(gate_result["operator_contracts"]["status"], "blocked");
+        assert_eq!(
+            gate_result["operator_contracts"]["blocker_codes"],
+            serde_json::json!(["failure_control_evidence_present"])
+        );
+        assert_eq!(gate_result["run_id"], "run-1");
+        assert_eq!(gate_result["task_id"], "task-1");
+        assert_eq!(gate_result["packet_id"], "packet.json");
+        assert_eq!(
+            gate_result["evidence_refs"],
+            serde_json::json!(["failure-control"])
+        );
+        assert_eq!(
+            gate_result["affected_paths"],
+            serde_json::json!(["crates/vida/src/consume_final_operator_surface.rs"])
+        );
+    }
+
+    #[test]
+    fn docflow_verdict_gate_result_adapts_block_verdict_without_changing_verdict_shape() {
+        let docflow_verdict = serde_json::json!({
+            "status": "block",
+            "ready": false,
+            "blockers": ["missing_proof_verdict"],
+            "proof_surfaces": ["registry", "check", "readiness", "proof"]
+        });
+
+        let gate_result = docflow_verdict_vida_gate_result(&docflow_verdict);
+
+        assert_eq!(gate_result["gate_id"], "docflow.runtime_verdict");
+        assert_eq!(gate_result["status"], "blocked");
+        assert_eq!(gate_result["ready"], false);
+        assert_eq!(
+            gate_result["blocker_codes"],
+            serde_json::json!(["missing_proof_verdict"])
+        );
+        assert_eq!(
+            gate_result["operator_contracts"]["blocker_codes"],
+            serde_json::json!(["missing_proof_verdict"])
+        );
     }
 }
