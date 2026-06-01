@@ -1428,6 +1428,19 @@ fn apply_continuation_dispatch_gate_to_preview(
             crate::status_surface_signals::continuation_binding_ambiguous_next_action().to_string(),
         );
     }
+    if let Some(planner) = preview.parallelization_planner.as_object_mut() {
+        planner.insert(
+            "status".to_string(),
+            serde_json::json!("no_packet_proposals"),
+        );
+        planner.insert("packet_proposals".to_string(), serde_json::json!([]));
+        planner.insert("materializes_packets".to_string(), serde_json::json!(false));
+        planner.insert("diagnostic_only".to_string(), serde_json::json!(true));
+        planner.insert(
+            "blocked_by_continuation_gate".to_string(),
+            serde_json::json!(true),
+        );
+    }
 }
 
 fn safe_agent_dispatch_projection_component(value: &str) -> String {
@@ -3433,6 +3446,9 @@ mod tests {
         );
         assert_eq!(preview.status, "pass");
         assert_eq!(preview.lanes_selected, 1);
+        assert!(preview.parallelization_planner["packet_proposals"]
+            .as_array()
+            .is_some_and(|proposals| !proposals.is_empty()));
 
         apply_continuation_dispatch_gate_to_preview(
             &mut preview,
@@ -3460,6 +3476,18 @@ mod tests {
         assert!(preview
             .next_actions
             .contains(&"bind an explicit next bounded unit".to_string()));
+        assert_eq!(
+            preview.parallelization_planner["status"],
+            "no_packet_proposals"
+        );
+        assert_eq!(preview.parallelization_planner["diagnostic_only"], true);
+        assert_eq!(
+            preview.parallelization_planner["blocked_by_continuation_gate"],
+            true
+        );
+        assert!(preview.parallelization_planner["packet_proposals"]
+            .as_array()
+            .is_some_and(|proposals| proposals.is_empty()));
     }
 
     #[test]
