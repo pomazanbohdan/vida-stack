@@ -2090,7 +2090,11 @@ fn configured_host_tool_bridge_dir(
     }
 }
 
-fn write_host_bridge_request_file(path: &Path, request: &serde_json::Value) -> Result<(), String> {
+fn write_host_bridge_request_file(
+    path: &Path,
+    request: &serde_json::Value,
+    replace_existing: bool,
+) -> Result<(), String> {
     let parent = path.parent().ok_or_else(|| {
         format!(
             "Host bridge request path `{}` has no parent directory.",
@@ -2135,22 +2139,36 @@ fn write_host_bridge_request_file(path: &Path, request: &serde_json::Value) -> R
     }
     let encoded = serde_json::to_string_pretty(request)
         .map_err(|error| format!("Failed to encode host bridge request: {error}"))?;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| {
-            format!(
-                "Failed to create host bridge request `{}`: {error}",
-                path.display()
-            )
-        })?;
+    let mut open_options = std::fs::OpenOptions::new();
+    open_options.write(true);
+    if replace_existing {
+        open_options.create(true).truncate(true);
+    } else {
+        open_options.create_new(true);
+    }
+    let mut file = open_options.open(path).map_err(|error| {
+        format!(
+            "Failed to create host bridge request `{}`: {error}",
+            path.display()
+        )
+    })?;
     file.write_all(encoded.as_bytes()).map_err(|error| {
         format!(
             "Failed to write host bridge request `{}`: {error}",
             path.display()
         )
     })
+}
+
+fn remove_stale_host_bridge_artifact(path: &Path, label: &str) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Failed to remove stale host bridge {label} `{}`: {error}",
+            path.display()
+        )),
+    }
 }
 
 fn read_existing_host_bridge_request(path: &Path) -> Result<Option<serde_json::Value>, String> {
@@ -2242,6 +2260,7 @@ fn materialize_host_tool_bridge_request(
         receipt.run_id, receipt.dispatch_target
     );
     let paths = host_tool_bridge_artifact_paths(project_root, selected_cli_entry, &request_id);
+    let mut replace_existing_request = false;
     if let Some(existing) = read_existing_host_bridge_request(&paths.request_path)? {
         if existing.get("run_id").and_then(serde_json::Value::as_str)
             != Some(receipt.run_id.as_str())
@@ -2259,7 +2278,18 @@ fn materialize_host_tool_bridge_request(
                 paths.request_path.display()
             ));
         }
-        return Ok(existing);
+        if existing
+            .get("packet_path")
+            .and_then(serde_json::Value::as_str)
+            == Some(dispatch_packet_path)
+        {
+            return Ok(existing);
+        }
+        replace_existing_request = true;
+    }
+    if replace_existing_request {
+        remove_stale_host_bridge_artifact(&paths.result_path, "result")?;
+        remove_stale_host_bridge_artifact(&paths.receipt_path, "receipt")?;
     }
     let adapter_kind = configured_host_tool_bridge_string(selected_cli_entry, "adapter_kind")
         .unwrap_or_else(|| "unconfigured_host_agent_adapter".to_string());
@@ -2319,7 +2349,7 @@ fn materialize_host_tool_bridge_request(
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("Failed to create host bridge receipt directory: {error}"))?;
     }
-    write_host_bridge_request_file(&paths.request_path, &request)?;
+    write_host_bridge_request_file(&paths.request_path, &request, replace_existing_request)?;
     Ok(request)
 }
 
@@ -4957,6 +4987,82 @@ host_tool_bridge:
             error.contains("does not match the active dispatch lane"),
             "unexpected error: {error}"
         );
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn host_tool_bridge_request_rotates_stale_same_target_packet() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-rotate-request-{}-{nanos}",
+            std::process::id()
+        ));
+        let first_packet_path = project_root.join(".vida/dispatch-a.json");
+        let second_packet_path = project_root.join(".vida/dispatch-b.json");
+        std::fs::create_dir_all(first_packet_path.parent().expect("dispatch parent"))
+            .expect("create dispatch parent");
+        std::fs::write(&first_packet_path, r#"{"owned_paths":["first.rs"]}"#)
+            .expect("write first dispatch packet");
+        std::fs::write(&second_packet_path, r#"{"owned_paths":["second.rs"]}"#)
+            .expect("write second dispatch packet");
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({}));
+        let mut receipt = internal_codex_fallback_receipt(
+            first_packet_path
+                .to_str()
+                .expect("first packet path should render"),
+        );
+        receipt.dispatch_target = "coach".to_string();
+
+        let first_request = materialize_host_tool_bridge_request(
+            &project_root,
+            None,
+            first_packet_path
+                .to_str()
+                .expect("first packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect("first bridge request should materialize");
+        let result_path = PathBuf::from(
+            first_request["result_path"]
+                .as_str()
+                .expect("result path should render"),
+        );
+        let receipt_path = PathBuf::from(
+            first_request["receipt_path"]
+                .as_str()
+                .expect("receipt path should render"),
+        );
+        std::fs::write(&result_path, "{}").expect("write stale result");
+        std::fs::write(&receipt_path, "{}").expect("write stale receipt");
+
+        let rotated_request = materialize_host_tool_bridge_request(
+            &project_root,
+            None,
+            second_packet_path
+                .to_str()
+                .expect("second packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect("second bridge request should rotate stale packet");
+
+        assert_eq!(
+            rotated_request["packet_path"],
+            second_packet_path
+                .to_str()
+                .expect("second packet path should render")
+        );
+        assert_eq!(rotated_request["owned_paths"][0], "second.rs");
+        assert!(!result_path.exists(), "stale result should be removed");
+        assert!(!receipt_path.exists(), "stale receipt should be removed");
         let _ = std::fs::remove_dir_all(&project_root);
     }
 
