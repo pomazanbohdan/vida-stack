@@ -303,15 +303,6 @@ fn wait_for_agent_end(
 ) -> Result<String, String> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("Failed to inspect Pi process state: {error}"))?
-        {
-            return Err(format!(
-                "Pi process exited before agent_end with status {status}"
-            ));
-        }
-
         let now = Instant::now();
         if now >= deadline {
             let _ = child.kill();
@@ -336,8 +327,25 @@ fn wait_for_agent_end(
                 }
             }
             Ok(Err(error)) => return Err(error),
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(status) = child
+                    .try_wait()
+                    .map_err(|error| format!("Failed to inspect Pi process state: {error}"))?
+                {
+                    return Err(format!(
+                        "Pi process exited before agent_end with status {status}"
+                    ));
+                }
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if let Some(status) = child
+                    .try_wait()
+                    .map_err(|error| format!("Failed to inspect Pi process state: {error}"))?
+                {
+                    return Err(format!(
+                        "Pi process exited before agent_end with status {status}"
+                    ));
+                }
                 return Err("Pi RPC stdout closed before agent_end".to_string());
             }
         }
