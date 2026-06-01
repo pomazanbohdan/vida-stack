@@ -16609,6 +16609,147 @@ host_environment:
     }
 
     #[test]
+    fn forged_executed_dispatch_result_without_receipt_evidence_does_not_reconcile() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("implementer-packet.json");
+        fs::write(&packet_path, "{}").expect("packet should write");
+        let result_dir = harness
+            .path()
+            .join("runtime-consumption")
+            .join("dispatch-results");
+        fs::create_dir_all(&result_dir).expect("dispatch result dir should exist");
+        fs::write(
+            result_dir.join("forged.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "run_id": "run-forged-completion",
+                "execution_state": "executed",
+                "recorded_at": "2026-04-11T00:00:00Z"
+            }))
+            .expect("forged json should encode"),
+        )
+        .expect("forged result should write");
+
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: "run-forged-completion".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("configured_internal".to_string()),
+            dispatch_command: Some("configured dispatch".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT.to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("default".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            !apply_existing_executed_dispatch_result_to_receipt(harness.path(), &mut receipt)
+                .expect("forged result scan should not fail")
+        );
+        assert_eq!(receipt.dispatch_status, "blocked");
+        assert_eq!(receipt.lane_status, "lane_blocked");
+        assert_eq!(
+            receipt.blocker_code.as_deref(),
+            Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
+        );
+        assert_eq!(receipt.dispatch_result_path, None);
+    }
+
+    #[test]
+    fn mismatched_executed_dispatch_completion_target_does_not_reconcile() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let packet_path = harness.path().join("implementer-packet.json");
+        fs::write(&packet_path, "{}").expect("packet should write");
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: "run-wrong-target-completion".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("configured_internal".to_string()),
+            dispatch_command: Some("configured dispatch".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("default".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        let path = write_runtime_dispatch_result(
+            harness.path(),
+            &receipt,
+            &serde_json::json!({
+                "surface": "configured_internal",
+                "status": "pass",
+                "execution_state": "executed",
+                "provider_result": "implemented"
+            }),
+        )
+        .expect("legitimate result should write");
+        let mut artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&path).expect("legitimate result should be readable"),
+        )
+        .expect("legitimate result should decode");
+        artifact["completed_target"] = serde_json::json!("verifier");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&artifact).expect("modified result should encode"),
+        )
+        .expect("modified result should write");
+
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT.to_string());
+        receipt.dispatch_result_path = None;
+
+        assert!(
+            !apply_existing_executed_dispatch_result_to_receipt(harness.path(), &mut receipt)
+                .expect("mismatched target scan should not fail")
+        );
+        assert_eq!(receipt.dispatch_status, "blocked");
+        assert_eq!(receipt.lane_status, "lane_blocked");
+        assert_eq!(
+            receipt.blocker_code.as_deref(),
+            Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
+        );
+        assert_eq!(receipt.dispatch_result_path, None);
+    }
+
+    #[test]
     fn write_runtime_dispatch_result_keeps_blocked_agent_lane_as_dispatch_artifact() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let receipt = RunGraphDispatchReceipt {
@@ -20990,25 +21131,71 @@ fn dispatch_result_matches_receipt(
     if result["run_id"].as_str() != Some(receipt.run_id.as_str()) {
         return false;
     }
-    if let Some(packet_path) = receipt
+    if result["completed_target"].as_str() != Some(receipt.dispatch_target.as_str()) {
+        return false;
+    }
+    let Some(packet_path) = receipt
         .dispatch_packet_path
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
-        if result["source_dispatch_packet_path"]
-            .as_str()
-            .is_some_and(|value| value != packet_path)
-        {
-            return false;
-        }
+    else {
+        return false;
+    };
+    if result["source_dispatch_packet_path"].as_str() != Some(packet_path) {
+        return false;
     }
     true
 }
 
-fn dispatch_result_is_executed_completion(result: &serde_json::Value) -> bool {
-    result["execution_state"].as_str() == Some("executed")
-        && result["status"].as_str().unwrap_or("pass") == "pass"
+fn dispatch_result_has_receipt_backed_execution_evidence(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    result: &serde_json::Value,
+) -> bool {
+    if result["completion_receipt_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        return false;
+    }
+    if result["activation_vs_execution_evidence"]["evidence_state"].as_str()
+        != Some("execution_evidence_recorded")
+    {
+        return false;
+    }
+    let execution_evidence = &result["execution_evidence"];
+    if execution_evidence["status"].as_str() != Some("recorded")
+        || execution_evidence["receipt_backed"].as_bool() != Some(true)
+        || execution_evidence["evidence_kind"].as_str() != Some("lane_execution_receipt_artifact")
+    {
+        return false;
+    }
+    if let Some(result_path) = result["dispatch_result_path"]
+        .as_str()
+        .or_else(|| result["receipt_path"].as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if execution_evidence["result_path"].as_str() != Some(result_path) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    let expected_backend = canonical_lane_receipt_carrier_id(receipt);
+    execution_evidence["backend_id"].as_str() == Some(expected_backend.as_str())
+}
+
+fn dispatch_result_is_executed_completion(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    result: &serde_json::Value,
+) -> bool {
+    result["artifact_kind"].as_str() == Some("runtime_lane_completion_result")
+        && result["execution_state"].as_str() == Some("executed")
+        && result["status"].as_str() == Some("pass")
+        && dispatch_result_has_receipt_backed_execution_evidence(receipt, result)
 }
 
 fn latest_executed_dispatch_result_for_receipt(
@@ -21044,7 +21231,7 @@ fn latest_executed_dispatch_result_for_receipt(
             continue;
         };
         if !dispatch_result_matches_receipt(receipt, &result)
-            || !dispatch_result_is_executed_completion(&result)
+            || !dispatch_result_is_executed_completion(receipt, &result)
         {
             continue;
         }
@@ -21889,6 +22076,10 @@ pub(crate) fn write_runtime_lane_completion_result(
         .expect("rfc3339 timestamp should render")
         .replace(':', "-");
     let result_path = result_dir.join(format!("{safe_run_id}-{ts}.json"));
+    let recorded_at = time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("rfc3339 timestamp should render");
+    let result_path_display = result_path.display().to_string();
     let body = serde_json::json!({
         "artifact_kind": "runtime_lane_completion_result",
         "status": "pass",
@@ -21897,9 +22088,41 @@ pub(crate) fn write_runtime_lane_completion_result(
         "completed_target": completed_target,
         "completion_receipt_id": receipt_id,
         "source_dispatch_packet_path": source_dispatch_packet_path,
-        "recorded_at": time::OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .expect("rfc3339 timestamp should render"),
+        "recorded_at": recorded_at,
+        "dispatch_result_path": result_path_display,
+        "receipt_path": result_path_display,
+        "lane_execution_receipt_path": result_path_display,
+        "activation_vs_execution_evidence": {
+            "activation_kind": "execution_evidence",
+            "evidence_state": "execution_evidence_recorded",
+            "activation_semantics": {
+                "activation_kind": "execution_evidence",
+                "view_only": false,
+                "executes_packet": true,
+                "records_completion_receipt": true,
+            },
+            "execution_evidence": {
+                "status": "recorded",
+                "receipt_backed": true,
+                "evidence_kind": "lane_execution_receipt_artifact",
+                "result_path": result_path_display,
+                "backend_id": "taskflow_state_store",
+            },
+            "receipt_backed": true,
+        },
+        "activation_semantics": {
+            "activation_kind": "execution_evidence",
+            "view_only": false,
+            "executes_packet": true,
+            "records_completion_receipt": true,
+        },
+        "execution_evidence": {
+            "status": "recorded",
+            "receipt_backed": true,
+            "evidence_kind": "lane_execution_receipt_artifact",
+            "result_path": result_path_display,
+            "backend_id": "taskflow_state_store",
+        },
     });
     let encoded = serde_json::to_string_pretty(&body)
         .map_err(|error| format!("Failed to encode lane completion result: {error}"))?;
