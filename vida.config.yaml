@@ -990,12 +990,12 @@ dev_team:
           requires_user_approval: true
           proof_gates:
             required_outputs: [architecture_problem_statement, accepted_constraints]
-        - role_id: developer
-          runtime_role: worker
+        - role_id: architect
+          runtime_role: solution_architect
           task_class: execution_preparation
           command_template:
             surface: vida agent-init
-            args: [--role, worker, "{{task_id}}", --json]
+            args: [--role, solution_architect, "{{task_id}}", --json]
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [implementation_plan, owned_write_scope]
