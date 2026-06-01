@@ -962,18 +962,13 @@ fn build_agent_dispatch_next_preview_dev_team(
             .map(str::to_string)
         })
         .collect::<std::collections::BTreeSet<_>>();
-    let selected_ready_candidates = if all_ready_flow_ids.len() > 1 {
-        if let Some(current_task_id) = projection.current_task_id.as_deref() {
-            projection
-                .ready
-                .iter()
-                .filter(|candidate| candidate.task.id == current_task_id)
-                .collect::<Vec<_>>()
-        } else {
-            projection.ready.iter().collect::<Vec<_>>()
-        }
-    } else {
-        projection.ready.iter().collect::<Vec<_>>()
+    let selected_ready_candidates = match projection.current_task_id.as_deref() {
+        Some(current_task_id) => projection
+            .ready
+            .iter()
+            .filter(|candidate| candidate.task.id == current_task_id)
+            .collect::<Vec<_>>(),
+        None => projection.ready.iter().collect::<Vec<_>>(),
     };
     let ready_flow_ids = selected_ready_candidates
         .iter()
@@ -3255,6 +3250,41 @@ mod tests {
             .next_actions
             .iter()
             .any(|action| action.contains("closure-oriented")));
+    }
+
+    #[test]
+    fn agent_dispatch_next_preview_dev_team_honors_current_task_for_same_flow_ready_candidates() {
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("zzz-bound".to_string()),
+            ready: vec![
+                candidate("aaa-other", "Other ready task", true, true, Vec::new()),
+                candidate(
+                    "zzz-bound",
+                    "Continuation-bound task",
+                    true,
+                    true,
+                    Vec::new(),
+                ),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle_with_dev_team_selection_truth(),
+            &projection,
+            1,
+            5,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "pass");
+        assert_eq!(preview.lanes_selected, 1);
+        assert_eq!(preview.selected_lanes[0].task_id, "zzz-bound");
+        assert!(preview.selected_lanes[0]
+            .dispatch_command
+            .contains("vida agent-init --role business_analyst zzz-bound --json"));
     }
 
     #[test]
