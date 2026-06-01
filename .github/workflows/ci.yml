@@ -272,7 +272,7 @@ jobs:
             Pop-Location
           }
 
-          Select-String -LiteralPath (Join-Path $tmpRoot "taskflow-help.txt") -Pattern "TaskFlow CLI"
+          Select-String -LiteralPath (Join-Path $tmpRoot "taskflow-help.txt") -Pattern "VIDA TaskFlow runtime family"
           Select-String -LiteralPath (Join-Path $tmpRoot "docflow-help.txt") -Pattern "Standalone DocFlow CLI"
           Select-String -LiteralPath (Join-Path $tmpRoot "vida-pi-agent-help.txt") -Pattern "VIDA adapter for one-shot Pi RPC dispatch"
           Select-String -LiteralPath (Join-Path $tmpRoot "vida-version.txt") -Pattern "vida "
