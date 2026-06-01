@@ -142,6 +142,7 @@ Will implement / choose:
   - next display-id payloads
 - Receipts / runtime state / config fields:
   - task close must keep emitting host-agent telemetry payloads
+  - task close JSON must include an `epic_progress_summary` derived from authoritative task graph rows after the close mutation; the summary includes per-epic closed/total descendant counts, percent closed, and bounded direct child task rows with id, title, status, priority, blocker state, blockers, and next action
   - no new config schema is required
 - Migration or compatibility notes:
   - `vida taskflow task ...` remains accepted during the migration window
@@ -173,6 +174,7 @@ Will implement / choose:
   - no silent fallback to detached JSONL snapshots as live state
 - Required receipts / proofs / gates:
   - close-path host-agent telemetry must remain intact
+  - close-path epic progress summary must remain derived from live task graph rows and must not introduce a separate cached progress authority
   - JSON status fields must remain canonical
 - Safety boundaries that must remain true during rollout:
   - unsupported flags must still fail closed
@@ -202,6 +204,7 @@ Will implement / choose:
 - Unit tests:
   - clap coverage for new root task subcommands
   - handler tests for create/update/close/export/display-id payloads
+  - close payload tests proving `epic_progress_summary` includes per-epic percentages and bounded child rows
 - Integration tests:
   - root and proxy command equivalence for the same task mutations
   - missing-task and bad-argument fail-closed cases
@@ -210,6 +213,7 @@ Will implement / choose:
   - `vida task create ... --json`
   - `vida task update ... --json`
   - `vida task close ... --reason ... --json`
+  - isolated `vida task close ... --reason ... --state-dir <temp> --json` smoke proving `epic_progress_summary` fields are emitted by the command path
   - `vida taskflow task create ... --json`
   - `vida task validate-graph --json`
 - Canonical checks:
@@ -262,10 +266,10 @@ Will implement / choose:
 artifact_path: product/spec/taskflow-task-command-parity-and-proxy-alignment-design
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-04-03'
+artifact_revision: '2026-06-02'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md
 created_at: '2026-04-03T12:58:30+03:00'
-updated_at: '2026-04-03T12:58:30+03:00'
+updated_at: '2026-06-02T02:25:00+03:00'
 changelog_ref: taskflow-task-command-parity-and-proxy-alignment-design.changelog.jsonl

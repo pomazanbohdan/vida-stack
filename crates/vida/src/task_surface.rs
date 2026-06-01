@@ -43,6 +43,51 @@ impl TaskReadMetadata {
     }
 }
 
+const TASK_CLOSE_EPIC_PROGRESS_CHILD_LIMIT: usize = 25;
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+struct TaskCloseEpicProgressSummary {
+    closed_task_id: String,
+    epic_count: usize,
+    reported_epic_count: usize,
+    epics: Vec<TaskCloseEpicProgressRow>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+struct TaskCloseEpicProgressRow {
+    epic_id: String,
+    epic_title: String,
+    epic_status: String,
+    epic_priority: u32,
+    closed_count: usize,
+    total_count: usize,
+    percent_closed: f64,
+    child_task_count: usize,
+    reported_child_task_count: usize,
+    child_task_report_limit: usize,
+    truncated_child_tasks: bool,
+    tasks: Vec<TaskCloseEpicProgressTaskRow>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskCloseEpicProgressTaskRow {
+    task_id: String,
+    title: String,
+    status: String,
+    priority: u32,
+    issue_type: String,
+    blocker_state: String,
+    blockers: Vec<TaskCloseEpicProgressBlocker>,
+    next_action: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct TaskCloseEpicProgressBlocker {
+    task_id: String,
+    status: String,
+    title: Option<String>,
+}
+
 fn task_json_success_status() -> &'static str {
     crate::contract_profile_adapter::release_contract_status(true)
 }
@@ -373,6 +418,217 @@ fn task_rows_as_values(
         .iter()
         .map(|task| serde_json::to_value(task).map_err(|error| error.to_string()))
         .collect()
+}
+
+fn task_close_epic_progress_summary(
+    rows: &[state_store::TaskRecord],
+    closed_task_id: &str,
+) -> Result<TaskCloseEpicProgressSummary, state_store::StateStoreError> {
+    let task_by_id = rows
+        .iter()
+        .map(|task| (task.id.as_str(), task))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut children_by_parent =
+        std::collections::BTreeMap::<String, Vec<&state_store::TaskRecord>>::new();
+    for task in rows {
+        if let Some(parent_id) = task_parent_id(task) {
+            children_by_parent.entry(parent_id).or_default().push(task);
+        }
+    }
+    for children in children_by_parent.values_mut() {
+        children.sort_by(|left, right| {
+            left.priority
+                .cmp(&right.priority)
+                .then_with(|| left.status.cmp(&right.status))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+    }
+
+    let mut epics = rows
+        .iter()
+        .filter(|task| task.issue_type == "epic")
+        .collect::<Vec<_>>();
+    epics.sort_by(|left, right| {
+        left.priority
+            .cmp(&right.priority)
+            .then_with(|| left.status.cmp(&right.status))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let mut epic_rows = Vec::with_capacity(epics.len());
+    for epic in epics {
+        let progress = StateStore::task_progress_summary_from_rows(rows, &epic.id)?;
+        let children = children_by_parent
+            .get(&epic.id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let tasks = children
+            .iter()
+            .take(TASK_CLOSE_EPIC_PROGRESS_CHILD_LIMIT)
+            .map(|task| task_close_epic_progress_task_row(task, &task_by_id))
+            .collect::<Vec<_>>();
+        epic_rows.push(TaskCloseEpicProgressRow {
+            epic_id: epic.id.clone(),
+            epic_title: epic.title.clone(),
+            epic_status: epic.status.clone(),
+            epic_priority: epic.priority,
+            closed_count: progress.closed_count,
+            total_count: progress.descendant_count,
+            percent_closed: progress.percent_closed,
+            child_task_count: children.len(),
+            reported_child_task_count: tasks.len(),
+            child_task_report_limit: TASK_CLOSE_EPIC_PROGRESS_CHILD_LIMIT,
+            truncated_child_tasks: children.len() > TASK_CLOSE_EPIC_PROGRESS_CHILD_LIMIT,
+            tasks,
+        });
+    }
+
+    Ok(TaskCloseEpicProgressSummary {
+        closed_task_id: closed_task_id.to_string(),
+        epic_count: epic_rows.len(),
+        reported_epic_count: epic_rows.len(),
+        epics: epic_rows,
+    })
+}
+
+fn task_close_epic_progress_task_row(
+    task: &state_store::TaskRecord,
+    task_by_id: &std::collections::BTreeMap<&str, &state_store::TaskRecord>,
+) -> TaskCloseEpicProgressTaskRow {
+    let blockers = task_close_progress_blockers(task, task_by_id);
+    let blocker_state = if blockers.is_empty() {
+        "clear"
+    } else {
+        "blocked"
+    };
+    let next_action = task_close_progress_next_action(task, &blockers);
+    TaskCloseEpicProgressTaskRow {
+        task_id: task.id.clone(),
+        title: task.title.clone(),
+        status: task.status.clone(),
+        priority: task.priority,
+        issue_type: task.issue_type.clone(),
+        blocker_state: blocker_state.to_string(),
+        blockers,
+        next_action,
+    }
+}
+
+fn task_close_progress_blockers(
+    task: &state_store::TaskRecord,
+    task_by_id: &std::collections::BTreeMap<&str, &state_store::TaskRecord>,
+) -> Vec<TaskCloseEpicProgressBlocker> {
+    task.dependencies
+        .iter()
+        .filter(|dependency| dependency.edge_type == "blocks")
+        .filter_map(
+            |dependency| match task_by_id.get(dependency.depends_on_id.as_str()) {
+                Some(blocker) if !StateStore::task_status_is_closed_like(&blocker.status) => {
+                    Some(TaskCloseEpicProgressBlocker {
+                        task_id: blocker.id.clone(),
+                        status: blocker.status.clone(),
+                        title: Some(blocker.title.clone()),
+                    })
+                }
+                Some(_) => None,
+                None => Some(TaskCloseEpicProgressBlocker {
+                    task_id: dependency.depends_on_id.clone(),
+                    status: "missing".to_string(),
+                    title: None,
+                }),
+            },
+        )
+        .collect()
+}
+
+fn task_close_progress_next_action(
+    task: &state_store::TaskRecord,
+    blockers: &[TaskCloseEpicProgressBlocker],
+) -> String {
+    if !blockers.is_empty() {
+        let blocker_ids = blockers
+            .iter()
+            .map(|blocker| blocker.task_id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!(
+            "Resolve blocking tasks before closing `{}`: {blocker_ids}",
+            task.id
+        );
+    }
+    if StateStore::task_status_is_closed_like(&task.status) {
+        return "No action; task is already closed.".to_string();
+    }
+    if task.issue_type == "epic" {
+        return format!(
+            "Inspect nested epic progress with `vida task progress {} --json`.",
+            task.id
+        );
+    }
+    format!(
+        "Continue `{}` or close it after proof is complete.",
+        task.id
+    )
+}
+
+fn task_close_result_payload(
+    task: &state_store::TaskRecord,
+    telemetry: &serde_json::Value,
+    automation: Option<&TaskCloseAutomationReceipt>,
+    telemetry_feedback_blocker: Option<&(Vec<String>, Vec<String>)>,
+    epic_progress_summary: Option<&TaskCloseEpicProgressSummary>,
+) -> serde_json::Value {
+    let automation_blocked = automation
+        .map(|receipt| receipt.status != "pass")
+        .unwrap_or(false);
+    let feedback_blocked = telemetry_feedback_blocker.is_some();
+    let blocker_codes = if let Some((blocker_codes, _)) = telemetry_feedback_blocker {
+        blocker_codes.clone()
+    } else {
+        automation
+            .map(|receipt| receipt.blocker_codes.clone())
+            .unwrap_or_default()
+    };
+    let next_actions = if let Some((_, next_actions)) = telemetry_feedback_blocker {
+        next_actions.clone()
+    } else {
+        automation
+            .map(|receipt| receipt.next_actions.clone())
+            .unwrap_or_default()
+    };
+    serde_json::json!({
+        "status": if automation_blocked || feedback_blocked { "blocked" } else { "pass" },
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "task": task,
+        "host_agent_telemetry": telemetry,
+        "automation": automation,
+        "epic_progress_summary": epic_progress_summary,
+    })
+}
+
+fn print_task_close_epic_progress_summary(
+    render: RenderMode,
+    summary: &TaskCloseEpicProgressSummary,
+) {
+    print_surface_line(
+        render,
+        "epic progress",
+        &format!(
+            "{} epics after closing {}",
+            summary.reported_epic_count, summary.closed_task_id
+        ),
+    );
+    for epic in &summary.epics {
+        print_surface_line(
+            render,
+            &format!("epic {}", epic.epic_id),
+            &format!(
+                "{}/{} closed ({:.2}%)",
+                epic.closed_count, epic.total_count, epic.percent_closed
+            ),
+        );
+    }
 }
 
 fn project_root_for_task_state(state_dir: &std::path::Path) -> Option<std::path::PathBuf> {
@@ -4898,33 +5154,35 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 .map(|receipt| receipt.status != "pass")
                                 .unwrap_or(false);
                             let feedback_blocked = telemetry_feedback_blocker.is_some();
+                            let epic_progress_summary = match store.all_tasks().await {
+                                Ok(rows) => {
+                                    match task_close_epic_progress_summary(&rows, &command.task_id)
+                                    {
+                                        Ok(summary) => Some(summary),
+                                        Err(error) => {
+                                            eprintln!(
+                                                "Failed to compute task close epic progress summary: {error}"
+                                            );
+                                            return ExitCode::from(1);
+                                        }
+                                    }
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to read tasks for task close epic progress summary: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            };
                             if command.json {
-                                let blocker_codes =
-                                    if let Some((blocker_codes, _)) = &telemetry_feedback_blocker {
-                                        blocker_codes.clone()
-                                    } else {
-                                        automation
-                                            .as_ref()
-                                            .map(|receipt| receipt.blocker_codes.clone())
-                                            .unwrap_or_default()
-                                    };
-                                let next_actions =
-                                    if let Some((_, next_actions)) = &telemetry_feedback_blocker {
-                                        next_actions.clone()
-                                    } else {
-                                        automation
-                                            .as_ref()
-                                            .map(|receipt| receipt.next_actions.clone())
-                                            .unwrap_or_default()
-                                    };
-                                crate::print_json_pretty(&serde_json::json!({
-                                    "status": if automation_blocked || feedback_blocked { "blocked" } else { "pass" },
-                                    "blocker_codes": blocker_codes,
-                                    "next_actions": next_actions,
-                                    "task": task,
-                                    "host_agent_telemetry": telemetry,
-                                    "automation": automation,
-                                }));
+                                let payload = task_close_result_payload(
+                                    &task,
+                                    &telemetry,
+                                    automation.as_ref(),
+                                    telemetry_feedback_blocker.as_ref(),
+                                    epic_progress_summary.as_ref(),
+                                );
+                                crate::print_json_pretty(&payload);
                             } else {
                                 print_task_mutation(
                                     command.render,
@@ -4970,6 +5228,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                             &automation.blocker_codes.join(", "),
                                         );
                                     }
+                                }
+                                if let Some(summary) = &epic_progress_summary {
+                                    print_task_close_epic_progress_summary(command.render, summary);
                                 }
                             }
                             if automation_blocked || feedback_blocked {
@@ -5401,7 +5662,8 @@ mod tests {
         runtime_binding_open_delegated_cycle_next_action, runtime_recovery_blocks_task_next_lawful,
         select_task_next_lawful_binding, task_close_automation_receipt,
         task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
-        task_close_feedback_blocker_summary, task_close_host_agent_telemetry,
+        task_close_epic_progress_summary, task_close_feedback_blocker_summary,
+        task_close_host_agent_telemetry, task_close_result_payload,
         task_close_uses_isolated_state_dir, task_create_semantics_mismatch,
         task_create_semantics_requested, task_create_title, task_critical_path_snapshot_first,
         task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
@@ -5631,6 +5893,119 @@ mod tests {
         assert_eq!(receipt.ownership_source, "missing");
         assert_eq!(receipt.blocker_codes, vec!["missing_owned_paths"]);
         assert!(receipt.stageable_files.is_empty());
+    }
+
+    #[test]
+    fn task_close_epic_progress_summary_reports_epic_percentages_and_child_rows() {
+        let mut epic = owned_task_record("epic-a", vec![]);
+        epic.title = "Epic A".to_string();
+        epic.issue_type = "epic".to_string();
+        epic.status = "open".to_string();
+        epic.priority = 1;
+
+        let mut closed_child = owned_task_record("child-closed", vec![]);
+        closed_child.title = "Closed child".to_string();
+        closed_child.status = "closed".to_string();
+        closed_child.priority = 1;
+        closed_child.dependencies = vec![crate::state_store::TaskDependencyRecord {
+            issue_id: closed_child.id.clone(),
+            depends_on_id: epic.id.clone(),
+            edge_type: "parent-child".to_string(),
+            created_at: "2026-06-02T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }];
+
+        let mut blocked_child = owned_task_record("child-blocked", vec![]);
+        blocked_child.title = "Blocked child".to_string();
+        blocked_child.status = "open".to_string();
+        blocked_child.priority = 2;
+        blocked_child.dependencies = vec![
+            crate::state_store::TaskDependencyRecord {
+                issue_id: blocked_child.id.clone(),
+                depends_on_id: epic.id.clone(),
+                edge_type: "parent-child".to_string(),
+                created_at: "2026-06-02T00:00:00Z".to_string(),
+                created_by: "test".to_string(),
+                metadata: "{}".to_string(),
+                thread_id: String::new(),
+            },
+            crate::state_store::TaskDependencyRecord {
+                issue_id: blocked_child.id.clone(),
+                depends_on_id: "blocker-task".to_string(),
+                edge_type: "blocks".to_string(),
+                created_at: "2026-06-02T00:00:00Z".to_string(),
+                created_by: "test".to_string(),
+                metadata: "{}".to_string(),
+                thread_id: String::new(),
+            },
+        ];
+
+        let mut blocker = owned_task_record("blocker-task", vec![]);
+        blocker.title = "Blocking task".to_string();
+        blocker.status = "open".to_string();
+
+        let rows = vec![epic, closed_child.clone(), blocked_child, blocker];
+        let summary = task_close_epic_progress_summary(&rows, &closed_child.id)
+            .expect("epic progress summary should build from task graph rows");
+
+        assert_eq!(summary.closed_task_id, "child-closed");
+        assert_eq!(summary.epic_count, 1);
+        let epic_row = &summary.epics[0];
+        assert_eq!(epic_row.epic_id, "epic-a");
+        assert_eq!(epic_row.closed_count, 1);
+        assert_eq!(epic_row.total_count, 2);
+        assert_eq!(epic_row.percent_closed, 50.0);
+        assert_eq!(epic_row.child_task_count, 2);
+        assert_eq!(epic_row.reported_child_task_count, 2);
+        let blocked_row = epic_row
+            .tasks
+            .iter()
+            .find(|task| task.task_id == "child-blocked")
+            .expect("blocked child should be reported");
+        assert_eq!(blocked_row.blocker_state, "blocked");
+        assert_eq!(blocked_row.blockers[0].task_id, "blocker-task");
+        assert!(blocked_row.next_action.contains("Resolve blocking tasks"));
+    }
+
+    #[test]
+    fn task_close_result_payload_includes_epic_progress_summary() {
+        let mut epic = owned_task_record("epic-a", vec![]);
+        epic.issue_type = "epic".to_string();
+        let mut closed_child = owned_task_record("child-closed", vec![]);
+        closed_child.status = "closed".to_string();
+        closed_child.dependencies = vec![crate::state_store::TaskDependencyRecord {
+            issue_id: closed_child.id.clone(),
+            depends_on_id: epic.id.clone(),
+            edge_type: "parent-child".to_string(),
+            created_at: "2026-06-02T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }];
+        let summary =
+            task_close_epic_progress_summary(&[epic, closed_child.clone()], "child-closed")
+                .expect("summary should build");
+
+        let payload = task_close_result_payload(
+            &closed_child,
+            &serde_json::json!({"status": "recorded"}),
+            None,
+            None,
+            Some(&summary),
+        );
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["task"]["id"], "child-closed");
+        assert_eq!(
+            payload["epic_progress_summary"]["epics"][0]["epic_id"],
+            "epic-a"
+        );
+        assert_eq!(
+            payload["epic_progress_summary"]["epics"][0]["closed_count"],
+            1
+        );
     }
 
     #[test]
