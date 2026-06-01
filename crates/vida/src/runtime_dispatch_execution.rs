@@ -2017,6 +2017,19 @@ fn configured_host_receipt_mode(system_entry: Option<&serde_yaml::Value>) -> Str
         .unwrap_or_else(|| "host_bridge_receipt".to_string())
 }
 
+fn path_has_dot_segment(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
+    })
+}
+
+fn host_tool_bridge_state_root(project_root: &Path) -> PathBuf {
+    project_root.join(".vida/data/state")
+}
+
 fn configured_host_tool_bridge_dir(
     project_root: &Path,
     system_entry: Option<&serde_yaml::Value>,
@@ -2026,12 +2039,45 @@ fn configured_host_tool_bridge_dir(
     let configured = system_entry
         .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["host_tool_bridge", key])))
         .unwrap_or_else(|| fallback.to_string());
+    let state_root = host_tool_bridge_state_root(project_root);
+    let fallback_path = project_root.join(fallback);
     let path = PathBuf::from(configured);
-    if path.is_absolute() {
+    let candidate = if path.is_absolute() {
         path
     } else {
         project_root.join(path)
+    };
+    if !path_has_dot_segment(&candidate) && candidate.starts_with(&state_root) {
+        candidate
+    } else {
+        fallback_path
     }
+}
+
+fn write_host_bridge_request_file(path: &Path, request: &serde_json::Value) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+        let canonical_parent = std::fs::canonicalize(parent)?;
+        let state_root = path
+            .ancestors()
+            .find(|ancestor| ancestor.ends_with(".vida/data/state"))
+            .map(Path::to_path_buf);
+        if let Some(state_root) = state_root {
+            let canonical_state_root = std::fs::canonicalize(state_root)?;
+            if !canonical_parent.starts_with(canonical_state_root) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "host bridge request path escapes VIDA state root",
+                ));
+            }
+        }
+    }
+    let encoded = serde_json::to_string_pretty(request).unwrap_or_else(|_| request.to_string());
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(encoded.as_bytes())
 }
 
 fn configured_host_tool_bridge_string(
@@ -2171,15 +2217,9 @@ fn materialize_host_tool_bridge_request(
         "result_path": result_path.display().to_string(),
         "receipt_path": receipt_path.display().to_string(),
     });
-    if let Some(parent) = request_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     let _ = std::fs::create_dir_all(&result_dir);
     let _ = std::fs::create_dir_all(&receipt_dir);
-    let _ = std::fs::write(
-        &request_path,
-        serde_json::to_string_pretty(&request).unwrap_or_else(|_| request.to_string()),
-    );
+    let _ = write_host_bridge_request_file(&request_path, &request);
     request
 }
 
@@ -3887,7 +3927,8 @@ mod tests {
         agent_lane_dispatch_result, configured_external_dispatch_output_mode,
         configured_external_dispatch_wall_timeout_seconds, configured_host_dispatch_transport,
         configured_host_execution_boundary, configured_host_receipt_mode,
-        configured_host_tool_bridge_string, configured_internal_host_activation_parts,
+        configured_host_tool_bridge_dir, configured_host_tool_bridge_string,
+        configured_internal_host_activation_parts,
         configured_internal_host_dispatch_no_output_timeout_seconds,
         configured_internal_host_dispatch_wall_timeout_seconds,
         configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
@@ -4455,6 +4496,37 @@ dispatch:
         assert_eq!(
             configured_host_dispatch_transport(Some(&system_entry)),
             "codex_cli_exec"
+        );
+    }
+
+    #[test]
+    fn configured_host_tool_bridge_dir_rejects_paths_outside_state_root() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-dir-guard-{}-{nanos}",
+            std::process::id()
+        ));
+        let configured = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+host_tool_bridge:
+  result_dir: /tmp/vida-host-bridge-escape
+"#,
+        )
+        .expect("parse host bridge config");
+
+        let resolved = configured_host_tool_bridge_dir(
+            &project_root,
+            Some(&configured),
+            "result_dir",
+            ".vida/data/state/host-tool-bridge/results",
+        );
+
+        assert_eq!(
+            resolved,
+            project_root.join(".vida/data/state/host-tool-bridge/results")
         );
     }
 
