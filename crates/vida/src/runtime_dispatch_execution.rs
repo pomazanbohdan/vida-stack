@@ -2137,33 +2137,32 @@ fn write_host_bridge_request_file(
             canonical_parent.display()
         ));
     }
-    let encoded = serde_json::to_string_pretty(request)
-        .map_err(|error| format!("Failed to encode host bridge request: {error}"))?;
-    let mut open_options = std::fs::OpenOptions::new();
-    open_options.write(true);
-    if replace_existing {
-        open_options.create(true).truncate(true);
-    } else {
-        open_options.create_new(true);
-    }
-    let mut file = match open_options.open(path) {
-        Ok(file) => file,
-        Err(error) if !replace_existing && error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let mut retry_options = std::fs::OpenOptions::new();
-            retry_options.write(true).truncate(true).open(path).map_err(|retry_error| {
-                format!(
-                    "Failed to replace existing host bridge request `{}` after create race: {retry_error}",
-                    path.display()
-                )
-            })?
-        }
-        Err(error) => {
+    if let Ok(metadata) = std::fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() {
             return Err(format!(
-                "Failed to create host bridge request `{}`: {error}",
+                "Host bridge request path `{}` is a symlink; refusing to follow it.",
                 path.display()
             ));
         }
-    };
+        if replace_existing {
+            std::fs::remove_file(path).map_err(|error| {
+                format!(
+                    "Failed to remove existing host bridge request `{}` before replacement: {error}",
+                    path.display()
+                )
+            })?;
+        }
+    }
+    let encoded = serde_json::to_string_pretty(request)
+        .map_err(|error| format!("Failed to encode host bridge request: {error}"))?;
+    let mut open_options = std::fs::OpenOptions::new();
+    open_options.write(true).create_new(true);
+    let mut file = open_options.open(path).map_err(|error| {
+        format!(
+            "Failed to create host bridge request `{}`: {error}",
+            path.display()
+        )
+    })?;
     file.write_all(encoded.as_bytes()).map_err(|error| {
         format!(
             "Failed to write host bridge request `{}`: {error}",
@@ -2172,7 +2171,49 @@ fn write_host_bridge_request_file(
     })
 }
 
+fn ensure_host_bridge_state_parent(path: &Path, label: &str) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "Host bridge {label} path `{}` has no parent directory.",
+            path.display()
+        )
+    })?;
+    let Some(state_root) = path
+        .ancestors()
+        .find(|ancestor| ancestor.ends_with(".vida/data/state"))
+        .map(Path::to_path_buf)
+    else {
+        return Err(format!(
+            "Host bridge {label} path `{}` is not under VIDA state root.",
+            path.display()
+        ));
+    };
+    let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
+        format!(
+            "Failed to canonicalize host bridge {label} directory `{}`: {error}",
+            parent.display()
+        )
+    })?;
+    let canonical_state_root = std::fs::canonicalize(&state_root).map_err(|error| {
+        format!(
+            "Failed to canonicalize VIDA state root `{}`: {error}",
+            state_root.display()
+        )
+    })?;
+    if !canonical_parent.starts_with(&canonical_state_root) {
+        return Err(format!(
+            "Host bridge {label} directory `{}` escapes VIDA state root.",
+            canonical_parent.display()
+        ));
+    }
+    Ok(())
+}
+
 fn remove_stale_host_bridge_artifact(path: &Path, label: &str) -> Result<(), String> {
+    if std::fs::symlink_metadata(path).is_err() {
+        return Ok(());
+    }
+    ensure_host_bridge_state_parent(path, label)?;
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -2184,8 +2225,15 @@ fn remove_stale_host_bridge_artifact(path: &Path, label: &str) -> Result<(), Str
 }
 
 fn read_existing_host_bridge_request(path: &Path) -> Result<Option<serde_json::Value>, String> {
-    if std::fs::symlink_metadata(path).is_err() {
-        return Ok(None);
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(None),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "Host bridge request path `{}` is a symlink; refusing to read it.",
+            path.display()
+        ));
     }
     let raw = std::fs::read_to_string(path).map_err(|error| {
         format!(
@@ -5093,6 +5141,155 @@ host_tool_bridge:
         assert_eq!(rotated_request["owned_paths"][0], "second.rs");
         assert!(!result_path.exists(), "stale result should be removed");
         assert!(!receipt_path.exists(), "stale receipt should be removed");
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn host_tool_bridge_request_rejects_symlinked_stale_request() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-symlink-request-{}-{nanos}",
+            std::process::id()
+        ));
+        let first_packet_path = project_root.join(".vida/dispatch-a.json");
+        let second_packet_path = project_root.join(".vida/dispatch-b.json");
+        std::fs::create_dir_all(first_packet_path.parent().expect("dispatch parent"))
+            .expect("create dispatch parent");
+        std::fs::write(&first_packet_path, r#"{"owned_paths":["first.rs"]}"#)
+            .expect("write first dispatch packet");
+        std::fs::write(&second_packet_path, r#"{"owned_paths":["second.rs"]}"#)
+            .expect("write second dispatch packet");
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({}));
+        let mut receipt = internal_codex_fallback_receipt(
+            first_packet_path
+                .to_str()
+                .expect("first packet path should render"),
+        );
+        receipt.dispatch_target = "coach".to_string();
+        let request_path = project_root
+            .join(".vida/data/state/host-tool-bridge/requests")
+            .join(format!(
+                "{}-{}-host-tool-bridge.json",
+                receipt.run_id, receipt.dispatch_target
+            ));
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        let outside_target = project_root.join("outside-request-target.json");
+        std::fs::write(
+            &outside_target,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "run_id": receipt.run_id,
+                "dispatch_target": receipt.dispatch_target,
+                "dispatch_transport": "host_tool_bridge",
+                "packet_path": first_packet_path.display().to_string()
+            }))
+            .expect("encode outside request target"),
+        )
+        .expect("write outside request target");
+        std::os::unix::fs::symlink(&outside_target, &request_path)
+            .expect("create symlinked request path");
+
+        let error = materialize_host_tool_bridge_request(
+            &project_root,
+            None,
+            second_packet_path
+                .to_str()
+                .expect("second packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect_err("symlinked stale request must fail closed");
+
+        assert!(
+            error.contains("is a symlink; refusing to read it"),
+            "unexpected error: {error}"
+        );
+        let outside = std::fs::read_to_string(&outside_target).expect("outside target remains");
+        assert!(
+            outside.contains("dispatch-a.json"),
+            "outside target should not be replaced: {outside}"
+        );
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn host_tool_bridge_rotation_rejects_stale_artifact_parent_escape() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-artifact-symlink-{}-{nanos}",
+            std::process::id()
+        ));
+        let first_packet_path = project_root.join(".vida/dispatch-a.json");
+        let second_packet_path = project_root.join(".vida/dispatch-b.json");
+        std::fs::create_dir_all(first_packet_path.parent().expect("dispatch parent"))
+            .expect("create dispatch parent");
+        std::fs::write(&first_packet_path, r#"{"owned_paths":["first.rs"]}"#)
+            .expect("write first dispatch packet");
+        std::fs::write(&second_packet_path, r#"{"owned_paths":["second.rs"]}"#)
+            .expect("write second dispatch packet");
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({}));
+        let mut receipt = internal_codex_fallback_receipt(
+            first_packet_path
+                .to_str()
+                .expect("first packet path should render"),
+        );
+        receipt.dispatch_target = "coach".to_string();
+        let first_request = materialize_host_tool_bridge_request(
+            &project_root,
+            None,
+            first_packet_path
+                .to_str()
+                .expect("first packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect("first bridge request should materialize");
+        let result_path = PathBuf::from(
+            first_request["result_path"]
+                .as_str()
+                .expect("result path should render"),
+        );
+        let result_dir = result_path.parent().expect("result parent").to_path_buf();
+        let outside_dir = project_root.join("outside-results");
+        std::fs::create_dir_all(&outside_dir).expect("create outside result dir");
+        std::fs::remove_dir_all(&result_dir).expect("remove guarded result dir");
+        std::os::unix::fs::symlink(&outside_dir, &result_dir).expect("create symlinked result dir");
+        let outside_result = outside_dir.join(result_path.file_name().expect("result file name"));
+        std::fs::write(&outside_result, "outside result").expect("write outside result");
+
+        let error = materialize_host_tool_bridge_request(
+            &project_root,
+            None,
+            second_packet_path
+                .to_str()
+                .expect("second packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect_err("stale artifact parent escape must fail closed");
+
+        assert!(
+            error.contains("escapes VIDA state root"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&outside_result).expect("outside result remains"),
+            "outside result"
+        );
         let _ = std::fs::remove_dir_all(&project_root);
     }
 
