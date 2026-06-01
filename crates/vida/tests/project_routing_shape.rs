@@ -191,18 +191,54 @@ fn assert_pr_repair_flow(config: &serde_yaml::Value, context: &str) {
 
 fn assert_approval_gated_architecture_flow(config: &serde_yaml::Value, context: &str) {
     let flow = &config["dev_team"]["flows"]["architecture_design"];
+    let architect_role = &config["dev_team"]["roles"]["architect"];
+    assert_eq!(
+        yaml_string(&architect_role["runtime_role"]),
+        Some("solution_architect"),
+        "{context} architecture flow should use a configured architect role contract",
+    );
+    assert_contains_all(
+        &yaml_string_list(&architect_role["task_classes"]),
+        &["architecture", "execution_preparation"],
+        &format!("{context} architect role task classes"),
+    );
     assert_contains_all(
         &yaml_string_list(&flow["lifecycle_hook_templates"]),
         &["approval_wait", "approval_complete"],
         &format!("{context} architecture_design lifecycle hooks"),
     );
-    let first_step = &flow["steps"]
+    let steps = flow["steps"]
         .as_sequence()
-        .expect("architecture flow should expose ordered steps")[0];
+        .expect("architecture flow should expose ordered steps");
+    let first_step = &steps[0];
     assert_eq!(
         yaml_bool(&first_step["requires_user_approval"]),
         Some(true),
         "{context} architecture_design should pause after analysis for user approval",
+    );
+    let execution_prep_step = steps
+        .iter()
+        .find(|step| yaml_string(&step["task_class"]) == Some("execution_preparation"))
+        .expect("architecture flow should include execution preparation");
+    assert_eq!(
+        yaml_string(&execution_prep_step["role_id"]),
+        Some("architect"),
+        "{context} architecture_design execution preparation should use the configured architect flow role",
+    );
+    assert_eq!(
+        yaml_string(&execution_prep_step["runtime_role"]),
+        Some("solution_architect"),
+        "{context} architecture_design execution preparation should dispatch as solution_architect",
+    );
+    assert_eq!(
+        yaml_string_list(&execution_prep_step["command_template"]["args"]),
+        vec![
+            "--role".to_string(),
+            "solution_architect".to_string(),
+            "{{task_id}}".to_string(),
+            "--json".to_string(),
+        ],
+        "{context} architecture_design execution preparation command should bind solution_architect",
     );
 }
 
