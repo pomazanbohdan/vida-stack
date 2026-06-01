@@ -2489,6 +2489,24 @@ fn ingest_completed_host_bridge_result(
     {
         return Err("Host bridge receipt is not receipt_backed=true.".into());
     }
+    if result.get("status").and_then(serde_json::Value::as_str) != Some("pass") {
+        return Err("Host bridge result status is not pass.".into());
+    }
+    if result
+        .get("execution_state")
+        .and_then(serde_json::Value::as_str)
+        != Some("executed")
+    {
+        return Err("Host bridge result execution_state is not executed.".into());
+    }
+    if result
+        .get("execution_evidence")
+        .and_then(|evidence| evidence.get("receipt_backed"))
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return Err("Host bridge result execution_evidence is not receipt_backed=true.".into());
+    }
     let body = result
         .as_object_mut()
         .ok_or_else(|| "Host bridge result must be a JSON object.".to_string())?;
@@ -5259,6 +5277,161 @@ agent_system:
         assert_eq!(
             result["backend_dispatch"]["backend_id"],
             "internal_subagents"
+        );
+
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn host_bridge_rejects_failed_parent_result() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-failed-result-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = project_root.join(".vida/data/state");
+        std::fs::create_dir_all(&state_root).expect("create state root");
+        let dispatch_packet_path = project_root.join(".vida/dispatch.json");
+        std::fs::create_dir_all(dispatch_packet_path.parent().expect("dispatch parent"))
+            .expect("create dispatch parent");
+        std::fs::write(
+            &dispatch_packet_path,
+            r#"{"owned_paths":["crates/vida/src/runtime_dispatch_execution.rs"]}"#,
+        )
+        .expect("write dispatch packet");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      dispatch_transport: host_tool_bridge
+      receipt_mode: host_bridge_receipt
+      host_tool_bridge:
+        adapter_kind: codex_host_tools
+        adapter_capability_id: codex.multi_agent_v1
+        invocation_mode: parent_host_tool_api
+      carriers:
+        middle:
+          model: gpt-5.5
+          model_reasoning_effort: medium
+          sandbox_mode: read-only
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+      default_model_profile: internal_fast
+      model_profiles:
+        internal_fast:
+          provider: openai
+          model_ref: gpt-5.5
+          reasoning_effort: medium
+          normalized_cost_units: 4
+          write_scope: orchestrator_native
+          runtime_roles: [business_analyst]
+          task_classes: [analysis]
+"#,
+        )
+        .expect("write overlay");
+        let role_selection =
+            internal_codex_fallback_role_selection(serde_json::json!({ "runtime_assignment": {
+                "activation_agent_type": "middle",
+                "selected_tier": "middle",
+                "selected_model_profile_id": "internal_fast"
+            }}));
+        let receipt = internal_codex_fallback_receipt(
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+        );
+        let request = materialize_host_tool_bridge_request(
+            &project_root,
+            None,
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect("host bridge request should materialize");
+        let result_path = PathBuf::from(
+            request["result_path"]
+                .as_str()
+                .expect("request result path should render"),
+        );
+        let receipt_path = PathBuf::from(
+            request["receipt_path"]
+                .as_str()
+                .expect("request receipt path should render"),
+        );
+        std::fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "schema_version": 1,
+                "status": "fail",
+                "execution_state": "blocked",
+                "run_id": receipt.run_id,
+                "dispatch_target": receipt.dispatch_target,
+                "execution_evidence": {
+                    "status": "failed",
+                    "receipt_backed": false
+                }
+            }))
+            .expect("encode failed host bridge result"),
+        )
+        .expect("write failed host bridge result");
+        std::fs::write(
+            &receipt_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_receipt",
+                "schema_version": 1,
+                "status": "pass",
+                "receipt_backed": true,
+                "run_id": receipt.run_id,
+                "dispatch_target": receipt.dispatch_target,
+                "result_path": result_path.display().to_string()
+            }))
+            .expect("encode host bridge receipt"),
+        )
+        .expect("write host bridge receipt");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let error = runtime
+            .block_on(async {
+                super::execute_internal_agent_lane_dispatch(
+                    &state_root,
+                    &project_root,
+                    dispatch_packet_path
+                        .to_str()
+                        .expect("dispatch packet path should render"),
+                    Some("internal_subagents"),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "internal",
+                        "selected_cli_system": "codex"
+                    }),
+                )
+                .await
+            })
+            .expect_err("failed parent result must fail closed");
+
+        assert!(
+            error.contains("Host bridge result status is not pass"),
+            "unexpected error: {error}"
         );
 
         let _ = std::fs::remove_dir_all(&project_root);
