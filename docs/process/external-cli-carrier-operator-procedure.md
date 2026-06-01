@@ -110,8 +110,8 @@ Interpret `host_agents.external_cli_preflight` as follows:
 3. Re-check carrier readiness:
    - `vida status --json | jq '.host_agents.external_cli_preflight.carrier_readiness'`
 4. Repair auth or model posture only for the failing carrier. For Pi, verify both adapter and provider layers: `vida-pi-agent --help` for the adapter and `pi --version` plus live/provider auth outside sandbox for Pi itself.
-5. Re-run the current bounded adapter/runtime proof. For Pi adapter changes, prefer the Rust adapter contract tests:
-   - `cargo test -p vida-pi-agent --locked`
+5. Re-run the current bounded adapter/runtime proof. For Pi adapter changes, prefer the package-scoped nextest contract proof:
+   - `cargo nextest run --locked -p vida-pi-agent --profile default`
    - `cargo build -p vida-pi-agent --bins --locked` only when a local binary is needed for manual operator inspection
    - optional live provider probes must be explicit, credential-aware operator actions and must not be hidden in a hardcoded smoke script
 6. Re-check:
@@ -121,7 +121,7 @@ Interpret `host_agents.external_cli_preflight` as follows:
 
 Use the repeatable bounded proof surfaces:
 
-1. `cargo test -p vida-pi-agent --locked`
+1. `cargo nextest run --locked -p vida-pi-agent --profile default`
 2. `vida status --json | jq '.host_agents.external_cli_preflight'`
 3. `vida taskflow consume agent-system --json | jq '.snapshot.carriers'`
 
@@ -130,7 +130,7 @@ Carrier proof must stay config/runtime-derived. Do not add hardcoded one-shot pr
 Pi-specific smoke modes:
 
 1. Build/run adapter tests when changing the adapter or its contract:
-   - `cargo test -p vida-pi-agent`
+   - `cargo nextest run --locked -p vida-pi-agent --profile default`
 2. Build Pi binaries only when local manual inspection needs them:
    - `cargo build -p vida-pi-agent --bins --locked`
 3. Run optional live Pi/provider smoke only as an explicit operator action outside the generic CI/local gate, with credentials and network posture intentionally available.
@@ -166,5 +166,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/external-cli-carrier-operator-procedure.md
 created_at: '2026-04-10T11:20:00+03:00'
-updated_at: 2026-06-02T00:00:00+03:00
+updated_at: 2026-06-02T03:05:00+03:00
 changelog_ref: external-cli-carrier-operator-procedure.changelog.jsonl

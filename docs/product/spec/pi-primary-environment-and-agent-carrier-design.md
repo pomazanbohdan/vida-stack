@@ -344,7 +344,7 @@ As of the `feature-vida-pi-agent-prewrite-tool-guard` slice, the epic implementa
 
 Concise proof commands recorded across the implementation slices:
 
-- `cargo test -p vida-pi-agent`
+- `cargo nextest run --locked -p vida-pi-agent --profile default`
 - `cargo test -p vida parse_external_provider_output -- --nocapture`
 - `cargo test -p vida guard_required_write_scope -- --nocapture`
 - `cargo test -p vida release_install -- --nocapture`
@@ -453,5 +453,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/pi-primary-environment-and-agent-carrier-design.md
 created_at: 2026-05-19T15:27:13.8001375Z
-updated_at: 2026-06-02T02:30:00+03:00
+updated_at: 2026-06-02T03:05:00+03:00
 changelog_ref: pi-primary-environment-and-agent-carrier-design.changelog.jsonl

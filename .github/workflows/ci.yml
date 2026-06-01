@@ -169,12 +169,6 @@ jobs:
           set -euo pipefail
           cargo test --workspace --doc --locked
 
-      - name: Run external adapter contract tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo test -p vida-pi-agent --locked
-
       - name: Run docflow validation
         shell: bash
         run: |

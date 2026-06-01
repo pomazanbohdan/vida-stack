@@ -19,66 +19,18 @@ It does not replace canonical product law in `docs/product/spec/**`.
 
 ### Rust Workspace
 
-The current Rust workspace is green for the active modernization bootstrap.
+The current Rust workspace proof ladder is nextest-backed and cost-aware. Use the repository gate script for local Windows proof loops and reserve release/install proof for release admission or installed-runtime validation.
 
-Proven commands:
+Current proof commands:
 
-1. `cargo test --workspace`
-2. `cargo test -p vida`
-3. `cargo fmt --all`
-4. `cargo test -p taskflow-format-jsonl -p taskflow-format-toon -p docflow-format-jsonl -p docflow-format-toon`
-5. `cargo test -p taskflow-config -p docflow-config`
-6. `cargo test -p taskflow-state`
-7. `cargo test -p taskflow-state-fs`
-8. `cargo test -p taskflow-state-surreal`
-9. `cargo test -p docflow-markdown`
-10. `cargo test -p docflow-inventory`
-11. `cargo test -p docflow-validation`
-12. `cargo test -p docflow-readiness`
-13. `cargo test -p docflow-relations`
-14. `cargo test -p docflow-operator`
-15. `cargo test -p docflow-cli`
-16. `cargo run -p docflow-cli -- overview --registry-count 4 --relation-count 2`
-17. `cargo run -p vida -- docflow overview --registry-count 5 --relation-count 2`
-18. `cargo run -p vida -- docflow validate-footer --path docs/process/test.md --content '# title\n'`
-19. `cargo run -p vida -- docflow readiness --path docs/process/test.md --content '# title\n'`
-20. `cargo run -p vida -- docflow check-file --path <markdown-file>`
-21. `cargo run -p vida -- docflow readiness-file --path <markdown-file>`
-22. `cargo run -p vida -- docflow registry-scan --root <scan-root>`
-23. `cargo run -p vida -- docflow overview-scan --root <scan-root>`
-24. `cargo run -p vida -- docflow validate-tree --root <scan-root>`
-25. `cargo run -p vida -- docflow readiness-tree --root <scan-root>`
-26. `cargo run -p vida -- docflow relations-scan --root <scan-root>`
-27. `cargo run -p vida -- docflow registry-write --root <scan-root> --output <jsonl-path>`
-28. `cargo run -p vida -- docflow readiness-write --root <scan-root> --output <jsonl-path>`
-29. `cargo run -p vida -- docflow registry --root <scan-root>`
-30. `cargo run -p vida -- docflow readiness-check --root <scan-root>`
-31. `cargo run -p vida -- docflow layer-status --layer <N>`
-32. `cargo run -p vida -- docflow summary --root <scan-root>`
-33. `cargo run -p vida -- docflow scan --root <scan-root>`
-34. `cargo run -p vida -- docflow fastcheck --root <scan-root>`
-35. `cargo run -p vida -- docflow doctor --root <scan-root>`
-36. `cargo run -p vida -- docflow activation-check --root <scan-root>`
-37. `cargo run -p vida -- docflow protocol-coverage-check --root <scan-root>`
-38. `cargo run -p vida -- docflow proofcheck --layer <N>`
-39. `cargo run -p vida -- docflow registry-write --root <scan-root> --canonical`
-40. `cargo run -p vida -- docflow readiness-write --root <scan-root> --canonical`
-41. `cargo run -p vida -- docflow links --path <markdown-file>`
-42. `cargo run -p vida -- docflow deps-map --path <path>`
-43. `cargo run -p vida -- docflow artifact-impact --artifact <artifact-path> --root <scan-root>`
-44. `cargo run -p vida -- docflow task-impact --task-id <task-id> --root <scan-root>`
-45. `cargo run -p vida -- docflow help`
-46. `cargo run -p vida -- docflow check --profile active-canon`
-47. `cargo run -p vida -- docflow fastcheck --profile active-canon`
-48. `cargo run -p vida -- docflow activation-check --profile active-canon`
-49. `cargo run -p vida -- docflow protocol-coverage-check --profile active-canon`
-50. `cargo run -p vida -- docflow readiness-check --profile active-canon`
-51. `cargo run -p vida -- docflow proofcheck --profile active-canon-strict`
-52. `cargo run -p vida -- docflow finalize-edit <markdown-file> "<change-note>" [--status <value>] [--artifact-revision <value>] [--set key=value]`
-53. `cargo run -p vida -- docflow touch <markdown-file> "<change-note>"`
-54. `cargo run -p vida -- docflow rename-artifact <markdown-file> <artifact-path> "<change-note>" [--artifact-type <value>] [--bump-version]`
-55. `cargo run -p vida -- docflow init <markdown-file> <artifact-path> <artifact-type> "<change-note>" [--title <value>] [--purpose <value>]`
-56. `cargo run -p vida -- docflow move <markdown-file> <destination> "<change-note>"`
+1. `scripts/vida-dev-gate.ps1 -Mode script-check -Json`
+2. `scripts/vida-dev-gate.ps1 -Mode quick -Json`
+3. `scripts/vida-dev-gate.ps1 -Mode focused-nextest -TestFilter <filter> -Json`
+4. `scripts/vida-dev-gate.ps1 -Mode workspace-nextest -Json`
+5. `cargo nextest run --locked -p vida --profile default <filter>`
+6. `cargo nextest run --locked --workspace --profile ci`
+7. `cargo test --workspace --doc --locked`
+8. `vida docflow check --root . <changed-docs> --json`
 
 Current focused Rust test harness condition:
 
@@ -332,9 +284,8 @@ The release build path is proven for the current tree.
 Proven command:
 
 1. `bash scripts/build-release.sh`
-2. `cargo build -p vida --release`
-3. `install -D -m 755 target/release/vida ~/.local/share/vida-stack/current/bin/vida`
-4. `cargo test -p vida -- --nocapture`
+2. `vida release install --json` only when installed-runtime validation or release admission is the bounded target
+3. `scripts/vida-dev-gate.ps1 -Mode release-install -Json` on Windows when the same installed-runtime gate needs timing evidence
 
 Proven release outputs:
 
@@ -508,10 +459,10 @@ Only record proven working conditions.
 artifact_path: process/vida1-development-conditions
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-14'
+artifact_revision: '2026-06-02'
 schema_version: '1'
 status: canonical
 source_path: docs/process/vida1-development-conditions.md
 created_at: '2026-03-11T09:00:00+02:00'
-updated_at: '2026-03-14T18:10:00+02:00'
+updated_at: '2026-06-02T03:05:00+03:00'
 changelog_ref: vida1-development-conditions.changelog.jsonl

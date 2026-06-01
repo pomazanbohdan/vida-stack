@@ -77,6 +77,7 @@ If a tool cannot emit this envelope directly, the orchestrator must record it in
 10. Windows local proof scripts that invoke Cargo must use deterministic target-dir behavior and report it in timing records. If `CARGO_TARGET_DIR` is already set by the caller, respect that value and record `target_dir_policy=caller_provided`. If the repository is a linked worktree under `.vida/worktrees`, use the owner repository's `.vida/cargo-target` cache and record `target_dir_policy=repo_local_worktree_shared`. Otherwise use the current repository's `.vida/cargo-target` cache and record `target_dir_policy=repo_local_default`.
 11. Debug-runtime smoke commands must resolve the debug binary from `effective_cargo_target_dir`, not from a hardcoded `target/debug` path. This keeps worktree output visible under `.vida/cargo-target` while preventing each linked worktree from cold-building an isolated `target` tree.
 12. Local build/test scripts must be current, reusable proof surfaces. Remove stale scripts when they hardcode carrier names, ambient models, legacy provider lists, or heavy pre-commit builds that are no longer part of the current gate ladder. Replace them with config-derived runtime/status checks, Rust contract tests, or `scripts/vida-dev-gate.ps1` modes.
+13. Do not keep a separate CI smoke step that only reruns package tests already covered by the workspace `cargo nextest` matrix. Keep separate smoke jobs only when they validate a different contract, such as doc tests, runtime boot/status behavior, docflow validation, packaging, installer behavior, or an external artifact path that nextest cannot exercise.
 
 ## Gate Decision Model
 
@@ -200,8 +201,9 @@ As of this protocol slice, the following observations are known from the active 
 8. In the same CI window, Linux runtime entrypoint build completed in under one minute, macOS in about six minutes, and Windows in about seven minutes after the gate was narrowed to deliverable runtime entrypoints. Cross-platform build remains a downstream proof gate, not the first defect-discovery gate.
 9. A cold local `scripts/vida-dev-gate.ps1 -Mode quick -Json` run spent about `79758 ms` in `cargo check --locked -p vida`; this is acceptable only as compile-aware source proof. Docs/script-only edits must use `-Mode script-check` first so local proof does not pay a Cargo compile cost unnecessarily.
 10. The 2026-06-02 local script audit retired `scripts/external-cli-carrier-smoke.sh` because it hardcoded a fixed carrier/provider list instead of deriving readiness from project config/runtime truth. The same audit retired `.githooks/pre-commit` and `scripts/precommit-build-json.sh` because the old heavy pre-commit JSON build hook was not the current local proof ladder and could reintroduce slow hidden build work.
-11. The replacement bounded adapter proof `cargo test -p vida-pi-agent --locked` completed locally in about `7438 ms` with 20 tests passing. Treat this as scoped Cargo proof, not as a normal two-second operator surface; it is acceptable in CI smoke and local batch proof when adapter behavior is in scope.
+11. The replacement bounded adapter proof completed locally in about `7438 ms` with 20 tests passing. Treat package-scoped adapter tests as scoped Cargo proof, not as a normal two-second operator surface; prefer `cargo nextest run --locked -p vida-pi-agent --profile default` for current local batch proof when adapter behavior is in scope.
 12. The 2026-06-02 post-push CI smoke run exposed a Linux race in `vida-pi-agent` adapter tests: a fast provider process can write `agent_end` and exit before parent-side process polling observes the queued terminal record. Adapter gates must drain terminal stdout events before classifying process exit as missing execution evidence; do not hide this class behind serial test execution or stale hardcoded smoke scripts.
+13. The 2026-06-02 local build/test cleanup removed the duplicate `validate-smoke` package-test step for `vida-pi-agent`; those adapter tests are now covered by the workspace nextest shards, while `validate-smoke` remains reserved for doc tests, docflow validation, and runtime smoke.
 
 These observations do not prove one root cause. They prove that timing diagnostics must cover both local runtime commands and CI/test gates.
 
@@ -214,5 +216,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/command-timing-and-gate-optimization-protocol.md
 created_at: 2026-05-26T00:00:00+03:00
-updated_at: 2026-06-02T02:30:00+03:00
+updated_at: 2026-06-02T03:05:00+03:00
 changelog_ref: command-timing-and-gate-optimization-protocol.changelog.jsonl
