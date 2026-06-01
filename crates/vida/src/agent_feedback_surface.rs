@@ -362,35 +362,37 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
     ignored
 }
 
-fn has_contrastive_blocker_clause(normalized: &str) -> bool {
-    let concrete_blocker_phrases = [
-        "still blocked",
-        "remains blocked",
-        "remained blocked",
-        "is blocked",
-        "stays blocked",
-        "blocked pending",
-        "blocked by",
-        "blocked on",
-        "blocker:",
-        "blocker_code",
-        "blocker code",
-        "approval required",
-        "pending approval",
-        "pending operator approval",
-        "awaiting approval",
-        "approval_wait",
-        "awaiting_approval",
-    ];
+const CONCRETE_CANONICAL_CLOSE_PHRASES: &[&str] = &[
+    "still blocked",
+    "remains blocked",
+    "remained blocked",
+    "is blocked",
+    "stays blocked",
+    "blocked pending",
+    "blocked by",
+    "blocked on",
+    "blocker:",
+    "blocker_code",
+    "blocker code",
+    "approval required",
+    "pending approval",
+    "pending operator approval",
+    "awaiting approval",
+    "approval_wait",
+    "awaiting_approval",
+];
 
+fn has_concrete_canonical_close_phrase(normalized: &str) -> bool {
+    CONCRETE_CANONICAL_CLOSE_PHRASES
+        .iter()
+        .any(|phrase| normalized.contains(phrase))
+}
+
+fn has_contrastive_blocker_clause(normalized: &str) -> bool {
     normalized
         .split_once(", but ")
         .or_else(|| normalized.split_once(" but "))
-        .is_some_and(|(_, blocker_clause)| {
-            concrete_blocker_phrases
-                .iter()
-                .any(|phrase| blocker_clause.contains(phrase))
-        })
+        .is_some_and(|(_, blocker_clause)| has_concrete_canonical_close_phrase(blocker_clause))
 }
 
 fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
@@ -440,6 +442,7 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
             if has_blocker_keyword
                 && has_meta_keyword
                 && !starts_with_blocked_status
+                && !has_concrete_canonical_close_phrase(&normalized)
                 && !has_contrastive_blocker_clause(&normalized)
             {
                 Some(normalized)
@@ -1531,6 +1534,8 @@ mod tests {
             "Blocked: cargo test failed",
             "The lane is blocked pending a verifier receipt.",
             "Task remains blocked pending coverage.",
+            "The lane is blocked pending a verifier receipt, proof commands passed.",
+            "The lane is blocked pending verifier receipt, coverage for tests added.",
         ] {
             let outcome = super::infer_feedback_outcome_from_close_reason(reason);
             let score = super::default_feedback_score(outcome, "verification");
