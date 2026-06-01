@@ -2146,12 +2146,24 @@ fn write_host_bridge_request_file(
     } else {
         open_options.create_new(true);
     }
-    let mut file = open_options.open(path).map_err(|error| {
-        format!(
-            "Failed to create host bridge request `{}`: {error}",
-            path.display()
-        )
-    })?;
+    let mut file = match open_options.open(path) {
+        Ok(file) => file,
+        Err(error) if !replace_existing && error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let mut retry_options = std::fs::OpenOptions::new();
+            retry_options.write(true).truncate(true).open(path).map_err(|retry_error| {
+                format!(
+                    "Failed to replace existing host bridge request `{}` after create race: {retry_error}",
+                    path.display()
+                )
+            })?
+        }
+        Err(error) => {
+            return Err(format!(
+                "Failed to create host bridge request `{}`: {error}",
+                path.display()
+            ));
+        }
+    };
     file.write_all(encoded.as_bytes()).map_err(|error| {
         format!(
             "Failed to write host bridge request `{}`: {error}",
