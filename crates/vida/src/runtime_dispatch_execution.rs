@@ -2030,6 +2030,42 @@ fn host_tool_bridge_state_root(project_root: &Path) -> PathBuf {
     project_root.join(".vida/data/state")
 }
 
+struct HostToolBridgeArtifactPaths {
+    request_path: PathBuf,
+    result_path: PathBuf,
+    receipt_path: PathBuf,
+}
+
+fn host_tool_bridge_artifact_paths(
+    project_root: &Path,
+    system_entry: Option<&serde_yaml::Value>,
+    request_id: &str,
+) -> HostToolBridgeArtifactPaths {
+    let request_dir = configured_host_tool_bridge_dir(
+        project_root,
+        system_entry,
+        "request_dir",
+        ".vida/data/state/host-tool-bridge/requests",
+    );
+    let result_dir = configured_host_tool_bridge_dir(
+        project_root,
+        system_entry,
+        "result_dir",
+        ".vida/data/state/host-tool-bridge/results",
+    );
+    let receipt_dir = configured_host_tool_bridge_dir(
+        project_root,
+        system_entry,
+        "receipt_dir",
+        ".vida/data/state/host-tool-bridge/receipts",
+    );
+    HostToolBridgeArtifactPaths {
+        request_path: request_dir.join(format!("{request_id}.json")),
+        result_path: result_dir.join(format!("{request_id}.json")),
+        receipt_path: receipt_dir.join(format!("{request_id}.json")),
+    }
+}
+
 fn configured_host_tool_bridge_dir(
     project_root: &Path,
     system_entry: Option<&serde_yaml::Value>,
@@ -2117,6 +2153,24 @@ fn write_host_bridge_request_file(path: &Path, request: &serde_json::Value) -> R
     })
 }
 
+fn read_existing_host_bridge_request(path: &Path) -> Result<Option<serde_json::Value>, String> {
+    if std::fs::symlink_metadata(path).is_err() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(path).map_err(|error| {
+        format!(
+            "Failed to read existing host bridge request `{}`: {error}",
+            path.display()
+        )
+    })?;
+    serde_json::from_str(&raw).map(Some).map_err(|error| {
+        format!(
+            "Failed to decode existing host bridge request `{}`: {error}",
+            path.display()
+        )
+    })
+}
+
 fn configured_host_tool_bridge_string(
     system_entry: Option<&serde_yaml::Value>,
     key: &str,
@@ -2187,27 +2241,26 @@ fn materialize_host_tool_bridge_request(
         "{}-{}-host-tool-bridge",
         receipt.run_id, receipt.dispatch_target
     );
-    let request_dir = configured_host_tool_bridge_dir(
-        project_root,
-        selected_cli_entry,
-        "request_dir",
-        ".vida/data/state/host-tool-bridge/requests",
-    );
-    let result_dir = configured_host_tool_bridge_dir(
-        project_root,
-        selected_cli_entry,
-        "result_dir",
-        ".vida/data/state/host-tool-bridge/results",
-    );
-    let receipt_dir = configured_host_tool_bridge_dir(
-        project_root,
-        selected_cli_entry,
-        "receipt_dir",
-        ".vida/data/state/host-tool-bridge/receipts",
-    );
-    let request_path = request_dir.join(format!("{request_id}.json"));
-    let result_path = result_dir.join(format!("{request_id}.json"));
-    let receipt_path = receipt_dir.join(format!("{request_id}.json"));
+    let paths = host_tool_bridge_artifact_paths(project_root, selected_cli_entry, &request_id);
+    if let Some(existing) = read_existing_host_bridge_request(&paths.request_path)? {
+        if existing.get("run_id").and_then(serde_json::Value::as_str)
+            != Some(receipt.run_id.as_str())
+            || existing
+                .get("dispatch_target")
+                .and_then(serde_json::Value::as_str)
+                != Some(receipt.dispatch_target.as_str())
+            || existing
+                .get("dispatch_transport")
+                .and_then(serde_json::Value::as_str)
+                != Some("host_tool_bridge")
+        {
+            return Err(format!(
+                "Existing host bridge request `{}` does not match the active dispatch lane.",
+                paths.request_path.display()
+            ));
+        }
+        return Ok(existing);
+    }
     let adapter_kind = configured_host_tool_bridge_string(selected_cli_entry, "adapter_kind")
         .unwrap_or_else(|| "unconfigured_host_agent_adapter".to_string());
     let adapter_capability_id =
@@ -2250,20 +2303,181 @@ fn materialize_host_tool_bridge_request(
         "owned_paths": dispatch_packet_string_list(dispatch_packet_path, "owned_paths"),
         "read_only_paths": dispatch_packet_string_list(dispatch_packet_path, "read_only_paths"),
         "proof_target": dispatch_packet_string_field(dispatch_packet_path, "proof_target"),
-        "request_path": request_path.display().to_string(),
-        "result_path": result_path.display().to_string(),
-        "receipt_path": receipt_path.display().to_string(),
+        "request_path": paths.request_path.display().to_string(),
+        "result_path": paths.result_path.display().to_string(),
+        "receipt_path": paths.receipt_path.display().to_string(),
     });
-    if let Some(parent) = request_path.parent() {
+    if let Some(parent) = paths.request_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("Failed to create host bridge request directory: {error}"))?;
     }
-    std::fs::create_dir_all(&result_dir)
-        .map_err(|error| format!("Failed to create host bridge result directory: {error}"))?;
-    std::fs::create_dir_all(&receipt_dir)
-        .map_err(|error| format!("Failed to create host bridge receipt directory: {error}"))?;
-    write_host_bridge_request_file(&request_path, &request)?;
+    if let Some(parent) = paths.result_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create host bridge result directory: {error}"))?;
+    }
+    if let Some(parent) = paths.receipt_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create host bridge receipt directory: {error}"))?;
+    }
+    write_host_bridge_request_file(&paths.request_path, &request)?;
     Ok(request)
+}
+
+fn host_bridge_state_path_from_request(
+    state_root: &Path,
+    request: &serde_json::Value,
+    field: &str,
+) -> Result<PathBuf, String> {
+    let raw = request
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("Host bridge request is missing non-empty `{field}`."))?;
+    let path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(raw);
+    if path_has_dot_segment(&path) {
+        return Err(format!(
+            "Host bridge `{field}` path `{}` contains inadmissible dot-segment traversal.",
+            path.display()
+        ));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "Host bridge `{field}` path `{}` has no parent directory.",
+            path.display()
+        )
+    })?;
+    std::fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "Failed to create host bridge `{field}` directory `{}`: {error}",
+            parent.display()
+        )
+    })?;
+    let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
+        format!(
+            "Failed to canonicalize host bridge `{field}` directory `{}`: {error}",
+            parent.display()
+        )
+    })?;
+    let canonical_state_root = std::fs::canonicalize(state_root).map_err(|error| {
+        format!(
+            "Failed to canonicalize VIDA state root `{}`: {error}",
+            state_root.display()
+        )
+    })?;
+    if !canonical_parent.starts_with(&canonical_state_root) {
+        return Err(format!(
+            "Host bridge `{field}` path `{}` escapes VIDA state root `{}`.",
+            path.display(),
+            canonical_state_root.display()
+        ));
+    }
+    Ok(path)
+}
+
+fn ingest_completed_host_bridge_result(
+    state_root: &Path,
+    request: &serde_json::Value,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    backend_id: &str,
+    carrier_id: &str,
+    execution_boundary: &str,
+    dispatch_transport: &str,
+    receipt_mode: &str,
+    host_runtime: &serde_json::Value,
+) -> Result<Option<serde_json::Value>, String> {
+    let result_path = host_bridge_state_path_from_request(state_root, request, "result_path")?;
+    let receipt_path = host_bridge_state_path_from_request(state_root, request, "receipt_path")?;
+    if std::fs::symlink_metadata(&result_path).is_err()
+        || std::fs::symlink_metadata(&receipt_path).is_err()
+    {
+        return Ok(None);
+    }
+    let result_raw = std::fs::read_to_string(&result_path).map_err(|error| {
+        format!(
+            "Failed to read host bridge result `{}`: {error}",
+            result_path.display()
+        )
+    })?;
+    let receipt_raw = std::fs::read_to_string(&receipt_path).map_err(|error| {
+        format!(
+            "Failed to read host bridge receipt `{}`: {error}",
+            receipt_path.display()
+        )
+    })?;
+    let mut result: serde_json::Value = serde_json::from_str(&result_raw).map_err(|error| {
+        format!(
+            "Failed to decode host bridge result `{}`: {error}",
+            result_path.display()
+        )
+    })?;
+    let bridge_receipt: serde_json::Value =
+        serde_json::from_str(&receipt_raw).map_err(|error| {
+            format!(
+                "Failed to decode host bridge receipt `{}`: {error}",
+                receipt_path.display()
+            )
+        })?;
+    if result.get("run_id").and_then(serde_json::Value::as_str) != Some(receipt.run_id.as_str())
+        || bridge_receipt
+            .get("run_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(receipt.run_id.as_str())
+    {
+        return Err("Host bridge result or receipt run_id does not match active dispatch.".into());
+    }
+    if result
+        .get("dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        != Some(receipt.dispatch_target.as_str())
+        || bridge_receipt
+            .get("dispatch_target")
+            .and_then(serde_json::Value::as_str)
+            != Some(receipt.dispatch_target.as_str())
+    {
+        return Err(
+            "Host bridge result or receipt dispatch_target does not match active dispatch.".into(),
+        );
+    }
+    if bridge_receipt
+        .get("receipt_backed")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return Err("Host bridge receipt is not receipt_backed=true.".into());
+    }
+    let body = result
+        .as_object_mut()
+        .ok_or_else(|| "Host bridge result must be a JSON object.".to_string())?;
+    body.insert("surface".to_string(), serde_json::json!("vida agent-init"));
+    body.insert("status".to_string(), serde_json::json!("pass"));
+    body.insert("execution_state".to_string(), serde_json::json!("executed"));
+    body.insert("blocker_code".to_string(), serde_json::Value::Null);
+    body.insert("host_runtime".to_string(), host_runtime.clone());
+    body.insert("host_tool_bridge_request".to_string(), request.clone());
+    body.insert(
+        "host_tool_bridge_receipt".to_string(),
+        bridge_receipt.clone(),
+    );
+    body.insert(
+        "backend_dispatch".to_string(),
+        serde_json::json!({
+            "backend_class": "internal",
+            "backend_id": backend_id,
+            "carrier_id": carrier_id,
+            "execution_boundary": execution_boundary,
+            "dispatch_transport": dispatch_transport,
+            "receipt_mode": receipt_mode,
+            "activation_view_is_execution_evidence": false,
+            "host_tool_bridge_request": request,
+            "host_tool_bridge_result_path": result_path.display().to_string(),
+            "host_tool_bridge_receipt_path": receipt_path.display().to_string()
+        }),
+    );
+    mark_dispatch_result_execution_evidence(body, "host_tool_bridge_receipt", backend_id);
+    refresh_execution_truth(body, role_selection, receipt, Some(backend_id), "recorded");
+    Ok(Some(result))
 }
 
 fn configured_internal_host_activation_parts(
@@ -2861,7 +3075,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             preferred_backend,
             role_selection,
             receipt,
-            host_runtime,
+            host_runtime.clone(),
         );
         let bridge_request = materialize_host_tool_bridge_request(
             project_root,
@@ -2872,6 +3086,20 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
             receipt,
             role_selection,
         )?;
+        if let Some(result) = ingest_completed_host_bridge_result(
+            state_root,
+            &bridge_request,
+            role_selection,
+            receipt,
+            backend_id,
+            carrier_id,
+            &execution_boundary,
+            &dispatch_transport,
+            &receipt_mode,
+            &host_runtime,
+        )? {
+            return Ok(Some(result));
+        }
         let body = result
             .as_object_mut()
             .expect("internal host bridge dispatch result should serialize to an object");
@@ -4660,7 +4888,7 @@ host_tool_bridge:
     }
 
     #[test]
-    fn host_tool_bridge_request_fails_when_stale_request_file_exists() {
+    fn host_tool_bridge_request_fails_when_stale_request_file_does_not_match_lane() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -4723,12 +4951,198 @@ host_tool_bridge:
             &receipt,
             &internal_codex_fallback_role_selection(serde_json::json!({})),
         )
-        .expect_err("stale request file should fail closed");
+        .expect_err("mismatched stale request file should fail closed");
 
         assert!(
-            error.contains("Failed to create host bridge request"),
+            error.contains("does not match the active dispatch lane"),
             "unexpected error: {error}"
         );
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn internal_host_tool_bridge_ingests_parent_written_receipt_backed_result() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-completed-result-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = project_root.join(".vida/data/state");
+        std::fs::create_dir_all(&state_root).expect("create state root");
+        let dispatch_packet_path = project_root.join(".vida/dispatch.json");
+        std::fs::create_dir_all(dispatch_packet_path.parent().expect("dispatch parent"))
+            .expect("create dispatch parent");
+        std::fs::write(
+            &dispatch_packet_path,
+            r#"{"owned_paths":["crates/vida/src/runtime_dispatch_execution.rs"],"proof_target":"cargo test -p vida host_bridge -- --nocapture"}"#,
+        )
+        .expect("write dispatch packet");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      dispatch_transport: host_tool_bridge
+      receipt_mode: host_bridge_receipt
+      host_tool_bridge:
+        adapter_kind: codex_host_tools
+        adapter_capability_id: codex.multi_agent_v1
+        invocation_mode: parent_host_tool_api
+      carriers:
+        middle:
+          model: gpt-5.5
+          model_reasoning_effort: medium
+          sandbox_mode: read-only
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+      default_model_profile: internal_fast
+      model_profiles:
+        internal_fast:
+          provider: openai
+          model_ref: gpt-5.5
+          reasoning_effort: medium
+          normalized_cost_units: 4
+          write_scope: orchestrator_native
+          runtime_roles: [business_analyst]
+          task_classes: [analysis]
+"#,
+        )
+        .expect("write overlay");
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "analysis": true,
+                        "implementation": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "analysis": {
+                    "executor_backend": "internal_subagents"
+                }
+            },
+            "runtime_assignment": {
+                "activation_agent_type": "middle",
+                "selected_tier": "middle",
+                "selected_model_profile_id": "internal_fast"
+            }
+        }));
+        let receipt = internal_codex_fallback_receipt(
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+        );
+        let request = materialize_host_tool_bridge_request(
+            &project_root,
+            None,
+            dispatch_packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect("host bridge request should materialize");
+        let result_path = PathBuf::from(
+            request["result_path"]
+                .as_str()
+                .expect("request result path should render"),
+        );
+        let receipt_path = PathBuf::from(
+            request["receipt_path"]
+                .as_str()
+                .expect("request receipt path should render"),
+        );
+        std::fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "schema_version": 1,
+                "status": "pass",
+                "execution_state": "executed",
+                "run_id": receipt.run_id,
+                "dispatch_target": receipt.dispatch_target,
+                "activation_semantics": {
+                    "activation_kind": "execution_evidence",
+                    "view_only": false,
+                    "executes_packet": true,
+                    "records_completion_receipt": true
+                },
+                "execution_evidence": {
+                    "status": "recorded",
+                    "receipt_backed": true
+                }
+            }))
+            .expect("encode host bridge result"),
+        )
+        .expect("write host bridge result");
+        std::fs::write(
+            &receipt_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_receipt",
+                "schema_version": 1,
+                "status": "pass",
+                "receipt_backed": true,
+                "run_id": receipt.run_id,
+                "dispatch_target": receipt.dispatch_target,
+                "result_path": result_path.display().to_string()
+            }))
+            .expect("encode host bridge receipt"),
+        )
+        .expect("write host bridge receipt");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let result = runtime
+            .block_on(async {
+                super::execute_internal_agent_lane_dispatch(
+                    &state_root,
+                    &project_root,
+                    dispatch_packet_path
+                        .to_str()
+                        .expect("dispatch packet path should render"),
+                    Some("internal_subagents"),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "internal",
+                        "selected_cli_system": "codex"
+                    }),
+                )
+                .await
+            })
+            .expect("dispatch should return")
+            .expect("completed bridge result should return execution evidence");
+
+        assert_eq!(result["status"], "pass");
+        assert_eq!(result["execution_state"], "executed");
+        assert_eq!(result["blocker_code"], serde_json::Value::Null);
+        assert_eq!(result["execution_evidence"]["receipt_backed"], true);
+        assert_eq!(
+            result["backend_dispatch"]["dispatch_transport"],
+            "host_tool_bridge"
+        );
+        assert_eq!(
+            result["backend_dispatch"]["backend_id"],
+            "internal_subagents"
+        );
+
         let _ = std::fs::remove_dir_all(&project_root);
     }
 
