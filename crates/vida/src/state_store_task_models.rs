@@ -1,6 +1,207 @@
 use super::*;
 use serde::Deserialize;
 
+pub const WORK_ITEM_TAXONOMY_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkItemCategory {
+    ProgramContainer,
+    Delivery,
+    Defect,
+    Review,
+    Architecture,
+    Release,
+    Operations,
+    Process,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkItemTaxonomyEntry {
+    pub canonical_issue_type: &'static str,
+    pub aliases: &'static [&'static str],
+    pub category: WorkItemCategory,
+    pub parent_required: bool,
+    pub flow_bindable: bool,
+    pub default_flow_binding: &'static str,
+    pub source_tiers: &'static [&'static str],
+}
+
+pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "epic",
+        aliases: &[],
+        category: WorkItemCategory::ProgramContainer,
+        parent_required: false,
+        flow_bindable: true,
+        default_flow_binding: "default_delivery",
+        source_tiers: &["operator_request", "planning"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "task",
+        aliases: &[],
+        category: WorkItemCategory::Delivery,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "default_delivery",
+        source_tiers: &["operator_request", "planned_delivery"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "defect",
+        aliases: &["bug"],
+        category: WorkItemCategory::Defect,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "defect_repair_verified",
+        source_tiers: &["runtime_status", "test_failure", "operator_report"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "runtime_defect",
+        aliases: &[],
+        category: WorkItemCategory::Defect,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "runtime_defect_remediation",
+        source_tiers: &["runtime_status", "downstream_runtime_report"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "pull_request",
+        aliases: &["pr"],
+        category: WorkItemCategory::Review,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "pr_repair_verified",
+        source_tiers: &["pull_request"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "pr_repair",
+        aliases: &[],
+        category: WorkItemCategory::Review,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "pr_repair_verified",
+        source_tiers: &["pull_request", "ci_failure"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "architecture",
+        aliases: &["spike"],
+        category: WorkItemCategory::Architecture,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "architecture_design",
+        source_tiers: &["operator_request", "architecture_review"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "release_readiness",
+        aliases: &[],
+        category: WorkItemCategory::Release,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "release_readiness_gate",
+        source_tiers: &["release_check", "ci_failure"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "service_tui",
+        aliases: &[],
+        category: WorkItemCategory::Delivery,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "service_tui_orchestration",
+        source_tiers: &["operator_request", "planned_delivery"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "internal_agent_development",
+        aliases: &[],
+        category: WorkItemCategory::Operations,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "hook_enabled_internal_agent_development",
+        source_tiers: &["runtime_status", "operator_request"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "ci_failure",
+        aliases: &[],
+        category: WorkItemCategory::Defect,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "defect_repair_verified",
+        source_tiers: &["ci_failure"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "optimization",
+        aliases: &[],
+        category: WorkItemCategory::Process,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "default_delivery",
+        source_tiers: &["operator_friction", "self_diagnostic"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "documentation_process",
+        aliases: &["documentation"],
+        category: WorkItemCategory::Process,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "default_delivery",
+        source_tiers: &["documentation_review", "operator_request"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "operator_surface_gap",
+        aliases: &[],
+        category: WorkItemCategory::Operations,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "runtime_defect_remediation",
+        source_tiers: &["operator_friction", "runtime_status"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "external_downstream_report",
+        aliases: &["downstream_report"],
+        category: WorkItemCategory::Defect,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "runtime_defect_remediation",
+        source_tiers: &["downstream_runtime_report", "operator_report"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "debug",
+        aliases: &[],
+        category: WorkItemCategory::Operations,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "debug_fast",
+        source_tiers: &["operator_request", "runtime_status"],
+    },
+];
+
+pub fn normalize_work_item_issue_type(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| match ch {
+            ' ' | '-' => '_',
+            _ => ch,
+        })
+        .collect()
+}
+
+pub fn work_item_taxonomy_entry(issue_type: &str) -> Option<&'static WorkItemTaxonomyEntry> {
+    let normalized = normalize_work_item_issue_type(issue_type);
+    WORK_ITEM_TAXONOMY.iter().find(|entry| {
+        entry.canonical_issue_type == normalized
+            || entry
+                .aliases
+                .iter()
+                .any(|alias| normalize_work_item_issue_type(alias) == normalized)
+    })
+}
+
+pub fn work_item_requires_parent(issue_type: &str) -> bool {
+    work_item_taxonomy_entry(issue_type)
+        .map(|entry| entry.parent_required)
+        .unwrap_or(true)
+}
+
 #[derive(Debug, Default, serde::Serialize, SurrealValue, Clone, PartialEq, Eq)]
 pub struct TaskExecutionSemantics {
     #[serde(default)]
@@ -635,7 +836,75 @@ impl From<TaskDependencyJsonlRecord> for TaskDependencyRecord {
 
 #[cfg(test)]
 mod tests {
-    use super::{TaskPlannerMetadata, TaskStorageRow};
+    use super::{
+        normalize_work_item_issue_type, work_item_requires_parent, work_item_taxonomy_entry,
+        TaskPlannerMetadata, TaskStorageRow, WORK_ITEM_TAXONOMY,
+    };
+
+    #[test]
+    fn work_item_taxonomy_has_unique_canonical_issue_types() {
+        let mut seen = std::collections::BTreeSet::new();
+
+        for entry in WORK_ITEM_TAXONOMY {
+            assert!(
+                seen.insert(entry.canonical_issue_type),
+                "duplicate taxonomy entry for {}",
+                entry.canonical_issue_type
+            );
+            assert!(
+                !entry.default_flow_binding.trim().is_empty(),
+                "taxonomy entry {} must bind a default flow",
+                entry.canonical_issue_type
+            );
+            assert!(
+                !entry.source_tiers.is_empty(),
+                "taxonomy entry {} must declare source tiers",
+                entry.canonical_issue_type
+            );
+            assert!(
+                !entry.flow_bindable || !entry.default_flow_binding.trim().is_empty(),
+                "flow-bindable taxonomy entry {} must bind a default flow",
+                entry.canonical_issue_type
+            );
+        }
+    }
+
+    #[test]
+    fn work_item_taxonomy_normalizes_provider_neutral_issue_types() {
+        assert_eq!(
+            normalize_work_item_issue_type("Pull Request"),
+            "pull_request"
+        );
+        assert_eq!(
+            normalize_work_item_issue_type("runtime-defect"),
+            "runtime_defect"
+        );
+        assert_eq!(
+            work_item_taxonomy_entry("PR Repair")
+                .expect("pr repair taxonomy")
+                .default_flow_binding,
+            "pr_repair_verified"
+        );
+        assert_eq!(
+            work_item_taxonomy_entry("bug")
+                .expect("bug alias")
+                .canonical_issue_type,
+            "defect"
+        );
+        assert_eq!(
+            work_item_taxonomy_entry("spike")
+                .expect("spike alias")
+                .canonical_issue_type,
+            "architecture"
+        );
+    }
+
+    #[test]
+    fn work_item_taxonomy_parent_rule_is_fail_closed() {
+        assert!(!work_item_requires_parent("epic"));
+        assert!(work_item_requires_parent("task"));
+        assert!(work_item_requires_parent("unknown_future_type"));
+    }
 
     #[test]
     fn task_planner_metadata_deserializes_from_null_as_default() {

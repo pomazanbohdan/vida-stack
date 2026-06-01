@@ -20,6 +20,13 @@ Task-state truth rule:
 
 1. When task lifecycle state and execution telemetry appear out of sync, use `runtime-instructions/work.task-state-reconciliation-protocol` as the canonical reconciliation layer before closing, reopening, or declaring the task stale.
 
+Work item taxonomy rule:
+
+1. Persisted task-store `issue_type` values are provider-neutral work item types and must resolve through the work item taxonomy registry before they drive flow binding, parent/root eligibility, or source-tier classification.
+2. Flow selection keys under `dev_team.work_item_flow_bindings` must use canonical taxonomy ids or documented aliases; runtime task classes are separate routing inputs.
+3. Execution granularity labels such as `delivery_task` and `execution_block` are TaskFlow step concepts, not persisted task-store `issue_type` values.
+4. Unknown work item types fail closed for root eligibility and require explicit taxonomy registration before becoming flow-driving types.
+
 Hard rule:
 
 1. No execution without active TaskFlow block.

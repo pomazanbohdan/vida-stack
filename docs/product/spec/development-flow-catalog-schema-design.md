@@ -102,6 +102,34 @@ Selection order:
 
 No runtime code may hardcode `default_delivery` as a semantic default. That id is a config value only.
 
+## Work Item Taxonomy Registry
+
+Flow binding keys are owned by the provider-neutral work item taxonomy registry in `state_store_task_models.rs`. The registry is additive over the persisted task-store `issue_type: String` field, so existing task records remain compatible while runtime code gains one owner contract for classification.
+
+The registry separates four vocabularies:
+
+1. Persisted work item type: the task-store `issue_type` value, normalized to a canonical taxonomy id.
+2. Flow selection binding: the key used by `dev_team.work_item_flow_bindings` and flow `work_item_bindings`.
+3. Runtime task class: selection and model-routing classes such as `implementation`, `test_authoring`, `verification`, and `architecture`.
+4. Execution granularity: planning labels such as `delivery_task` and `execution_block`; these are not persisted work item types.
+
+Phase 1 registry fields:
+
+```json
+{
+  "schema_version": 1,
+  "canonical_issue_type": "runtime_defect",
+  "aliases": [],
+  "category": "defect",
+  "parent_required": true,
+  "flow_bindable": true,
+  "default_flow_binding": "runtime_defect_remediation",
+  "source_tiers": ["runtime_status", "downstream_runtime_report"]
+}
+```
+
+Unknown work item types are fail-closed for parent validation and must not silently become root-capable. New source systems may add aliases in later slices, but the canonical registry id remains provider-neutral and must not encode Jira, Linear, GitHub, or host-tool-specific names unless the work item class itself is a generic source tier. Compatibility aliases such as `bug` and `spike` may remain as aliases only; they must not become separate flow-driving provider-specific canonical ids.
+
 ## Standard Flow Presets
 
 The root project config and generated template must keep the same standard flow presets unless a project explicitly opts out through a later accepted override contract:
