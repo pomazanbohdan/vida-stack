@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("quick", "runtime-smoke", "release-install")]
+    [ValidateSet("quick", "runtime-smoke", "release-install", "target-dir-policy")]
     [string]$Mode = "quick",
     [string]$TestFilter = "",
     [switch]$Json
@@ -8,6 +8,36 @@ param(
 $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
 $Records = New-Object System.Collections.Generic.List[object]
+$OriginalCargoTargetDir = $env:CARGO_TARGET_DIR
+
+function Resolve-CargoTargetDirPolicy {
+    $normalizedRoot = [System.IO.Path]::GetFullPath($RootDir)
+    if (-not [string]::IsNullOrWhiteSpace($OriginalCargoTargetDir)) {
+        return [pscustomobject]@{
+            target_dir_policy = "caller_provided"
+            effective_cargo_target_dir = [System.IO.Path]::GetFullPath($OriginalCargoTargetDir)
+        }
+    }
+
+    $worktreeMarker = "{0}.vida{0}worktrees{0}" -f [System.IO.Path]::DirectorySeparatorChar
+    $markerIndex = $normalizedRoot.IndexOf($worktreeMarker, [System.StringComparison]::OrdinalIgnoreCase)
+    if ($markerIndex -ge 0) {
+        $ownerRoot = $normalizedRoot.Substring(0, $markerIndex)
+        return [pscustomobject]@{
+            target_dir_policy = "repo_local_worktree_shared"
+            effective_cargo_target_dir = Join-Path $ownerRoot ".vida\cargo-target"
+        }
+    }
+
+    return [pscustomobject]@{
+        target_dir_policy = "repo_local_default"
+        effective_cargo_target_dir = Join-Path $normalizedRoot ".vida\cargo-target"
+    }
+}
+
+$CargoTargetDirState = Resolve-CargoTargetDirPolicy
+$env:CARGO_TARGET_DIR = $CargoTargetDirState.effective_cargo_target_dir
+$DebugVidaPath = Join-Path $CargoTargetDirState.effective_cargo_target_dir "debug\vida.exe"
 
 function Invoke-Timed {
     param(
@@ -58,6 +88,8 @@ function Invoke-Timed {
             duration_ms = [int64]$sw.ElapsedMilliseconds
             exit_status = $(if ($exitCode -eq 0) { "pass" } else { "fail" })
             classification = $(if ($sw.ElapsedMilliseconds -le 2000) { "fast" } elseif ($sw.ElapsedMilliseconds -le 5000) { "watch" } else { "long_gate_expected" })
+            target_dir_policy = $CargoTargetDirState.target_dir_policy
+            effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
             artifact_refs = $artifactRefs
         })
     }
@@ -68,7 +100,20 @@ function Invoke-Timed {
 
 Push-Location $RootDir
 try {
-    if ($Mode -eq "quick") {
+    if ($Mode -eq "target-dir-policy") {
+        $Records.Add([pscustomobject]@{
+            operation_id = "target-dir-policy"
+            command_or_surface = "scripts/vida-dev-gate.ps1 -Mode target-dir-policy"
+            cwd_or_context = $RootDir
+            started_at = (Get-Date).ToString("o")
+            duration_ms = 0
+            exit_status = "pass"
+            classification = "fast"
+            target_dir_policy = $CargoTargetDirState.target_dir_policy
+            effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+            artifact_refs = @()
+        })
+    } elseif ($Mode -eq "quick") {
         Invoke-Timed "cargo-fmt-check" @("cargo", "fmt", "-p", "vida", "--", "--check")
         if ($TestFilter.Trim().Length -gt 0) {
             Invoke-Timed "cargo-test-focused" @("cargo", "test", "-p", "vida", $TestFilter, "--", "--nocapture", "--test-threads=1")
@@ -77,7 +122,7 @@ try {
         }
     } elseif ($Mode -eq "runtime-smoke") {
         Invoke-Timed "cargo-build-debug" @("cargo", "build", "-p", "vida")
-        Invoke-Timed "debug-vida-status" @(".\target\debug\vida.exe", "status", "--json")
+        Invoke-Timed "debug-vida-status" @($DebugVidaPath, "status", "--json")
     } elseif ($Mode -eq "release-install") {
         Invoke-Timed "vida-release-install" @("vida", "release", "install", "--json")
         Invoke-Timed "installed-vida-status" @("vida", "status", "--json")
@@ -91,4 +136,5 @@ try {
             Write-Host ("[{0}] {1} {2}ms" -f $record.exit_status, $record.operation_id, $record.duration_ms)
         }
     }
+    $env:CARGO_TARGET_DIR = $OriginalCargoTargetDir
 }

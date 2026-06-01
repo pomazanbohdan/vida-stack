@@ -37,6 +37,8 @@ blocking_scope: none | local_iteration | pr_acceptance | main_admission | releas
 artifact_refs: log paths, CI URLs, receipt paths, screenshots, or command output paths
 classification: fast | watch | slow | hard_defect | long_gate_expected
 next_decision: keep_blocking | make_fast_proof | diagnostic_only_for_pr | move_to_main_or_release | remove_or_replace_stale_check | create_runtime_defect | none
+target_dir_policy: caller_provided | repo_local_worktree_shared | repo_local_default | not_applicable
+effective_cargo_target_dir: absolute Cargo target directory when the operation can invoke Cargo or a Cargo-built binary
 ```
 
 If a tool cannot emit this envelope directly, the orchestrator must record it in the TaskFlow note, PR task, diagnostic note, or linked process artifact.
@@ -72,6 +74,8 @@ If a tool cannot emit this envelope directly, the orchestrator must record it in
 7. If a command is expected to run longer than two minutes, state that expectation before running it and identify what smaller proof has already passed.
 8. Do not repeatedly rerun a long gate to discover hidden failure details; repair output/artifact capture first.
 9. If a CI run is superseded by a newer pushed commit, cancel the stale run once the newer run is queued or running so runner capacity and status surfaces reflect the current head.
+10. Windows local proof scripts that invoke Cargo must use deterministic target-dir behavior and report it in timing records. If `CARGO_TARGET_DIR` is already set by the caller, respect that value and record `target_dir_policy=caller_provided`. If the repository is a linked worktree under `.vida/worktrees`, use the owner repository's `.vida/cargo-target` cache and record `target_dir_policy=repo_local_worktree_shared`. Otherwise use the current repository's `.vida/cargo-target` cache and record `target_dir_policy=repo_local_default`.
+11. Debug-runtime smoke commands must resolve the debug binary from `effective_cargo_target_dir`, not from a hardcoded `target/debug` path. This keeps worktree output visible under `.vida/cargo-target` while preventing each linked worktree from cold-building an isolated `target` tree.
 
 ## Gate Decision Model
 
@@ -168,7 +172,7 @@ The checklist is required even when build, release, commit, push, or CI proof is
 9. Cargo accepts a single test-name filter before `--`; do not pass multiple focused test filters as extra positional arguments. For a focused Rust proof batch, run separate `cargo test` commands, use a script/loop wrapper with timing per filter, or select a broader valid substring/module filter that intentionally covers the batch.
 10. For VIDA runtime recovery diagnostics, prefer the fastest authoritative inspection surface that exposes the needed evidence. If a timeout/recovery path only needs task metadata or current owned scope, use `vida task show <task-id> --json` before heavier lane or run-graph projections.
 11. If a long test shard or runtime command is killed because it exceeds the local tool timeout, immediately record the command, duration, missing artifact gap, and replacement proof strategy in the post-pool checklist.
-12. Prefer `scripts/vida-dev-gate.ps1` for local Windows proof loops that need consistent timing records. Use `-Mode quick` for debug source proof, `-Mode runtime-smoke` for debug-runtime state compatibility, and `-Mode release-install` only when installed runtime validation is the bounded acceptance target.
+12. Prefer `scripts/vida-dev-gate.ps1` for local Windows proof loops that need consistent timing records and deterministic Cargo cache behavior. Use `-Mode quick` for debug source proof, `-Mode runtime-smoke` for debug-runtime state compatibility, and `-Mode release-install` only when installed runtime validation is the bounded acceptance target. Use `-Mode target-dir-policy -Json` as the cheap policy probe before running Cargo from a new linked worktree. With `-Json`, every operation record must include `target_dir_policy` and `effective_cargo_target_dir`.
 
 ## Prohibited Patterns
 

@@ -201,6 +201,24 @@ vida release install --json
 vida status --json
 ```
 
+For timed Windows proof loops, prefer the repo script:
+
+```powershell
+# Fast debug source proof: fmt plus focused test, or --no-run when no filter is supplied.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick -TestFilter close_feedback_inference -Json
+
+# Cheap policy probe for a checkout or linked worktree before running Cargo.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode target-dir-policy -Json
+
+# Debug runtime smoke: build debug vida and run status from the effective Cargo target dir.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode runtime-smoke -Json
+
+# Installed runtime proof only when the bounded target requires the operator-facing launcher.
+powershell -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-install -Json
+```
+
+`scripts/vida-dev-gate.ps1` keeps Cargo output visible and deterministic by setting `CARGO_TARGET_DIR` when the caller has not already set it. Normal checkouts use `.vida\cargo-target`; linked worktrees under `.vida\worktrees\...` share the owner checkout's `.vida\cargo-target` so each worktree does not cold-build its own `target` tree. If the caller provides `CARGO_TARGET_DIR`, the script respects it and reports that policy in JSON timing records.
+
 This keeps ordinary proof runs fast and inspectable. The operator-facing `vida` in `~/.local/share/vida-stack/current/bin` on Unix-like systems or `%LOCALAPPDATA%\vida-stack\current\bin` on Windows should be refreshed from the release profile only when the installed launcher itself is part of the proof.
 
 On Windows, Application Control, Smart App Control, or Device Guard may block any newly generated or downloaded executable, including Cargo build scripts under `target\debug\build\*\build-script-build.exe`, integration-test binaries under `target\debug\deps\*.exe`, and release binaries installed under `%LOCALAPPDATA%\vida-stack\current\bin`. If that policy is active, local Windows `cargo build`, `cargo test`, and installer smoke may fail before VIDA code runs. Use WSL/Linux or GitHub Actions for proof builds, or allowlist/sign the release binaries before making them the active system runtime.
