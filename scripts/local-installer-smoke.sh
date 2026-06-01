@@ -123,7 +123,7 @@ run_step vida-status-json env PATH="$RUNTIME_PATH" vida status --state-dir "$PRO
 run_step vida-doctor-json env PATH="$RUNTIME_PATH" vida doctor --state-dir "$PROJECT_STATE" --json
 popd >/dev/null
 
-assert_contains taskflow-help "$ARTIFACT_DIR/taskflow-help.stdout" "TaskFlow CLI"
+assert_contains taskflow-help "$ARTIFACT_DIR/taskflow-help.stdout" "VIDA TaskFlow runtime family"
 assert_contains docflow-help "$ARTIFACT_DIR/docflow-help.stdout" "Standalone DocFlow CLI"
 assert_contains vida-pi-agent-help "$ARTIFACT_DIR/vida-pi-agent-help.stdout" "VIDA adapter for one-shot Pi RPC dispatch"
 assert_contains docflow-init "$ARTIFACT_DIR/docflow-init.stdout" "mode: agent_bootstrap"
