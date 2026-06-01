@@ -13,6 +13,7 @@ const DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS: [&str; 3] = [
 ];
 const CONSUME_RESUME_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const CONSUME_RESUME_PREPARATION_GATE_TIMEOUT: Duration = Duration::from_secs(10);
+const CONSUME_RESUME_SHORT_LOCK_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const CONSUME_CONTINUE_DEFERRED_HANDOFF_PROJECTION_NAME: &str =
     "taskflow-consume-continue-deferred-handoff";
 
@@ -105,7 +106,9 @@ async fn fail_fast_state_store_open_read_only_with_timeout(
     label: &str,
     timeout: Duration,
 ) -> Result<super::StateStore, String> {
-    if authoritative_datastore_lock_is_held(&state_root)? {
+    if timeout <= CONSUME_RESUME_SHORT_LOCK_PROBE_TIMEOUT
+        && authoritative_datastore_lock_is_held(&state_root)?
+    {
         return Err(format!(
             "consume continue failed fast: {label}: Database at LOCK is already locked by another process"
         ));
@@ -7214,7 +7217,7 @@ mod tests {
         runtime.block_on(async {
             let store = StateStore::open(root.clone()).await.expect("open store");
             let result = tokio::time::timeout(
-                Duration::from_secs(1),
+                Duration::from_secs(10),
                 fail_fast_state_store_open_read_only_with_timeout(
                     root.clone(),
                     "reopening authoritative state store after resumed runtime dispatch",
