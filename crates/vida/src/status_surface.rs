@@ -91,7 +91,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let as_json = args.json;
     let summary_only = args.summary;
 
-    if as_json {
+    if as_json && summary_only {
         if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
             &state_dir,
             status_json_projection_name(summary_only),
@@ -102,17 +102,19 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             );
             return ExitCode::SUCCESS;
         }
-        if let Some(cached) =
+        if summary_only {
+            if let Some(cached) =
             crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
                 &state_dir,
                 status_json_projection_name(summary_only),
             )
-        {
-            println!(
-                "{}",
-                render_cached_status_projection_for_operator(summary_only, &cached)
-            );
-            return ExitCode::SUCCESS;
+            {
+                println!(
+                    "{}",
+                    render_cached_status_projection_for_operator(summary_only, &cached)
+                );
+                return ExitCode::SUCCESS;
+            }
         }
         if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
             &state_dir,
