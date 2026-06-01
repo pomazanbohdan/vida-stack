@@ -1518,6 +1518,8 @@ agent_system:
         - execution_preparation
         - hard_escalation
         - meta_analysis
+        - test_authoring
+        - regression_test
       model_profiles:
         codex_gpt55_low_write:
           provider: openai

@@ -2933,6 +2933,7 @@ pub(crate) fn agent_lane_dispatch_result(
         for key in [
             "selected_carrier_id",
             "selected_backend_id",
+            "selected_dispatch_backend_id",
             "selected_model_profile_id",
             "selected_model_ref",
             "selected_model_provider",
@@ -7481,7 +7482,8 @@ agent_system:
             vec![
                 "-NoProfile".to_string(),
                 "-Command".to_string(),
-                "Write-Output started; Start-Sleep -Seconds 30".to_string(),
+                "[Console]::Out.WriteLine('started'); [Console]::Out.Flush(); Start-Sleep -Seconds 30"
+                    .to_string(),
             ],
             Some(30),
             Some(1),

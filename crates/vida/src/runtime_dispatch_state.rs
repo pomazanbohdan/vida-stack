@@ -1260,12 +1260,11 @@ pub(crate) fn backend_is_admissible_for_dispatch_target(
 
 fn assignment_selects_backend(assignment: &serde_json::Value, backend_id: &str) -> bool {
     [
+        "effective_selected_backend",
+        "selected_dispatch_backend_id",
+        "dispatch_backend_id",
         "selected_backend_id",
-        "selected_carrier_id",
-        "selected_agent_id",
-        "selected_carrier_agent_id",
-        "selected_tier",
-        "activation_agent_type",
+        "selected_backend",
     ]
     .iter()
     .filter_map(|key| json_string(assignment.get(*key)))
@@ -1278,10 +1277,11 @@ fn assignment_selects_explicit_dispatch_backend(
     backend_id: &str,
 ) -> bool {
     let explicit_match = [
+        "effective_selected_backend",
+        "selected_dispatch_backend_id",
+        "dispatch_backend_id",
         "selected_backend_id",
-        "selected_carrier_id",
-        "selected_agent_id",
-        "selected_carrier_agent_id",
+        "selected_backend",
     ]
     .iter()
     .filter_map(|key| json_string(assignment.get(*key)))
@@ -1857,8 +1857,10 @@ pub(crate) fn sync_receipt_configured_activation_assignment(
             .or_else(|| json_string(assignment.get("runtime_role")));
     }
     let selected_backend = canonical_selected_backend_for_receipt(role_selection, receipt)
+        .or_else(|| json_string(assignment.get("selected_dispatch_backend_id")))
+        .or_else(|| json_string(assignment.get("dispatch_backend_id")))
         .or_else(|| json_string(assignment.get("selected_backend_id")))
-        .or_else(|| json_string(assignment.get("selected_carrier_id")));
+        .or_else(|| json_string(assignment.get("selected_backend")));
     if let Some(selected_backend) = selected_backend {
         if receipt
             .selected_backend
@@ -1888,10 +1890,11 @@ fn runtime_assignment_selected_backend_for_target(
     dispatch_target: &str,
 ) -> Option<String> {
     let (assignment, _) = dispatch_target_runtime_assignment(execution_plan, dispatch_target);
-    json_string(assignment.get("selected_backend_id"))
-        .or_else(|| json_string(assignment.get("selected_carrier_id")))
-        .or_else(|| json_string(assignment.get("selected_tier")))
-        .or_else(|| json_string(assignment.get("activation_agent_type")))
+    json_string(assignment.get("effective_selected_backend"))
+        .or_else(|| json_string(assignment.get("selected_dispatch_backend_id")))
+        .or_else(|| json_string(assignment.get("dispatch_backend_id")))
+        .or_else(|| json_string(assignment.get("selected_backend_id")))
+        .or_else(|| json_string(assignment.get("selected_backend")))
 }
 
 fn selected_backend_override_conflicts_with_runtime_assignment(
@@ -16159,6 +16162,52 @@ host_environment:
                 Some("junior")
             ),
             Some("junior".to_string())
+        );
+    }
+
+    #[test]
+    fn downstream_selected_backend_does_not_treat_carrier_id_as_dispatch_backend() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue test authoring".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["test_authoring".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "implementer": {
+                        "carrier_runtime_assignment": {
+                            "selected_carrier_id": "middle",
+                            "selected_model_profile_id": "codex_gpt55_medium_write",
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "worker"
+                        }
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+
+        assert_eq!(
+            downstream_selected_backend(&role_selection, "implementer", Some("middle"), None),
+            Some("internal_subagents".to_string())
         );
     }
 

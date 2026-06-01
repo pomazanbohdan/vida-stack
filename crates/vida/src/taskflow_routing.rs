@@ -188,13 +188,11 @@ pub(crate) fn dispatch_target_for_runtime_role(
 }
 
 fn carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<String> {
-    json_string(assignment.get("selected_backend_id"))
+    json_string(assignment.get("effective_selected_backend"))
+        .or_else(|| json_string(assignment.get("selected_dispatch_backend_id")))
+        .or_else(|| json_string(assignment.get("dispatch_backend_id")))
+        .or_else(|| json_string(assignment.get("selected_backend_id")))
         .or_else(|| json_string(assignment.get("selected_backend")))
-        .or_else(|| json_string(assignment.get("selected_carrier_id")))
-        .or_else(|| json_string(assignment.get("selected_carrier_agent_id")))
-        .or_else(|| json_string(assignment.get("selected_agent_id")))
-        .or_else(|| json_string(assignment.get("activation_agent_type")))
-        .or_else(|| json_string(assignment.get("selected_tier")))
         .filter(|value| !value.is_empty())
 }
 
@@ -240,6 +238,11 @@ fn dispatch_backend_from_assignment(
 
 pub(crate) fn activation_backend_from_route(route: &serde_json::Value) -> Option<String> {
     carrier_backend_from_assignment(dispatch_contract_lane_activation(route))
+}
+
+fn activation_agent_type_from_route(route: &serde_json::Value) -> Option<String> {
+    json_string(dispatch_contract_lane_activation(route).get("activation_agent_type"))
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn route_backend_value(route: &serde_json::Value, key: &str) -> Option<String> {
@@ -529,7 +532,7 @@ pub(crate) fn route_explain_payload(
     let fanout_backends = route
         .map(fanout_executor_backends_from_route)
         .unwrap_or_default();
-    let activation_agent_type = route.and_then(activation_backend_from_route);
+    let activation_agent_type = route.and_then(activation_agent_type_from_route);
     let selected_backend = route
         .and_then(|route| {
             crate::runtime_dispatch_state::admissible_selected_backend_for_dispatch_target(
@@ -994,7 +997,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_backend_prefers_route_activation_agent_type_when_executor_hints_missing() {
+    fn selected_backend_does_not_use_activation_agent_type_without_executor_hints() {
         let execution_plan = serde_json::json!({});
         let route = serde_json::json!({
             "activation": {
@@ -1005,8 +1008,61 @@ mod tests {
 
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, &route).as_deref(),
-            Some("middle")
+            None
         );
+    }
+
+    #[test]
+    fn route_payload_keeps_test_author_carrier_separate_from_dispatch_backend() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "analysis": true,
+                        "coach": true,
+                        "implementation": true,
+                        "review": true,
+                        "verification": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "test_author": {
+                    "runtime_assignment": {
+                        "selected_carrier_id": "middle",
+                        "activation_agent_type": "middle",
+                        "selected_backend_id": "internal_subagents",
+                        "selected_model_ref": "gpt-5.5",
+                        "selected_model_profile_id": "codex_gpt55_medium_write",
+                        "selected_model_provider": "openai",
+                        "selected_reasoning_effort": "medium",
+                        "enabled": true,
+                        "model_selection_enabled": true
+                    },
+                    "activation": {
+                        "activation_agent_type": "middle",
+                        "activation_runtime_role": "worker"
+                    }
+                }
+            }
+        });
+        let route = &execution_plan["development_flow"]["test_author"];
+        let payload = route_explain_payload(&execution_plan, "test_author", Some(route));
+
+        assert_eq!(payload["selected_carrier_id"].as_str(), Some("middle"));
+        assert_eq!(payload["selected_model_ref"].as_str(), Some("gpt-5.5"));
+        assert_eq!(payload["activation_agent_type"].as_str(), Some("middle"));
+        assert_eq!(
+            payload["selected_backend"].as_str(),
+            Some("internal_subagents")
+        );
+        assert_ne!(
+            payload["selected_backend"].as_str(),
+            payload["activation_agent_type"].as_str()
+        );
+        assert_eq!(route_explain_status(&payload, Some(true)), "pass");
     }
 
     #[test]

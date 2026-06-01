@@ -527,6 +527,73 @@ fn route_profile_mapping_source_path(
     None
 }
 
+fn route_executor_backend(
+    compiled_bundle: &serde_json::Value,
+    route_key: &str,
+    conversation_role: &str,
+) -> Option<String> {
+    json_lookup(
+        &compiled_bundle["agent_system"]["routing"][route_key],
+        &["executor_backend"],
+    )
+    .or_else(|| {
+        json_lookup(
+            &compiled_bundle["agent_system"]["routing"][conversation_role],
+            &["executor_backend"],
+        )
+    })
+    .or_else(|| {
+        json_lookup(
+            &compiled_bundle["agent_system"]["routing"]["default"],
+            &["executor_backend"],
+        )
+    })
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(str::to_string)
+}
+
+fn route_executor_backend_source_path(
+    compiled_bundle: &serde_json::Value,
+    route_key: &str,
+    conversation_role: &str,
+) -> Option<String> {
+    if json_lookup(
+        &compiled_bundle["agent_system"]["routing"][route_key],
+        &["executor_backend"],
+    )
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .is_some_and(|value| !value.is_empty())
+    {
+        return Some(format!("agent_system.routing.{route_key}.executor_backend"));
+    }
+    if json_lookup(
+        &compiled_bundle["agent_system"]["routing"][conversation_role],
+        &["executor_backend"],
+    )
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .is_some_and(|value| !value.is_empty())
+    {
+        return Some(format!(
+            "agent_system.routing.{conversation_role}.executor_backend"
+        ));
+    }
+    if json_lookup(
+        &compiled_bundle["agent_system"]["routing"]["default"],
+        &["executor_backend"],
+    )
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .is_some_and(|value| !value.is_empty())
+    {
+        return Some("agent_system.routing.default.executor_backend".to_string());
+    }
+    None
+}
+
 fn mapped_profile_for_carrier(
     route_profiles: Option<&serde_json::Value>,
     carrier_id: &str,
@@ -1687,12 +1754,24 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
 
     let selected_role = &selected_candidate.role;
     let selected_profile = &selected_candidate.profile;
+    let selected_role_id = selected_role["role_id"].as_str().unwrap_or_default();
+    let selected_profile_id = selected_profile["profile_id"].as_str().unwrap_or_default();
+    let selected_dispatch_backend =
+        route_executor_backend(compiled_bundle, task_class, conversation_role).unwrap_or_else(
+            || {
+                selected_role["role_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            },
+        );
+    let selected_dispatch_backend_source_path =
+        route_executor_backend_source_path(compiled_bundle, task_class, conversation_role)
+            .unwrap_or_else(|| format!("carrier_runtime.roles[{selected_role_id}].role_id"));
     let selected_route_profile_mapping = mapped_profile_for_carrier(
         route_profiles,
         selected_role["role_id"].as_str().unwrap_or_default(),
     );
-    let selected_role_id = selected_role["role_id"].as_str().unwrap_or_default();
-    let selected_profile_id = selected_profile["profile_id"].as_str().unwrap_or_default();
     let selected_route_profile_mapping_source_path =
         selected_route_profile_mapping.as_ref().and_then(|_| {
             route_profile_mapping_source_path(
@@ -1768,7 +1847,8 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
         "activation_runtime_role": execution_runtime_role,
         "selected_agent_id": selected_role["role_id"],
         "selected_carrier_id": selected_role["role_id"],
-        "selected_backend_id": selected_role["role_id"],
+        "selected_backend_id": selected_dispatch_backend,
+        "selected_dispatch_backend_id": selected_dispatch_backend,
         "selected_carrier_agent_id": selected_role["role_id"],
         "selected_tier": selected_role["tier"],
         "selected_carrier_tier": selected_role["tier"],
@@ -1821,7 +1901,8 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
         );
         let mut selection_source_paths = serde_json::json!({
             "selected_carrier_id": format!("carrier_runtime.roles[{selected_role_id}].role_id"),
-            "selected_backend_id": format!("carrier_runtime.roles[{selected_role_id}].role_id"),
+            "selected_backend_id": selected_dispatch_backend_source_path,
+            "selected_dispatch_backend_id": selected_dispatch_backend_source_path,
             "selected_carrier_tier": format!("carrier_runtime.roles[{selected_role_id}].tier"),
             "selected_model_profile_id": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.profile_id"),
             "selected_model_ref": format!("carrier_runtime.roles[{selected_role_id}].model_profiles.{selected_profile_id}.model_ref"),
@@ -2034,6 +2115,68 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[test]
+    fn configured_executor_backend_stays_separate_from_selected_carrier() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "middle",
+            "tier": "middle",
+            "rate": 4,
+            "normalized_cost_units": 4,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["test_authoring"],
+            "reasoning_band": "medium",
+            "default_model_profile": "codex_gpt55_medium_write",
+            "model_profiles": {
+                "codex_gpt55_medium_write": {
+                    "profile_id": "codex_gpt55_medium_write",
+                    "model_ref": "gpt-5.5",
+                    "provider": "openai",
+                    "reasoning_effort": "medium",
+                    "plan_mode_reasoning_effort": "high",
+                    "sandbox_mode": "workspace-write",
+                    "normalized_cost_units": 4,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["test_authoring"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+        compiled_bundle.as_object_mut().unwrap().insert(
+            "agent_system".to_string(),
+            serde_json::json!({
+                "routing": {
+                    "default": {
+                        "executor_backend": "internal_subagents"
+                    }
+                }
+            }),
+        );
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "test_author",
+            "test_authoring",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "middle");
+        assert_eq!(assignment["activation_agent_type"], "middle");
+        assert_eq!(assignment["selected_backend_id"], "internal_subagents");
+        assert_eq!(
+            assignment["selected_dispatch_backend_id"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            assignment["selection_source_paths"]["selected_backend_id"],
+            "agent_system.routing.default.executor_backend"
+        );
     }
 
     #[test]
