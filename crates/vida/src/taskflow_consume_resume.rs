@@ -1,6 +1,7 @@
 use crate::taskflow_run_graph::{
     status_with_active_exception_dispatch_replay, validate_run_graph_resume_gate,
 };
+use fs2::FileExt;
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, UNIX_EPOCH};
@@ -104,6 +105,11 @@ async fn fail_fast_state_store_open_read_only_with_timeout(
     label: &str,
     timeout: Duration,
 ) -> Result<super::StateStore, String> {
+    if authoritative_datastore_lock_is_held(&state_root)? {
+        return Err(format!(
+            "consume continue failed fast: {label}: Database at LOCK is already locked by another process"
+        ));
+    }
     match tokio::time::timeout(
         timeout,
         super::StateStore::open_existing_read_only(state_root),
@@ -117,6 +123,50 @@ async fn fail_fast_state_store_open_read_only_with_timeout(
             "consume continue failed fast: {label} timed out while waiting for authoritative datastore lock"
         )),
     }
+}
+
+fn authoritative_datastore_lock_is_held(state_root: &Path) -> Result<bool, String> {
+    let lock_path = state_root.join("LOCK");
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if io_error_is_lock_contention(&error) => return Ok(true),
+        Err(error) => {
+            return Err(format!(
+                "consume continue failed fast: checking authoritative datastore lock `{}`: {error}",
+                lock_path.display()
+            ));
+        }
+    };
+
+    match file.try_lock_exclusive() {
+        Ok(()) => {
+            let _ = file.unlock();
+            Ok(false)
+        }
+        Err(error) if io_error_is_lock_contention(&error) => Ok(true),
+        Err(error) => Err(format!(
+            "consume continue failed fast: checking authoritative datastore lock `{}`: {error}",
+            lock_path.display()
+        )),
+    }
+}
+
+fn io_error_is_lock_contention(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::Interrupted
+    ) || error.raw_os_error().is_some_and(|code| {
+        code == libc::EWOULDBLOCK
+            || code == libc::EAGAIN
+            || (cfg!(windows) && matches!(code, 5 | 32 | 33))
+    })
 }
 
 fn consume_continue_state_access_error_kind(error: &str) -> &'static str {
