@@ -102,6 +102,18 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             );
             return ExitCode::SUCCESS;
         }
+        if let Some(cached) =
+            crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
+                &state_dir,
+                status_json_projection_name(summary_only),
+            )
+        {
+            println!(
+                "{}",
+                render_cached_status_projection_for_operator(summary_only, &cached)
+            );
+            return ExitCode::SUCCESS;
+        }
         if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
             &state_dir,
             status_json_projection_name(summary_only),
@@ -137,25 +149,24 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             )
             .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
         {
-            if let Some(overlay) =
+            let rendered = if let Some(overlay) =
                 crate::operator_projection_cache::read_runtime_continuation_binding_overlay(
                     &state_dir,
+                ) {
+                crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload(
+                    &state_dir,
+                    &cached,
+                    &overlay,
                 )
-            {
-                if let Some(rendered) =
-                    crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload(
-                        &state_dir,
-                        &cached,
-                        &overlay,
-                    )
-                {
-                    println!(
-                        "{}",
-                        render_cached_status_projection_for_operator(summary_only, &rendered)
-                    );
-                    return ExitCode::SUCCESS;
-                }
-            }
+                .unwrap_or_else(|| cached.clone())
+            } else {
+                cached.clone()
+            };
+            println!(
+                "{}",
+                render_cached_status_projection_for_operator(summary_only, &rendered)
+            );
+            return ExitCode::SUCCESS;
         }
     }
 

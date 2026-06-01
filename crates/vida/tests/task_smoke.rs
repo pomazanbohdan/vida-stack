@@ -122,9 +122,18 @@ fn create_epic_parent(state_dir: &str, parent_id: &str, title: &str, status: &st
 fn write_operator_projection(state_dir: &str, projection_name: &str, payload: &serde_json::Value) {
     let projection_dir = format!("{state_dir}/operator-projections");
     fs::create_dir_all(&projection_dir).expect("operator projection dir should exist");
+    let mut payload = payload.clone();
+    if let serde_json::Value::Object(object) = &mut payload {
+        object.insert(
+            "projection_cache_dependencies".to_string(),
+            serde_json::json!({
+                "task_snapshot_marker": null
+            }),
+        );
+    }
     fs::write(
         format!("{projection_dir}/{projection_name}.json"),
-        serde_json::to_string_pretty(payload).expect("operator projection should render"),
+        serde_json::to_string_pretty(&payload).expect("operator projection should render"),
     )
     .expect("operator projection should write");
 }
