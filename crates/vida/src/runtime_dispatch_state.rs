@@ -3329,7 +3329,7 @@ pub(crate) fn configured_external_activation_parts(
         })?;
     if !external_dispatch_command_is_config_safe(&command, backend_entry) {
         return Err(format!(
-            "Configured external backend `{backend_id}` uses unsafe `dispatch.command` `{command}`; external dispatch commands must be config-owned command tokens that match backend trust metadata, not shell snippets, path-like invocations, or unrelated local binaries"
+            "Configured external backend `{backend_id}` uses unsafe `dispatch.command` `{command}`; external dispatch commands must be code-owned trusted command tokens, not shell snippets, path-like invocations, project self-attested tokens, or unrelated local binaries"
         ));
     }
     let mut args = yaml_string_list(yaml_lookup(dispatch, &["static_args"]));
@@ -3424,9 +3424,19 @@ pub(crate) fn configured_external_backend_dispatch_blocker(
     external_backend_dispatch_blocker(backend_id, backend_entry)
 }
 
+const EXTERNAL_DISPATCH_TRUSTED_COMMANDS: &[&str] = &[
+    "codex",
+    "hermes",
+    "kilo",
+    "opencode",
+    "qwen",
+    "vida-pi-agent",
+    "vibe",
+];
+
 fn external_dispatch_command_is_config_safe(
     command: &str,
-    backend_entry: &serde_yaml::Value,
+    _backend_entry: &serde_yaml::Value,
 ) -> bool {
     let trimmed = command.trim();
     if trimmed.is_empty()
@@ -3444,32 +3454,9 @@ fn external_dispatch_command_is_config_safe(
         return false;
     }
 
-    let backend_class = yaml_string(yaml_lookup(backend_entry, &["subagent_backend_class"]))
-        .map(|value| value.trim().to_ascii_lowercase());
-    let trusted_tokens = [
-        yaml_string(yaml_lookup(backend_entry, &["detect_command"])),
-        yaml_string(yaml_lookup(
-            backend_entry,
-            &["readiness", "adapter", "command"],
-        )),
-        yaml_string(yaml_lookup(backend_entry, &["dispatch", "trusted_command"])),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|value| value.trim().to_string())
-    .filter(|value| !value.is_empty())
-    .filter(|value| {
-        value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
-    })
-    .collect::<Vec<_>>();
-
-    if trusted_tokens.is_empty() {
-        return backend_class.as_deref() != Some("external_cli");
-    }
-
-    trusted_tokens.iter().any(|token| token == trimmed)
+    EXTERNAL_DISPATCH_TRUSTED_COMMANDS
+        .iter()
+        .any(|token| *token == trimmed)
 }
 
 pub(crate) fn render_command_display(command: &str, args: &[String]) -> String {
@@ -3635,29 +3622,59 @@ dispatch:
     }
 
     #[test]
-    fn configured_external_activation_parts_accepts_config_derived_command_token() {
+    fn configured_external_activation_parts_rejects_config_self_attested_command_token() {
         let backend_entry: serde_yaml::Value = serde_yaml::from_str(
             r#"
 subagent_backend_class: external_cli
 detect_command: newly-configured-carrier
 dispatch:
   command: newly-configured-carrier
+  trusted_command: newly-configured-carrier
   static_args: ["run"]
   prompt_mode: positional
 "#,
         )
         .expect("backend entry should parse");
 
-        let (command, args) = configured_external_activation_parts(
+        let error = configured_external_activation_parts(
             "new_cli",
             &backend_entry,
             Path::new("/tmp/project"),
             "/tmp/project/.vida/dispatch.json",
             None,
         )
-        .expect("command token matching backend trust metadata should be accepted");
-        assert_eq!(command, "newly-configured-carrier");
-        assert_eq!(args[0], "run");
+        .expect_err("project config must not self-attest external dispatch commands");
+
+        assert!(error.contains("unsafe"));
+        assert!(error.contains("newly-configured-carrier"));
+    }
+
+    #[test]
+    fn configured_external_activation_parts_rejects_self_attested_shell_command_token() {
+        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+subagent_backend_class: external_cli
+detect_command: sh
+dispatch:
+  command: sh
+  trusted_command: sh
+  static_args: ["-lc", "echo SHOULD_NOT_LAUNCH"]
+  prompt_mode: stdin
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let error = configured_external_activation_parts(
+            "malicious_cli",
+            &backend_entry,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            None,
+        )
+        .expect_err("project config must not self-attest shell dispatch commands");
+
+        assert!(error.contains("unsafe"));
+        assert!(error.contains("sh"));
     }
 
     #[test]
@@ -3742,14 +3759,14 @@ dispatch:
     }
 
     #[test]
-    fn configured_external_activation_parts_accepts_configured_adapter_but_rejects_path_like_variant(
+    fn configured_external_activation_parts_accepts_code_trusted_adapter_but_rejects_path_like_variant(
     ) {
         let backend_entry: serde_yaml::Value = serde_yaml::from_str(
             r#"
 subagent_backend_class: external_cli
-detect_command: configured-adapter
+detect_command: vida-pi-agent
 dispatch:
-  command: configured-adapter
+  command: vida-pi-agent
   static_args: ["--mode", "rpc"]
   prompt_mode: stdin
 "#,
@@ -3763,16 +3780,16 @@ dispatch:
             "/tmp/project/.vida/dispatch.json",
             None,
         )
-        .expect("configured adapter command should be trusted");
-        assert_eq!(command, "configured-adapter");
+        .expect("code-trusted adapter command should be accepted");
+        assert_eq!(command, "vida-pi-agent");
         assert_eq!(args, vec!["--mode".to_string(), "rpc".to_string()]);
 
         let path_like: serde_yaml::Value = serde_yaml::from_str(
             r#"
 subagent_backend_class: external_cli
-detect_command: configured-adapter
+detect_command: vida-pi-agent
 dispatch:
-  command: ./configured-adapter
+  command: ./vida-pi-agent
   prompt_mode: stdin
 "#,
         )
@@ -3786,7 +3803,7 @@ dispatch:
         )
         .expect_err("path-like configured adapter must remain rejected");
         assert!(error.contains("unsafe"));
-        assert!(error.contains("./configured-adapter"));
+        assert!(error.contains("./vida-pi-agent"));
     }
 
     #[test]
