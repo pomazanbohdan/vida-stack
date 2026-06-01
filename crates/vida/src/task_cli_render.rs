@@ -41,6 +41,21 @@ fn print_task_read_metadata(
     }
 }
 
+fn task_work_item_kind_value(issue_type: &str) -> serde_json::Value {
+    serde_json::to_value(crate::state_store::task_work_item_kind(issue_type))
+        .expect("work item kind should serialize")
+}
+
+fn task_record_value(task: &TaskRecord) -> serde_json::Value {
+    let mut value = serde_json::to_value(task).expect("task record should serialize");
+    value["work_item_kind"] = task_work_item_kind_value(&task.issue_type);
+    value
+}
+
+fn optional_work_item_kind_value(issue_type: Option<&str>) -> serde_json::Value {
+    issue_type.map_or(serde_json::Value::Null, task_work_item_kind_value)
+}
+
 fn build_operator_surface_payload(
     surface: &str,
     blocker_codes: Vec<String>,
@@ -200,7 +215,7 @@ fn task_list_row_value(task: &TaskRecord, full: bool) -> serde_json::Value {
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     if full {
-        let mut value = serde_json::to_value(task).expect("task record should serialize");
+        let mut value = task_record_value(task);
         value["parent_id"] = parent_id;
         value["parent_edge"] = parent_edge;
         return value;
@@ -213,6 +228,7 @@ fn task_list_row_value(task: &TaskRecord, full: bool) -> serde_json::Value {
         "title": task.title,
         "priority": task.priority,
         "issue_type": task.issue_type,
+        "work_item_kind": task_work_item_kind_value(&task.issue_type),
         "parent_id": parent_id,
         "parent_edge": parent_edge,
     })
@@ -311,7 +327,7 @@ pub(crate) fn task_ready_payload(
             "state_access": task_read_metadata_value(read_metadata),
             "scope_task_id": scope_task_id,
             "ready_count": tasks.len(),
-            "tasks": tasks,
+            "tasks": tasks.iter().map(task_record_value).collect::<Vec<_>>(),
         }),
     )
 }
@@ -325,7 +341,7 @@ pub(crate) fn task_show_payload(
         serde_json::json!({
             "state_access": task_read_metadata_value(read_metadata),
             "task_id": task.id,
-            "task": task,
+            "task": task_record_value(task),
         }),
     )
 }
@@ -358,6 +374,7 @@ pub(crate) fn print_task_progress(
         "vida task progress",
         serde_json::json!({
             "task_id": summary.root_task.id,
+            "root_work_item_kind": task_work_item_kind_value(&summary.root_task.issue_type),
             "progress": summary,
         }),
     );
@@ -416,7 +433,7 @@ pub(crate) fn print_task_mutation(
         title,
         serde_json::json!({
             "task_id": task.id,
-            "task": task,
+            "task": task_record_value(task),
         }),
     );
     if crate::surface_render::print_surface_json(&payload, as_json, "task should render as json") {
@@ -572,12 +589,15 @@ pub(crate) fn print_blocked_tasks(
                     "display_id": blocked.task.display_id,
                     "status": blocked.task.status,
                     "title": blocked.task.title,
+                    "issue_type": blocked.task.issue_type,
+                    "work_item_kind": task_work_item_kind_value(&blocked.task.issue_type),
                     "blocker_count": blocked.blockers.len(),
                     "blockers": blocked.blockers.iter().map(|blocker| serde_json::json!({
                         "depends_on_id": blocker.depends_on_id,
                         "edge_type": blocker.edge_type,
                         "dependency_status": blocker.dependency_status,
                         "dependency_issue_type": blocker.dependency_issue_type,
+                        "dependency_work_item_kind": optional_work_item_kind_value(blocker.dependency_issue_type.as_deref()),
                     })).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
             }),
@@ -587,7 +607,17 @@ pub(crate) fn print_blocked_tasks(
             "vida task blocked",
             serde_json::json!({
                 "blocked_count": tasks.len(),
-                "tasks": tasks,
+                "tasks": tasks.iter().map(|blocked| serde_json::json!({
+                    "task": task_record_value(&blocked.task),
+                    "blockers": blocked.blockers.iter().map(|blocker| serde_json::json!({
+                        "issue_id": blocker.issue_id,
+                        "depends_on_id": blocker.depends_on_id,
+                        "edge_type": blocker.edge_type,
+                        "dependency_status": blocker.dependency_status,
+                        "dependency_issue_type": blocker.dependency_issue_type,
+                        "dependency_work_item_kind": optional_work_item_kind_value(blocker.dependency_issue_type.as_deref()),
+                    })).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
             }),
         )
     };
@@ -635,6 +665,7 @@ pub(crate) fn print_task_dependency_tree(
                 "id": edge.depends_on_id,
                 "status": edge.dependency_status,
                 "issue_type": edge.dependency_issue_type,
+                "work_item_kind": optional_work_item_kind_value(edge.dependency_issue_type.as_deref()),
                 "edge_type": edge.edge_type,
                 "missing": edge.missing,
                 "cycle": edge.cycle,
@@ -652,6 +683,7 @@ pub(crate) fn print_task_dependency_tree(
                 "status": child.child_status,
                 "priority": child.child_priority,
                 "issue_type": child.child_issue_type,
+                "work_item_kind": optional_work_item_kind_value(child.child_issue_type.as_deref()),
                 "labels": child.child_labels,
                 "missing": child.missing,
                 "cycle": child.cycle,
@@ -667,6 +699,7 @@ pub(crate) fn print_task_dependency_tree(
                 "title": tree.task.title,
                 "priority": tree.task.priority,
                 "issue_type": tree.task.issue_type,
+                "work_item_kind": task_work_item_kind_value(&tree.task.issue_type),
             },
             "root_task_id": tree.task.id,
             "dependency_count": tree.dependencies.len(),
@@ -723,7 +756,19 @@ pub(crate) fn print_task_direct_children(
         serde_json::json!({
             "root_task_id": tree.task.id,
             "child_count": tree.children.len(),
-            "children": tree.children,
+            "children": tree.children.iter().map(|child| serde_json::json!({
+                "child_id": child.child_id,
+                "child_display_id": child.child_display_id,
+                "child_title": child.child_title,
+                "child_status": child.child_status,
+                "child_priority": child.child_priority,
+                "child_issue_type": child.child_issue_type,
+                "child_work_item_kind": optional_work_item_kind_value(child.child_issue_type.as_deref()),
+                "child_labels": child.child_labels,
+                "node": child.node,
+                "cycle": child.cycle,
+                "missing": child.missing,
+            })).collect::<Vec<_>>(),
         }),
     );
     if crate::surface_render::print_surface_json(
@@ -1165,6 +1210,20 @@ mod tests {
     }
 
     #[test]
+    fn task_list_row_exposes_canonical_work_item_kind_without_rewriting_issue_type() {
+        let mut task = sample_task("bug-1");
+        task.issue_type = "bug".to_string();
+
+        let row = super::task_list_row_value(&task, false);
+
+        assert_eq!(row["issue_type"], "bug");
+        assert_eq!(row["work_item_kind"]["canonical_issue_type"], "defect");
+        assert_eq!(row["work_item_kind"]["original_issue_type"], "bug");
+        assert_eq!(row["work_item_kind"]["provider_issue_type"], "bug");
+        assert_eq!(row["work_item_kind"]["schema_version"], 1);
+    }
+
+    #[test]
     fn task_show_payload_keeps_release1_operator_contract_parity() {
         let task = sample_task("task-1");
         let payload = build_pass_operator_surface_payload(
@@ -1179,6 +1238,25 @@ mod tests {
         assert_eq!(payload["shared_fields"]["status"], "pass");
         assert_eq!(payload["operator_contracts"]["status"], "pass");
         assert_eq!(payload["artifact_refs"]["surface"], "vida task show");
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_show_payload_exposes_canonical_work_item_kind() {
+        let mut task = sample_task("pr-1");
+        task.issue_type = "pr".to_string();
+
+        let payload = super::task_show_payload(&task, None);
+
+        assert_eq!(payload["task"]["issue_type"], "pr");
+        assert_eq!(
+            payload["task"]["work_item_kind"]["canonical_issue_type"],
+            "pull_request"
+        );
+        assert_eq!(
+            payload["task"]["work_item_kind"]["provider_issue_type"],
+            "pr"
+        );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 

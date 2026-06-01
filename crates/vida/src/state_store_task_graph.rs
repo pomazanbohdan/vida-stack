@@ -617,6 +617,21 @@ impl StateStore {
                     ),
                 });
             }
+            if work_item_requires_parent(&task.issue_type)
+                && !Self::task_status_is_closed_like(&task.status)
+                && parent_edges.is_empty()
+            {
+                issues.push(TaskGraphIssue {
+                    issue_type: "missing_required_parent_edge".to_string(),
+                    issue_id: task.id.clone(),
+                    depends_on_id: None,
+                    edge_type: Some("parent-child".to_string()),
+                    detail: format!(
+                        "non-closed work item kind `{}` requires one parent-child edge",
+                        canonical_work_item_issue_type(&task.issue_type)
+                    ),
+                });
+            }
 
             for dependency in &task.dependencies {
                 if !by_id.contains_key(&dependency.depends_on_id) {
@@ -637,6 +652,24 @@ impl StateStore {
                         edge_type: Some(dependency.edge_type.clone()),
                         detail: "task must not depend on itself".to_string(),
                     });
+                }
+                if dependency.edge_type == "parent-child" {
+                    if let Some(parent) = by_id.get(&dependency.depends_on_id) {
+                        let child_kind = canonical_work_item_issue_type(&task.issue_type);
+                        let parent_kind = canonical_work_item_issue_type(&parent.issue_type);
+                        if child_kind == "epic" && parent_kind != "epic" {
+                            issues.push(TaskGraphIssue {
+                                issue_type: "invalid_parent_child_kind".to_string(),
+                                issue_id: task.id.clone(),
+                                depends_on_id: Some(parent.id.clone()),
+                                edge_type: Some("parent-child".to_string()),
+                                detail: format!(
+                                    "epic work item `{}` can only be parented by another epic, got `{}`",
+                                    task.id, parent.issue_type
+                                ),
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -906,6 +939,37 @@ mod tests {
             metadata: "{}".to_string(),
             thread_id: String::new(),
         }
+    }
+
+    #[test]
+    fn validate_task_graph_flags_non_closed_parent_required_item_without_parent() {
+        let child = task_record("child", "open");
+
+        let issues = StateStore::validate_task_graph_rows(&[child]);
+
+        assert!(issues.iter().any(|issue| {
+            issue.issue_type == "missing_required_parent_edge"
+                && issue.issue_id == "child"
+                && issue.edge_type.as_deref() == Some("parent-child")
+        }));
+    }
+
+    #[test]
+    fn validate_task_graph_flags_epic_parented_by_non_epic() {
+        let parent = task_record("parent", "open");
+        let mut child = task_record("child-epic", "open");
+        child.issue_type = "epic".to_string();
+        child
+            .dependencies
+            .push(parent_child_dependency("child-epic", "parent"));
+
+        let issues = StateStore::validate_task_graph_rows(&[parent, child]);
+
+        assert!(issues.iter().any(|issue| {
+            issue.issue_type == "invalid_parent_child_kind"
+                && issue.issue_id == "child-epic"
+                && issue.depends_on_id.as_deref() == Some("parent")
+        }));
     }
 
     #[test]

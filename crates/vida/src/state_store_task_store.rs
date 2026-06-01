@@ -1384,11 +1384,10 @@ impl StateStore {
                 reason: format!("task `{task_id}` title is empty"),
             });
         }
-        // Non-epic tasks must have a parent_id
-        if issue_type != "epic" && parent_id.is_none() {
+        if work_item_requires_parent(issue_type) && parent_id.is_none() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
-                    "task `{task_id}` of type `{}` cannot be created without parent_id. Only epic tasks can have no parent.",
+                    "task `{task_id}` of type `{}` cannot be created without parent_id. Only parent-optional work item kinds can have no parent.",
                     issue_type
                 ),
             });
@@ -2333,6 +2332,64 @@ mod tests {
                 .find(|path| path.file_name().and_then(|name| name.to_str()) != Some("state"))
                 .unwrap_or(&state_root),
         );
+    }
+
+    #[tokio::test]
+    async fn create_task_uses_work_item_taxonomy_for_parent_requirement() {
+        let root = unique_task_store_temp_root("vida-work-item-parent-requirement");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let error = store
+            .create_task(CreateTaskRequest {
+                task_id: "bug-without-parent",
+                title: "Bug without parent",
+                display_id: None,
+                description: "",
+                issue_type: "bug",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect_err("bug alias must still require a parent");
+
+        assert!(error
+            .to_string()
+            .contains("Only parent-optional work item kinds can have no parent"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn create_task_accepts_normalized_parent_optional_epic_kind() {
+        let root = unique_task_store_temp_root("vida-work-item-epic-parent-optional");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let task = store
+            .create_task(CreateTaskRequest {
+                task_id: "capitalized-epic",
+                title: "Capitalized Epic",
+                display_id: None,
+                description: "",
+                issue_type: "Epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("normalized epic kind should be parent optional");
+
+        assert_eq!(task.issue_type, "Epic");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]

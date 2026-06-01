@@ -15,6 +15,21 @@ pub enum WorkItemCategory {
     Process,
 }
 
+impl WorkItemCategory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkItemCategory::ProgramContainer => "program_container",
+            WorkItemCategory::Delivery => "delivery",
+            WorkItemCategory::Defect => "defect",
+            WorkItemCategory::Review => "review",
+            WorkItemCategory::Architecture => "architecture",
+            WorkItemCategory::Release => "release",
+            WorkItemCategory::Operations => "operations",
+            WorkItemCategory::Process => "process",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkItemTaxonomyEntry {
     pub canonical_issue_type: &'static str,
@@ -24,6 +39,20 @@ pub struct WorkItemTaxonomyEntry {
     pub flow_bindable: bool,
     pub default_flow_binding: &'static str,
     pub source_tiers: &'static [&'static str],
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskWorkItemKind {
+    pub schema_version: u32,
+    pub canonical_issue_type: String,
+    pub original_issue_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_issue_type: Option<String>,
+    pub category: String,
+    pub parent_required: bool,
+    pub flow_bindable: bool,
+    pub default_flow_binding: String,
+    pub source_tiers: Vec<String>,
 }
 
 pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
@@ -194,6 +223,47 @@ pub fn work_item_taxonomy_entry(issue_type: &str) -> Option<&'static WorkItemTax
                 .iter()
                 .any(|alias| normalize_work_item_issue_type(alias) == normalized)
     })
+}
+
+pub fn canonical_work_item_issue_type(issue_type: &str) -> String {
+    work_item_taxonomy_entry(issue_type)
+        .map(|entry| entry.canonical_issue_type.to_string())
+        .unwrap_or_else(|| normalize_work_item_issue_type(issue_type))
+}
+
+pub fn task_work_item_kind(issue_type: &str) -> TaskWorkItemKind {
+    let original = issue_type.trim().to_string();
+    let normalized = normalize_work_item_issue_type(issue_type);
+    if let Some(entry) = work_item_taxonomy_entry(issue_type) {
+        let canonical = entry.canonical_issue_type.to_string();
+        return TaskWorkItemKind {
+            schema_version: WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
+            canonical_issue_type: canonical.clone(),
+            original_issue_type: original,
+            provider_issue_type: (normalized != canonical).then_some(normalized),
+            category: entry.category.as_str().to_string(),
+            parent_required: entry.parent_required,
+            flow_bindable: entry.flow_bindable,
+            default_flow_binding: entry.default_flow_binding.to_string(),
+            source_tiers: entry
+                .source_tiers
+                .iter()
+                .map(|tier| (*tier).to_string())
+                .collect(),
+        };
+    }
+
+    TaskWorkItemKind {
+        schema_version: WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
+        canonical_issue_type: normalized.clone(),
+        original_issue_type: original,
+        provider_issue_type: None,
+        category: "legacy_unknown".to_string(),
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "default_delivery".to_string(),
+        source_tiers: vec!["legacy_issue_type".to_string()],
+    }
 }
 
 pub fn work_item_requires_parent(issue_type: &str) -> bool {
@@ -837,8 +907,9 @@ impl From<TaskDependencyJsonlRecord> for TaskDependencyRecord {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_work_item_issue_type, work_item_requires_parent, work_item_taxonomy_entry,
-        TaskPlannerMetadata, TaskStorageRow, WORK_ITEM_TAXONOMY,
+        canonical_work_item_issue_type, normalize_work_item_issue_type, task_work_item_kind,
+        work_item_requires_parent, work_item_taxonomy_entry, TaskPlannerMetadata, TaskStorageRow,
+        WORK_ITEM_TAXONOMY, WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
     };
 
     #[test]
@@ -904,6 +975,20 @@ mod tests {
         assert!(!work_item_requires_parent("epic"));
         assert!(work_item_requires_parent("task"));
         assert!(work_item_requires_parent("unknown_future_type"));
+    }
+
+    #[test]
+    fn work_item_taxonomy_preserves_provider_alias_with_canonical_kind() {
+        assert_eq!(canonical_work_item_issue_type("bug"), "defect");
+
+        let kind = task_work_item_kind("bug");
+        assert_eq!(kind.schema_version, WORK_ITEM_TAXONOMY_SCHEMA_VERSION);
+        assert_eq!(kind.canonical_issue_type, "defect");
+        assert_eq!(kind.original_issue_type, "bug");
+        assert_eq!(kind.provider_issue_type.as_deref(), Some("bug"));
+        assert_eq!(kind.category, "defect");
+        assert!(kind.parent_required);
+        assert_eq!(kind.default_flow_binding, "defect_repair_verified");
     }
 
     #[test]

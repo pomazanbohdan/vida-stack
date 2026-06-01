@@ -23,6 +23,19 @@ impl TaskRecord {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkItemKind {
+    pub schema_version: u32,
+    pub canonical_issue_type: String,
+    pub original_issue_type: String,
+    pub provider_issue_type: Option<String>,
+    pub category: String,
+    pub parent_required: bool,
+    pub flow_bindable: bool,
+    pub default_flow_binding: String,
+    pub source_tiers: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencyEdge {
     pub issue_id: TaskId,

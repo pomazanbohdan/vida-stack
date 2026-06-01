@@ -116,12 +116,13 @@ use state_store_source_scan::{
     record_id_for_slice_source,
 };
 pub use state_store_task_models::{
-    BlockedTaskRecord, CreateTaskRequest, TaskBulkReparentResult, TaskCriticalPath,
-    TaskCriticalPathNode, TaskDefectBatchRehomeResult, TaskDependencyStatus,
+    canonical_work_item_issue_type, task_work_item_kind, work_item_requires_parent,
+    work_item_taxonomy_entry, BlockedTaskRecord, CreateTaskRequest, TaskBulkReparentResult,
+    TaskCriticalPath, TaskCriticalPathNode, TaskDefectBatchRehomeResult, TaskDependencyStatus,
     TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode,
     TaskExecutionSemantics, TaskGraphIssue, TaskImportSummary, TaskPlannerMetadata,
     TaskProgressSummary, TaskRecord, TaskRelease1ContractStep, TaskSchedulingCandidate,
-    TaskSchedulingProjection, TaskStoreSummary, UpdateTaskRequest,
+    TaskSchedulingProjection, TaskStoreSummary, TaskWorkItemKind, UpdateTaskRequest,
 };
 pub(crate) use state_store_task_models::{
     TaskContent, TaskJsonlRecord, TaskStorageRow, TaskStorageRowStored,
