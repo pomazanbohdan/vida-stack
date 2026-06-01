@@ -329,6 +329,8 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "top-level blocked/actionable",
             "top level blocked/actionable",
             "actionable blocked output",
+            "actionable blockers",
+            "fail closed with actionable blockers",
             "genuinely blocked",
             "readiness blockers",
             "readiness blocker",
@@ -354,6 +356,7 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "approval_wait coverage",
             "approval required coverage",
             "pending approval coverage",
+            "ready/blocked/progress/list/tree",
         ],
     );
     ignored.extend(ignored_canonical_close_meta_segments(reason));
@@ -1312,6 +1315,29 @@ mod tests {
             .any(|phrase| phrase.contains("diagnostic context")));
         assert!(ignored.iter().any(|phrase| phrase
             .contains("installed vida task next --json returns blocked with recovery action")));
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_task_acceptance_blocker_wording() {
+        let reason = "Implemented TaskFlow work item kind schema. Acceptance covered: invalid parent/child kind combinations fail closed with actionable blockers; ready/blocked/progress/list/tree surfaces include canonical kind without breaking existing JSON consumers. Proofs passed.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        let ignored = inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render");
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "fail closed with actionable blockers"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "ready/blocked/progress/list/tree"));
     }
 
     #[test]

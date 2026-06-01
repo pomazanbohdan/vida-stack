@@ -1264,6 +1264,7 @@ impl StateStore {
         created_by: &str,
     ) -> Result<TaskDependencyRecord, StateStoreError> {
         let mut tasks = self.all_tasks().await?;
+        let original_tasks = tasks.clone();
         let target_exists = tasks.iter().any(|task| task.id == depends_on_id);
         if !target_exists {
             return Err(StateStoreError::MissingTask {
@@ -1306,7 +1307,9 @@ impl StateStore {
                 .then_with(|| left.depends_on_id.cmp(&right.depends_on_id))
         });
 
-        let issues = Self::validate_task_graph_rows(&tasks);
+        let touched_task_ids = BTreeSet::from([issue_id.to_string(), depends_on_id.to_string()]);
+        let issues =
+            Self::validate_task_graph_rows_for_mutation(&original_tasks, &tasks, &touched_task_ids);
         if !issues.is_empty() {
             let first = issues.first().expect("issues is not empty");
             return Err(StateStoreError::InvalidTaskRecord {
@@ -1404,6 +1407,7 @@ impl StateStore {
             .validate_task_display_id_alias(task_id, display_id)
             .await?;
         let mut tasks = self.all_tasks().await?;
+        let original_tasks = tasks.clone();
         if tasks.iter().any(|task| task.id == task_id) {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!("task already exists: {task_id}"),
@@ -1477,7 +1481,14 @@ impl StateStore {
             Vec::new()
         };
         tasks.push(task.clone());
-        let issues = Self::validate_task_graph_rows(&tasks);
+        let touched_task_ids = reopened_parents
+            .iter()
+            .map(|parent| parent.id.clone())
+            .chain(std::iter::once(task.id.clone()))
+            .chain(normalized_parent_id.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let issues =
+            Self::validate_task_graph_rows_for_mutation(&original_tasks, &tasks, &touched_task_ids);
         if let Some(first) = issues.first() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
@@ -1658,6 +1669,7 @@ impl StateStore {
         task.labels.dedup();
         task.updated_at = unix_timestamp_nanos().to_string();
         let mut tasks = self.all_tasks().await?;
+        let original_tasks = tasks.clone();
         let task_index = tasks
             .iter()
             .position(|existing| existing.id == task.id)
@@ -1686,7 +1698,14 @@ impl StateStore {
                 Vec::new(),
             )
         };
-        let issues = Self::validate_task_graph_rows(&tasks);
+        let touched_task_ids = reopened_parents
+            .iter()
+            .map(|parent| parent.id.clone())
+            .chain(closed_parents.iter().map(|parent| parent.id.clone()))
+            .chain(std::iter::once(task.id.clone()))
+            .collect::<BTreeSet<_>>();
+        let issues =
+            Self::validate_task_graph_rows_for_mutation(&original_tasks, &tasks, &touched_task_ids);
         if let Some(first) = issues.first() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
@@ -1727,6 +1746,7 @@ impl StateStore {
         }
 
         let mut tasks = self.all_tasks().await?;
+        let original_tasks = tasks.clone();
         let direct_child_ids = tasks
             .iter()
             .filter(|task| {
@@ -1815,7 +1835,14 @@ impl StateStore {
             &format!("all direct child tasks moved from `{from_parent_id}` to `{to_parent_id}`"),
         );
 
-        let issues = Self::validate_task_graph_rows(&tasks);
+        let touched_task_ids = moved_tasks
+            .iter()
+            .map(|task| task.id.clone())
+            .chain(closed_parents.iter().map(|parent| parent.id.clone()))
+            .chain([from_parent_id.to_string(), to_parent_id.to_string()])
+            .collect::<BTreeSet<_>>();
+        let issues =
+            Self::validate_task_graph_rows_for_mutation(&original_tasks, &tasks, &touched_task_ids);
         if let Some(first) = issues.first() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
@@ -1894,6 +1921,7 @@ impl StateStore {
         }
 
         let mut tasks = self.all_tasks().await?;
+        let original_tasks = tasks.clone();
         let task_ids = tasks
             .iter()
             .map(|task| task.id.clone())
@@ -2005,7 +2033,13 @@ impl StateStore {
             }
         }
 
-        let issues = Self::validate_task_graph_rows(&tasks);
+        let touched_task_ids = changed_tasks
+            .iter()
+            .map(|task| task.id.clone())
+            .chain([from_parent_id.to_string(), to_parent_id.to_string()])
+            .collect::<BTreeSet<_>>();
+        let issues =
+            Self::validate_task_graph_rows_for_mutation(&original_tasks, &tasks, &touched_task_ids);
         if let Some(first) = issues.first() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
@@ -2069,6 +2103,7 @@ impl StateStore {
         task.updated_at = now.clone();
         task.closed_at = Some(now);
         task.close_reason = Some(reason.to_string());
+        let original_tasks = tasks.clone();
         let mut reconciled_tasks = tasks;
         let task_index = reconciled_tasks
             .iter()
@@ -2083,7 +2118,18 @@ impl StateStore {
             &format!("all direct child tasks closed after closing `{task_id}`"),
             Some(task_id),
         );
-        if let Some(first) = Self::validate_task_graph_rows(&reconciled_tasks).first() {
+        let touched_task_ids = closed_parents
+            .iter()
+            .map(|parent| parent.id.clone())
+            .chain(std::iter::once(task.id.clone()))
+            .collect::<BTreeSet<_>>();
+        if let Some(first) = Self::validate_task_graph_rows_for_mutation(
+            &original_tasks,
+            &reconciled_tasks,
+            &touched_task_ids,
+        )
+        .first()
+        {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
                     "task close would create invalid graph: {} on {}",
@@ -2216,6 +2262,31 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
+    }
+
+    fn test_task_record(task_id: &str, issue_type: &str, status: &str) -> TaskRecord {
+        TaskRecord {
+            id: task_id.to_string(),
+            display_id: None,
+            title: task_id.to_string(),
+            description: String::new(),
+            status: status.to_string(),
+            priority: 1,
+            issue_type: issue_type.to_string(),
+            created_at: "1".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "1".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: TaskExecutionSemantics::default(),
+            planner_metadata: TaskPlannerMetadata::default(),
+            dependencies: Vec::new(),
+        }
     }
 
     #[test]
@@ -2389,6 +2460,61 @@ mod tests {
             .expect("normalized epic kind should be parent optional");
 
         assert_eq!(task.issue_type, "Epic");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn close_task_ignores_unrelated_existing_parentless_open_work_item() {
+        let root = unique_task_store_temp_root("vida-close-ignores-existing-orphan");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "parent-epic",
+                title: "Parent epic",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "child-task",
+                title: "Child task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("parent-epic"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create child");
+        store
+            .persist_task_record(test_task_record("historical-orphan", "task", "open"))
+            .await
+            .expect("persist historical orphan");
+
+        let closed = store
+            .close_task("child-task", "proof passed")
+            .await
+            .expect("unrelated historical orphan should not block close");
+
+        assert_eq!(closed.status, "closed");
         let _ = fs::remove_dir_all(&root);
     }
 

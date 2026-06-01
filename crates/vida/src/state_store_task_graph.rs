@@ -762,6 +762,40 @@ impl StateStore {
         issues
     }
 
+    fn task_graph_issue_key(
+        issue: &TaskGraphIssue,
+    ) -> (String, String, Option<String>, Option<String>) {
+        (
+            issue.issue_type.clone(),
+            issue.issue_id.clone(),
+            issue.depends_on_id.clone(),
+            issue.edge_type.clone(),
+        )
+    }
+
+    pub(crate) fn validate_task_graph_rows_for_mutation(
+        before: &[TaskRecord],
+        after: &[TaskRecord],
+        touched_task_ids: &BTreeSet<String>,
+    ) -> Vec<TaskGraphIssue> {
+        let existing_issues = Self::validate_task_graph_rows(before)
+            .into_iter()
+            .map(|issue| Self::task_graph_issue_key(&issue))
+            .collect::<BTreeSet<_>>();
+
+        Self::validate_task_graph_rows(after)
+            .into_iter()
+            .filter(|issue| {
+                touched_task_ids.contains(&issue.issue_id)
+                    || issue
+                        .depends_on_id
+                        .as_ref()
+                        .is_some_and(|id| touched_task_ids.contains(id))
+                    || !existing_issues.contains(&Self::task_graph_issue_key(issue))
+            })
+            .collect()
+    }
+
     fn critical_path_for_task(
         by_id: &BTreeMap<String, TaskRecord>,
         task_id: &str,
@@ -952,6 +986,29 @@ mod tests {
                 && issue.issue_id == "child"
                 && issue.edge_type.as_deref() == Some("parent-child")
         }));
+    }
+
+    #[test]
+    fn validate_task_graph_mutation_ignores_unrelated_existing_orphan() {
+        let existing_orphan = task_record("existing-orphan", "open");
+        let mut parent = task_record("parent", "open");
+        parent.issue_type = "epic".to_string();
+        let mut child = task_record("child", "open");
+        child
+            .dependencies
+            .push(parent_child_dependency("child", "parent"));
+        let touched_task_ids = BTreeSet::from(["parent".to_string(), "child".to_string()]);
+
+        let issues = StateStore::validate_task_graph_rows_for_mutation(
+            &[existing_orphan.clone()],
+            &[existing_orphan, parent, child],
+            &touched_task_ids,
+        );
+
+        assert!(
+            issues.is_empty(),
+            "unrelated pre-existing graph debt should not block a valid mutation: {issues:?}"
+        );
     }
 
     #[test]
