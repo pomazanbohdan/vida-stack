@@ -222,6 +222,10 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "failed keywords",
             "failure keyword",
             "failed keyword",
+            "failed/tampered parent adapter results",
+            "failed/tampered parent-adapter results",
+            "failed or tampered parent adapter results",
+            "failed or tampered parent-adapter results",
             "records failure",
             "recorded failure",
             "recording failure",
@@ -1439,6 +1443,29 @@ mod tests {
             .any(|phrase| phrase.as_str().is_some_and(|value| value.contains(
                 "installed vida task next --json returns blocked with recovery action"
             ))));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_failed_result_defect_description() {
+        let reason = "Fixed host bridge result ingestion so failed/tampered parent adapter results fail closed instead of being promoted to pass. Added regression test host_bridge_rejects_failed_parent_result. Proofs passed: cargo test -p vida host_bridge_rejects_failed_parent_result -- --nocapture --test-threads=1; cargo test -p vida host_bridge -- --nocapture --test-threads=1; cargo fmt -p vida -- --check; git diff --check.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["outcome"], "success");
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert!(inference["success_markers"]
+            .as_array()
+            .expect("success markers should render")
+            .iter()
+            .any(|marker| marker == "proofs passed"));
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase == "failed/tampered parent adapter results"));
     }
 
     #[test]
